@@ -1,0 +1,18 @@
+// sld_mcp.idl : IDL source for sld_mcp
+//
+
+// This file will be processed by the MIDL tool to
+// produce the type library (sldmcp.tlb) and marshalling code.
+
+import "oaidl.idl";
+import "ocidl.idl";
+
+[
+	uuid(f846a1ae-dce6-483c-ac89-3ff0afd723b6),
+	version(1.0),
+]
+library sldmcpLib
+{
+	importlib("stdole2.tlb");
+};
+

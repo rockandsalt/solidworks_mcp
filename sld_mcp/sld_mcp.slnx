@@ -1,0 +1,11 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="sld_mcp.vcxproj" />
+  <Project Path="sld_mcpPS/sld_mcpPS.vcxproj">
+    <BuildDependency Project="sld_mcp.vcxproj" />
+    <Build Project="false" />
+  </Project>
+</Solution>
