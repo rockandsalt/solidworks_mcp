@@ -1,3 +1,18 @@
 HKCR
 {
+	NoRemove CLSID
+	{
+		ForceRemove {c191de66-c755-4b06-928b-c39f69d1afc7} = s 'sld_mcp SolidWorks Add-in'
+		{
+			ProgID = s 'sld_mcp.SwMcpAddin.1'
+			VersionIndependentProgID = s 'sld_mcp.SwMcpAddin'
+			ForceRemove 'Programmable'
+			InprocServer32 = s '%MODULE%'
+			{
+				val ThreadingModel = s 'Apartment'
+			}
+			'TypeLib' = s '{f846a1ae-dce6-483c-ac89-3ff0afd723b6}'
+			'Version' = s '1.0'
+		}
+	}
 }

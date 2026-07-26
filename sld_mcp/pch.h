@@ -10,4 +10,10 @@
 // add headers that you want to pre-compile here
 #include "framework.h"
 
+// SolidWorks type libraries. $(SolidWorksInstallDir) is added as an
+// additional include directory in the vcxproj so this resolves without a
+// hardcoded path here.
+#import "sldworks.tlb" raw_interfaces_only, raw_native_types, no_namespace, named_guids
+#import "swpublished.tlb" raw_interfaces_only, raw_native_types, no_namespace, named_guids
+
 #endif //PCH_H

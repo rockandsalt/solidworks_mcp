@@ -37,6 +37,9 @@
     <ClInclude Include="pch.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="SwAddin.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="sld_mcp.cpp">
@@ -49,6 +52,9 @@
       <Filter>Generated Files</Filter>
     </ClCompile>
     <ClCompile Include="pch.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="SwAddin.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

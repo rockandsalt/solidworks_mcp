@@ -14,5 +14,15 @@ import "ocidl.idl";
 library sldmcpLib
 {
 	importlib("stdole2.tlb");
+	importlib("sldworks.tlb");
+	importlib("swpublished.tlb");
+
+	[
+		uuid(c191de66-c755-4b06-928b-c39f69d1afc7)
+	]
+	coclass SwMcpAddin
+	{
+		[default] interface ISwAddin;
+	};
 };
 

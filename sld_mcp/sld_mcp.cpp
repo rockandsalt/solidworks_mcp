@@ -10,6 +10,36 @@
 
 using namespace ATL;
 
+namespace
+{
+	// CLSID of CSwMcpAddin, as a registry subkey name.
+	const wchar_t kAddinClsidKey[] = L"SOFTWARE\\SolidWorks\\AddIns\\{c191de66-c755-4b06-928b-c39f69d1afc7}";
+
+	// Registers/unregisters the add-in with SolidWorks, in addition to the
+	// normal COM registration ATL already handles for the CLSID itself.
+	void RegisterSwAddin()
+	{
+		CRegKey machineKey;
+		if (machineKey.Create(HKEY_LOCAL_MACHINE, kAddinClsidKey) == ERROR_SUCCESS)
+		{
+			machineKey.SetStringValue(L"Description", L"sld_mcp SolidWorks Add-in");
+			machineKey.SetStringValue(L"Title", L"sld_mcp");
+		}
+
+		CRegKey userKey;
+		if (userKey.Create(HKEY_CURRENT_USER, kAddinClsidKey) == ERROR_SUCCESS)
+		{
+			userKey.SetDWORDValue(L"", 1);
+		}
+	}
+
+	void UnregisterSwAddin()
+	{
+		CRegKey(HKEY_CURRENT_USER).DeleteSubKey(kAddinClsidKey);
+		CRegKey(HKEY_LOCAL_MACHINE).DeleteSubKey(kAddinClsidKey);
+	}
+}
+
 // Used to determine whether the DLL can be unloaded by OLE.
 _Use_decl_annotations_
 STDAPI DllCanUnloadNow(void)
@@ -30,6 +60,8 @@ STDAPI DllRegisterServer(void)
 {
 	// registers object, typelib and all interfaces in typelib
 	HRESULT hr = _AtlModule.DllRegisterServer();
+	if (SUCCEEDED(hr))
+		RegisterSwAddin();
 	return hr;
 }
 
@@ -37,6 +69,7 @@ STDAPI DllRegisterServer(void)
 _Use_decl_annotations_
 STDAPI DllUnregisterServer(void)
 {
+	UnregisterSwAddin();
 	HRESULT hr = _AtlModule.DllUnregisterServer();
 	return hr;
 }
