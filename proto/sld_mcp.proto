@@ -1,0 +1,29 @@
+// sld_mcp.proto : the contract between the Rust MCP server (gRPC client)
+// and the sld_mcp SolidWorks add-in (gRPC server).
+//
+// Code is generated from this file on both sides:
+//   - Rust: mcp_server/build.rs (tonic-prost-build)
+//   - C++:  sld_mcp/sld_mcp.vcxproj, target SldMcpGenerateProto (vcpkg's protoc + grpc_cpp_plugin)
+//
+// The add-in listens on 127.0.0.1:<port>; the port defaults to 50551 and can
+// be overridden on both sides with the SLD_MCP_PORT environment variable.
+syntax = "proto3";
+
+package sld_mcp.v1;
+
+service SolidWorks {
+  // Returns the document SolidWorks currently has active, if any.
+  rpc GetActiveDocument(GetActiveDocumentRequest) returns (GetActiveDocumentResponse);
+}
+
+message GetActiveDocumentRequest {}
+
+message GetActiveDocumentResponse {
+  // Unset when SolidWorks has no document open.
+  Document document = 1;
+}
+
+message Document {
+  // Window title as SolidWorks shows it (IModelDoc2::GetTitle).
+  string title = 1;
+}

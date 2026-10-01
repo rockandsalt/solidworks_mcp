@@ -40,6 +40,12 @@
     <ClInclude Include="SwAddin.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="RpcServer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SolidWorksService.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="sld_mcp.cpp">
@@ -57,6 +63,18 @@
     <ClCompile Include="SwAddin.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="RpcServer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="SolidWorksService.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SldMcpProtoOutDir)\sld_mcp.pb.cc">
+      <Filter>Generated Files</Filter>
+    </ClCompile>
+    <ClCompile Include="$(SldMcpProtoOutDir)\sld_mcp.grpc.pb.cc">
+      <Filter>Generated Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="sld_mcp.rc">
@@ -68,6 +86,10 @@
       <Filter>Resource Files</Filter>
     </None>
     <None Include="sld_mcp.def">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="vcpkg.json" />
+    <None Include="..\proto\sld_mcp.proto">
       <Filter>Source Files</Filter>
     </None>
   </ItemGroup>

@@ -69,6 +69,19 @@
   <PropertyGroup Label="UserMacros">
     <SolidWorksInstallDir>C:\Program Files\Dassault Systemes\SOLIDWORKS 3DEXPERIENCE R2026x\SOLIDWORKS</SolidWorksInstallDir>
   </PropertyGroup>
+  <PropertyGroup Label="Vcpkg">
+    <VcpkgEnableManifest>true</VcpkgEnableManifest>
+  </PropertyGroup>
+  <PropertyGroup Label="Vcpkg" Condition="'$(Platform)'=='x64'">
+    <VcpkgTriplet>x64-windows-static-md</VcpkgTriplet>
+  </PropertyGroup>
+  <PropertyGroup Label="Vcpkg" Condition="'$(Platform)'=='Win32'">
+    <VcpkgTriplet>x86-windows-static-md</VcpkgTriplet>
+  </PropertyGroup>
+  <PropertyGroup Label="Proto">
+    <SldMcpProtoDir>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\proto'))</SldMcpProtoDir>
+    <SldMcpProtoOutDir>$(IntDir)generated</SldMcpProtoOutDir>
+  </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <IgnoreImportLibrary>true</IgnoreImportLibrary>
     <LinkIncremental>true</LinkIncremental>
@@ -96,7 +109,8 @@
       <PreprocessorDefinitions>WIN32;_WINDOWS;_DEBUG;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>$(SolidWorksInstallDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolidWorksInstallDir);$(SldMcpProtoOutDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Midl>
       <MkTypLibCompatible>false</MkTypLibCompatible>
@@ -119,6 +133,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <ModuleDefinitionFile>.\sld_mcp.def</ModuleDefinitionFile>
+      <AdditionalDependencies>ws2_32.lib;crypt32.lib;iphlpapi.lib;bcrypt.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <RegisterOutput>true</RegisterOutput>
     </Link>
   </ItemDefinitionGroup>
@@ -133,7 +148,8 @@
       <PreprocessorDefinitions>WIN32;_WINDOWS;NDEBUG;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>$(SolidWorksInstallDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolidWorksInstallDir);$(SldMcpProtoOutDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Midl>
       <MkTypLibCompatible>false</MkTypLibCompatible>
@@ -156,6 +172,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <ModuleDefinitionFile>.\sld_mcp.def</ModuleDefinitionFile>
+      <AdditionalDependencies>ws2_32.lib;crypt32.lib;iphlpapi.lib;bcrypt.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <RegisterOutput>true</RegisterOutput>
@@ -172,7 +189,8 @@
       <PreprocessorDefinitions>_WINDOWS;_DEBUG;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>$(SolidWorksInstallDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolidWorksInstallDir);$(SldMcpProtoOutDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Midl>
       <MkTypLibCompatible>false</MkTypLibCompatible>
@@ -194,6 +212,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <ModuleDefinitionFile>.\sld_mcp.def</ModuleDefinitionFile>
+      <AdditionalDependencies>ws2_32.lib;crypt32.lib;iphlpapi.lib;bcrypt.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <RegisterOutput>true</RegisterOutput>
     </Link>
   </ItemDefinitionGroup>
@@ -208,7 +227,8 @@
       <PreprocessorDefinitions>_WINDOWS;NDEBUG;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>$(SolidWorksInstallDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolidWorksInstallDir);$(SldMcpProtoOutDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Midl>
       <MkTypLibCompatible>false</MkTypLibCompatible>
@@ -230,6 +250,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <ModuleDefinitionFile>.\sld_mcp.def</ModuleDefinitionFile>
+      <AdditionalDependencies>ws2_32.lib;crypt32.lib;iphlpapi.lib;bcrypt.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <RegisterOutput>true</RegisterOutput>
@@ -243,6 +264,8 @@
     <ClInclude Include="sldmcp_i.h" />
     <ClInclude Include="targetver.h" />
     <ClInclude Include="SwAddin.h" />
+    <ClInclude Include="RpcServer.h" />
+    <ClInclude Include="SolidWorksService.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp">
@@ -281,6 +304,18 @@
     </ClCompile>
     <ClCompile Include="sld_mcp.cpp" />
     <ClCompile Include="SwAddin.cpp" />
+    <ClCompile Include="RpcServer.cpp" />
+    <ClCompile Include="SolidWorksService.cpp" />
+    <ClCompile Include="$(SldMcpProtoOutDir)\sld_mcp.pb.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <SDLCheck>false</SDLCheck>
+      <DisableSpecificWarnings>4244;4267;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <ClCompile Include="$(SldMcpProtoOutDir)\sld_mcp.grpc.pb.cc">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <SDLCheck>false</SDLCheck>
+      <DisableSpecificWarnings>4244;4267;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="sld_mcp.rc" />
@@ -288,11 +323,39 @@
   <ItemGroup>
     <None Include="sld_mcp.def" />
     <None Include="sld_mcp.rgs" />
+    <None Include="vcpkg.json" />
+    <None Include="..\proto\sld_mcp.proto" />
   </ItemGroup>
   <ItemGroup>
     <Midl Include="sldmcp.idl" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <!--
+    Generates sld_mcp.pb.{h,cc} and sld_mcp.grpc.pb.{h,cc} from ..\proto\sld_mcp.proto
+    into $(SldMcpProtoOutDir), using the protoc and grpc_cpp_plugin that vcpkg
+    installed alongside grpc (so the generated code always matches the
+    protobuf runtime it links against). Runs after vcpkg's manifest install
+    and before anything compiles.
+  -->
+  <Target Name="SldMcpGenerateProto"
+          AfterTargets="VcpkgInstallManifestDependencies"
+          BeforeTargets="ClCompile"
+          Inputs="$(SldMcpProtoDir)\sld_mcp.proto"
+          Outputs="$(SldMcpProtoOutDir)\sld_mcp.pb.cc;$(SldMcpProtoOutDir)\sld_mcp.pb.h;$(SldMcpProtoOutDir)\sld_mcp.grpc.pb.cc;$(SldMcpProtoOutDir)\sld_mcp.grpc.pb.h">
+    <PropertyGroup>
+      <!-- grpc pulls its code generators in as host dependencies, so they land in the host triplet's tree. -->
+      <_SldMcpHostTriplet>$(VcpkgHostTriplet)</_SldMcpHostTriplet>
+      <_SldMcpHostTriplet Condition="'$(_SldMcpHostTriplet)' == ''">x64-windows</_SldMcpHostTriplet>
+      <_SldMcpProtoc>$(_ZVcpkgInstalledDir)$(_SldMcpHostTriplet)\tools\protobuf\protoc.exe</_SldMcpProtoc>
+      <_SldMcpProtoc Condition="!Exists('$(_SldMcpProtoc)')">$(_ZVcpkgCurrentInstalledDir)tools\protobuf\protoc.exe</_SldMcpProtoc>
+      <_SldMcpGrpcPlugin>$(_ZVcpkgInstalledDir)$(_SldMcpHostTriplet)\tools\grpc\grpc_cpp_plugin.exe</_SldMcpGrpcPlugin>
+      <_SldMcpGrpcPlugin Condition="!Exists('$(_SldMcpGrpcPlugin)')">$(_ZVcpkgCurrentInstalledDir)tools\grpc\grpc_cpp_plugin.exe</_SldMcpGrpcPlugin>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(_SldMcpProtoc)')" Text="protoc.exe not found under $(_ZVcpkgInstalledDir). Is vcpkg integration enabled (vcpkg integrate install) so vcpkg.json gets installed?" />
+    <Error Condition="!Exists('$(_SldMcpGrpcPlugin)')" Text="grpc_cpp_plugin.exe not found under $(_ZVcpkgInstalledDir). Is vcpkg integration enabled (vcpkg integrate install) so vcpkg.json gets installed?" />
+    <MakeDir Directories="$(SldMcpProtoOutDir)" />
+    <Exec Command="&quot;$(_SldMcpProtoc)&quot; --proto_path=&quot;$(SldMcpProtoDir)&quot; --cpp_out=&quot;$(SldMcpProtoOutDir)&quot; --grpc_out=&quot;$(SldMcpProtoOutDir)&quot; --plugin=protoc-gen-grpc=&quot;$(_SldMcpGrpcPlugin)&quot; &quot;$(SldMcpProtoDir)\sld_mcp.proto&quot;" />
+  </Target>
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
 </Project>

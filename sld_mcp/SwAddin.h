@@ -2,10 +2,13 @@
 //
 // This is the entry point SolidWorks talks to: it implements ISwAddin,
 // the interface SolidWorks calls to load/unload a COM add-in. Everything
-// else (the IPC bridge to Rust, the MCP server) hangs off of this.
+// else (the gRPC server the Rust MCP server connects to) hangs off of this.
 #pragma once
 
 #include "resource.h"
+#include <memory>
+
+class RpcServer;
 
 class ATL_NO_VTABLE CSwAddin :
 	public ATL::CComObjectRootEx<ATL::CComSingleThreadModel>,
@@ -14,6 +17,7 @@ class ATL_NO_VTABLE CSwAddin :
 {
 public:
 	CSwAddin() = default;
+	~CSwAddin();
 
 	DECLARE_REGISTRY_RESOURCEID(IDR_SLDMCP)
 	DECLARE_NOT_AGGREGATABLE(CSwAddin)
@@ -28,8 +32,20 @@ public:
 	STDMETHOD(DisconnectFromSW)(VARIANT_BOOL* IsDisconnected);
 
 private:
+	void ReleaseSolidWorks();
+
 	ATL::CComPtr<ISldWorks> m_swApp;
 	long m_addinCookie = 0;
+
+	// m_swApp lives on SolidWorks' main STA thread, but gRPC calls arrive on
+	// its own worker threads, which can't call m_swApp directly without
+	// violating COM apartment-threading rules. Registering it in the Global
+	// Interface Table lets those threads fetch a COM-marshaled proxy instead,
+	// with calls forwarded to the main thread's message loop automatically.
+	ATL::CComPtr<IGlobalInterfaceTable> m_git;
+	DWORD m_swAppGitCookie = 0;
+
+	std::unique_ptr<RpcServer> m_rpcServer;
 };
 
 OBJECT_ENTRY_AUTO(__uuidof(SwMcpAddin), CSwAddin)

@@ -1,0 +1,20 @@
+[package]
+name = "mcp_server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rmcp = { version = "3.0.0-beta.2", features = ["server", "macros", "transport-io", "schemars"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "io-util", "net", "time"] }
+tonic = { version = "0.14", default-features = false, features = ["channel", "codegen"] }
+tonic-prost = "0.14"
+prost = "0.14"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[build-dependencies]
+tonic-prost-build = "0.14"
+protoc-bin-vendored = "3"
