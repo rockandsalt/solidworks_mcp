@@ -12,31 +12,43 @@ using namespace ATL;
 
 namespace
 {
-	// CLSID of CSwMcpAddin, as a registry subkey name.
-	const wchar_t kAddinClsidKey[] = L"SOFTWARE\\SolidWorks\\AddIns\\{c191de66-c755-4b06-928b-c39f69d1afc7}";
+	// SolidWorks lists add-ins found under HKLM\SOFTWARE\SolidWorks\Addins\{CLSID}
+	// (so registering needs admin rights, like the COM registration itself),
+	// and loads one at startup if HKCU\Software\SolidWorks\AddInsStartup\{CLSID}
+	// is 1.
+	const wchar_t kAddinKey[] = L"SOFTWARE\\SolidWorks\\Addins\\{c191de66-c755-4b06-928b-c39f69d1afc7}";
+	const wchar_t kAddinStartupKey[] = L"Software\\SolidWorks\\AddInsStartup\\{c191de66-c755-4b06-928b-c39f69d1afc7}";
 
-	// Registers/unregisters the add-in with SolidWorks, in addition to the
-	// normal COM registration ATL already handles for the CLSID itself.
-	void RegisterSwAddin()
+	// Written by earlier versions of this DLL in place of kAddinStartupKey,
+	// which is where SolidWorks actually reads the startup flag. Cleaned up
+	// on unregister.
+	const wchar_t kLegacyUserKey[] = L"SOFTWARE\\SolidWorks\\AddIns\\{c191de66-c755-4b06-928b-c39f69d1afc7}";
+
+	HRESULT RegisterSwAddin()
 	{
 		CRegKey machineKey;
-		if (machineKey.Create(HKEY_LOCAL_MACHINE, kAddinClsidKey) == ERROR_SUCCESS)
-		{
-			machineKey.SetStringValue(L"Description", L"sld_mcp SolidWorks Add-in");
-			machineKey.SetStringValue(L"Title", L"sld_mcp");
-		}
+		LONG rc = machineKey.Create(HKEY_LOCAL_MACHINE, kAddinKey);
+		if (rc == ERROR_SUCCESS)
+			rc = machineKey.SetDWORDValue(nullptr, 0);
+		if (rc == ERROR_SUCCESS)
+			rc = machineKey.SetStringValue(L"Description", L"sld_mcp SolidWorks Add-in");
+		if (rc == ERROR_SUCCESS)
+			rc = machineKey.SetStringValue(L"Title", L"sld_mcp");
+		if (rc != ERROR_SUCCESS)
+			return HRESULT_FROM_WIN32(rc);
 
 		CRegKey userKey;
-		if (userKey.Create(HKEY_CURRENT_USER, kAddinClsidKey) == ERROR_SUCCESS)
-		{
-			userKey.SetDWORDValue(L"", 1);
-		}
+		rc = userKey.Create(HKEY_CURRENT_USER, kAddinStartupKey);
+		if (rc == ERROR_SUCCESS)
+			rc = userKey.SetDWORDValue(nullptr, 1);
+		return HRESULT_FROM_WIN32(rc);
 	}
 
 	void UnregisterSwAddin()
 	{
-		CRegKey(HKEY_CURRENT_USER).DeleteSubKey(kAddinClsidKey);
-		CRegKey(HKEY_LOCAL_MACHINE).DeleteSubKey(kAddinClsidKey);
+		RegDeleteKeyW(HKEY_CURRENT_USER, kAddinStartupKey);
+		RegDeleteKeyW(HKEY_CURRENT_USER, kLegacyUserKey);
+		RegDeleteKeyW(HKEY_LOCAL_MACHINE, kAddinKey);
 	}
 }
 
@@ -61,7 +73,7 @@ STDAPI DllRegisterServer(void)
 	// registers object, typelib and all interfaces in typelib
 	HRESULT hr = _AtlModule.DllRegisterServer();
 	if (SUCCEEDED(hr))
-		RegisterSwAddin();
+		hr = RegisterSwAddin();
 	return hr;
 }
 

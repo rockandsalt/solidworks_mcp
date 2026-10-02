@@ -6,7 +6,6 @@
 #include "sldmcp_i.h"
 #include "SwAddin.h"
 #include "RpcServer.h"
-#include "SolidWorksService.h"
 #include <objidl.h>
 #include <cwchar>
 #include <exception>
@@ -85,8 +84,7 @@ STDMETHODIMP CSwAddin::ConnectToSW(IDispatch* ThisSW, long Cookie, VARIANT_BOOL*
 
 	try
 	{
-		m_rpcServer = std::make_unique<RpcServer>(GetPort(),
-			std::make_unique<SolidWorksService>(m_git, m_swAppGitCookie));
+		m_rpcServer = std::make_unique<RpcServer>(GetPort(), m_git, m_swAppGitCookie);
 	}
 	catch (const std::exception& ex)
 	{

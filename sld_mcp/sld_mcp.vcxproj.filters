@@ -40,6 +40,9 @@
     <ClInclude Include="SwAddin.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="GrpcIncludes.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="RpcServer.h">
       <Filter>Header Files</Filter>
     </ClInclude>

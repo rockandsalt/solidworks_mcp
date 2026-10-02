@@ -5,8 +5,7 @@
 // and implement it in SolidWorksService.cpp.
 #pragma once
 
-#include <grpcpp/grpcpp.h>
-#include "sld_mcp.grpc.pb.h"
+#include "GrpcIncludes.h"
 
 class SolidWorksService final : public sld_mcp::v1::SolidWorks::Service
 {

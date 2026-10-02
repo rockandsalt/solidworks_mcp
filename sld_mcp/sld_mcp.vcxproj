@@ -71,6 +71,14 @@
   </PropertyGroup>
   <PropertyGroup Label="Vcpkg">
     <VcpkgEnableManifest>true</VcpkgEnableManifest>
+    <!--
+      Build vcpkg ports outside the repo. By default vcpkg builds under
+      vcpkg_installed\<triplet>\vcpkg\blds, which pushes some of grpc's
+      generated sources past Windows' 260-character MAX_PATH limit (cl.exe then
+      fails with C1083 "Cannot open include file"). Only the build scratch moves;
+      the installed headers and libs stay in vcpkg_installed.
+    -->
+    <VcpkgAdditionalInstallOptions>&quot;--x-buildtrees-root=$(LOCALAPPDATA)\vcpkg\bt&quot; &quot;--x-packages-root=$(LOCALAPPDATA)\vcpkg\pk&quot;</VcpkgAdditionalInstallOptions>
   </PropertyGroup>
   <PropertyGroup Label="Vcpkg" Condition="'$(Platform)'=='x64'">
     <VcpkgTriplet>x64-windows-static-md</VcpkgTriplet>
@@ -134,7 +142,8 @@
       <SubSystem>Windows</SubSystem>
       <ModuleDefinitionFile>.\sld_mcp.def</ModuleDefinitionFile>
       <AdditionalDependencies>ws2_32.lib;crypt32.lib;iphlpapi.lib;bcrypt.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <RegisterOutput>true</RegisterOutput>
+      <!-- Registering writes to HKLM, which needs admin: run regsvr32 once from an elevated prompt instead of on every build. -->
+      <RegisterOutput>false</RegisterOutput>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -175,7 +184,8 @@
       <AdditionalDependencies>ws2_32.lib;crypt32.lib;iphlpapi.lib;bcrypt.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <RegisterOutput>true</RegisterOutput>
+      <!-- Registering writes to HKLM, which needs admin: run regsvr32 once from an elevated prompt instead of on every build. -->
+      <RegisterOutput>false</RegisterOutput>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -213,7 +223,8 @@
       <SubSystem>Windows</SubSystem>
       <ModuleDefinitionFile>.\sld_mcp.def</ModuleDefinitionFile>
       <AdditionalDependencies>ws2_32.lib;crypt32.lib;iphlpapi.lib;bcrypt.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <RegisterOutput>true</RegisterOutput>
+      <!-- Registering writes to HKLM, which needs admin: run regsvr32 once from an elevated prompt instead of on every build. -->
+      <RegisterOutput>false</RegisterOutput>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -253,7 +264,8 @@
       <AdditionalDependencies>ws2_32.lib;crypt32.lib;iphlpapi.lib;bcrypt.lib;dbghelp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <RegisterOutput>true</RegisterOutput>
+      <!-- Registering writes to HKLM, which needs admin: run regsvr32 once from an elevated prompt instead of on every build. -->
+      <RegisterOutput>false</RegisterOutput>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -264,6 +276,7 @@
     <ClInclude Include="sldmcp_i.h" />
     <ClInclude Include="targetver.h" />
     <ClInclude Include="SwAddin.h" />
+    <ClInclude Include="GrpcIncludes.h" />
     <ClInclude Include="RpcServer.h" />
     <ClInclude Include="SolidWorksService.h" />
   </ItemGroup>
@@ -308,13 +321,17 @@
     <ClCompile Include="SolidWorksService.cpp" />
     <ClCompile Include="$(SldMcpProtoOutDir)\sld_mcp.pb.cc">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <!-- /Z7: keep debug info in the .obj instead of the shared vc145.pdb (avoids C1090 PDB errors). -->
+      <DebugInformationFormat>OldStyle</DebugInformationFormat>
       <SDLCheck>false</SDLCheck>
-      <DisableSpecificWarnings>4244;4267;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <DisableSpecificWarnings>4996;4018;4099;4244;4267;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <ClCompile Include="$(SldMcpProtoOutDir)\sld_mcp.grpc.pb.cc">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <!-- /Z7: keep debug info in the .obj instead of the shared vc145.pdb (avoids C1090 PDB errors). -->
+      <DebugInformationFormat>OldStyle</DebugInformationFormat>
       <SDLCheck>false</SDLCheck>
-      <DisableSpecificWarnings>4244;4267;%(DisableSpecificWarnings)</DisableSpecificWarnings>
+      <DisableSpecificWarnings>4996;4018;4099;4244;4267;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

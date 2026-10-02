@@ -1,4 +1,7 @@
 // RpcServer.h : owns the grpc::Server hosted inside SolidWorks.
+//
+// Deliberately free of grpc++ headers so SwAddin.cpp doesn't have to include
+// them (see GrpcIncludes.h for why that matters).
 #pragma once
 
 #include <memory>
@@ -12,10 +15,12 @@ namespace grpc
 class RpcServer
 {
 public:
-	// Starts serving `service` on 127.0.0.1:`port` (loopback only). Throws
-	// std::runtime_error if the port can't be bound -- typically because
-	// another SolidWorks instance already has it.
-	RpcServer(int port, std::unique_ptr<grpc::Service> service);
+	// Starts serving the SolidWorks service on 127.0.0.1:`port` (loopback
+	// only). `git` / `swAppCookie` identify the ISldWorks the RPC handlers
+	// use; both must outlive this object. Throws std::runtime_error if the
+	// port can't be bound -- typically because another SolidWorks instance
+	// already has it.
+	RpcServer(int port, IGlobalInterfaceTable* git, DWORD swAppCookie);
 	~RpcServer();
 
 	RpcServer(const RpcServer&) = delete;

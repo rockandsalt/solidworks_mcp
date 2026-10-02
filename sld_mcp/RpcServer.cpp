@@ -1,8 +1,7 @@
 // RpcServer.cpp : grpc::Server lifecycle.
 #include "pch.h"
 #include "RpcServer.h"
-#include <grpcpp/grpcpp.h>
-#include <grpcpp/impl/service_type.h>
+#include "SolidWorksService.h"
 #include <chrono>
 #include <stdexcept>
 #include <string>
@@ -13,8 +12,8 @@ namespace
 	constexpr auto kShutdownGracePeriod = std::chrono::seconds(2);
 }
 
-RpcServer::RpcServer(int port, std::unique_ptr<grpc::Service> service)
-	: m_service(std::move(service))
+RpcServer::RpcServer(int port, IGlobalInterfaceTable* git, DWORD swAppCookie)
+	: m_service(std::make_unique<SolidWorksService>(git, swAppCookie))
 {
 	const std::string address = "127.0.0.1:" + std::to_string(port);
 
