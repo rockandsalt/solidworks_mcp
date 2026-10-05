@@ -1,0 +1,45 @@
+{
+    // Cargo.toml isn't at the repo root, so point rust-analyzer at it.
+    "rust-analyzer.linkedProjects": ["mcp_server/Cargo.toml"],
+    // Separate target dir for rust-analyzer's background checks, so they don't
+    // hold the cargo lock while the build task runs.
+    "rust-analyzer.cargo.targetDir": true,
+
+    // C++ IntelliSense for the add-in. cpptools can't read the .vcxproj, so this
+    // mirrors its Debug|x64 settings. The .tlh files come from pch.h's #import
+    // and the generated/ headers from protoc, so both only exist after one
+    // build of the add-in. framework.h goes first because it must include
+    // winsock2.h before anything pulls in windows.h.
+    "C_Cpp.default.cppStandard": "c++17",
+    "C_Cpp.default.intelliSenseMode": "windows-msvc-x64",
+    "C_Cpp.default.defines": ["_DEBUG", "_WINDOWS", "_USRDLL", "_WINDLL", "UNICODE", "_UNICODE"],
+    "C_Cpp.default.includePath": [
+        "${workspaceFolder}/sld_mcp",
+        "${workspaceFolder}/sld_mcp/sld_mcp/x64/Debug",
+        "${workspaceFolder}/sld_mcp/sld_mcp/x64/Debug/generated",
+        "${workspaceFolder}/sld_mcp/vcpkg_installed/x64-windows-static-md/x64-windows-static-md/include",
+        "C:/Program Files/Dassault Systemes/SOLIDWORKS 3DEXPERIENCE R2026x/SOLIDWORKS"
+    ],
+    "C_Cpp.default.forcedInclude": [
+        "${workspaceFolder}/sld_mcp/framework.h",
+        "${workspaceFolder}/sld_mcp/sld_mcp/x64/Debug/swconst.tlh",
+        "${workspaceFolder}/sld_mcp/sld_mcp/x64/Debug/sldworks.tlh",
+        "${workspaceFolder}/sld_mcp/sld_mcp/x64/Debug/swpublished.tlh"
+    ],
+
+    // Keep build output and vcpkg trees out of search and the file watcher.
+    "search.exclude": {
+        "**/target": true,
+        "sld_mcp/x64": true,
+        "sld_mcp/sld_mcp": true,
+        "sld_mcp/vcpkg_installed": true,
+        "sld_mcp/.vs": true
+    },
+    "files.watcherExclude": {
+        "**/target/**": true,
+        "sld_mcp/x64/**": true,
+        "sld_mcp/sld_mcp/**": true,
+        "sld_mcp/vcpkg_installed/**": true,
+        "sld_mcp/.vs/**": true
+    }
+}

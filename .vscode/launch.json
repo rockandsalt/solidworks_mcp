@@ -1,0 +1,14 @@
+{
+    "version": "2.0.0",
+    "configurations": [
+        {
+            // Debug the add-in: start SolidWorks normally, then attach and pick SLDWORKS.exe.
+            // Also works for mcp_server.exe once an MCP client has started it.
+            "name": "Attach to SLDWORKS.exe / mcp_server.exe",
+            "type": "cppvsdbg",
+            "request": "attach",
+            "processId": "${command:pickProcess}",
+            "symbolSearchPath": "${workspaceFolder}\\sld_mcp\\x64\\Debug;${workspaceFolder}\\mcp_server\\target\\debug"
+        }
+    ]
+}

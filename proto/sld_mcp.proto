@@ -11,9 +11,21 @@ syntax = "proto3";
 
 package sld_mcp.v1;
 
+// All lengths on the wire are in meters, the SolidWorks API's native unit.
+// Converting from user-facing units (mm) is the MCP server's job.
 service SolidWorks {
   // Returns the document SolidWorks currently has active, if any.
   rpc GetActiveDocument(GetActiveDocumentRequest) returns (GetActiveDocumentResponse);
+
+  // Creates a new part from the user's default part template and makes it
+  // the active document.
+  rpc NewPart(NewPartRequest) returns (NewPartResponse);
+
+  // Creates a new sketch on one of the active part's standard planes
+  // containing a single center rectangle, then closes the sketch.
+  // Fails with FAILED_PRECONDITION if the active document isn't a part or
+  // a sketch is already open for editing.
+  rpc CreateRectangleSketch(CreateRectangleSketchRequest) returns (CreateRectangleSketchResponse);
 }
 
 message GetActiveDocumentRequest {}
@@ -26,4 +38,35 @@ message GetActiveDocumentResponse {
 message Document {
   // Window title as SolidWorks shows it (IModelDoc2::GetTitle).
   string title = 1;
+}
+
+message NewPartRequest {}
+
+message NewPartResponse {
+  Document document = 1;
+}
+
+// The three default reference planes every part starts with. Resolved by
+// position in the feature tree (1st/2nd/3rd RefPlane), not by name, so it
+// works with localized or renamed planes.
+enum Plane {
+  PLANE_UNSPECIFIED = 0;
+  PLANE_FRONT = 1;
+  PLANE_TOP = 2;
+  PLANE_RIGHT = 3;
+}
+
+message CreateRectangleSketchRequest {
+  Plane plane = 1;
+  // Rectangle center in the sketch's 2D coordinates, meters.
+  double center_x = 2;
+  double center_y = 3;
+  // Full side lengths, meters. Both must be > 0; equal for a square.
+  double width = 4;
+  double height = 5;
+}
+
+message CreateRectangleSketchResponse {
+  // Feature-tree name of the new sketch, e.g. "Sketch1".
+  string sketch_name = 1;
 }

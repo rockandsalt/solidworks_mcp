@@ -6,6 +6,7 @@
 #pragma once
 
 #include "GrpcIncludes.h"
+#include <mutex>
 
 class SolidWorksService final : public sld_mcp::v1::SolidWorks::Service
 {
@@ -18,6 +19,14 @@ public:
 		const sld_mcp::v1::GetActiveDocumentRequest* request,
 		sld_mcp::v1::GetActiveDocumentResponse* response) override;
 
+	grpc::Status NewPart(grpc::ServerContext* context,
+		const sld_mcp::v1::NewPartRequest* request,
+		sld_mcp::v1::NewPartResponse* response) override;
+
+	grpc::Status CreateRectangleSketch(grpc::ServerContext* context,
+		const sld_mcp::v1::CreateRectangleSketchRequest* request,
+		sld_mcp::v1::CreateRectangleSketchResponse* response) override;
+
 private:
 	// gRPC runs handlers on its own thread pool, not on SolidWorks' main
 	// STA thread, so ISldWorks can't be used directly. This fetches a
@@ -27,4 +36,10 @@ private:
 
 	ATL::CComPtr<IGlobalInterfaceTable> m_git;
 	DWORD m_swAppCookie;
+
+	// Serializes RPCs that change the model. Each COM call is marshaled to
+	// SolidWorks' main thread on its own, so two concurrent multi-step RPCs
+	// (select plane, open sketch, ...) could otherwise interleave their
+	// steps and clobber each other's selection or open sketch.
+	std::mutex m_editMutex;
 };

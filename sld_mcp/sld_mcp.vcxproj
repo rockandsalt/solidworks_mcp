@@ -72,6 +72,12 @@
   <PropertyGroup Label="Vcpkg">
     <VcpkgEnableManifest>true</VcpkgEnableManifest>
     <!--
+      Don't run vcpkg's post-build "applocal" step. It copies dependency DLLs
+      next to the output, but the static-md triplet links grpc statically so
+      there are none, and the step needs pwsh.exe (PowerShell 7).
+    -->
+    <VcpkgApplocalDeps>false</VcpkgApplocalDeps>
+    <!--
       Build vcpkg ports outside the repo. By default vcpkg builds under
       vcpkg_installed\<triplet>\vcpkg\blds, which pushes some of grpc's
       generated sources past Windows' 260-character MAX_PATH limit (cl.exe then

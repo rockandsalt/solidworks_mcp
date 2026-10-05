@@ -15,5 +15,7 @@
 // hardcoded path here.
 #import "sldworks.tlb" raw_interfaces_only, raw_native_types, no_namespace, named_guids
 #import "swpublished.tlb" raw_interfaces_only, raw_native_types, no_namespace, named_guids
+// Enums (swDocumentTypes_e, swUserPreferenceStringValue_e, ...).
+#import "swconst.tlb" raw_interfaces_only, raw_native_types, no_namespace, named_guids
 
 #endif //PCH_H

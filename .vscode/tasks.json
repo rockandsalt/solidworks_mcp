@@ -1,0 +1,77 @@
+{
+    // Ctrl+Shift+B runs "Build all (Debug)". Every task wraps build.ps1, which
+    // can also be run directly from a terminal.
+    "version": "2.0.0",
+    "options": {
+        "cwd": "${workspaceFolder}"
+    },
+    "tasks": [
+        {
+            "label": "Build all (Debug)",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\build.ps1", "-Target", "all"],
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": [
+                "$msCompile",
+                { "base": "$rustc", "fileLocation": ["autoDetect", "${workspaceFolder}\\mcp_server"] }
+            ]
+        },
+        {
+            "label": "Build add-in (Debug)",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\build.ps1", "-Target", "addin"],
+            "group": "build",
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "Build MCP server (Debug)",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\build.ps1", "-Target", "server"],
+            "group": "build",
+            "problemMatcher": { "base": "$rustc", "fileLocation": ["autoDetect", "${workspaceFolder}\\mcp_server"] }
+        },
+        {
+            "label": "Build all (Release)",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\build.ps1", "-Target", "all", "-Configuration", "Release"],
+            "group": "build",
+            "problemMatcher": [
+                "$msCompile",
+                { "base": "$rustc", "fileLocation": ["autoDetect", "${workspaceFolder}\\mcp_server"] }
+            ]
+        },
+        {
+            "label": "Clean all (Debug)",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\build.ps1", "-Target", "all", "-Clean"],
+            "problemMatcher": []
+        },
+        {
+            "label": "Register add-in (admin, once)",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\build.ps1", "-Target", "register"],
+            "problemMatcher": []
+        },
+        {
+            // Opens the MCP Inspector web UI against the Debug server. Needs Node.js.
+            // -e passes RUST_LOG through: the Inspector doesn't forward the parent environment.
+            "label": "Test: MCP Inspector (Debug)",
+            "type": "shell",
+            "command": "npx",
+            "args": [
+                { "value": "@modelcontextprotocol/inspector", "quoting": "strong" },
+                "-e", "RUST_LOG=debug",
+                "${workspaceFolder}\\mcp_server\\target\\debug\\mcp_server.exe"
+            ],
+            "dependsOn": "Build MCP server (Debug)",
+            "isBackground": true,
+            "problemMatcher": []
+        }
+    ]
+}

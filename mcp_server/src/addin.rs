@@ -68,4 +68,20 @@ impl AddinClient {
             .await?;
         Ok(response.into_inner().document)
     }
+
+    pub async fn new_part(&self) -> Result<Option<proto::Document>, tonic::Status> {
+        let mut client = self.client.clone();
+        let response = client.new_part(proto::NewPartRequest {}).await?;
+        Ok(response.into_inner().document)
+    }
+
+    /// Lengths in meters. Returns the new sketch's feature-tree name.
+    pub async fn create_rectangle_sketch(
+        &self,
+        request: proto::CreateRectangleSketchRequest,
+    ) -> Result<String, tonic::Status> {
+        let mut client = self.client.clone();
+        let response = client.create_rectangle_sketch(request).await?;
+        Ok(response.into_inner().sketch_name)
+    }
 }
