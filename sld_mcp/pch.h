@@ -13,7 +13,10 @@
 // SolidWorks type libraries. $(SolidWorksInstallDir) is added as an
 // additional include directory in the vcxproj so this resolves without a
 // hardcoded path here.
-#import "sldworks.tlb" raw_interfaces_only, raw_native_types, no_namespace, named_guids
+// GetOpenFileName and PropertySheet are also windows.h macros (-> ...W under
+// UNICODE), so rename the type-library methods to avoid warning C4278.
+#import "sldworks.tlb" raw_interfaces_only, raw_native_types, no_namespace, named_guids, \
+	rename("GetOpenFileName", "SwGetOpenFileName"), rename("PropertySheet", "SwPropertySheet")
 #import "swpublished.tlb" raw_interfaces_only, raw_native_types, no_namespace, named_guids
 // Enums (swDocumentTypes_e, swUserPreferenceStringValue_e, ...).
 #import "swconst.tlb" raw_interfaces_only, raw_native_types, no_namespace, named_guids

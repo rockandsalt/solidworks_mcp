@@ -220,7 +220,9 @@ impl SolidWorksTools {
     }
 }
 
-#[tool_handler]
+// Use the router built once in new(); the macro default calls
+// Self::tool_router() again on every request.
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for SolidWorksTools {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())

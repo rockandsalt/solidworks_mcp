@@ -18,7 +18,7 @@
         "${workspaceFolder}/sld_mcp/sld_mcp/x64/Debug",
         "${workspaceFolder}/sld_mcp/sld_mcp/x64/Debug/generated",
         "${workspaceFolder}/sld_mcp/vcpkg_installed/x64-windows-static-md/x64-windows-static-md/include",
-        "C:/Program Files/Dassault Systemes/SOLIDWORKS 3DEXPERIENCE R2026x/SOLIDWORKS"
+        "C:/Program Files/Dassault Systemes/SOLIDWORKS Apps 2026/SOLIDWORKS"
     ],
     "C_Cpp.default.forcedInclude": [
         "${workspaceFolder}/sld_mcp/framework.h",
