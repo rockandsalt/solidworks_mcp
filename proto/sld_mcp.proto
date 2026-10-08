@@ -26,6 +26,13 @@ service SolidWorks {
   // Fails with FAILED_PRECONDITION if the active document isn't a part or
   // a sketch is already open for editing.
   rpc CreateRectangleSketch(CreateRectangleSketchRequest) returns (CreateRectangleSketchResponse);
+
+  // Extrudes a closed sketch of the active part into a boss (adds material,
+  // merging with any existing body) with a blind end condition.
+  // Fails with FAILED_PRECONDITION if the active document isn't a part, a
+  // sketch is open for editing, or there is no sketch to extrude; and with
+  // NOT_FOUND if a named sketch doesn't exist.
+  rpc ExtrudeSketch(ExtrudeSketchRequest) returns (ExtrudeSketchResponse);
 }
 
 message GetActiveDocumentRequest {}
@@ -69,4 +76,24 @@ message CreateRectangleSketchRequest {
 message CreateRectangleSketchResponse {
   // Feature-tree name of the new sketch, e.g. "Sketch1".
   string sketch_name = 1;
+}
+
+message ExtrudeSketchRequest {
+  // Feature-tree name of the sketch to extrude, e.g. "Sketch1". Empty means
+  // the most recent sketch not yet used by any feature.
+  string sketch_name = 1;
+  // Total extrusion depth, meters. Must be > 0.
+  double depth = 2;
+  // Extrude away from the sketch plane's normal instead of along it.
+  // Ignored when mid_plane is set.
+  bool reverse_direction = 3;
+  // Extrude symmetrically, depth/2 to each side of the sketch plane.
+  bool mid_plane = 4;
+}
+
+message ExtrudeSketchResponse {
+  // Feature-tree name of the new feature, e.g. "Boss-Extrude1".
+  string feature_name = 1;
+  // The sketch that was extruded (useful when the request left it empty).
+  string sketch_name = 2;
 }

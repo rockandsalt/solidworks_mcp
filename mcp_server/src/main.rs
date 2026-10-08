@@ -67,6 +67,24 @@ struct RectangleSketchParams {
     center_y_mm: f64,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct ExtrudeSketchParams {
+    /// Extrusion depth, in millimeters. With mid_plane this is the total depth, split evenly
+    /// across both sides of the sketch plane.
+    depth_mm: f64,
+    /// Feature-tree name of the sketch to extrude, e.g. "Sketch1". Omit to extrude the most
+    /// recently created sketch that no feature uses yet.
+    #[serde(default)]
+    sketch_name: Option<String>,
+    /// Extrude in the opposite direction (away from the sketch plane's normal). Ignored with
+    /// mid_plane. Defaults to false.
+    #[serde(default)]
+    reverse_direction: bool,
+    /// Extrude symmetrically to both sides of the sketch plane. Defaults to false.
+    #[serde(default)]
+    mid_plane: bool,
+}
+
 /// SolidWorks API lengths are in meters; tools take millimeters.
 const MM_PER_M: f64 = 1000.0;
 
@@ -155,6 +173,54 @@ impl SolidWorksTools {
         )
         .await
     }
+
+    #[tool(
+        description = "Extrude a closed sketch of the active part into a solid (boss-extrude, \
+                       blind depth), merging with any existing body. By default extrudes the \
+                       most recently created sketch that isn't used by a feature yet, e.g. the \
+                       one create_square_sketch or create_rectangle_sketch just made. Requires \
+                       an open part with no sketch being edited."
+    )]
+    async fn extrude_sketch(
+        &self,
+        Parameters(params): Parameters<ExtrudeSketchParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let depth_mm = params.depth_mm;
+        if !(depth_mm.is_finite() && depth_mm > 0.0) {
+            return Err(McpError::invalid_params(
+                format!("depth must be a positive number of millimeters, got {depth_mm}"),
+                None,
+            ));
+        }
+        let sketch_name = params
+            .sketch_name
+            .map(|name| name.trim().to_string())
+            .unwrap_or_default();
+
+        let request = proto::ExtrudeSketchRequest {
+            sketch_name,
+            depth: depth_mm / MM_PER_M,
+            reverse_direction: params.reverse_direction,
+            mid_plane: params.mid_plane,
+        };
+        let result = self
+            .addin
+            .extrude_sketch(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+
+        let how = if params.mid_plane {
+            " (mid-plane)"
+        } else if params.reverse_direction {
+            " (reversed)"
+        } else {
+            ""
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+            "created {} by extruding {} {depth_mm} mm{how}",
+            result.feature_name, result.sketch_name
+        ))]))
+    }
 }
 
 impl SolidWorksTools {
@@ -213,7 +279,9 @@ impl SolidWorksTools {
                     .to_string()
             }
             // The add-in's message already says what's wrong and what to do.
-            Code::FailedPrecondition | Code::InvalidArgument => status.message().to_string(),
+            Code::FailedPrecondition | Code::InvalidArgument | Code::NotFound => {
+                status.message().to_string()
+            }
             code => format!("sld_mcp add-in error ({code:?}): {}", status.message()),
         };
         McpError::internal_error(message, None)

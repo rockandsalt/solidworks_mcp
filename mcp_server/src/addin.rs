@@ -84,4 +84,14 @@ impl AddinClient {
         let response = client.create_rectangle_sketch(request).await?;
         Ok(response.into_inner().sketch_name)
     }
+
+    /// Depth in meters.
+    pub async fn extrude_sketch(
+        &self,
+        request: proto::ExtrudeSketchRequest,
+    ) -> Result<proto::ExtrudeSketchResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        let response = client.extrude_sketch(request).await?;
+        Ok(response.into_inner())
+    }
 }

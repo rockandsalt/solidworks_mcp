@@ -27,6 +27,10 @@ public:
 		const sld_mcp::v1::CreateRectangleSketchRequest* request,
 		sld_mcp::v1::CreateRectangleSketchResponse* response) override;
 
+	grpc::Status ExtrudeSketch(grpc::ServerContext* context,
+		const sld_mcp::v1::ExtrudeSketchRequest* request,
+		sld_mcp::v1::ExtrudeSketchResponse* response) override;
+
 private:
 	// gRPC runs handlers on its own thread pool, not on SolidWorks' main
 	// STA thread, so ISldWorks can't be used directly. This fetches a
