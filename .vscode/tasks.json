@@ -1,17 +1,46 @@
 {
-    // Ctrl+Shift+B runs "Build all (Debug)". Every task wraps build.ps1, which
-    // can also be run directly from a terminal.
+    // Ctrl+Shift+B runs "Dev cycle (Debug)": stop the MCP test session, build
+    // both, then resume it. Close SolidWorks first when the add-in changed.
+    // Every task wraps build.ps1, which can also be run directly from a terminal.
     "version": "2.0.0",
     "options": {
         "cwd": "${workspaceFolder}"
     },
     "tasks": [
         {
+            "label": "Dev cycle (Debug)",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\build.ps1", "-Target", "all", "-Cycle"],
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": [
+                "$msCompile",
+                { "base": "$rustc", "fileLocation": ["autoDetect", "${workspaceFolder}\\mcp_server"] }
+            ]
+        },
+        {
+            // Rust-only changes: SolidWorks can stay open.
+            "label": "Dev cycle: MCP server only (Debug)",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\build.ps1", "-Target", "server", "-Cycle"],
+            "group": "build",
+            "problemMatcher": { "base": "$rustc", "fileLocation": ["autoDetect", "${workspaceFolder}\\mcp_server"] }
+        },
+        {
+            // A Claude Code session with only this MCP server, in its own window.
+            "label": "Open MCP test session",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\build.ps1", "-Target", "test-session"],
+            "problemMatcher": []
+        },
+        {
             "label": "Build all (Debug)",
             "type": "process",
             "command": "powershell.exe",
             "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\build.ps1", "-Target", "all"],
-            "group": { "kind": "build", "isDefault": true },
+            "group": "build",
             "problemMatcher": [
                 "$msCompile",
                 { "base": "$rustc", "fileLocation": ["autoDetect", "${workspaceFolder}\\mcp_server"] }

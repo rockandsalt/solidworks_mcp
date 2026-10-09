@@ -5,15 +5,22 @@ use addin::proto;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolResult, ContentBlock, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo,
+    CacheScope, CallToolResult, ContentBlock, Implementation, ListToolsResult,
+    PaginatedRequestParams, ProtocolVersion, ServerCapabilities, ServerInfo,
 };
+use rmcp::service::RequestContext;
 use rmcp::transport::stdio;
 use rmcp::{
-    ErrorData as McpError, ServerHandler, ServiceExt, schemars, tool, tool_handler, tool_router,
+    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt, schemars, tool, tool_handler,
+    tool_router,
 };
 use serde::Deserialize;
 use tonic::Code;
 use tracing_subscriber::EnvFilter;
+
+/// How long a client may cache the tool list. The list is fixed for the life
+/// of the process, so this only bounds how long a cache outlives a rebuild.
+const TOOL_LIST_TTL_MS: u64 = 5 * 60 * 1000;
 
 /// One of the three default reference planes every part starts with.
 #[derive(Debug, Clone, Copy, Default, Deserialize, schemars::JsonSchema)]
@@ -292,9 +299,25 @@ impl SolidWorksTools {
 // Self::tool_router() again on every request.
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for SolidWorksTools {
+    // Written by hand because the one #[tool_handler] generates leaves out
+    // ttlMs and cacheScope. Protocol 2026-07-28 requires both on tools/list,
+    // and Claude Code rejects the whole tool list without them.
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, McpError> {
+        Ok(ListToolsResult::with_all_items(self.tool_router.list_all())
+            .with_ttl_ms(TOOL_LIST_TTL_MS)
+            .with_cache_scope(CacheScope::Public))
+    }
+
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::from_build_env())
+            // from_build_env() expands rmcp's own Cargo env vars, so it reports "rmcp".
+            .with_server_info(Implementation::new("solidworks-mcp", env!("CARGO_PKG_VERSION")))
+            // Only a fallback: rmcp answers with whichever known version the
+            // client asks for, currently 2026-07-28 for Claude Code.
             .with_protocol_version(ProtocolVersion::V_2024_11_05)
             .with_instructions(
                 "Bridges to a running SolidWorks instance via the sld_mcp COM add-in, \
