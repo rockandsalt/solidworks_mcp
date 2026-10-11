@@ -33,6 +33,27 @@ service SolidWorks {
   // sketch is open for editing, or there is no sketch to extrude; and with
   // NOT_FOUND if a named sketch doesn't exist.
   rpc ExtrudeSketch(ExtrudeSketchRequest) returns (ExtrudeSketchResponse);
+
+  // Read-only look at the active part: its features, bodies, faces and/or
+  // edges with their geometry. Every entity comes with a persist_id that
+  // other RPCs accept to target it (e.g. sketching on a face). Fails with
+  // FAILED_PRECONDITION if the active document isn't a part.
+  rpc InspectModel(InspectModelRequest) returns (InspectModelResponse);
+}
+
+// ---------------------------------------------------------------------------
+// Shared geometry types. All coordinates are in the part's model space.
+
+message Vec3 {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+}
+
+// Axis-aligned bounding box.
+message Box3 {
+  Vec3 min = 1;
+  Vec3 max = 2;
 }
 
 message GetActiveDocumentRequest {}
@@ -64,18 +85,40 @@ enum Plane {
 }
 
 message CreateRectangleSketchRequest {
+  // Ignored when `on_persist_id` is set.
   Plane plane = 1;
-  // Rectangle center in the sketch's 2D coordinates, meters.
+  // Rectangle center in the sketch's 2D coordinates, meters. Ignored when
+  // `center_model` is set.
   double center_x = 2;
   double center_y = 3;
-  // Full side lengths, meters. Both must be > 0; equal for a square.
+  // Full side lengths, meters, along the sketch's X and Y axes. Both must be
+  // > 0; equal for a square.
   double width = 4;
   double height = 5;
+  // Sketch on this entity instead of `plane`: a persist_id from InspectModel
+  // of a planar face or a reference plane feature. NOT_FOUND if it no longer
+  // resolves, INVALID_ARGUMENT if it isn't something you can sketch on.
+  bytes on_persist_id = 6;
+  // Rectangle center as a point in model space, meters, projected onto the
+  // sketch plane. When unset on a face, defaults to the center of the face's
+  // bounding box.
+  Vec3 center_model = 7;
+}
+
+// Where a sketch sits in model space: maps the sketch's 2D axes to 3D.
+message SketchFrame {
+  Vec3 origin = 1;  // sketch (0, 0)
+  Vec3 x_axis = 2;  // unit vector along sketch X (rectangle width)
+  Vec3 y_axis = 3;  // unit vector along sketch Y (rectangle height)
+  Vec3 normal = 4;  // unit sketch normal; a boss extrudes along it
 }
 
 message CreateRectangleSketchResponse {
   // Feature-tree name of the new sketch, e.g. "Sketch1".
   string sketch_name = 1;
+  SketchFrame frame = 2;
+  // The rectangle's center in model space, meters.
+  Vec3 center_model = 3;
 }
 
 message ExtrudeSketchRequest {
@@ -89,6 +132,11 @@ message ExtrudeSketchRequest {
   bool reverse_direction = 3;
   // Extrude symmetrically, depth/2 to each side of the sketch plane.
   bool mid_plane = 4;
+  // Remove material (cut-extrude) instead of adding it.
+  bool cut = 5;
+  // Cuts only: go through the whole part; `depth` and `mid_plane` are
+  // ignored.
+  bool through_all = 6;
 }
 
 message ExtrudeSketchResponse {
@@ -96,4 +144,139 @@ message ExtrudeSketchResponse {
   string feature_name = 1;
   // The sketch that was extruded (useful when the request left it empty).
   string sketch_name = 2;
+}
+
+// ---------------------------------------------------------------------------
+// InspectModel
+
+message InspectModelRequest {
+  // Which entity kinds to return; any combination.
+  bool include_features = 1;
+  bool include_bodies = 2;
+  bool include_faces = 3;
+  bool include_edges = 4;
+
+  // Restrict faces/edges to one entity: a body, a feature (the faces it
+  // created) or a face (edges only). At most one of these may be set; with
+  // neither, faces/edges cover every body in the part.
+  bytes scope_persist_id = 5;
+  string scope_feature_name = 6;
+}
+
+message InspectModelResponse {
+  Document document = 1;
+  repeated FeatureInfo features = 2;
+  repeated BodyInfo bodies = 3;
+  repeated FaceInfo faces = 4;
+  repeated EdgeInfo edges = 5;
+  // Set when faces or edges were cut off at the add-in's safety limit;
+  // narrow the scope to see the rest.
+  bool truncated = 6;
+}
+
+// A persist_id is SolidWorks' persistent reference for an entity
+// (IModelDocExtension::GetPersistReference3): opaque bytes that keep
+// identifying the same entity across rebuilds and later edits, for as long
+// as the entity exists in this document.
+
+message FeatureInfo {
+  bytes persist_id = 1;
+  string name = 2;       // as shown in the feature tree
+  string type_name = 3;  // IFeature::GetTypeName2, e.g. "ProfileFeature" (sketch), "Extrusion", "Cut", "RefPlane"
+  bool suppressed = 4;
+  repeated string parents = 5;   // names of features this one depends on
+  repeated string children = 6;  // names of features that depend on this one
+}
+
+message BodyInfo {
+  bytes persist_id = 1;
+  string name = 2;
+  bool solid = 3;  // false for surface (sheet) bodies
+  Box3 box = 4;
+  // Unset if SolidWorks can't compute mass properties for the body.
+  MassProperties mass = 5;
+  int32 face_count = 6;
+  int32 edge_count = 7;
+}
+
+message MassProperties {
+  double volume = 1;        // m^3
+  double surface_area = 2;  // m^2
+  Vec3 center_of_mass = 3;  // the centroid (uniform density)
+}
+
+enum SurfaceType {
+  SURFACE_TYPE_UNSPECIFIED = 0;
+  SURFACE_TYPE_PLANE = 1;
+  SURFACE_TYPE_CYLINDER = 2;
+  SURFACE_TYPE_CONE = 3;
+  SURFACE_TYPE_SPHERE = 4;
+  SURFACE_TYPE_TORUS = 5;
+  SURFACE_TYPE_BSPLINE = 6;
+  SURFACE_TYPE_BLEND = 7;
+  SURFACE_TYPE_OFFSET = 8;
+  SURFACE_TYPE_EXTRUSION = 9;
+  SURFACE_TYPE_REVOLUTION = 10;
+}
+
+message FaceInfo {
+  bytes persist_id = 1;
+  bytes body_persist_id = 2;
+  string feature_name = 3;  // the feature that created the face
+  SurfaceType surface_type = 4;
+  double area = 5;          // m^2
+  Box3 box = 6;
+  int32 edge_count = 7;
+  // True when the face's outward direction is opposite to its underlying
+  // surface's own normal (IFace2::FaceInSurfaceSense). SolidWorks doesn't
+  // orient surface normals consistently -- a cut hole's cylinder can point
+  // either way -- so this alone can't tell a hole from a boss; use
+  // sample_point / sample_normal for that.
+  bool reversed = 8;
+
+  // Surface parameters; which ones are set depends on surface_type:
+  //   PLANE:    normal (outward, unit), origin (a point on the plane)
+  //   CYLINDER: origin (on the axis), axis, radius
+  //   CONE:     origin (on the axis), axis, radius, half_angle (radians)
+  //   SPHERE:   origin (center), radius
+  //   TORUS:    origin (center), axis, radius (major), minor_radius
+  Vec3 normal = 9;
+  Vec3 origin = 10;
+  Vec3 axis = 11;
+  double radius = 12;
+  double minor_radius = 13;
+  double half_angle = 14;
+
+  // Non-planar faces: a point on the face and the face's outward unit normal
+  // there (pointing out of the material), from SolidWorks' display
+  // tessellation. Unset if the face has no tessellation.
+  Vec3 sample_point = 15;
+  Vec3 sample_normal = 16;
+}
+
+enum CurveType {
+  CURVE_TYPE_UNSPECIFIED = 0;
+  CURVE_TYPE_LINE = 1;
+  CURVE_TYPE_CIRCLE = 2;
+  CURVE_TYPE_ELLIPSE = 3;
+  CURVE_TYPE_INTERSECTION = 4;
+  CURVE_TYPE_BSPLINE = 5;
+  CURVE_TYPE_SPCURVE = 6;
+  CURVE_TYPE_CONSTPARAM = 7;
+  CURVE_TYPE_TRIMMED = 8;
+}
+
+message EdgeInfo {
+  bytes persist_id = 1;
+  bytes body_persist_id = 2;
+  CurveType curve_type = 3;
+  double length = 4;  // m
+  Vec3 start = 5;
+  Vec3 end = 6;       // equals start for a closed edge such as a full circle
+  // The one or two faces meeting at this edge.
+  repeated bytes face_persist_ids = 7;
+  // CIRCLE only.
+  Vec3 center = 8;
+  Vec3 axis = 9;
+  double radius = 10;
 }

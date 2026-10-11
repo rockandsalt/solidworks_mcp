@@ -31,6 +31,10 @@ public:
 		const sld_mcp::v1::ExtrudeSketchRequest* request,
 		sld_mcp::v1::ExtrudeSketchResponse* response) override;
 
+	grpc::Status InspectModel(grpc::ServerContext* context,
+		const sld_mcp::v1::InspectModelRequest* request,
+		sld_mcp::v1::InspectModelResponse* response) override;
+
 private:
 	// gRPC runs handlers on its own thread pool, not on SolidWorks' main
 	// STA thread, so ISldWorks can't be used directly. This fetches a

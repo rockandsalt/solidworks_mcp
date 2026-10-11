@@ -285,6 +285,7 @@
     <ClInclude Include="GrpcIncludes.h" />
     <ClInclude Include="RpcServer.h" />
     <ClInclude Include="SolidWorksService.h" />
+    <ClInclude Include="ComVariant.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp">

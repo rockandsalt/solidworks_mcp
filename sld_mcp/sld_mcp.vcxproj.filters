@@ -49,6 +49,9 @@
     <ClInclude Include="SolidWorksService.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="ComVariant.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="sld_mcp.cpp">

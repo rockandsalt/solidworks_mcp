@@ -75,14 +75,14 @@ impl AddinClient {
         Ok(response.into_inner().document)
     }
 
-    /// Lengths in meters. Returns the new sketch's feature-tree name.
+    /// Lengths in meters.
     pub async fn create_rectangle_sketch(
         &self,
         request: proto::CreateRectangleSketchRequest,
-    ) -> Result<String, tonic::Status> {
+    ) -> Result<proto::CreateRectangleSketchResponse, tonic::Status> {
         let mut client = self.client.clone();
         let response = client.create_rectangle_sketch(request).await?;
-        Ok(response.into_inner().sketch_name)
+        Ok(response.into_inner())
     }
 
     /// Depth in meters.
@@ -92,6 +92,16 @@ impl AddinClient {
     ) -> Result<proto::ExtrudeSketchResponse, tonic::Status> {
         let mut client = self.client.clone();
         let response = client.extrude_sketch(request).await?;
+        Ok(response.into_inner())
+    }
+
+    /// Lengths in meters.
+    pub async fn inspect_model(
+        &self,
+        request: proto::InspectModelRequest,
+    ) -> Result<proto::InspectModelResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        let response = client.inspect_model(request).await?;
         Ok(response.into_inner())
     }
 }
