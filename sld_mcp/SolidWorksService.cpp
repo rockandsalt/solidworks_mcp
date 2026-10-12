@@ -4,6 +4,7 @@
 #include "SolidWorksService.h"
 #include "ComVariant.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <map>
@@ -602,6 +603,8 @@ namespace
 	class EntitySet
 	{
 	public:
+		explicit EntitySet(size_t cap = kMaxInspectedEntities) : m_cap(cap) {}
+
 		// Adds each element of a VARIANT array that is a T. Returns false
 		// once the cap is reached.
 		bool AddAll(const VARIANT& array)
@@ -620,7 +623,7 @@ namespace
 				return true;
 			if (!m_seen.insert(identity.p).second)
 				return true;
-			if (m_items.size() >= kMaxInspectedEntities)
+			if (m_items.size() >= m_cap)
 			{
 				m_truncated = true;
 				return false;
@@ -637,8 +640,137 @@ namespace
 		std::vector<ATL::CComPtr<T>> m_items;
 		std::set<IUnknown*> m_seen;
 		std::vector<ATL::CComPtr<IUnknown>> m_alive;
+		size_t m_cap;
 		bool m_truncated = false;
 	};
+
+	// ---- GetMesh --------------------------------------------------------------
+
+	// Rendering needs every face, so the caps are well above InspectModel's;
+	// they only guard against a pathological part stalling the UI thread.
+	constexpr size_t kMaxMeshFaces = 20000;
+	constexpr size_t kMaxMeshEdges = 40000;
+
+	void AppendFloats(const std::vector<double>& values, google::protobuf::RepeatedField<float>* out)
+	{
+		out->Reserve(out->size() + static_cast<int>(values.size()));
+		for (double v : values)
+			out->Add(static_cast<float>(v));
+	}
+
+	// The face's display tessellation. False if it has none (nothing to draw).
+	bool MeshFace(IFace2* face, sld_mcp::v1::FaceMesh* mesh)
+	{
+		// 3 vertices x 3 coordinates per triangle, meters with NoConversion.
+		ATL::CComVariant triangles;
+		if (FAILED(face->GetTessTriangles(VARIANT_TRUE, &triangles)))
+			return false;
+		std::vector<double> t = comvariant::ToDoubles(triangles);
+		t.resize(t.size() - t.size() % 9);
+		if (t.empty())
+			return false;
+		AppendFloats(t, mesh->mutable_triangles());
+
+		// One normal per vertex, same order; dropped if it doesn't line up.
+		ATL::CComVariant norms;
+		if (SUCCEEDED(face->GetTessNorms(&norms)))
+		{
+			const std::vector<double> n = comvariant::ToDoubles(norms);
+			if (n.size() == t.size())
+				AppendFloats(n, mesh->mutable_normals());
+		}
+		return true;
+	}
+
+	// A point on `curve` at parameter `t`. False if SolidWorks won't say.
+	bool CurvePoint(ICurve* curve, double t, std::array<double, 3>& point)
+	{
+		ATL::CComVariant result;
+		if (FAILED(curve->Evaluate2(t, 0, &result)))
+			return false;
+		const std::vector<double> p = comvariant::ToDoubles(result);
+		if (p.size() < 3)
+			return false;
+		std::copy(p.begin(), p.begin() + 3, point.begin());
+		return true;
+	}
+
+	// The edge as a polyline (x, y, z, ...), meters. Lines are just their
+	// two ends; curves use ICurve::GetTessPts between points on the edge.
+	// A closed edge (a full circle) starts and ends at the same point, which
+	// doesn't say which way round to go, so it's done in thirds.
+	bool TessellateEdge(IEdge* edge, double chordTolerance, double lengthTolerance, std::vector<double>& points)
+	{
+		points.clear();
+		// [start point, end point, start param, end param, ...]
+		ATL::CComVariant curveParams;
+		if (FAILED(edge->GetCurveParams2(&curveParams)))
+			return false;
+		const std::vector<double> c = comvariant::ToDoubles(curveParams);
+		if (c.size() < 8)
+			return false;
+		const std::array<double, 3> start = { c[0], c[1], c[2] };
+		const std::array<double, 3> end = { c[3], c[4], c[5] };
+		const double t0 = c[6], t1 = c[7];
+
+		ATL::CComPtr<ICurve> curve;
+		long identity = 0;
+		if (FAILED(edge->IGetCurve(&curve)) || !curve || FAILED(curve->Identity(&identity)) ||
+			identity == LINE_TYPE)
+		{
+			points.assign(start.begin(), start.end());
+			points.insert(points.end(), end.begin(), end.end());
+			return true;
+		}
+
+		const double gap = std::sqrt((start[0] - end[0]) * (start[0] - end[0]) +
+			(start[1] - end[1]) * (start[1] - end[1]) + (start[2] - end[2]) * (start[2] - end[2]));
+		const int pieces = gap < 1e-9 ? 3 : 1;
+		std::vector<std::array<double, 3>> stops = { start };
+		for (int i = 1; i < pieces; ++i)
+		{
+			std::array<double, 3> p{};
+			if (!CurvePoint(curve, t0 + (t1 - t0) * i / pieces, p))
+				break;
+			stops.push_back(p);
+		}
+		stops.push_back(end);
+
+		bool ok = stops.size() == static_cast<size_t>(pieces) + 1;
+		for (size_t i = 0; ok && i + 1 < stops.size(); ++i)
+		{
+			ATL::CComVariant from = comvariant::FromDoubles(stops[i].data(), 3);
+			ATL::CComVariant to = comvariant::FromDoubles(stops[i + 1].data(), 3);
+			ATL::CComVariant tess;
+			std::vector<double> segment;
+			if (FAILED(curve->GetTessPts(chordTolerance, lengthTolerance, from, to, &tess)) ||
+				(segment = comvariant::ToDoubles(tess)).size() < 6)
+			{
+				ok = false;
+				break;
+			}
+			segment.resize(segment.size() - segment.size() % 3);
+			// Each piece starts where the last one ended.
+			points.insert(points.end(), segment.begin() + (points.empty() ? 0 : 3), segment.end());
+		}
+		if (ok && points.size() >= 6)
+			return true;
+
+		// Fall back to sampling the parameter range evenly.
+		constexpr int kSamples = 32;
+		points.clear();
+		for (int i = 0; i <= kSamples; ++i)
+		{
+			std::array<double, 3> p{};
+			if (CurvePoint(curve, t0 + (t1 - t0) * i / kSamples, p))
+				points.insert(points.end(), p.begin(), p.end());
+		}
+		if (points.size() >= 6)
+			return true;
+		points.assign(start.begin(), start.end());
+		points.insert(points.end(), end.begin(), end.end());
+		return gap > 0.0;
+	}
 }
 
 SolidWorksService::SolidWorksService(IGlobalInterfaceTable* git, DWORD swAppCookie)
@@ -1313,5 +1445,136 @@ grpc::Status SolidWorksService::InspectModel(grpc::ServerContext* /*context*/,
 	for (const auto& edge : edges.Items())
 		InspectEdge(edge, ids, response->add_edges());
 	response->set_truncated(faces.Truncated() || edges.Truncated());
+	return grpc::Status::OK;
+}
+
+grpc::Status SolidWorksService::GetMesh(grpc::ServerContext* /*context*/,
+	const sld_mcp::v1::GetMeshRequest* request,
+	sld_mcp::v1::GetMeshResponse* response)
+{
+	// Read-only, but must not see a half-finished edit (see InspectModel).
+	std::lock_guard<std::mutex> lock(m_editMutex);
+	ComApartment com;
+	if (!com.Ok())
+		return ComApartmentError();
+
+	ATL::CComPtr<ISldWorks> swApp;
+	if (grpc::Status status = GetSwApp(swApp); !status.ok())
+		return status;
+
+	ATL::CComPtr<IModelDoc2> doc;
+	if (grpc::Status status = GetActivePart(swApp, doc); !status.ok())
+		return status;
+	ATL::CComQIPtr<IPartDoc> part(doc.p);
+	if (!part)
+		return grpc::Status(grpc::StatusCode::INTERNAL, "active part has no IPartDoc interface");
+
+	ATL::CComPtr<IModelDocExtension> ext;
+	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+		return status;
+	PersistIds ids(ext);
+
+	ATL::CComBSTR title;
+	HRESULT hr = doc->GetTitle(&title);
+	if (FAILED(hr))
+		return ComError("IModelDoc2::GetTitle", hr);
+	response->mutable_document()->set_title(ToUtf8(title));
+
+	// Only what's shown: hidden bodies aren't in the picture either.
+	ATL::CComVariant all;
+	hr = part->GetBodies2(swAllBodies, VARIANT_TRUE, &all);
+	if (FAILED(hr))
+		return ComError("IPartDoc::GetBodies2", hr);
+	std::vector<ATL::CComPtr<IBody2>> bodies;
+	for (const auto& disp : comvariant::ToDispatches(all))
+		if (ATL::CComQIPtr<IBody2> body(disp.p); body)
+			bodies.push_back(body);
+
+	// Edge tessellation tolerances scale with the part: chords within 0.1%
+	// of its size, segments no longer than 5% of it.
+	double lo[3] = { HUGE_VAL, HUGE_VAL, HUGE_VAL }, hi[3] = { -HUGE_VAL, -HUGE_VAL, -HUGE_VAL };
+	for (const auto& body : bodies)
+	{
+		ATL::CComVariant box;
+		const std::vector<double> b = SUCCEEDED(body->GetBodyBox(&box)) ? comvariant::ToDoubles(box) : std::vector<double>{};
+		if (b.size() < 6)
+			continue;
+		for (int i = 0; i < 3; ++i)
+		{
+			lo[i] = std::min(lo[i], b[i]);
+			hi[i] = std::max(hi[i], b[i + 3]);
+		}
+	}
+	double size = 0.0;
+	if (lo[0] <= hi[0])
+		size = std::sqrt((hi[0] - lo[0]) * (hi[0] - lo[0]) + (hi[1] - lo[1]) * (hi[1] - lo[1]) +
+			(hi[2] - lo[2]) * (hi[2] - lo[2]));
+	if (!(size > 0.0) || !std::isfinite(size))
+		size = 0.1;
+	const double chordTolerance = size * 1e-3;
+	const double lengthTolerance = size * 0.05;
+
+	size_t faceCount = 0, edgeCount = 0;
+	bool truncated = false;
+	for (const auto& body : bodies)
+	{
+		const std::string bodyId = ids.Get(body);
+
+		ATL::CComVariant faces;
+		if (SUCCEEDED(body->GetFaces(&faces)))
+		{
+			for (const auto& disp : comvariant::ToDispatches(faces))
+			{
+				ATL::CComQIPtr<IFace2> face(disp.p);
+				if (!face)
+					continue;
+				if (faceCount >= kMaxMeshFaces)
+				{
+					truncated = true;
+					break;
+				}
+				sld_mcp::v1::FaceMesh mesh;
+				if (!MeshFace(face, &mesh))
+					continue;
+				mesh.set_persist_id(ids.Get(face));
+				mesh.set_body_persist_id(bodyId);
+				ATL::CComPtr<IFeature> feature;
+				if (SUCCEEDED(face->IGetFeature(&feature)) && feature)
+				{
+					mesh.set_feature_persist_id(ids.Get(feature));
+					mesh.set_feature_name(FeatureName(feature));
+				}
+				response->add_faces()->Swap(&mesh);
+				++faceCount;
+			}
+		}
+
+		if (!request->include_edges())
+			continue;
+		ATL::CComVariant edges;
+		if (SUCCEEDED(body->GetEdges(&edges)))
+		{
+			std::vector<double> points;
+			for (const auto& disp : comvariant::ToDispatches(edges))
+			{
+				ATL::CComQIPtr<IEdge> edge(disp.p);
+				if (!edge)
+					continue;
+				if (edgeCount >= kMaxMeshEdges)
+				{
+					truncated = true;
+					break;
+				}
+				if (!TessellateEdge(edge, chordTolerance, lengthTolerance, points))
+					continue;
+				sld_mcp::v1::EdgePolyline* polyline = response->add_edges();
+				polyline->set_persist_id(ids.Get(edge));
+				polyline->set_body_persist_id(bodyId);
+				AppendFloats(points, polyline->mutable_points());
+				++edgeCount;
+			}
+		}
+	}
+	response->set_truncated(truncated);
 	return grpc::Status::OK;
 }

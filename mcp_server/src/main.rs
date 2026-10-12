@@ -1,9 +1,12 @@
 mod addin;
 mod inspect;
+mod render;
 
 use std::sync::{Arc, Mutex};
 
 use addin::AddinClient;
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use addin::proto;
 use inspect::{IdRegistry, MM_PER_M};
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -222,12 +225,33 @@ struct InspectModelParams {
     offset: Option<usize>,
 }
 
+const DEFAULT_TILE_PX: u32 = 512;
+const TILE_PX_RANGE: std::ops::RangeInclusive<u32> = 256..=1024;
+const MAX_VIEWS: usize = 9;
+
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+struct RenderViewsParams {
+    /// Views to draw, in order, as a grid. Defaults to ["top", "isometric", "front", "right"]
+    /// in a 2x2 grid: top above front and right beside it, like a third-angle drawing.
+    #[serde(default)]
+    views: Option<Vec<render::View>>,
+    /// Entities to color in, each an id from inspect_model ("face:7", "edge:3", "body:1",
+    /// "feature:5") or a feature name ("Cut-Extrude1", for the faces it made). Up to 6; each
+    /// gets its own color, reported in the result.
+    #[serde(default)]
+    highlight: Vec<String>,
+    /// Size of each view in pixels (square), 256 to 1024. Defaults to 512.
+    #[serde(default)]
+    size_px: Option<u32>,
+}
+
 #[derive(Clone)]
 struct SolidWorksTools {
     tool_router: ToolRouter<SolidWorksTools>,
     addin: AddinClient,
     /// Short IDs handed out by inspect_model, shared by every tool call.
     ids: Arc<Mutex<IdRegistry>>,
+    renderer: Arc<render::Renderer>,
 }
 
 #[tool_router]
@@ -237,6 +261,7 @@ impl SolidWorksTools {
             tool_router: Self::tool_router(),
             addin,
             ids: Arc::default(),
+            renderer: Arc::default(),
         }
     }
 
@@ -494,6 +519,134 @@ impl SolidWorksTools {
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
     }
+
+    #[tool(
+        description = "Draw the active part as a picture: shaded, with edges, in orthographic \
+                       standard views (front/back/left/right/top/bottom/isometric) at one shared \
+                       scale, as a grid in one PNG. Use it to check the overall shape after \
+                       edits -- which side a cut went, where a boss landed -- and `highlight` \
+                       ids from inspect_model to see which face or edge an id is before using \
+                       it. Read exact sizes and positions from inspect_model, not the picture. \
+                       Doesn't change the model."
+    )]
+    async fn render_views(
+        &self,
+        Parameters(params): Parameters<RenderViewsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let (views, columns) = match params.views {
+            None => (render::View::DEFAULT_GRID.to_vec(), 2),
+            Some(views) if views.is_empty() || views.len() > MAX_VIEWS => {
+                return Err(McpError::invalid_params(
+                    format!("give between 1 and {MAX_VIEWS} views"),
+                    None,
+                ));
+            }
+            Some(views) => {
+                // As square as possible: 1-3 in a row, 4 as 2x2, 5-6 as 3x2, ...
+                let columns = match views.len() {
+                    n @ 1..=3 => n,
+                    4 => 2,
+                    _ => 3,
+                };
+                (views, columns)
+            }
+        };
+        let tile_px = params.size_px.unwrap_or(DEFAULT_TILE_PX);
+        if !TILE_PX_RANGE.contains(&tile_px) {
+            return Err(McpError::invalid_params(
+                format!(
+                    "size_px must be {} to {}",
+                    TILE_PX_RANGE.start(),
+                    TILE_PX_RANGE.end()
+                ),
+                None,
+            ));
+        }
+        if params.highlight.len() > render::HIGHLIGHTS.len() {
+            return Err(McpError::invalid_params(
+                format!("at most {} highlights", render::HIGHLIGHTS.len()),
+                None,
+            ));
+        }
+        let highlight: Vec<String> = params
+            .highlight
+            .iter()
+            .map(|h| h.trim().to_string())
+            .collect();
+        let targets = highlight
+            .iter()
+            .map(|h| self.highlight_target(h))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mesh = self
+            .addin
+            .get_mesh(proto::GetMeshRequest {
+                include_edges: true,
+            })
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let (model, matched) = render::model_from_mesh(&mesh, &targets);
+        if model.faces.is_empty() {
+            return Err(McpError::invalid_params(
+                "the active part has nothing to draw yet (no visible bodies) -- create some \
+                 geometry first",
+                None,
+            ));
+        }
+        let triangles = model.triangle_count();
+        let edge_count = model.edges.len();
+
+        let request = render::Request {
+            model,
+            views: views.clone(),
+            columns,
+            tile_px,
+        };
+        let rendered = self.renderer.render(request).await.map_err(|err| {
+            McpError::internal_error(
+                format!(
+                    "couldn't render the part: {err:#} (the renderer needs a GPU or a software \
+                         Vulkan/DirectX 12 driver)"
+                ),
+                None,
+            )
+        })?;
+
+        let mut text = format!(
+            "{} view(s) of {} ({} x {} px, {triangles} triangles, {edge_count} edges). Orthographic, \
+             same scale in every view: each tile spans {:.1} mm. Layout, row by row:",
+            views.len(),
+            mesh.document
+                .as_ref()
+                .map_or("the active part", |d| d.title.as_str()),
+            rendered.width,
+            rendered.height,
+            rendered.tile_span_mm
+        );
+        for (row, chunk) in views.chunks(columns).enumerate() {
+            let tiles: Vec<String> = chunk
+                .iter()
+                .map(|v| match v.screen_axes() {
+                    Some(axes) => format!("{} ({axes})", v.label()),
+                    None => v.label().to_string(),
+                })
+                .collect();
+            text += &format!("\n  row {}: {}", row + 1, tiles.join(" | "));
+        }
+        for ((name, count), (color, _)) in highlight.iter().zip(&matched).zip(render::HIGHLIGHTS) {
+            text += &match count {
+                0 => format!("\n{name}: not visible (deleted, hidden, or on a hidden body?)"),
+                _ => format!("\n{name}: {color}"),
+            };
+        }
+        if mesh.truncated {
+            text += "\nwarning: the part is too detailed to draw completely; some faces or edges are missing";
+        }
+        Ok(CallToolResult::success(vec![
+            ContentBlock::image(BASE64.encode(&rendered.png), "image/png"),
+            ContentBlock::text(text),
+        ]))
+    }
 }
 
 impl SolidWorksTools {
@@ -574,6 +727,25 @@ impl SolidWorksTools {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
+    /// What a render_views highlight refers to: a short id, or else a
+    /// feature name.
+    fn highlight_target(&self, highlight: &str) -> Result<render::Target, McpError> {
+        if !IdRegistry::looks_like_id(highlight) {
+            if highlight.is_empty() {
+                return Err(McpError::invalid_params("empty highlight", None));
+            }
+            return Ok(render::Target::FeatureName(highlight.to_string()));
+        }
+        let persist_id = self.resolve_id(highlight)?;
+        let kind = highlight.split(':').next().unwrap_or_default();
+        Ok(match kind {
+            "face" => render::Target::Face(persist_id),
+            "edge" => render::Target::Edge(persist_id),
+            "body" => render::Target::Body(persist_id),
+            _ => render::Target::Feature(persist_id),
+        })
+    }
+
     /// The persist ID behind an id handed out by inspect_model.
     fn resolve_id(&self, id: &str) -> Result<Vec<u8>, McpError> {
         let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -641,8 +813,9 @@ impl ServerHandler for SolidWorksTools {
                  over gRPC on localhost. Requires SolidWorks to be running with that \
                  add-in enabled. Use inspect_model to see what's in the active part \
                  (features, bodies, faces, edges with their geometry) before editing it; \
-                 the ids it returns let other tools target specific faces. Lengths are \
-                 in millimeters."
+                 the ids it returns let other tools target specific faces. render_views \
+                 draws the part (optionally highlighting ids) to check its shape. \
+                 Lengths are in millimeters."
                     .to_string(),
             )
     }

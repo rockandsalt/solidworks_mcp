@@ -39,6 +39,11 @@ service SolidWorks {
   // other RPCs accept to target it (e.g. sketching on a face). Fails with
   // FAILED_PRECONDITION if the active document isn't a part.
   rpc InspectModel(InspectModelRequest) returns (InspectModelResponse);
+
+  // Read-only: the active part's display tessellation (triangles per face)
+  // and edges as polylines, for the MCP server to render pictures from.
+  // Fails with FAILED_PRECONDITION if the active document isn't a part.
+  rpc GetMesh(GetMeshRequest) returns (GetMeshResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -279,4 +284,43 @@ message EdgeInfo {
   Vec3 center = 8;
   Vec3 axis = 9;
   double radius = 10;
+}
+
+// ---------------------------------------------------------------------------
+// GetMesh
+//
+// Coordinates are packed as floats (x, y, z, x, y, z, ...) in meters, model
+// space: single precision is plenty for pictures and halves the message.
+
+message GetMeshRequest {
+  // Also return the edges as polylines.
+  bool include_edges = 1;
+}
+
+message GetMeshResponse {
+  Document document = 1;
+  repeated FaceMesh faces = 2;
+  repeated EdgePolyline edges = 3;
+  // Set when faces or edges were cut off at the add-in's safety limit.
+  bool truncated = 4;
+}
+
+message FaceMesh {
+  // Same persist IDs InspectModel returns, so the two can be matched up.
+  bytes persist_id = 1;
+  bytes body_persist_id = 2;
+  bytes feature_persist_id = 3;  // the feature that created the face
+  string feature_name = 4;
+  // Triangles: 9 floats (3 vertices) each, from IFace2::GetTessTriangles.
+  repeated float triangles = 5;
+  // One unit normal per vertex, pointing out of the material, in the same
+  // order as `triangles` (IFace2::GetTessNorms). May be empty.
+  repeated float normals = 6;
+}
+
+message EdgePolyline {
+  bytes persist_id = 1;
+  bytes body_persist_id = 2;
+  // Points along the edge, start to end (at least 2).
+  repeated float points = 3;
 }

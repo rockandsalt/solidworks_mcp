@@ -104,4 +104,21 @@ impl AddinClient {
         let response = client.inspect_model(request).await?;
         Ok(response.into_inner())
     }
+
+    /// The active part's tessellation; coordinates in meters.
+    pub async fn get_mesh(
+        &self,
+        request: proto::GetMeshRequest,
+    ) -> Result<proto::GetMeshResponse, tonic::Status> {
+        // A detailed part's mesh is far past tonic's default 4 MB cap.
+        let mut client = self
+            .client
+            .clone()
+            .max_decoding_message_size(MAX_MESH_MESSAGE);
+        let response = client.get_mesh(request).await?;
+        Ok(response.into_inner())
+    }
 }
+
+/// Largest GetMesh reply accepted: about 5 million triangles with normals.
+const MAX_MESH_MESSAGE: usize = 256 * 1024 * 1024;
