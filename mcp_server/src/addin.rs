@@ -85,6 +85,16 @@ impl AddinClient {
         Ok(response.into_inner())
     }
 
+    /// Coordinates in meters.
+    pub async fn add_sketch_entities(
+        &self,
+        request: proto::AddSketchEntitiesRequest,
+    ) -> Result<proto::AddSketchEntitiesResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        let response = client.add_sketch_entities(request).await?;
+        Ok(response.into_inner())
+    }
+
     /// Depth in meters.
     pub async fn extrude_sketch(
         &self,

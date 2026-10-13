@@ -27,6 +27,15 @@ service SolidWorks {
   // a sketch is already open for editing.
   rpc CreateRectangleSketch(CreateRectangleSketchRequest) returns (CreateRectangleSketchResponse);
 
+  // Draws lines, circles, arcs, splines and/or points into a sketch of the
+  // active part -- a new one on a plane or face, or an existing one by name
+  // -- then closes the sketch. Coincident end points are merged, so a chain
+  // of entities that ends where it started forms a closed contour. All or
+  // nothing: if any entity fails, none of them are kept (and a new sketch is
+  // deleted). Fails with FAILED_PRECONDITION if the active document isn't a
+  // part or a sketch is already open for editing.
+  rpc AddSketchEntities(AddSketchEntitiesRequest) returns (AddSketchEntitiesResponse);
+
   // Extrudes a closed sketch of the active part into a boss (adds material,
   // merging with any existing body) with a blind end condition.
   // Fails with FAILED_PRECONDITION if the active document isn't a part, a
@@ -124,6 +133,93 @@ message CreateRectangleSketchResponse {
   SketchFrame frame = 2;
   // The rectangle's center in model space, meters.
   Vec3 center_model = 3;
+}
+
+// ---------------------------------------------------------------------------
+// AddSketchEntities
+
+message AddSketchEntitiesRequest {
+  // Add to this existing 2D sketch, e.g. "Sketch1". When set, `plane` and
+  // `on_persist_id` must be left unset. Empty means create a new sketch.
+  string sketch_name = 1;
+  // New sketches: one of the default planes, or (instead) a planar face or
+  // reference plane feature by persist_id, as in CreateRectangleSketch.
+  Plane plane = 2;
+  bytes on_persist_id = 3;
+  // How every point below is given:
+  //   false: sketch 2D coordinates (x, y; z is ignored), meters.
+  //   true:  model-space points, meters, projected onto the sketch plane.
+  bool model_space = 4;
+  // Drawn in order. At least one.
+  repeated SketchEntity entities = 5;
+}
+
+message SketchEntity {
+  // Construction (reference) geometry: shown dashed and ignored by
+  // features. Points are always construction-like; ignored for them.
+  bool construction = 1;
+  oneof geometry {
+    SketchLine line = 2;
+    SketchCircle circle = 3;
+    SketchArc arc = 4;
+    SketchSpline spline = 5;
+    SketchPointEntity point = 6;
+  }
+}
+
+message SketchLine {
+  Vec3 start = 1;
+  Vec3 end = 2;
+}
+
+message SketchCircle {
+  Vec3 center = 1;
+  double radius = 2;  // meters, > 0
+}
+
+// From `start` to `end`, defined by exactly one of:
+//   center:  arc around this point; the radius is |start - center| and
+//            `end` only sets where it stops (it's moved onto that radius).
+//            Runs counterclockwise unless `clockwise`, as seen looking at
+//            the sketch from the side its normal points to.
+//   through: a third point on the arc, between start and end.
+message SketchArc {
+  Vec3 start = 1;
+  Vec3 end = 2;
+  Vec3 center = 3;
+  Vec3 through = 4;
+  bool clockwise = 5;  // center arcs only
+}
+
+// Interpolating spline through the points, in order.
+message SketchSpline {
+  repeated Vec3 points = 1;  // at least 2 (3 when closed)
+  // Loop back to the first point, making a closed spline.
+  bool closed = 2;
+}
+
+message SketchPointEntity {
+  Vec3 position = 1;
+}
+
+message AddSketchEntitiesResponse {
+  // Feature-tree name of the sketch drawn into.
+  string sketch_name = 1;
+  // True when the sketch was created by this call.
+  bool created_sketch = 2;
+  SketchFrame frame = 3;
+  // How many entities were drawn (one per request entity).
+  int32 entity_count = 4;
+  // The whole sketch's contours after the change. Unset if SolidWorks
+  // couldn't report them.
+  SketchContours contours = 5;
+}
+
+// Chains of connected segments in a sketch. Boss/cut extrusions need
+// closed ones.
+message SketchContours {
+  int32 closed = 1;
+  int32 open = 2;
 }
 
 message ExtrudeSketchRequest {

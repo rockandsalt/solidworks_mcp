@@ -99,6 +99,187 @@ struct SketchPlacement {
     center_mm: Option<[f64; 3]>,
 }
 
+/// A point for the sketch_* tools, in millimeters: [x, y] in the sketch's own 2D coordinates,
+/// or [x, y, z] in model coordinates, projected onto the sketch plane. All points in one call
+/// must use the same form.
+type Point = Vec<f64>;
+
+/// Which sketch the sketch_* tools draw in.
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+struct SketchTarget {
+    /// Add to this existing sketch, e.g. "Sketch1" (the name an earlier sketch_* or
+    /// create_*_sketch call reported, or a ProfileFeature from inspect_model). Omit to create a
+    /// new sketch.
+    #[serde(default)]
+    sketch_name: Option<String>,
+    /// New sketch only: the plane to sketch on. Defaults to the Front plane.
+    #[serde(default)]
+    plane: Option<SketchPlane>,
+    /// New sketch only: sketch on this instead of `plane`: the id (from inspect_model) of a
+    /// planar face, e.g. "face:4", or of a reference plane feature. Give points as [x, y, z]
+    /// model coordinates to place geometry on a face without knowing its sketch axes.
+    #[serde(default)]
+    on: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SketchLineParams {
+    /// Points to connect with straight lines, in order: 2 points draw one line, more draw a
+    /// connected chain. Each is [x, y] (sketch) or [x, y, z] (model), in millimeters.
+    points: Vec<Point>,
+    /// Also draw a line from the last point back to the first, closing the shape (e.g. a
+    /// polygon to extrude). Defaults to false.
+    #[serde(default)]
+    closed: bool,
+    /// Draw construction lines (reference only, ignored by features). Defaults to false.
+    #[serde(default)]
+    construction: bool,
+    #[serde(flatten)]
+    target: SketchTarget,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SketchCircleParams {
+    /// Center, [x, y] (sketch) or [x, y, z] (model), in millimeters.
+    center: Point,
+    /// Radius in millimeters. Give this or diameter_mm.
+    #[serde(default)]
+    radius_mm: Option<f64>,
+    /// Diameter in millimeters. Give this or radius_mm.
+    #[serde(default)]
+    diameter_mm: Option<f64>,
+    /// Draw a construction circle (reference only, ignored by features). Defaults to false.
+    #[serde(default)]
+    construction: bool,
+    #[serde(flatten)]
+    target: SketchTarget,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SketchArcParams {
+    /// Where the arc starts, [x, y] (sketch) or [x, y, z] (model), in millimeters.
+    start: Point,
+    /// Where the arc ends. With `center`, only its direction from the center matters: it's
+    /// moved onto the radius set by `start`.
+    end: Point,
+    /// Center of the arc. Give this or `through`.
+    #[serde(default)]
+    center: Option<Point>,
+    /// A point the arc passes through between start and end (3-point arc). Give this or
+    /// `center`. Simplest with model coordinates, since there's no direction to pick.
+    #[serde(default)]
+    through: Option<Point>,
+    /// With `center`: go from start to end clockwise instead of counterclockwise, as seen
+    /// looking at the sketch from the side its normal points to. Defaults to false.
+    #[serde(default)]
+    clockwise: bool,
+    /// Draw a construction arc (reference only, ignored by features). Defaults to false.
+    #[serde(default)]
+    construction: bool,
+    #[serde(flatten)]
+    target: SketchTarget,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SketchSplineParams {
+    /// Points the spline passes through, in order (at least 2, or 3 when closed). Each is
+    /// [x, y] (sketch) or [x, y, z] (model), in millimeters.
+    points: Vec<Point>,
+    /// Make a closed loop back through the first point. Defaults to false.
+    #[serde(default)]
+    closed: bool,
+    /// Draw a construction spline (reference only, ignored by features). Defaults to false.
+    #[serde(default)]
+    construction: bool,
+    #[serde(flatten)]
+    target: SketchTarget,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SketchPointParams {
+    /// Points to place, each [x, y] (sketch) or [x, y, z] (model), in millimeters.
+    points: Vec<Point>,
+    #[serde(flatten)]
+    target: SketchTarget,
+}
+
+/// Most entities or spline points one sketch_* call may draw (the add-in's limit).
+const MAX_SKETCH_ITEMS: usize = 1000;
+
+/// Turns tool points into wire points (meters), checking that they're well formed and that a
+/// call doesn't mix sketch [x, y] and model [x, y, z] points.
+#[derive(Default)]
+struct PointConverter {
+    /// Settled by the first point: Some(true) for model coordinates.
+    model_space: Option<bool>,
+}
+
+impl PointConverter {
+    fn convert(&mut self, point: &[f64], what: &str) -> Result<proto::Vec3, McpError> {
+        let model = match point.len() {
+            2 => false,
+            3 => true,
+            n => {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "{what} has {n} coordinates; give [x, y] in sketch coordinates or \
+                         [x, y, z] in model coordinates"
+                    ),
+                    None,
+                ));
+            }
+        };
+        if !point.iter().all(|v| v.is_finite()) {
+            return Err(McpError::invalid_params(format!("{what} must be finite"), None));
+        }
+        match self.model_space {
+            Some(previous) if previous != model => {
+                return Err(McpError::invalid_params(
+                    "don't mix [x, y] sketch points and [x, y, z] model points in one call",
+                    None,
+                ));
+            }
+            _ => self.model_space = Some(model),
+        }
+        Ok(proto::Vec3 {
+            x: point[0] / MM_PER_M,
+            y: point[1] / MM_PER_M,
+            z: point.get(2).copied().unwrap_or(0.0) / MM_PER_M,
+        })
+    }
+
+    fn convert_all(&mut self, points: &[Point], what: &str) -> Result<Vec<proto::Vec3>, McpError> {
+        points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| self.convert(p, &format!("{what} {}", i + 1)))
+            .collect()
+    }
+
+    fn model_space(&self) -> bool {
+        self.model_space.unwrap_or(false)
+    }
+}
+
+fn sketch_entity(
+    construction: bool,
+    geometry: proto::sketch_entity::Geometry,
+) -> proto::SketchEntity {
+    proto::SketchEntity {
+        construction,
+        geometry: Some(geometry),
+    }
+}
+
+/// "1 line", "3 lines".
+fn count_of(n: usize, singular: &str) -> String {
+    if n == 1 {
+        format!("1 {singular}")
+    } else {
+        format!("{n} {singular}s")
+    }
+}
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ExtrudeSketchParams {
     /// Extrusion depth, in millimeters. With mid_plane this is the total depth, split evenly
@@ -341,6 +522,243 @@ impl SolidWorksTools {
             params.height_mm,
         )
         .await
+    }
+
+    #[tool(
+        description = "Draw straight lines in a sketch of the active part: one line between 2 \
+                       points, or a connected chain through more (closed=true joins the last \
+                       point back to the first, e.g. for a polygon to extrude). Draws into a new \
+                       sketch on the Front/Top/Right plane or `on` a planar face, or into an \
+                       existing sketch given by sketch_name -- use that to combine lines, arcs \
+                       and splines into one profile. Points are [x, y] in sketch coordinates or \
+                       [x, y, z] in model coordinates (projected onto the sketch plane), in \
+                       millimeters. End points that meet are joined, and the result says how many \
+                       closed contours the sketch has (extrude_sketch needs closed ones) and how \
+                       its axes map to model space. Requires an open part with no sketch being \
+                       edited."
+    )]
+    async fn sketch_line(
+        &self,
+        Parameters(params): Parameters<SketchLineParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let n = params.points.len();
+        if n < 2 {
+            return Err(McpError::invalid_params("give at least 2 points", None));
+        }
+        if params.closed && n < 3 {
+            return Err(McpError::invalid_params(
+                "a closed chain needs at least 3 points",
+                None,
+            ));
+        }
+        if n > MAX_SKETCH_ITEMS {
+            return Err(McpError::invalid_params(
+                format!("at most {MAX_SKETCH_ITEMS} points per call"),
+                None,
+            ));
+        }
+        let mut points = PointConverter::default();
+        let mut vertices = points.convert_all(&params.points, "point")?;
+        if params.closed {
+            vertices.push(vertices[0]);
+        }
+        let entities = vertices
+            .windows(2)
+            .map(|pair| {
+                sketch_entity(
+                    params.construction,
+                    proto::sketch_entity::Geometry::Line(proto::SketchLine {
+                        start: Some(pair[0]),
+                        end: Some(pair[1]),
+                    }),
+                )
+            })
+            .collect::<Vec<_>>();
+        let what = count_of(entities.len(), "line");
+        self.draw_sketch(params.target, points.model_space(), entities, what)
+            .await
+    }
+
+    #[tool(
+        description = "Draw a circle in a sketch of the active part, by center and radius or \
+                       diameter -- e.g. a hole profile to cut-extrude. Draws into a new sketch on \
+                       the Front/Top/Right plane or `on` a planar face, or into an existing sketch \
+                       given by sketch_name. The center is [x, y] in sketch coordinates or \
+                       [x, y, z] in model coordinates (projected onto the sketch plane), in \
+                       millimeters. Requires an open part with no sketch being edited."
+    )]
+    async fn sketch_circle(
+        &self,
+        Parameters(params): Parameters<SketchCircleParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let radius_mm = match (params.radius_mm, params.diameter_mm) {
+            (Some(r), None) => r,
+            (None, Some(d)) => d / 2.0,
+            _ => {
+                return Err(McpError::invalid_params(
+                    "give exactly one of radius_mm or diameter_mm",
+                    None,
+                ));
+            }
+        };
+        if !(radius_mm.is_finite() && radius_mm > 0.0) {
+            return Err(McpError::invalid_params(
+                "the radius/diameter must be a positive number of millimeters",
+                None,
+            ));
+        }
+        let mut points = PointConverter::default();
+        let center = points.convert(&params.center, "center")?;
+        let entity = sketch_entity(
+            params.construction,
+            proto::sketch_entity::Geometry::Circle(proto::SketchCircle {
+                center: Some(center),
+                radius: radius_mm / MM_PER_M,
+            }),
+        );
+        let what = format!("a circle of radius {radius_mm} mm");
+        self.draw_sketch(params.target, points.model_space(), vec![entity], what)
+            .await
+    }
+
+    #[tool(
+        description = "Draw an arc in a sketch of the active part from `start` to `end`, \
+                       defined either by its `center` (counterclockwise unless clockwise=true) or \
+                       by a third point it passes `through`. Draws into a new sketch on the \
+                       Front/Top/Right plane or `on` a planar face, or into an existing sketch \
+                       given by sketch_name -- e.g. to round off a chain of lines into a slot or \
+                       a U shape. Points are [x, y] in sketch coordinates or [x, y, z] in model \
+                       coordinates (projected onto the sketch plane), in millimeters. End points \
+                       that meet other entities are joined. Requires an open part with no sketch \
+                       being edited."
+    )]
+    async fn sketch_arc(
+        &self,
+        Parameters(params): Parameters<SketchArcParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let mut points = PointConverter::default();
+        let start = points.convert(&params.start, "start")?;
+        let end = points.convert(&params.end, "end")?;
+        let (center, through) = match (&params.center, &params.through) {
+            (Some(c), None) => (Some(points.convert(c, "center")?), None),
+            (None, Some(t)) => {
+                if params.clockwise {
+                    return Err(McpError::invalid_params(
+                        "clockwise only applies with `center`; a 3-point arc's direction comes \
+                         from its `through` point",
+                        None,
+                    ));
+                }
+                (None, Some(points.convert(t, "through")?))
+            }
+            _ => {
+                return Err(McpError::invalid_params(
+                    "give exactly one of center or through",
+                    None,
+                ));
+            }
+        };
+        let entity = sketch_entity(
+            params.construction,
+            proto::sketch_entity::Geometry::Arc(proto::SketchArc {
+                start: Some(start),
+                end: Some(end),
+                center,
+                through,
+                clockwise: params.clockwise,
+            }),
+        );
+        self.draw_sketch(
+            params.target,
+            points.model_space(),
+            vec![entity],
+            "an arc".to_string(),
+        )
+        .await
+    }
+
+    #[tool(
+        description = "Draw a smooth spline curve through the given points, in order, in a \
+                       sketch of the active part (closed=true makes a closed loop). Draws into a \
+                       new sketch on the Front/Top/Right plane or `on` a planar face, or into an \
+                       existing sketch given by sketch_name. Points are [x, y] in sketch \
+                       coordinates or [x, y, z] in model coordinates (projected onto the sketch \
+                       plane), in millimeters. Its ends join other entities they meet. Requires \
+                       an open part with no sketch being edited."
+    )]
+    async fn sketch_spline(
+        &self,
+        Parameters(params): Parameters<SketchSplineParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let n = params.points.len();
+        let min = if params.closed { 3 } else { 2 };
+        if n < min {
+            return Err(McpError::invalid_params(
+                format!("give at least {min} points"),
+                None,
+            ));
+        }
+        if n > MAX_SKETCH_ITEMS {
+            return Err(McpError::invalid_params(
+                format!("at most {MAX_SKETCH_ITEMS} points per spline"),
+                None,
+            ));
+        }
+        let mut points = PointConverter::default();
+        let spline_points = points.convert_all(&params.points, "point")?;
+        let entity = sketch_entity(
+            params.construction,
+            proto::sketch_entity::Geometry::Spline(proto::SketchSpline {
+                points: spline_points,
+                closed: params.closed,
+            }),
+        );
+        let what = format!(
+            "a {}spline through {n} points",
+            if params.closed { "closed " } else { "" }
+        );
+        self.draw_sketch(params.target, points.model_space(), vec![entity], what)
+            .await
+    }
+
+    #[tool(
+        description = "Place sketch points in a sketch of the active part, e.g. reference \
+                       points for later geometry. Draws into a new sketch on the Front/Top/Right \
+                       plane or `on` a planar face, or into an existing sketch given by \
+                       sketch_name. Points are [x, y] in sketch coordinates or [x, y, z] in model \
+                       coordinates (projected onto the sketch plane), in millimeters. Requires an \
+                       open part with no sketch being edited."
+    )]
+    async fn sketch_point(
+        &self,
+        Parameters(params): Parameters<SketchPointParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let n = params.points.len();
+        if n == 0 {
+            return Err(McpError::invalid_params("give at least 1 point", None));
+        }
+        if n > MAX_SKETCH_ITEMS {
+            return Err(McpError::invalid_params(
+                format!("at most {MAX_SKETCH_ITEMS} points per call"),
+                None,
+            ));
+        }
+        let mut points = PointConverter::default();
+        let entities = points
+            .convert_all(&params.points, "point")?
+            .into_iter()
+            .map(|position| {
+                sketch_entity(
+                    false,
+                    proto::sketch_entity::Geometry::Point(proto::SketchPointEntity {
+                        position: Some(position),
+                    }),
+                )
+            })
+            .collect::<Vec<_>>();
+        let what = count_of(n, "point");
+        self.draw_sketch(params.target, points.model_space(), entities, what)
+            .await
     }
 
     #[tool(
@@ -727,6 +1145,88 @@ impl SolidWorksTools {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
+    /// Shared by the sketch_* tools: draws `entities` (meters) into the target sketch and
+    /// describes the result. `what` names what was drawn, e.g. "3 lines".
+    async fn draw_sketch(
+        &self,
+        target: SketchTarget,
+        model_space: bool,
+        entities: Vec<proto::SketchEntity>,
+        what: String,
+    ) -> Result<CallToolResult, McpError> {
+        let sketch_name = target
+            .sketch_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty());
+        let on = target.on.as_deref().map(str::trim).filter(|on| !on.is_empty());
+        if sketch_name.is_some() && (on.is_some() || target.plane.is_some()) {
+            return Err(McpError::invalid_params(
+                "give either sketch_name (to add to an existing sketch) or plane/on (for a new \
+                 one), not both",
+                None,
+            ));
+        }
+        let plane = target.plane.unwrap_or_default();
+
+        let on_persist_id = match on {
+            Some(id) => self.resolve_id(id)?,
+            None => Vec::new(),
+        };
+        let request = proto::AddSketchEntitiesRequest {
+            sketch_name: sketch_name.unwrap_or_default().to_string(),
+            plane: if sketch_name.is_some() {
+                proto::Plane::Unspecified
+            } else {
+                proto::Plane::from(plane)
+            }
+            .into(),
+            on_persist_id,
+            model_space,
+            entities,
+        };
+        let result = self
+            .addin
+            .add_sketch_entities(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+
+        let place = match (sketch_name, on) {
+            (Some(_), _) => String::new(),
+            (None, Some(id)) => format!(" (new sketch on {id})"),
+            (None, None) => format!(" (new sketch on the {plane:?} plane)"),
+        };
+        let mut text = format!("drew {what} in {}{place}.", result.sketch_name);
+        if let Some(contours) = &result.contours {
+            text += &format!(
+                " {} now has {} closed and {} open contour(s)",
+                result.sketch_name, contours.closed, contours.open
+            );
+            text += if contours.closed > 0 && contours.open == 0 {
+                "; ready to extrude."
+            } else if contours.open > 0 {
+                "; extrude_sketch needs closed ones, so connect the open ends if you mean to \
+                 extrude it."
+            } else {
+                "."
+            };
+        }
+        if let Some(frame) = &result.frame
+            && let (Some(origin), Some(x), Some(y), Some(n)) =
+                (&frame.origin, &frame.x_axis, &frame.y_axis, &frame.normal)
+        {
+            text += &format!(
+                " Sketch axes in model space: origin {} mm, X along {}, Y along {}, normal {} \
+                 (a boss extrudes this way unless reversed).",
+                inspect::point_mm(origin),
+                inspect::direction(x),
+                inspect::direction(y),
+                inspect::direction(n)
+            );
+        }
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
     /// What a render_views highlight refers to: a short id, or else a
     /// feature name.
     fn highlight_target(&self, highlight: &str) -> Result<render::Target, McpError> {
@@ -813,7 +1313,11 @@ impl ServerHandler for SolidWorksTools {
                  over gRPC on localhost. Requires SolidWorks to be running with that \
                  add-in enabled. Use inspect_model to see what's in the active part \
                  (features, bodies, faces, edges with their geometry) before editing it; \
-                 the ids it returns let other tools target specific faces. render_views \
+                 the ids it returns let other tools target specific faces. Sketch with \
+                 create_rectangle_sketch / create_square_sketch or, for any other profile, \
+                 sketch_line, sketch_arc, sketch_circle, sketch_spline and sketch_point \
+                 (pass sketch_name to keep adding to one sketch), then extrude_sketch or \
+                 cut_extrude_sketch. render_views \
                  draws the part (optionally highlighting ids) to check its shape. \
                  Lengths are in millimeters."
                     .to_string(),
@@ -835,4 +1339,35 @@ async fn main() -> anyhow::Result<()> {
     let service = SolidWorksTools::new(addin).serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sketch_points_convert_to_meters() {
+        let mut points = PointConverter::default();
+        let p = points.convert(&[10.0, -2.5], "point").unwrap();
+        assert_eq!((p.x, p.y, p.z), (0.01, -0.0025, 0.0));
+        assert!(!points.model_space());
+
+        let mut points = PointConverter::default();
+        let p = points.convert(&[1.0, 2.0, 3.0], "point").unwrap();
+        assert_eq!((p.x, p.y, p.z), (0.001, 0.002, 0.003));
+        assert!(points.model_space());
+    }
+
+    #[test]
+    fn sketch_points_reject_bad_input() {
+        let mut points = PointConverter::default();
+        assert!(points.convert(&[1.0], "point").is_err());
+        assert!(points.convert(&[1.0, 2.0, 3.0, 4.0], "point").is_err());
+        assert!(points.convert(&[f64::NAN, 0.0], "point").is_err());
+
+        // One call can't mix sketch and model points.
+        let mut points = PointConverter::default();
+        points.convert(&[0.0, 0.0], "start").unwrap();
+        assert!(points.convert(&[0.0, 0.0, 0.0], "end").is_err());
+    }
 }

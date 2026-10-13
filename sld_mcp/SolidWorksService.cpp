@@ -329,6 +329,510 @@ namespace
 		}
 	}
 
+	// ---- Sketch helpers -------------------------------------------------------
+
+	// PLANE_FRONT/TOP/RIGHT as FindStandardPlane's index.
+	bool StandardPlaneIndex(sld_mcp::v1::Plane plane, int& index)
+	{
+		switch (plane)
+		{
+		case sld_mcp::v1::PLANE_FRONT: index = 0; return true;
+		case sld_mcp::v1::PLANE_TOP:   index = 1; return true;
+		case sld_mcp::v1::PLANE_RIGHT: index = 2; return true;
+		default:                       return false;
+		}
+	}
+
+	// What a new sketch goes on: a planar face (`face` + `faceEntity`) or a
+	// reference plane feature (`plane`); exactly one is set once resolved.
+	struct SketchTarget
+	{
+		ATL::CComPtr<IFace2> face;
+		ATL::CComPtr<IEntity> faceEntity;
+		ATL::CComPtr<IFeature> plane;
+	};
+
+	// Resolves `onPersistId` (a planar face or a reference plane feature), or
+	// the standard plane `planeIndex` when it's empty.
+	grpc::Status ResolveSketchTarget(IModelDoc2* doc, const std::string& onPersistId, int planeIndex,
+		SketchTarget& target)
+	{
+		if (onPersistId.empty())
+			return FindStandardPlane(doc, planeIndex, target.plane);
+
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		ATL::CComPtr<IDispatch> obj;
+		if (grpc::Status status = ResolvePersistId(ext, onPersistId, obj); !status.ok())
+			return status;
+
+		if (ATL::CComQIPtr<IFace2> face(obj.p); face)
+		{
+			ATL::CComPtr<ISurface> surface;
+			VARIANT_BOOL planar = VARIANT_FALSE;
+			if (FAILED(face->IGetSurface(&surface)) || !surface ||
+				FAILED(surface->IsPlane(&planar)) || !planar)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"that face isn't planar -- sketches need a planar face or a reference plane");
+			if (FAILED(face->QueryInterface(IID_PPV_ARGS(&target.faceEntity))) || !target.faceEntity)
+				return grpc::Status(grpc::StatusCode::INTERNAL, "face has no IEntity interface");
+			target.face = face;
+			return grpc::Status::OK;
+		}
+		if (ATL::CComQIPtr<IFeature> feature(obj.p); feature)
+		{
+			ATL::CComBSTR typeName;
+			HRESULT hr = feature->GetTypeName2(&typeName);
+			if (FAILED(hr))
+				return ComError("IFeature::GetTypeName2", hr);
+			if (typeName != L"RefPlane")
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"\"" + FeatureName(feature) + "\" isn't a reference plane -- sketches need a "
+					"planar face or a reference plane");
+			target.plane = feature;
+			return grpc::Status::OK;
+		}
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+			"that ID isn't a face or a reference plane -- sketches need a planar face or a reference plane");
+	}
+
+	// Selects the target and opens a new sketch on it. On failure nothing is
+	// left open.
+	grpc::Status OpenNewSketch(IModelDoc2* doc, ISketchManager* sketchManager, const SketchTarget& target,
+		ATL::CComPtr<ISketch>& sketch)
+	{
+		HRESULT hr = doc->ClearSelection2(VARIANT_TRUE);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::ClearSelection2", hr);
+		VARIANT_BOOL selected = VARIANT_FALSE;
+		hr = target.faceEntity ? target.faceEntity->Select4(VARIANT_FALSE, nullptr, &selected)
+		                       : target.plane->Select2(VARIANT_FALSE, 0, &selected);
+		if (FAILED(hr))
+			return ComError(target.faceEntity ? "IEntity::Select4" : "IFeature::Select2", hr);
+		if (!selected)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks wouldn't select the sketch plane");
+
+		// Opens a new sketch on the selected plane or face.
+		hr = sketchManager->InsertSketch(VARIANT_TRUE);
+		if (FAILED(hr))
+			return ComError("ISketchManager::InsertSketch", hr);
+		hr = doc->IGetActiveSketch2(&sketch);
+		if (FAILED(hr) || !sketch)
+		{
+			doc->ClearSelection2(VARIANT_TRUE);
+			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks didn't open a sketch on the plane");
+		}
+		return grpc::Status::OK;
+	}
+
+	// A 2D sketch by its feature-tree name.
+	grpc::Status FindSketchByName(IModelDoc2* doc, const std::string& name, ATL::CComPtr<IFeature>& sketch)
+	{
+		ATL::CComQIPtr<IPartDoc> part(doc);
+		if (!part)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "active part has no IPartDoc interface");
+		HRESULT hr = part->IFeatureByName(FromUtf8(name), &sketch);
+		if (FAILED(hr))
+			return ComError("IPartDoc::IFeatureByName", hr);
+		if (!sketch)
+			return grpc::Status(grpc::StatusCode::NOT_FOUND,
+				"the active part has no feature named \"" + name + "\"");
+
+		ATL::CComBSTR typeName;
+		hr = sketch->GetTypeName2(&typeName);
+		if (FAILED(hr))
+			return ComError("IFeature::GetTypeName2", hr);
+		if (typeName != L"ProfileFeature")
+		{
+			sketch.Release();
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "\"" + name + "\" isn't a 2D sketch");
+		}
+		return grpc::Status::OK;
+	}
+
+	// Deletes a (closed) sketch feature, e.g. one left empty by a failed
+	// RPC. Best effort.
+	void DeleteSketchFeature(IModelDoc2* doc, IFeature* sketchFeature)
+	{
+		VARIANT_BOOL selected = VARIANT_FALSE;
+		if (sketchFeature && SUCCEEDED(sketchFeature->Select2(VARIANT_FALSE, 0, &selected)) && selected)
+		{
+			doc->EditDelete();
+			doc->ClearSelection2(VARIANT_TRUE);
+		}
+	}
+
+	// Converts points between model space and an open sketch's own space
+	// (x, y in the sketch plane; z = distance from it) with IMathPoints.
+	class SketchSpace
+	{
+	public:
+		// Call before opening the sketch, so a failure here needs no cleanup.
+		grpc::Status Init(ISldWorks* swApp)
+		{
+			ATL::CComPtr<IDispatch> mathDisp;
+			HRESULT hr = swApp->GetMathUtility(&mathDisp);
+			if (FAILED(hr))
+				return ComError("ISldWorks::GetMathUtility", hr);
+			m_math = mathDisp;
+			if (!m_math)
+				return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no math utility");
+			return grpc::Status::OK;
+		}
+
+		// Once the sketch is open. If SolidWorks has no transform for it,
+		// the conversions below just fail.
+		void Attach(ISketch* sketch)
+		{
+			if (SUCCEEDED(sketch->get_ModelToSketchTransform(&m_toSketch)) && m_toSketch)
+			{
+				ATL::CComPtr<IDispatch> inverse;
+				if (SUCCEEDED(m_toSketch->Inverse(&inverse)) && inverse)
+					inverse->QueryInterface(IID_PPV_ARGS(&m_toModel));
+			}
+		}
+
+		bool ToSketch(const double in[3], double out[3]) const { return Apply(m_toSketch, in, out); }
+		bool ToModel(const double in[3], double out[3]) const { return Apply(m_toModel, in, out); }
+
+		// The sketch's origin and unit axes in model space.
+		bool Frame(sld_mcp::v1::SketchFrame& frame) const
+		{
+			const double sketchPoints[4][3] = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+			double modelPoints[4][3];
+			for (int i = 0; i < 4; ++i)
+				if (!ToModel(sketchPoints[i], modelPoints[i]))
+					return false;
+
+			SetVec3(frame.mutable_origin(), modelPoints[0]);
+			sld_mcp::v1::Vec3* axes[3] = {frame.mutable_x_axis(), frame.mutable_y_axis(), frame.mutable_normal()};
+			for (int a = 0; a < 3; ++a)
+			{
+				double d[3];
+				for (int i = 0; i < 3; ++i)
+					d[i] = modelPoints[a + 1][i] - modelPoints[0][i];
+				const double len = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+				if (len > 0.0)
+					for (double& v : d)
+						v /= len;
+				SetVec3(axes[a], d);
+			}
+			return true;
+		}
+
+	private:
+		bool Apply(IMathTransform* xform, const double in[3], double out[3]) const
+		{
+			if (!xform || !m_math)
+				return false;
+			ATL::CComVariant data = comvariant::FromDoubles(in, 3);
+			ATL::CComPtr<IDispatch> pointDisp;
+			if (FAILED(m_math->CreatePoint(data, &pointDisp)))
+				return false;
+			ATL::CComQIPtr<IMathPoint> point(pointDisp.p);
+			ATL::CComPtr<IDispatch> movedDisp;
+			if (!point || FAILED(point->MultiplyTransform(xform, &movedDisp)))
+				return false;
+			ATL::CComQIPtr<IMathPoint> moved(movedDisp.p);
+			ATL::CComVariant result;
+			if (!moved || FAILED(moved->get_ArrayData(&result)))
+				return false;
+			const std::vector<double> p = comvariant::ToDoubles(result);
+			if (p.size() < 3)
+				return false;
+			std::copy(p.begin(), p.begin() + 3, out);
+			return true;
+		}
+
+		ATL::CComQIPtr<IMathUtility> m_math;
+		ATL::CComPtr<IMathTransform> m_toSketch;
+		ATL::CComPtr<IMathTransform> m_toModel;
+	};
+
+	// ---- AddSketchEntities ----------------------------------------------------
+
+	// Requests with more entities (or spline points) than this are refused.
+	constexpr int kMaxSketchEntities = 1000;
+	constexpr int kMaxSplinePoints = 1000;
+	// Points closer than this (meters) count as the same point.
+	constexpr double kSketchTolerance = 1e-9;
+	// End points closer than this (meters) are merged after drawing, so
+	// chains of entities connect into contours.
+	constexpr double kMergeDistance = 1e-8;
+
+	bool IsFinite(const sld_mcp::v1::Vec3& p)
+	{
+		return std::isfinite(p.x()) && std::isfinite(p.y()) && std::isfinite(p.z());
+	}
+
+	// Checks an entity's shape before SolidWorks is touched: the right
+	// points are present and every number is finite. Geometric degeneracy is
+	// checked when drawing, once points are in sketch coordinates.
+	grpc::Status ValidateSketchEntity(const sld_mcp::v1::SketchEntity& entity)
+	{
+		using Entity = sld_mcp::v1::SketchEntity;
+		auto invalid = [](const char* why) { return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, why); };
+		auto point = [](bool has, const sld_mcp::v1::Vec3& p) { return has && IsFinite(p); };
+		switch (entity.geometry_case())
+		{
+		case Entity::kLine:
+			if (!point(entity.line().has_start(), entity.line().start()) ||
+				!point(entity.line().has_end(), entity.line().end()))
+				return invalid("a line needs a finite start and end");
+			return grpc::Status::OK;
+		case Entity::kCircle:
+		{
+			const double r = entity.circle().radius();
+			if (!point(entity.circle().has_center(), entity.circle().center()))
+				return invalid("a circle needs a finite center");
+			if (!(std::isfinite(r) && r > kSketchTolerance))
+				return invalid("a circle's radius must be positive");
+			return grpc::Status::OK;
+		}
+		case Entity::kArc:
+		{
+			const auto& arc = entity.arc();
+			if (!point(arc.has_start(), arc.start()) || !point(arc.has_end(), arc.end()))
+				return invalid("an arc needs a finite start and end");
+			if (arc.has_center() == arc.has_through())
+				return invalid("an arc needs exactly one of center or through");
+			if (!IsFinite(arc.has_center() ? arc.center() : arc.through()))
+				return invalid("an arc's center/through point must be finite");
+			if (arc.clockwise() && !arc.has_center())
+				return invalid("clockwise only applies to arcs given by their center");
+			return grpc::Status::OK;
+		}
+		case Entity::kSpline:
+		{
+			const auto& points = entity.spline().points();
+			const int minPoints = entity.spline().closed() ? 3 : 2;
+			if (points.size() < minPoints)
+				return invalid(entity.spline().closed() ? "a closed spline needs at least 3 points"
+				                                        : "a spline needs at least 2 points");
+			if (points.size() > kMaxSplinePoints)
+				return invalid("a spline can have at most 1000 points");
+			for (const auto& p : points)
+				if (!IsFinite(p))
+					return invalid("spline points must be finite");
+			return grpc::Status::OK;
+		}
+		case Entity::kPoint:
+			if (!point(entity.point().has_position(), entity.point().position()))
+				return invalid("a point needs a finite position");
+			return grpc::Status::OK;
+		default:
+			return invalid("an entity has no geometry (line, circle, arc, spline or point)");
+		}
+	}
+
+	// Maps request points into the open sketch's 2D coordinates (z = 0).
+	struct SketchPointMapper
+	{
+		const SketchSpace& space;
+		bool modelSpace;
+
+		bool operator()(const sld_mcp::v1::Vec3& p, double out[3]) const
+		{
+			if (modelSpace)
+			{
+				const double in[3] = {p.x(), p.y(), p.z()};
+				if (!space.ToSketch(in, out))
+					return false;
+			}
+			else
+			{
+				out[0] = p.x();
+				out[1] = p.y();
+			}
+			// Dropping the sketch z projects the point onto the sketch plane.
+			out[2] = 0.0;
+			return true;
+		}
+	};
+
+	double Distance2D(const double a[3], const double b[3])
+	{
+		return std::hypot(a[0] - b[0], a[1] - b[1]);
+	}
+
+	// Draws one (validated) entity into the open sketch and returns what was
+	// created: an ISketchSegment, or an ISketchPoint for points.
+	grpc::Status DrawSketchEntity(ISketchManager* sketchManager, const SketchPointMapper& map,
+		const sld_mcp::v1::SketchEntity& entity, ATL::CComPtr<IDispatch>& created)
+	{
+		using Entity = sld_mcp::v1::SketchEntity;
+		auto invalid = [](const std::string& why) { return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, why); };
+		const grpc::Status mapFailed(grpc::StatusCode::INTERNAL,
+			"couldn't map a point into the sketch's coordinates");
+
+		ATL::CComPtr<ISketchSegment> segment;
+		HRESULT hr = S_OK;
+		std::string what;
+		switch (entity.geometry_case())
+		{
+		case Entity::kLine:
+		{
+			what = "line";
+			double s[3], e[3];
+			if (!map(entity.line().start(), s) || !map(entity.line().end(), e))
+				return mapFailed;
+			if (Distance2D(s, e) < kSketchTolerance)
+				return invalid("a line's start and end are the same point in the sketch plane");
+			hr = sketchManager->CreateLine(s[0], s[1], 0.0, e[0], e[1], 0.0, &segment);
+			break;
+		}
+		case Entity::kCircle:
+		{
+			what = "circle";
+			double c[3];
+			if (!map(entity.circle().center(), c))
+				return mapFailed;
+			hr = sketchManager->CreateCircleByRadius(c[0], c[1], 0.0, entity.circle().radius(), &segment);
+			break;
+		}
+		case Entity::kArc:
+		{
+			what = "arc";
+			const auto& arc = entity.arc();
+			double s[3], e[3];
+			if (!map(arc.start(), s) || !map(arc.end(), e))
+				return mapFailed;
+			if (arc.has_center())
+			{
+				double c[3];
+				if (!map(arc.center(), c))
+					return mapFailed;
+				const double radius = Distance2D(s, c);
+				const double toEnd = Distance2D(e, c);
+				if (radius < kSketchTolerance || toEnd < kSketchTolerance)
+					return invalid("an arc's start and end must both be away from its center");
+				// The radius comes from the start; the end only gives the angle.
+				for (int i = 0; i < 2; ++i)
+					e[i] = c[i] + (e[i] - c[i]) * radius / toEnd;
+				if (Distance2D(s, e) < kSketchTolerance)
+					return invalid("an arc's start and end are at the same angle around its center -- "
+					               "draw a circle for a full turn");
+				// Direction: +1 counterclockwise, -1 clockwise.
+				hr = sketchManager->CreateArc(c[0], c[1], 0.0, s[0], s[1], 0.0, e[0], e[1], 0.0,
+					static_cast<short>(arc.clockwise() ? -1 : 1), &segment);
+			}
+			else
+			{
+				double t[3];
+				if (!map(arc.through(), t))
+					return mapFailed;
+				const double chord = Distance2D(s, e);
+				if (chord < kSketchTolerance)
+					return invalid("an arc's start and end are the same point -- draw a circle instead");
+				// Twice the triangle's area over its base = the through point's
+				// distance from the chord.
+				const double cross = (t[0] - s[0]) * (e[1] - s[1]) - (t[1] - s[1]) * (e[0] - s[0]);
+				if (std::abs(cross) / chord < kSketchTolerance)
+					return invalid("an arc's three points are in a straight line -- draw a line instead");
+				// Start, end, then a point on the arc.
+				hr = sketchManager->Create3PointArc(s[0], s[1], 0.0, e[0], e[1], 0.0, t[0], t[1], 0.0, &segment);
+			}
+			break;
+		}
+		case Entity::kSpline:
+		{
+			what = "spline";
+			const auto& spline = entity.spline();
+			std::vector<double> data;
+			data.reserve(static_cast<size_t>(spline.points_size() + 1) * 3);
+			double first[3] = {};
+			double previous[3] = {};
+			for (int i = 0; i < spline.points_size(); ++i)
+			{
+				double p[3];
+				if (!map(spline.points(i), p))
+					return mapFailed;
+				if (i > 0 && Distance2D(p, previous) < kSketchTolerance)
+					return invalid("a spline has two consecutive points at the same place in the sketch plane");
+				if (i == 0)
+					std::copy(p, p + 3, first);
+				std::copy(p, p + 3, previous);
+				data.insert(data.end(), p, p + 3);
+			}
+			// A spline whose last point is its first is closed.
+			if (spline.closed() && Distance2D(previous, first) >= kSketchTolerance)
+				data.insert(data.end(), first, first + 3);
+			ATL::CComVariant points = comvariant::FromDoubles(data.data(), data.size());
+			hr = sketchManager->CreateSpline(points, &segment);
+			break;
+		}
+		case Entity::kPoint:
+		{
+			double p[3];
+			if (!map(entity.point().position(), p))
+				return mapFailed;
+			ATL::CComPtr<ISketchPoint> point;
+			hr = sketchManager->CreatePoint(p[0], p[1], 0.0, &point);
+			if (FAILED(hr))
+				return ComError("ISketchManager::CreatePoint", hr);
+			if (!point)
+				return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks didn't create the point");
+			created = point.p;
+			return grpc::Status::OK;
+		}
+		default:
+			return invalid("an entity has no geometry");
+		}
+
+		if (FAILED(hr))
+			return ComError(("ISketchManager creating a " + what).c_str(), hr);
+		if (!segment)
+			return grpc::Status(grpc::StatusCode::INTERNAL,
+				"SolidWorks didn't create the " + what + " (degenerate geometry?)");
+		if (entity.construction())
+			segment->put_ConstructionGeometry(VARIANT_TRUE);
+		created = segment.p;
+		return grpc::Status::OK;
+	}
+
+	// Deletes entities drawn into the still-open sketch. Best effort.
+	void DeleteSketchEntities(IModelDoc2* doc, const std::vector<ATL::CComPtr<IDispatch>>& entities)
+	{
+		doc->ClearSelection2(VARIANT_TRUE);
+		bool any = false;
+		for (const auto& entity : entities)
+		{
+			VARIANT_BOOL selected = VARIANT_FALSE;
+			if (ATL::CComQIPtr<ISketchSegment> segment(entity.p); segment)
+				segment->Select4(VARIANT_TRUE, nullptr, &selected);
+			else if (ATL::CComQIPtr<ISketchPoint> point(entity.p); point)
+				point->Select4(VARIANT_TRUE, nullptr, &selected);
+			any = any || selected;
+		}
+		if (any)
+			doc->EditDelete();
+		doc->ClearSelection2(VARIANT_TRUE);
+	}
+
+	// Counts the sketch's closed and open contours.
+	bool CountContours(ISketch* sketch, sld_mcp::v1::SketchContours& contours)
+	{
+		ATL::CComVariant list;
+		if (FAILED(sketch->GetSketchContours(&list)))
+			return false;
+		// VT_EMPTY / VT_NULL: no contours at all (e.g. only points).
+		for (const auto& disp : comvariant::ToDispatches(list))
+		{
+			if (!disp)
+				continue;
+			ATL::CComQIPtr<ISketchContour> contour(disp.p);
+			VARIANT_BOOL closed = VARIANT_FALSE;
+			if (!contour || FAILED(contour->IsClosed(&closed)))
+				return false;
+			if (closed)
+				contours.set_closed(contours.closed() + 1);
+			else
+				contours.set_open(contours.open() + 1);
+		}
+		return true;
+	}
+
 	// ---- InspectModel ---------------------------------------------------------
 	//
 	// Entity details are best-effort: a property SolidWorks won't report is
@@ -864,17 +1368,8 @@ grpc::Status SolidWorksService::CreateRectangleSketch(grpc::ServerContext* /*con
 	// Validate before touching SolidWorks.
 	const bool onEntity = !request->on_persist_id().empty();
 	int planeIndex = 0;
-	if (!onEntity)
-	{
-		switch (request->plane())
-		{
-		case sld_mcp::v1::PLANE_FRONT: planeIndex = 0; break;
-		case sld_mcp::v1::PLANE_TOP:   planeIndex = 1; break;
-		case sld_mcp::v1::PLANE_RIGHT: planeIndex = 2; break;
-		default:
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "plane must be FRONT, TOP or RIGHT");
-		}
-	}
+	if (!onEntity && !StandardPlaneIndex(request->plane(), planeIndex))
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "plane must be FRONT, TOP or RIGHT");
 	const double halfWidth = request->width() / 2.0;
 	const double halfHeight = request->height() / 2.0;
 	if (!(std::isfinite(halfWidth) && halfWidth > 0.0 && std::isfinite(halfHeight) && halfHeight > 0.0))
@@ -912,71 +1407,29 @@ grpc::Status SolidWorksService::CreateRectangleSketch(grpc::ServerContext* /*con
 
 	// What to sketch on: a planar face, a reference plane feature, or one of
 	// the three default planes.
-	ATL::CComPtr<IEntity> faceEntity;
-	ATL::CComPtr<IFeature> plane;
-	HRESULT hr = S_OK;
-	if (onEntity)
-	{
-		ATL::CComPtr<IModelDocExtension> ext;
-		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-			return status;
-		ATL::CComPtr<IDispatch> target;
-		if (grpc::Status status = ResolvePersistId(ext, request->on_persist_id(), target); !status.ok())
-			return status;
-
-		if (ATL::CComQIPtr<IFace2> face(target.p); face)
-		{
-			ATL::CComPtr<ISurface> surface;
-			VARIANT_BOOL planar = VARIANT_FALSE;
-			if (FAILED(face->IGetSurface(&surface)) || !surface ||
-				FAILED(surface->IsPlane(&planar)) || !planar)
-				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-					"that face isn't planar -- sketches need a planar face or a reference plane");
-			if (FAILED(face->QueryInterface(IID_PPV_ARGS(&faceEntity))) || !faceEntity)
-				return grpc::Status(grpc::StatusCode::INTERNAL, "face has no IEntity interface");
-
-			// Default to the middle of the face (well, of its bounding box).
-			if (!haveModelCenter)
-			{
-				ATL::CComVariant box;
-				hr = face->GetBox(&box);
-				if (FAILED(hr))
-					return ComError("IFace2::GetBox", hr);
-				const std::vector<double> b = comvariant::ToDoubles(box);
-				if (b.size() < 6)
-					return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no box for the face");
-				for (int i = 0; i < 3; ++i)
-					modelCenter[i] = (b[i] + b[i + 3]) / 2.0;
-				haveModelCenter = true;
-			}
-		}
-		else if (ATL::CComQIPtr<IFeature> feature(target.p); feature)
-		{
-			ATL::CComBSTR typeName;
-			hr = feature->GetTypeName2(&typeName);
-			if (FAILED(hr))
-				return ComError("IFeature::GetTypeName2", hr);
-			if (typeName != L"RefPlane")
-				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-					"\"" + FeatureName(feature) + "\" isn't a reference plane -- sketches need a "
-					"planar face or a reference plane");
-			plane = feature;
-		}
-		else
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				"that ID isn't a face or a reference plane -- sketches need a planar face or a reference plane");
-	}
-	else if (grpc::Status status = FindStandardPlane(doc, planeIndex, plane); !status.ok())
+	SketchTarget target;
+	if (grpc::Status status = ResolveSketchTarget(doc, request->on_persist_id(), planeIndex, target); !status.ok())
 		return status;
 
-	// Points are mapped between model and sketch space with IMathPoints.
-	ATL::CComPtr<IDispatch> mathDisp;
-	hr = swApp->GetMathUtility(&mathDisp);
-	if (FAILED(hr))
-		return ComError("ISldWorks::GetMathUtility", hr);
-	ATL::CComQIPtr<IMathUtility> math(mathDisp.p);
-	if (!math)
-		return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no math utility");
+	// On a face, default to the middle of the face (well, of its bounding box).
+	HRESULT hr = S_OK;
+	if (target.face && !haveModelCenter)
+	{
+		ATL::CComVariant box;
+		hr = target.face->GetBox(&box);
+		if (FAILED(hr))
+			return ComError("IFace2::GetBox", hr);
+		const std::vector<double> b = comvariant::ToDoubles(box);
+		if (b.size() < 6)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no box for the face");
+		for (int i = 0; i < 3; ++i)
+			modelCenter[i] = (b[i] + b[i + 3]) / 2.0;
+		haveModelCenter = true;
+	}
+
+	SketchSpace space;
+	if (grpc::Status status = space.Init(swApp); !status.ok())
+		return status;
 
 	ATL::CComPtr<ISketchManager> sketchManager;
 	hr = doc->get_SketchManager(&sketchManager);
@@ -985,71 +1438,21 @@ grpc::Status SolidWorksService::CreateRectangleSketch(grpc::ServerContext* /*con
 	if (!sketchManager)
 		return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no sketch manager");
 
-	hr = doc->ClearSelection2(VARIANT_TRUE);
-	if (FAILED(hr))
-		return ComError("IModelDoc2::ClearSelection2", hr);
-	VARIANT_BOOL selected = VARIANT_FALSE;
-	hr = faceEntity ? faceEntity->Select4(VARIANT_FALSE, nullptr, &selected)
-	                : plane->Select2(VARIANT_FALSE, 0, &selected);
-	if (FAILED(hr))
-		return ComError(faceEntity ? "IEntity::Select4" : "IFeature::Select2", hr);
-	if (!selected)
-		return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks wouldn't select the sketch plane");
-
-	// Opens a new sketch on the selected plane or face.
-	hr = sketchManager->InsertSketch(VARIANT_TRUE);
-	if (FAILED(hr))
-		return ComError("ISketchManager::InsertSketch", hr);
 	ATL::CComPtr<ISketch> sketch;
-	hr = doc->IGetActiveSketch2(&sketch);
-	if (FAILED(hr) || !sketch)
-	{
-		doc->ClearSelection2(VARIANT_TRUE);
-		return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks didn't open a sketch on the plane");
-	}
+	if (grpc::Status status = OpenNewSketch(doc, sketchManager, target, sketch); !status.ok())
+		return status;
 
 	// The sketch is now open: everything below must fall through to the
 	// InsertSketch call that closes it, so no early returns until then.
 	grpc::Status failure = grpc::Status::OK;
-
-	// The sketch's placement in model space, from its model-to-sketch
-	// transform: the inverse maps sketch (0,0,0), (1,0,0), ... to model space.
-	ATL::CComPtr<IMathTransform> toSketch;
-	ATL::CComPtr<IMathTransform> toModel;
-	if (SUCCEEDED(sketch->get_ModelToSketchTransform(&toSketch)) && toSketch)
-	{
-		ATL::CComPtr<IDispatch> inverse;
-		if (SUCCEEDED(toSketch->Inverse(&inverse)) && inverse)
-			inverse->QueryInterface(IID_PPV_ARGS(&toModel));
-	}
-	auto transform = [&](IMathTransform* xform, const double in[3], double out[3]) {
-		if (!xform)
-			return false;
-		ATL::CComVariant data = comvariant::FromDoubles(in, 3);
-		ATL::CComPtr<IDispatch> pointDisp;
-		if (FAILED(math->CreatePoint(data, &pointDisp)))
-			return false;
-		ATL::CComQIPtr<IMathPoint> point(pointDisp.p);
-		ATL::CComPtr<IDispatch> movedDisp;
-		if (!point || FAILED(point->MultiplyTransform(xform, &movedDisp)))
-			return false;
-		ATL::CComQIPtr<IMathPoint> moved(movedDisp.p);
-		ATL::CComVariant result;
-		if (!moved || FAILED(moved->get_ArrayData(&result)))
-			return false;
-		const std::vector<double> p = comvariant::ToDoubles(result);
-		if (p.size() < 3)
-			return false;
-		std::copy(p.begin(), p.begin() + 3, out);
-		return true;
-	};
+	space.Attach(sketch);
 
 	if (haveModelCenter)
 	{
 		// Dropping the sketch Z (the distance from the plane) projects the
 		// point onto the sketch plane.
 		double sketchCenter[3];
-		if (transform(toSketch, modelCenter, sketchCenter))
+		if (space.ToSketch(modelCenter, sketchCenter))
 		{
 			cx = sketchCenter[0];
 			cy = sketchCenter[1];
@@ -1087,30 +1490,13 @@ grpc::Status SolidWorksService::CreateRectangleSketch(grpc::ServerContext* /*con
 	// informational, so a failure here just leaves them out.
 	if (created)
 	{
-		const double sketchPoints[5][3] = {
-			{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}, {cx, cy, 0}};
-		double modelPoints[5][3];
-		bool mapped = true;
-		for (int i = 0; i < 5 && mapped; ++i)
-			mapped = transform(toModel, sketchPoints[i], modelPoints[i]);
-		if (mapped)
+		sld_mcp::v1::SketchFrame frame;
+		const double sketchCenter[3] = {cx, cy, 0.0};
+		double center[3];
+		if (space.Frame(frame) && space.ToModel(sketchCenter, center))
 		{
-			sld_mcp::v1::SketchFrame* frame = response->mutable_frame();
-			SetVec3(frame->mutable_origin(), modelPoints[0]);
-			sld_mcp::v1::Vec3* axes[3] = {
-				frame->mutable_x_axis(), frame->mutable_y_axis(), frame->mutable_normal()};
-			for (int a = 0; a < 3; ++a)
-			{
-				double d[3];
-				for (int i = 0; i < 3; ++i)
-					d[i] = modelPoints[a + 1][i] - modelPoints[0][i];
-				const double len = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
-				if (len > 0.0)
-					for (double& v : d)
-						v /= len;
-				SetVec3(axes[a], d);
-			}
-			SetVec3(response->mutable_center_model(), modelPoints[4]);
+			*response->mutable_frame() = frame;
+			SetVec3(response->mutable_center_model(), center);
 		}
 	}
 
@@ -1128,19 +1514,182 @@ grpc::Status SolidWorksService::CreateRectangleSketch(grpc::ServerContext* /*con
 	if (!created)
 	{
 		// Don't leave an empty sketch behind.
-		VARIANT_BOOL reselected = VARIANT_FALSE;
-		if (SUCCEEDED(closeHr) && sketchFeature &&
-			SUCCEEDED(sketchFeature->Select2(VARIANT_FALSE, 0, &reselected)) && reselected)
-		{
-			doc->EditDelete();
-			doc->ClearSelection2(VARIANT_TRUE);
-		}
+		if (SUCCEEDED(closeHr))
+			DeleteSketchFeature(doc, sketchFeature);
 		return failure;
 	}
 	if (FAILED(closeHr))
 		return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
 
 	response->set_sketch_name(ToUtf8(sketchName));
+	return grpc::Status::OK;
+}
+
+grpc::Status SolidWorksService::AddSketchEntities(grpc::ServerContext* /*context*/,
+	const sld_mcp::v1::AddSketchEntitiesRequest* request,
+	sld_mcp::v1::AddSketchEntitiesResponse* response)
+{
+	// Validate before touching SolidWorks.
+	const bool existing = !request->sketch_name().empty();
+	const bool onEntity = !request->on_persist_id().empty();
+	int planeIndex = 0;
+	if (existing)
+	{
+		if (onEntity || request->plane() != sld_mcp::v1::PLANE_UNSPECIFIED)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"give either an existing sketch_name or where to put a new sketch, not both");
+	}
+	else if (!onEntity && !StandardPlaneIndex(request->plane(), planeIndex))
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "plane must be FRONT, TOP or RIGHT");
+	if (request->entities_size() == 0)
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "nothing to draw -- give at least one entity");
+	if (request->entities_size() > kMaxSketchEntities)
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "too many entities in one call (max 1000)");
+	for (int i = 0; i < request->entities_size(); ++i)
+		if (grpc::Status status = ValidateSketchEntity(request->entities(i)); !status.ok())
+			return grpc::Status(status.error_code(),
+				"entity " + std::to_string(i + 1) + ": " + status.error_message());
+
+	std::lock_guard<std::mutex> lock(m_editMutex);
+	ComApartment com;
+	if (!com.Ok())
+		return ComApartmentError();
+
+	ATL::CComPtr<ISldWorks> swApp;
+	if (grpc::Status status = GetSwApp(swApp); !status.ok())
+		return status;
+
+	ATL::CComPtr<IModelDoc2> doc;
+	if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
+		return status;
+
+	// Resolve everything that can fail before a sketch is opened.
+	ATL::CComPtr<IFeature> sketchFeature;
+	SketchTarget target;
+	if (existing)
+	{
+		if (grpc::Status status = FindSketchByName(doc, request->sketch_name(), sketchFeature); !status.ok())
+			return status;
+	}
+	else if (grpc::Status status = ResolveSketchTarget(doc, request->on_persist_id(), planeIndex, target);
+		!status.ok())
+		return status;
+
+	SketchSpace space;
+	if (grpc::Status status = space.Init(swApp); !status.ok())
+		return status;
+
+	ATL::CComPtr<ISketchManager> sketchManager;
+	HRESULT hr = doc->get_SketchManager(&sketchManager);
+	if (FAILED(hr))
+		return ComError("IModelDoc2::SketchManager", hr);
+	if (!sketchManager)
+		return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no sketch manager");
+
+	// Open the sketch: re-enter the existing one, or create one.
+	ATL::CComPtr<ISketch> sketch;
+	if (existing)
+	{
+		hr = doc->ClearSelection2(VARIANT_TRUE);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::ClearSelection2", hr);
+		VARIANT_BOOL selected = VARIANT_FALSE;
+		hr = sketchFeature->Select2(VARIANT_FALSE, 0, &selected);
+		if (FAILED(hr))
+			return ComError("IFeature::Select2", hr);
+		if (!selected)
+			return grpc::Status(grpc::StatusCode::INTERNAL,
+				"SolidWorks wouldn't select sketch \"" + request->sketch_name() + "\"");
+		hr = doc->EditSketch();
+		if (FAILED(hr))
+		{
+			doc->ClearSelection2(VARIANT_TRUE);
+			return ComError("IModelDoc2::EditSketch", hr);
+		}
+		hr = doc->IGetActiveSketch2(&sketch);
+		if (FAILED(hr) || !sketch)
+		{
+			doc->ClearSelection2(VARIANT_TRUE);
+			return grpc::Status(grpc::StatusCode::INTERNAL,
+				"SolidWorks didn't open sketch \"" + request->sketch_name() + "\" for editing");
+		}
+	}
+	else
+	{
+		if (grpc::Status status = OpenNewSketch(doc, sketchManager, target, sketch); !status.ok())
+			return status;
+		sketchFeature = ATL::CComQIPtr<IFeature>(sketch.p);
+	}
+
+	// The sketch is now open: everything below must fall through to the
+	// InsertSketch call that closes it, so no early returns until then.
+	space.Attach(sketch);
+	const SketchPointMapper map{space, request->model_space()};
+
+	// AddToDB skips snapping and inferencing, so entities land exactly at the
+	// requested coordinates instead of snapping to nearby geometry.
+	VARIANT_BOOL previousAddToDB = VARIANT_FALSE;
+	sketchManager->get_AddToDB(&previousAddToDB);
+	sketchManager->put_AddToDB(VARIANT_TRUE);
+
+	grpc::Status failure = grpc::Status::OK;
+	std::vector<ATL::CComPtr<IDispatch>> created;
+	for (int i = 0; i < request->entities_size() && failure.ok(); ++i)
+	{
+		ATL::CComPtr<IDispatch> entity;
+		failure = DrawSketchEntity(sketchManager, map, request->entities(i), entity);
+		if (failure.ok())
+			created.push_back(entity);
+		else
+			failure = grpc::Status(failure.error_code(),
+				"entity " + std::to_string(i + 1) + ": " + failure.error_message());
+	}
+
+	sketchManager->put_AddToDB(previousAddToDB);
+
+	if (failure.ok())
+	{
+		// With AddToDB on, entities that meet end to end each keep their own
+		// end point; merging them is what connects them into contours.
+		VARIANT_BOOL merged = VARIANT_FALSE;
+		sketch->MergePoints(kMergeDistance, &merged);
+
+		sld_mcp::v1::SketchFrame frame;
+		if (space.Frame(frame))
+			*response->mutable_frame() = frame;
+	}
+	else if (existing)
+	{
+		// All or nothing: take back what this call drew.
+		DeleteSketchEntities(doc, created);
+	}
+
+	ATL::CComBSTR sketchName;
+	if (sketchFeature)
+		sketchFeature->get_Name(&sketchName);
+
+	// Close the sketch (and rebuild).
+	const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_TRUE);
+	doc->ClearSelection2(VARIANT_TRUE);
+
+	if (!failure.ok())
+	{
+		// Don't leave a half-drawn new sketch behind.
+		if (!existing && SUCCEEDED(closeHr))
+			DeleteSketchFeature(doc, sketchFeature);
+		return failure;
+	}
+	if (FAILED(closeHr))
+		return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
+
+	// After the rebuild, so contours reflect the merged points.
+	sld_mcp::v1::SketchContours contours;
+	if (CountContours(sketch, contours))
+		*response->mutable_contours() = contours;
+
+	response->set_sketch_name(ToUtf8(sketchName));
+	response->set_created_sketch(!existing);
+	response->set_entity_count(static_cast<int32_t>(created.size()));
 	return grpc::Status::OK;
 }
 
@@ -1180,23 +1729,8 @@ grpc::Status SolidWorksService::ExtrudeSketch(grpc::ServerContext* /*context*/,
 	}
 	else
 	{
-		ATL::CComQIPtr<IPartDoc> part(doc.p);
-		if (!part)
-			return grpc::Status(grpc::StatusCode::INTERNAL, "active part has no IPartDoc interface");
-		hr = part->IFeatureByName(FromUtf8(request->sketch_name()), &sketch);
-		if (FAILED(hr))
-			return ComError("IPartDoc::IFeatureByName", hr);
-		if (!sketch)
-			return grpc::Status(grpc::StatusCode::NOT_FOUND,
-				"the active part has no feature named \"" + request->sketch_name() + "\"");
-
-		ATL::CComBSTR typeName;
-		hr = sketch->GetTypeName2(&typeName);
-		if (FAILED(hr))
-			return ComError("IFeature::GetTypeName2", hr);
-		if (typeName != L"ProfileFeature")
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				"\"" + request->sketch_name() + "\" isn't a 2D sketch");
+		if (grpc::Status status = FindSketchByName(doc, request->sketch_name(), sketch); !status.ok())
+			return status;
 	}
 
 	ATL::CComBSTR sketchName;
