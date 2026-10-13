@@ -15,6 +15,8 @@ anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 kiss3d = "0.47"
+# Same major version as kiss3d's; render.rs creates the GPU device itself.
+wgpu = "30"
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["png"] }
 

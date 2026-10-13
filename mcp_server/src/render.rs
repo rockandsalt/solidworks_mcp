@@ -7,6 +7,11 @@
 //! calls hand it a [`Model`] and wait for the PNG on a oneshot channel. The
 //! GPU device is created once and reused; if creating it fails (no usable
 //! adapter) the error is reported and the next call tries again.
+//!
+//! The device is created here, not by kiss3d (see [`ensure_gpu`]): kiss3d
+//! asks wgpu for any backend, wgpu then prefers Vulkan, and some Windows
+//! Vulkan drivers crash the whole process while creating the device -- a
+//! native access violation that `catch_unwind` can't stop.
 
 use std::cell::RefCell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -337,6 +342,95 @@ fn bounds(model: &Model) -> Option<(Vec3, f32)> {
     Some(((lo + hi) / 2.0, if radius > 0.0 { radius } else { 1.0 }))
 }
 
+/// Backends to try, in order, each on its own; `WGPU_BACKEND` (e.g. "dx12",
+/// "vulkan", "gl") replaces the list.
+///
+/// On Windows that's DX12 only. wgpu's default choice there is Vulkan, and
+/// the Vulkan driver of an Intel UHD 630 (driver 27.20.100.8729) crashes in
+/// vkCreateDevice with an access violation, taking the MCP server down with
+/// it; the same GPU renders fine through DX12. GL renders too but crashes
+/// when the context is torn down.
+fn backend_candidates() -> Vec<wgpu::Backends> {
+    if let Some(backends) = wgpu::Backends::from_env() {
+        return vec![backends];
+    }
+    if cfg!(windows) {
+        vec![wgpu::Backends::DX12]
+    } else {
+        vec![wgpu::Backends::PRIMARY, wgpu::Backends::GL]
+    }
+}
+
+/// Makes sure kiss3d's (thread-local) wgpu context exists, creating the
+/// device ourselves. kiss3d reuses an existing context when it opens a
+/// window, so its own adapter selection never runs. Called before every
+/// window is created: kiss3d drops the context when its last window goes
+/// away (e.g. after a panic).
+fn ensure_gpu() -> Result<()> {
+    if kiss3d::context::Context::is_initialized() {
+        return Ok(());
+    }
+    let mut tried = Vec::new();
+    for backends in backend_candidates() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends,
+            // No validation/debug layers, even in debug builds; WGPU_VALIDATION
+            // and WGPU_DEBUG turn them back on.
+            flags: wgpu::InstanceFlags::empty().with_env(),
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        // A real GPU first; then the software fallback (WARP on Windows).
+        let adapter = [false, true].into_iter().find_map(|fallback| {
+            kiss3d::pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::from_env().unwrap_or_default(),
+                compatible_surface: None,
+                force_fallback_adapter: fallback,
+                apply_limit_buckets: false,
+            }))
+            .ok()
+        });
+        let Some(adapter) = adapter else {
+            tried.push(format!("{backends:?}: no adapter"));
+            continue;
+        };
+        let info = adapter.get_info();
+        // Only what kiss3d's rasterizer uses: GPU timestamps if available, and
+        // the adapter's full limits (its shadow/point/wireframe renderers need
+        // more bind groups and storage buffers than wgpu's defaults allow). Not
+        // kiss3d's experimental ray queries -- the path tracer isn't used here.
+        let device = kiss3d::pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("render_views"),
+            required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
+            required_limits: adapter.limits(),
+            memory_hints: wgpu::MemoryHints::default(),
+            trace: wgpu::Trace::Off,
+            experimental_features: wgpu::ExperimentalFeatures::disabled(),
+        }));
+        match device {
+            Ok((device, queue)) => {
+                tracing::info!(
+                    backend = ?info.backend,
+                    adapter = %info.name,
+                    driver = %info.driver_info,
+                    "render_views: using GPU adapter"
+                );
+                kiss3d::context::Context::init(
+                    instance,
+                    device,
+                    queue,
+                    adapter,
+                    // What kiss3d picks for headless windows; gamma is done
+                    // in its shaders.
+                    wgpu::TextureFormat::Rgba8Unorm,
+                );
+                return Ok(());
+            }
+            Err(err) => tried.push(format!("{:?} {}: {err}", info.backend, info.name)),
+        }
+    }
+    Err(anyhow!("no usable GPU adapter ({})", tried.join("; ")))
+}
+
 fn render_job(window: &mut Option<Window>, request: &Request) -> Result<Rendered> {
     let (center, radius) =
         bounds(&request.model).ok_or_else(|| anyhow!("the part has no geometry to draw"))?;
@@ -349,6 +443,7 @@ fn render_job(window: &mut Option<Window>, request: &Request) -> Result<Rendered
         .as_ref()
         .is_none_or(|w| w.size().x != tile || w.size().y != tile)
     {
+        ensure_gpu()?;
         let setup = CanvasSetup {
             samples: NumSamples::Four,
             ..Default::default()
