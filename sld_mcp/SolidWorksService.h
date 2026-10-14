@@ -43,6 +43,26 @@ public:
 		const sld_mcp::v1::GetMeshRequest* request,
 		sld_mcp::v1::GetMeshResponse* response) override;
 
+	grpc::Status InspectSketch(grpc::ServerContext* context,
+		const sld_mcp::v1::InspectSketchRequest* request,
+		sld_mcp::v1::InspectSketchResponse* response) override;
+
+	grpc::Status AddSketchDimensions(grpc::ServerContext* context,
+		const sld_mcp::v1::AddSketchDimensionsRequest* request,
+		sld_mcp::v1::AddSketchDimensionsResponse* response) override;
+
+	grpc::Status AddSketchRelations(grpc::ServerContext* context,
+		const sld_mcp::v1::AddSketchRelationsRequest* request,
+		sld_mcp::v1::AddSketchRelationsResponse* response) override;
+
+	grpc::Status FullyDefineSketch(grpc::ServerContext* context,
+		const sld_mcp::v1::FullyDefineSketchRequest* request,
+		sld_mcp::v1::FullyDefineSketchResponse* response) override;
+
+	grpc::Status SetDimensionValue(grpc::ServerContext* context,
+		const sld_mcp::v1::SetDimensionValueRequest* request,
+		sld_mcp::v1::SetDimensionValueResponse* response) override;
+
 private:
 	// gRPC runs handlers on its own thread pool, not on SolidWorks' main
 	// STA thread, so ISldWorks can't be used directly. This fetches a

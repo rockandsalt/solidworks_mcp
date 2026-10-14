@@ -77,6 +77,52 @@ namespace comvariant
 		return out;
 	}
 
+	// An integer array (e.g. a sketch entity ID) as int64s. Non-numeric
+	// VARIANT elements read as 0.
+	inline std::vector<long long> ToInt64s(const VARIANT& v)
+	{
+		std::vector<long long> out;
+		SAFEARRAY* sa = detail::Array1D(v);
+		if (!sa)
+			return out;
+		switch (v.vt & VT_TYPEMASK)
+		{
+		case VT_I4:
+		case VT_INT:
+			detail::WithData<LONG>(sa, [&](const LONG* p, size_t n) { out.assign(p, p + n); });
+			break;
+		case VT_UI4:
+		case VT_UINT:
+			detail::WithData<ULONG>(sa, [&](const ULONG* p, size_t n) { out.assign(p, p + n); });
+			break;
+		case VT_I8:
+			detail::WithData<LONGLONG>(sa, [&](const LONGLONG* p, size_t n) { out.assign(p, p + n); });
+			break;
+		case VT_R8:
+			detail::WithData<double>(sa, [&](const double* p, size_t n) {
+				for (size_t i = 0; i < n; ++i)
+					out.push_back(static_cast<long long>(p[i]));
+			});
+			break;
+		case VT_VARIANT:
+			detail::WithData<VARIANT>(sa, [&](const VARIANT* p, size_t n) {
+				out.reserve(n);
+				for (size_t i = 0; i < n; ++i)
+				{
+					VARIANT d;
+					VariantInit(&d);
+					if (SUCCEEDED(VariantChangeType(&d, const_cast<VARIANT*>(&p[i]), 0, VT_I8)))
+						out.push_back(d.llVal);
+					else
+						out.push_back(0);
+					VariantClear(&d);
+				}
+			});
+			break;
+		}
+		return out;
+	}
+
 	// An array of COM objects (or a single one). Null elements are kept as
 	// null pointers so positions stay meaningful.
 	inline std::vector<ATL::CComPtr<IDispatch>> ToDispatches(const VARIANT& v)

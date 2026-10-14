@@ -1,6 +1,7 @@
 mod addin;
 mod inspect;
 mod render;
+mod sketch;
 
 use std::sync::{Arc, Mutex};
 
@@ -8,7 +9,8 @@ use addin::AddinClient;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use addin::proto;
-use inspect::{IdRegistry, MM_PER_M};
+use inspect::{IdRegistry, Kind, MM_PER_M, SKETCH_KINDS};
+use sketch::RefTarget;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
@@ -261,6 +263,72 @@ impl PointConverter {
     }
 }
 
+/// Flags an extruded sketch that isn't fully defined.
+fn sketch_status_note(result: &proto::ExtrudeSketchResponse) -> String {
+    match result.sketch_status() {
+        proto::DefinitionStatus::Fully | proto::DefinitionStatus::Unspecified => String::new(),
+        status => format!(
+            " Note: {} is {} (dimension_sketch / fully_define_sketch can fix that).",
+            result.sketch_name,
+            sketch::status_name(status)
+        ),
+    }
+}
+
+/// A trimmed, possibly empty name for the wire ("" = the add-in's default).
+fn trimmed(name: Option<String>) -> String {
+    name.map(|n| n.trim().to_string()).unwrap_or_default()
+}
+
+/// Puts "dimension 2: " (or similar) in front of an error's message.
+fn prefix_error(error: McpError, what: &str) -> McpError {
+    McpError::invalid_params(format!("{what}: {}", error.message), error.data)
+}
+
+/// Millimeters -> meters, for a value that must be positive.
+fn positive_mm(value_mm: f64) -> Result<f64, McpError> {
+    if !(value_mm.is_finite() && value_mm > 0.0) {
+        return Err(McpError::invalid_params(
+            format!("the value must be a positive number of millimeters, got {value_mm}"),
+            None,
+        ));
+    }
+    Ok(sketch::m(value_mm))
+}
+
+/// Degrees -> radians, for an angle strictly between 0 and 360.
+fn angle_rad(value_deg: f64) -> Result<f64, McpError> {
+    if !(value_deg.is_finite() && value_deg > 0.0 && value_deg < 360.0) {
+        return Err(McpError::invalid_params(
+            format!("an angle must be between 0 and 360 degrees, got {value_deg}"),
+            None,
+        ));
+    }
+    Ok(value_deg.to_radians())
+}
+
+/// A dimension's value on the wire (meters, or radians for angles), checking the right unit
+/// was used.
+fn dimension_value(spec: &DimensionSpec) -> Result<Option<f64>, McpError> {
+    match (spec.kind == DimensionKind::Angle, spec.value_mm, spec.value_deg) {
+        (_, Some(_), Some(_)) => Err(McpError::invalid_params(
+            "give value_mm or value_deg, not both",
+            None,
+        )),
+        (true, Some(_), None) => Err(McpError::invalid_params(
+            "an angle takes value_deg (degrees), not value_mm",
+            None,
+        )),
+        (false, None, Some(_)) => Err(McpError::invalid_params(
+            "only angles take value_deg; give value_mm",
+            None,
+        )),
+        (true, None, Some(d)) => angle_rad(d).map(Some),
+        (false, Some(v), None) => positive_mm(v).map(Some),
+        (_, None, None) => Ok(None),
+    }
+}
+
 fn sketch_entity(
     construction: bool,
     geometry: proto::sketch_entity::Geometry,
@@ -425,6 +493,242 @@ struct RenderViewsParams {
     #[serde(default)]
     size_px: Option<u32>,
 }
+
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+struct InspectSketchParams {
+    /// The sketch, e.g. "Sketch1". Defaults to the last sketch in the feature tree.
+    #[serde(default)]
+    sketch_name: Option<String>,
+}
+
+/// What a dimension measures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum DimensionKind {
+    /// 1 line: its length.
+    Length,
+    /// 2 entities: point-point (aligned), point-line (perpendicular), between parallel lines,
+    /// or circle/arc to anything (from its center).
+    Distance,
+    /// 1 line's extent, or the distance between 2 entities, along the sketch's X axis.
+    Horizontal,
+    /// 1 line's extent, or the distance between 2 entities, along the sketch's Y axis.
+    Vertical,
+    /// 1 circle or arc.
+    Diameter,
+    /// 1 circle or arc.
+    Radius,
+    /// 2 lines (degrees).
+    Angle,
+}
+
+impl DimensionKind {
+    fn name(self) -> &'static str {
+        match self {
+            DimensionKind::Length => "length",
+            DimensionKind::Distance => "distance",
+            DimensionKind::Horizontal => "horizontal",
+            DimensionKind::Vertical => "vertical",
+            DimensionKind::Diameter => "diameter",
+            DimensionKind::Radius => "radius",
+            DimensionKind::Angle => "angle",
+        }
+    }
+}
+
+impl From<DimensionKind> for proto::DimensionKind {
+    fn from(kind: DimensionKind) -> Self {
+        match kind {
+            DimensionKind::Length => proto::DimensionKind::Length,
+            DimensionKind::Distance => proto::DimensionKind::Distance,
+            DimensionKind::Horizontal => proto::DimensionKind::Horizontal,
+            DimensionKind::Vertical => proto::DimensionKind::Vertical,
+            DimensionKind::Diameter => proto::DimensionKind::Diameter,
+            DimensionKind::Radius => proto::DimensionKind::Radius,
+            DimensionKind::Angle => proto::DimensionKind::Angle,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct DimensionSpec {
+    /// length (1 line), distance (2 entities), horizontal / vertical (1 line, or 2 entities,
+    /// measured along the sketch's X / Y axis), diameter / radius (1 circle or arc), angle
+    /// (2 lines).
+    kind: DimensionKind,
+    /// What it measures: sketch entity ids from inspect_sketch or the sketch_* tools ("line:3",
+    /// "point:7", "circle:1"), "origin" for the sketch origin, or an edge/face id from
+    /// inspect_model ("edge:12") to measure from the model.
+    entities: Vec<String>,
+    /// Drive the dimension to this many millimeters, moving the geometry. Omit to keep the
+    /// current size and just lock it. Not for angles.
+    #[serde(default)]
+    value_mm: Option<f64>,
+    /// Angles only: drive the angle to this many degrees. Omit to keep the current angle.
+    #[serde(default)]
+    value_deg: Option<f64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct DimensionSketchParams {
+    /// Dimensions to add to one sketch, applied together.
+    dimensions: Vec<DimensionSpec>,
+    /// The sketch, e.g. "Sketch1". Defaults to the sketch the entity ids belong to.
+    #[serde(default)]
+    sketch_name: Option<String>,
+}
+
+/// A geometric relation between sketch entities.
+#[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum RelationKind {
+    /// Lines, or exactly 2 points (level with each other).
+    Horizontal,
+    /// Lines, or exactly 2 points (one above the other).
+    Vertical,
+    /// A point and a point, line, arc or the origin.
+    Coincident,
+    /// A point and a line: the point sits at the line's middle.
+    Midpoint,
+    /// 2+ lines on one infinite line.
+    Collinear,
+    /// 2+ lines.
+    Parallel,
+    /// 2 lines.
+    Perpendicular,
+    /// An arc/circle/spline and a line or arc.
+    Tangent,
+    /// 2+ arcs/circles/points sharing a center.
+    Concentric,
+    /// 2 arcs/circles: same center and radius.
+    Coradial,
+    /// 2+ lines (same length) or arcs/circles (same radius).
+    Equal,
+    /// Lock entities where they are.
+    Fixed,
+    /// 2 entities and then a line to mirror them about (3 in all).
+    Symmetric,
+    /// 2 points become one.
+    Merge,
+}
+
+impl RelationKind {
+    fn name(self) -> &'static str {
+        match self {
+            RelationKind::Horizontal => "horizontal",
+            RelationKind::Vertical => "vertical",
+            RelationKind::Coincident => "coincident",
+            RelationKind::Midpoint => "midpoint",
+            RelationKind::Collinear => "collinear",
+            RelationKind::Parallel => "parallel",
+            RelationKind::Perpendicular => "perpendicular",
+            RelationKind::Tangent => "tangent",
+            RelationKind::Concentric => "concentric",
+            RelationKind::Coradial => "coradial",
+            RelationKind::Equal => "equal",
+            RelationKind::Fixed => "fixed",
+            RelationKind::Symmetric => "symmetric",
+            RelationKind::Merge => "merge",
+        }
+    }
+}
+
+impl From<RelationKind> for proto::RelationKind {
+    fn from(kind: RelationKind) -> Self {
+        match kind {
+            RelationKind::Horizontal => proto::RelationKind::Horizontal,
+            RelationKind::Vertical => proto::RelationKind::Vertical,
+            RelationKind::Coincident => proto::RelationKind::Coincident,
+            RelationKind::Midpoint => proto::RelationKind::Midpoint,
+            RelationKind::Collinear => proto::RelationKind::Collinear,
+            RelationKind::Parallel => proto::RelationKind::Parallel,
+            RelationKind::Perpendicular => proto::RelationKind::Perpendicular,
+            RelationKind::Tangent => proto::RelationKind::Tangent,
+            RelationKind::Concentric => proto::RelationKind::Concentric,
+            RelationKind::Coradial => proto::RelationKind::Coradial,
+            RelationKind::Equal => proto::RelationKind::Equal,
+            RelationKind::Fixed => proto::RelationKind::Fixed,
+            RelationKind::Symmetric => proto::RelationKind::Symmetric,
+            RelationKind::Merge => proto::RelationKind::Merge,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct RelationSpec {
+    kind: RelationKind,
+    /// The entities, in order: sketch entity ids ("line:3", "point:7"), "origin", or an
+    /// edge/face id from inspect_model.
+    entities: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct AddSketchRelationsParams {
+    /// Relations to add to one sketch, applied together.
+    relations: Vec<RelationSpec>,
+    /// The sketch, e.g. "Sketch1". Defaults to the sketch the entity ids belong to.
+    #[serde(default)]
+    sketch_name: Option<String>,
+}
+
+/// How fully_define_sketch lays out the dimensions it adds.
+#[derive(Debug, Clone, Copy, Default, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum DimensionScheme {
+    /// Every dimension from the datum (default).
+    #[default]
+    Baseline,
+    /// Each dimension from the previous feature.
+    Chain,
+    /// Ordinate dimensions from the datum.
+    Ordinate,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct FullyDefineSketchParams {
+    /// The sketch, e.g. "Sketch1". Defaults to the last sketch in the feature tree.
+    #[serde(default)]
+    sketch_name: Option<String>,
+    /// Add relations (horizontal, vertical, coincident, tangent, ...) wherever the geometry
+    /// already satisfies them. Defaults to true.
+    #[serde(default = "default_true")]
+    relations: bool,
+    /// Add dimensions for whatever relations don't fix. Defaults to true.
+    #[serde(default = "default_true")]
+    dimensions: bool,
+    /// How to lay out the dimensions: "baseline" (default), "chain" or "ordinate".
+    #[serde(default)]
+    scheme: DimensionScheme,
+    /// What horizontal dimensions are measured from: "origin" (default), a sketch point or
+    /// vertical line id, or a model edge id.
+    #[serde(default)]
+    horizontal_datum: Option<String>,
+    /// What vertical dimensions are measured from: "origin" (default), a sketch point or
+    /// horizontal line id, or a model edge id.
+    #[serde(default)]
+    vertical_datum: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SetDimensionParams {
+    /// The dimension's full name, e.g. "D1@Sketch1" (inspect_sketch lists them).
+    name: String,
+    /// New value in millimeters, for lengths, distances, diameters and radii.
+    #[serde(default)]
+    value_mm: Option<f64>,
+    /// New value in degrees, for angles.
+    #[serde(default)]
+    value_deg: Option<f64>,
+}
+
+/// Most entities one dimension or relation takes.
+const MAX_CONSTRAINT_ENTITIES: usize = 3;
+/// Most dimensions or relations per call (the add-in's limit).
+const MAX_CONSTRAINTS: usize = 200;
 
 #[derive(Clone)]
 struct SolidWorksTools {
@@ -806,8 +1110,10 @@ impl SolidWorksTools {
             ""
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-            "created {} by extruding {} {depth_mm} mm{how}",
-            result.feature_name, result.sketch_name
+            "created {} by extruding {} {depth_mm} mm{how}.{}",
+            result.feature_name,
+            result.sketch_name,
+            sketch_status_note(&result)
         ))]))
     }
 
@@ -869,8 +1175,10 @@ impl SolidWorksTools {
             format!("{depth_mm} mm")
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-            "created {} by cutting with {} {how}",
-            result.feature_name, result.sketch_name
+            "created {} by cutting with {} {how}.{}",
+            result.feature_name,
+            result.sketch_name,
+            sketch_status_note(&result)
         ))]))
     }
 
@@ -1065,6 +1373,255 @@ impl SolidWorksTools {
             ContentBlock::text(text),
         ]))
     }
+
+    #[tool(
+        description = "Look at one 2D sketch of the active part without changing it: every \
+                       segment and point with an id (\"line:3\", \"arc:1\", \"circle:2\", \
+                       \"point:7\" -- end points and centers are points) and its geometry in the \
+                       sketch's own 2D coordinates (mm), the sketch's dimensions (names like \
+                       \"D1@Sketch1\" and values) and relations, and whether the sketch is fully \
+                       defined; entities that can still move carry a status. Defaults to the last \
+                       sketch. Use the ids with dimension_sketch and add_sketch_relations."
+    )]
+    async fn inspect_sketch(
+        &self,
+        Parameters(params): Parameters<InspectSketchParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let reply = self
+            .addin
+            .inspect_sketch(proto::InspectSketchRequest {
+                sketch_name: trimmed(params.sketch_name),
+            })
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let json = {
+            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            sketch::render_inspect(&mut ids, &reply)
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+    }
+
+    #[tool(
+        description = "Add dimensions to a sketch of the active part -- the way to give a sketch \
+                       exact sizes and positions (design intent) and toward making it fully \
+                       defined. Each dimension has a kind and the entities it measures: length (1 \
+                       line), distance (2 entities), horizontal / vertical (1 line, or 2 entities \
+                       along the sketch's X / Y axis), diameter / radius (1 circle or arc), angle \
+                       (2 lines). Entities are sketch ids from inspect_sketch or the sketch_* tools \
+                       (\"line:3\", \"point:7\"), \"origin\", or an edge/face id from \
+                       inspect_model. With value_mm (value_deg for angles) the dimension drives the \
+                       geometry to that size; without, it locks the current size. All dimensions of \
+                       a call are applied together, or none if any fails (e.g. one would \
+                       over-define the sketch). Reports the new dimension names and what in the \
+                       sketch can still move. Requires no sketch open for editing."
+    )]
+    async fn dimension_sketch(
+        &self,
+        Parameters(params): Parameters<DimensionSketchParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let n = params.dimensions.len();
+        if n == 0 || n > MAX_CONSTRAINTS {
+            return Err(McpError::invalid_params(
+                format!("give between 1 and {MAX_CONSTRAINTS} dimensions"),
+                None,
+            ));
+        }
+        let mut dimensions = Vec::with_capacity(n);
+        let mut labels = Vec::with_capacity(n);
+        for (i, spec) in params.dimensions.iter().enumerate() {
+            let at = |e: McpError| prefix_error(e, &format!("dimension {}", i + 1));
+            let value = dimension_value(spec).map_err(at)?;
+            let refs = self.sketch_refs(&spec.entities).map_err(at)?;
+            dimensions.push(proto::SketchDimension {
+                kind: proto::DimensionKind::from(spec.kind).into(),
+                refs,
+                value,
+            });
+            labels.push(format!("{} of {}", spec.kind.name(), spec.entities.join(" & ")));
+        }
+        let reply = self
+            .addin
+            .add_sketch_dimensions(proto::AddSketchDimensionsRequest {
+                sketch_name: trimmed(params.sketch_name),
+                dimensions,
+            })
+            .await
+            .map_err(|status| self.addin_error(status))?;
+
+        let added: Vec<String> = reply
+            .dimensions
+            .iter()
+            .zip(&labels)
+            .map(|(d, label)| format!("{} ({label})", sketch::dimension_text(d)))
+            .collect();
+        let mut text = format!("added to {}: {}.", reply.sketch_name, added.join(", "));
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        text += &sketch::state_text(&mut ids, &reply.sketch_name, reply.state.as_ref());
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Add geometric relations between entities of a sketch of the active part: \
+                       horizontal, vertical, coincident, midpoint, collinear, parallel, \
+                       perpendicular, tangent, concentric, coradial, equal, fixed, symmetric \
+                       (2 entities then the line to mirror about), merge. Entities are sketch ids \
+                       from inspect_sketch or the sketch_* tools (\"line:3\", \"point:7\"), \
+                       \"origin\" (e.g. coincident a circle's center point with the origin), or \
+                       an edge/face id from inspect_model. Relations can move geometry to satisfy \
+                       them. Applied together; if one fails, the ones added by this call are \
+                       removed again. Reports what in the sketch can still move. Requires no \
+                       sketch open for editing."
+    )]
+    async fn add_sketch_relations(
+        &self,
+        Parameters(params): Parameters<AddSketchRelationsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let n = params.relations.len();
+        if n == 0 || n > MAX_CONSTRAINTS {
+            return Err(McpError::invalid_params(
+                format!("give between 1 and {MAX_CONSTRAINTS} relations"),
+                None,
+            ));
+        }
+        let mut relations = Vec::with_capacity(n);
+        let mut labels = Vec::with_capacity(n);
+        for (i, spec) in params.relations.iter().enumerate() {
+            let refs = self
+                .sketch_refs(&spec.entities)
+                .map_err(|e| prefix_error(e, &format!("relation {}", i + 1)))?;
+            relations.push(proto::SketchRelation {
+                kind: proto::RelationKind::from(spec.kind).into(),
+                refs,
+            });
+            labels.push(format!("{} {}", spec.kind.name(), spec.entities.join(" & ")));
+        }
+        let reply = self
+            .addin
+            .add_sketch_relations(proto::AddSketchRelationsRequest {
+                sketch_name: trimmed(params.sketch_name),
+                relations,
+            })
+            .await
+            .map_err(|status| self.addin_error(status))?;
+
+        let mut text = format!(
+            "added {} to {}: {}.",
+            count_of(reply.added.max(0) as usize, "relation"),
+            reply.sketch_name,
+            labels.join(", ")
+        );
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        text += &sketch::state_text(&mut ids, &reply.sketch_name, reply.state.as_ref());
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Fully define a sketch of the active part (SolidWorks' Fully Define \
+                       Sketch): adds the relations and dimensions still missing so nothing can \
+                       move, locking the geometry where it is. Dimensions are measured from the \
+                       sketch origin unless datums are given. Best after dimension_sketch / \
+                       add_sketch_relations have set the sizes that matter, since what this adds \
+                       just records the current geometry. Defaults to the last sketch. Reports the \
+                       dimensions it added and whether the sketch is now fully defined. Requires \
+                       no sketch open for editing."
+    )]
+    async fn fully_define_sketch(
+        &self,
+        Parameters(params): Parameters<FullyDefineSketchParams>,
+    ) -> Result<CallToolResult, McpError> {
+        if !params.relations && !params.dimensions {
+            return Err(McpError::invalid_params(
+                "relations and dimensions can't both be false -- there'd be nothing to add",
+                None,
+            ));
+        }
+        let datum = |datum: &Option<String>, what: &str| -> Result<Option<proto::SketchRef>, McpError> {
+            match datum.as_deref().map(str::trim) {
+                None | Some("") => Ok(None),
+                Some(id) => self
+                    .sketch_ref(id)
+                    .map(Some)
+                    .map_err(|e| prefix_error(e, what)),
+            }
+        };
+        let request = proto::FullyDefineSketchRequest {
+            sketch_name: trimmed(params.sketch_name),
+            skip_relations: !params.relations,
+            skip_dimensions: !params.dimensions,
+            scheme: match params.scheme {
+                DimensionScheme::Baseline => proto::DimensionScheme::Baseline,
+                DimensionScheme::Chain => proto::DimensionScheme::Chain,
+                DimensionScheme::Ordinate => proto::DimensionScheme::Ordinate,
+            }
+            .into(),
+            horizontal_datum: datum(&params.horizontal_datum, "horizontal_datum")?,
+            vertical_datum: datum(&params.vertical_datum, "vertical_datum")?,
+        };
+        let reply = self
+            .addin
+            .fully_define_sketch(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+
+        let dims: Vec<String> = reply.added_dimensions.iter().map(sketch::dimension_text).collect();
+        let mut text = if dims.is_empty() && reply.added_relations == 0 {
+            format!("added nothing to {}.", reply.sketch_name)
+        } else {
+            let mut t = format!(
+                "added {} and {} to {}",
+                count_of(dims.len(), "dimension"),
+                count_of(reply.added_relations.max(0) as usize, "relation"),
+                reply.sketch_name
+            );
+            if !dims.is_empty() {
+                t += &format!(" ({})", dims.join(", "));
+            }
+            t.push('.');
+            t
+        };
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        text += &sketch::state_text(&mut ids, &reply.sketch_name, reply.state.as_ref());
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Change the value of an existing dimension of the active part by its full \
+                       name -- a sketch dimension like \"D1@Sketch1\" (inspect_sketch lists them) \
+                       or a feature's, like \"D1@Boss-Extrude1\" -- and rebuild. value_mm for \
+                       lengths, value_deg for angles. Requires no sketch open for editing."
+    )]
+    async fn set_dimension(
+        &self,
+        Parameters(params): Parameters<SetDimensionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let name = params.name.trim().to_string();
+        if name.is_empty() {
+            return Err(McpError::invalid_params("give the dimension's name, e.g. D1@Sketch1", None));
+        }
+        let value = match (params.value_mm, params.value_deg) {
+            (Some(v), None) => proto::set_dimension_value_request::Value::Length(positive_mm(v)?),
+            (None, Some(d)) => proto::set_dimension_value_request::Value::Angle(angle_rad(d)?),
+            _ => {
+                return Err(McpError::invalid_params(
+                    "give exactly one of value_mm (lengths) or value_deg (angles)",
+                    None,
+                ));
+            }
+        };
+        let reply = self
+            .addin
+            .set_dimension_value(proto::SetDimensionValueRequest {
+                name,
+                value: Some(value),
+            })
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let text = match &reply.dimension {
+            Some(d) => format!("set {}; the model was rebuilt.", sketch::dimension_text(d)),
+            None => "set the dimension; the model was rebuilt.".to_string(),
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
 }
 
 impl SolidWorksTools {
@@ -1142,6 +1699,11 @@ impl SolidWorksTools {
                 inspect::direction(n)
             );
         }
+        text.push('.');
+        {
+            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            text += &sketch::items_text(&mut ids, &sketch.items);
+        }
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
@@ -1197,6 +1759,10 @@ impl SolidWorksTools {
             (None, None) => format!(" (new sketch on the {plane:?} plane)"),
         };
         let mut text = format!("drew {what} in {}{place}.", result.sketch_name);
+        {
+            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            text += &sketch::items_text(&mut ids, &result.items);
+        }
         if let Some(contours) = &result.contours {
             text += &format!(
                 " {} now has {} closed and {} open contour(s)",
@@ -1225,6 +1791,57 @@ impl SolidWorksTools {
             );
         }
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    /// The wire refs for a dimension's or relation's entities.
+    fn sketch_refs(&self, entities: &[String]) -> Result<Vec<proto::SketchRef>, McpError> {
+        if entities.is_empty() || entities.len() > MAX_CONSTRAINT_ENTITIES {
+            return Err(McpError::invalid_params(
+                format!("give 1 to {MAX_CONSTRAINT_ENTITIES} entities"),
+                None,
+            ));
+        }
+        entities.iter().map(|e| self.sketch_ref(e)).collect()
+    }
+
+    /// One dimension/relation entity: a sketch entity id, "origin", or a model edge/face id.
+    fn sketch_ref(&self, entity: &str) -> Result<proto::SketchRef, McpError> {
+        let entity = entity.trim();
+        if entity.eq_ignore_ascii_case("origin") {
+            return Ok(RefTarget::Origin.into_proto());
+        }
+        match Kind::of_id(entity) {
+            Some(Kind::Edge | Kind::Face) => Ok(RefTarget::Model(self.resolve_id(entity)?).into_proto()),
+            Some(kind) if SKETCH_KINDS.contains(&kind) => {
+                let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                sketch::decode_ref(&ids, entity)
+                    .map(|r| RefTarget::Item(r).into_proto())
+                    .ok_or_else(|| {
+                        McpError::invalid_params(
+                            format!(
+                                "unknown sketch entity id {entity:?} -- ids come from inspect_sketch \
+                                 and the sketch_* tools (and are forgotten if the MCP server \
+                                 restarts); call inspect_sketch to get current ones"
+                            ),
+                            None,
+                        )
+                    })
+            }
+            Some(_) => Err(McpError::invalid_params(
+                format!(
+                    "{entity} can't be used here -- give sketch entities (\"line:3\", \
+                     \"point:7\"), \"origin\", or a model edge/face id"
+                ),
+                None,
+            )),
+            None => Err(McpError::invalid_params(
+                format!(
+                    "{entity:?} isn't an id -- give sketch entity ids like \"line:3\" (from \
+                     inspect_sketch), \"origin\", or edge/face ids from inspect_model"
+                ),
+                None,
+            )),
+        }
     }
 
     /// What a render_views highlight refers to: a short id, or else a
@@ -1317,9 +1934,13 @@ impl ServerHandler for SolidWorksTools {
                  create_rectangle_sketch / create_square_sketch or, for any other profile, \
                  sketch_line, sketch_arc, sketch_circle, sketch_spline and sketch_point \
                  (pass sketch_name to keep adding to one sketch), then extrude_sketch or \
-                 cut_extrude_sketch. render_views \
+                 cut_extrude_sketch. To make a sketch fully defined: the drawing tools \
+                 report entity ids (\"line:1\", \"point:2\"; inspect_sketch lists them all), \
+                 dimension_sketch adds driving dimensions and add_sketch_relations adds \
+                 relations for the sizes and alignments that matter, then fully_define_sketch \
+                 locks whatever is left. set_dimension changes a dimension later. render_views \
                  draws the part (optionally highlighting ids) to check its shape. \
-                 Lengths are in millimeters."
+                 Lengths are in millimeters, angles in degrees."
                     .to_string(),
             )
     }
@@ -1369,5 +1990,25 @@ mod tests {
         let mut points = PointConverter::default();
         points.convert(&[0.0, 0.0], "start").unwrap();
         assert!(points.convert(&[0.0, 0.0, 0.0], "end").is_err());
+    }
+
+    #[test]
+    fn dimension_values_check_units() {
+        let spec = |kind, value_mm, value_deg| DimensionSpec {
+            kind,
+            entities: vec!["line:1".into()],
+            value_mm,
+            value_deg,
+        };
+        assert_eq!(dimension_value(&spec(DimensionKind::Length, Some(50.0), None)).unwrap(), Some(0.05));
+        assert_eq!(dimension_value(&spec(DimensionKind::Length, None, None)).unwrap(), None);
+        let angle = dimension_value(&spec(DimensionKind::Angle, None, Some(90.0))).unwrap().unwrap();
+        assert!((angle - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+        // Wrong unit for the kind, both units, or out of range.
+        assert!(dimension_value(&spec(DimensionKind::Angle, Some(90.0), None)).is_err());
+        assert!(dimension_value(&spec(DimensionKind::Diameter, None, Some(10.0))).is_err());
+        assert!(dimension_value(&spec(DimensionKind::Length, Some(1.0), Some(1.0))).is_err());
+        assert!(dimension_value(&spec(DimensionKind::Length, Some(-1.0), None)).is_err());
+        assert!(dimension_value(&spec(DimensionKind::Angle, None, Some(360.0))).is_err());
     }
 }

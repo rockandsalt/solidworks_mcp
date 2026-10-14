@@ -53,6 +53,33 @@ service SolidWorks {
   // and edges as polylines, for the MCP server to render pictures from.
   // Fails with FAILED_PRECONDITION if the active document isn't a part.
   rpc GetMesh(GetMeshRequest) returns (GetMeshResponse);
+
+  // Read-only look at one 2D sketch: its segments and points (with IDs
+  // other sketch RPCs take), dimensions, relations, and how fully defined
+  // it and each entity are. Doesn't open the sketch for editing.
+  rpc InspectSketch(InspectSketchRequest) returns (InspectSketchResponse);
+
+  // Adds dimensions to a sketch, optionally driving each to a new value
+  // (which moves the geometry). All or nothing: if any dimension can't be
+  // added, would over-define the sketch, or the values can't be solved,
+  // the values are put back and the new dimensions deleted. Opens and
+  // closes the sketch; FAILED_PRECONDITION if a sketch is already open.
+  rpc AddSketchDimensions(AddSketchDimensionsRequest) returns (AddSketchDimensionsResponse);
+
+  // Adds geometric relations (horizontal, coincident, tangent, ...) to a
+  // sketch. All or nothing, best effort: relations added by a failed call
+  // are deleted again, but geometry they moved stays where it went.
+  rpc AddSketchRelations(AddSketchRelationsRequest) returns (AddSketchRelationsResponse);
+
+  // SolidWorks' "Fully Define Sketch": adds the relations and dimensions
+  // still needed to fully define a sketch, locking the geometry where it
+  // is. Dimensions are measured from the sketch origin unless datums are
+  // given.
+  rpc FullyDefineSketch(FullyDefineSketchRequest) returns (FullyDefineSketchResponse);
+
+  // Changes the value of an existing dimension by its full name, e.g.
+  // "D1@Sketch1" or "D1@Boss-Extrude1", and rebuilds.
+  rpc SetDimensionValue(SetDimensionValueRequest) returns (SetDimensionValueResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +160,9 @@ message CreateRectangleSketchResponse {
   SketchFrame frame = 2;
   // The rectangle's center in model space, meters.
   Vec3 center_model = 3;
+  // The segments the rectangle is made of (sides, plus any construction
+  // geometry SolidWorks adds), with their IDs.
+  repeated SketchItem items = 4;
 }
 
 // ---------------------------------------------------------------------------
@@ -213,6 +243,9 @@ message AddSketchEntitiesResponse {
   // The whole sketch's contours after the change. Unset if SolidWorks
   // couldn't report them.
   SketchContours contours = 5;
+  // What was drawn, in request order, with IDs for dimensioning. A drawn
+  // point that was merged into another entity's end point is left out.
+  repeated SketchItem items = 6;
 }
 
 // Chains of connected segments in a sketch. Boss/cut extrusions need
@@ -245,6 +278,8 @@ message ExtrudeSketchResponse {
   string feature_name = 1;
   // The sketch that was extruded (useful when the request left it empty).
   string sketch_name = 2;
+  // How fully defined that sketch was.
+  DefinitionStatus sketch_status = 3;
 }
 
 // ---------------------------------------------------------------------------
@@ -419,4 +454,239 @@ message EdgePolyline {
   bytes body_persist_id = 2;
   // Points along the edge, start to end (at least 2).
   repeated float points = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Sketch dimensions and relations
+//
+// Sketch coordinates are the sketch's own 2D axes (see SketchFrame), meters;
+// angles are radians.
+
+// One entity inside a 2D sketch: SolidWorks' sketch entity ID
+// (ISketchSegment::GetID / ISketchPoint::GetID, two numbers that stay the
+// same for as long as the entity exists) plus the sketch it belongs to.
+// Treat as opaque.
+message SketchItemRef {
+  bytes sketch_persist_id = 1;  // the sketch feature's persist_id
+  bool point = 2;               // a sketch point rather than a segment
+  int64 id0 = 3;
+  int64 id1 = 4;
+}
+
+enum SketchItemType {
+  SKETCH_ITEM_TYPE_UNSPECIFIED = 0;
+  SKETCH_ITEM_TYPE_POINT = 1;
+  SKETCH_ITEM_TYPE_LINE = 2;
+  SKETCH_ITEM_TYPE_ARC = 3;
+  SKETCH_ITEM_TYPE_CIRCLE = 4;
+  SKETCH_ITEM_TYPE_SPLINE = 5;
+  SKETCH_ITEM_TYPE_ELLIPSE = 6;
+  SKETCH_ITEM_TYPE_OTHER = 7;   // parabola, text, ...
+}
+
+// swConstrainedStatus_e.
+enum DefinitionStatus {
+  DEFINITION_STATUS_UNSPECIFIED = 0;
+  DEFINITION_STATUS_UNDER = 1;        // can still move
+  DEFINITION_STATUS_FULLY = 2;
+  DEFINITION_STATUS_OVER = 3;         // conflicting dimensions/relations
+  DEFINITION_STATUS_NO_SOLUTION = 4;
+  DEFINITION_STATUS_INVALID = 5;      // solved, but into invalid geometry
+  DEFINITION_STATUS_NOT_SOLVED = 6;   // automatic solve is off
+}
+
+// A segment or point of a sketch. Geometry in sketch coordinates; which
+// fields are set depends on `type`:
+//   POINT:          position
+//   LINE:           start, end (+ start_point, end_point), length
+//   ARC:            start, end, center (+ the three points), radius, length
+//   CIRCLE:         center (+ center_point), radius, length
+//   SPLINE/ELLIPSE: start, end (+ points) when SolidWorks reports them, length
+message SketchItem {
+  SketchItemRef ref = 1;
+  SketchItemType type = 2;
+  string name = 3;  // SolidWorks' own name, e.g. "Line3" (segments only)
+  bool construction = 4;
+  DefinitionStatus status = 5;
+  Vec3 position = 6;
+  Vec3 start = 7;
+  Vec3 end = 8;
+  Vec3 center = 9;
+  double radius = 10;
+  double length = 11;
+  SketchItemRef start_point = 12;
+  SketchItemRef end_point = 13;
+  SketchItemRef center_point = 14;
+}
+
+// How defined a sketch is, and what can still move.
+message SketchState {
+  DefinitionStatus status = 1;
+  // Entities that aren't fully defined (or are over defined), up to a cap.
+  repeated SketchItem not_fully_defined = 2;
+  // How many there are in all (may exceed the list).
+  int32 not_fully_defined_count = 3;
+}
+
+enum DimensionType {
+  DIMENSION_TYPE_UNSPECIFIED = 0;
+  DIMENSION_TYPE_LINEAR = 1;
+  DIMENSION_TYPE_ANGULAR = 2;  // value in radians
+  DIMENSION_TYPE_RADIUS = 3;
+  DIMENSION_TYPE_DIAMETER = 4;
+  DIMENSION_TYPE_ARC_LENGTH = 5;
+  DIMENSION_TYPE_ORDINATE = 6;
+  DIMENSION_TYPE_OTHER = 7;
+}
+
+message DimensionInfo {
+  string name = 1;  // full name, e.g. "D1@Sketch1"
+  DimensionType type = 2;
+  double value = 3;  // meters, or radians for ANGULAR
+  // A driven (reference) dimension only measures; it doesn't define anything.
+  bool driven = 4;
+}
+
+// A sketch relation. Entities outside the sketch (the origin, model
+// edges, ...) are only counted.
+message RelationInfo {
+  int32 constraint_type = 1;  // swConstraintType_e
+  repeated SketchItemRef items = 2;
+  int32 external_count = 3;
+}
+
+message InspectSketchRequest {
+  // E.g. "Sketch1". Empty means the last sketch in the feature tree.
+  string sketch_name = 1;
+}
+
+message InspectSketchResponse {
+  string sketch_name = 1;
+  SketchFrame frame = 2;
+  DefinitionStatus status = 3;
+  // Segments first, then points.
+  repeated SketchItem items = 4;
+  repeated DimensionInfo dimensions = 5;
+  repeated RelationInfo relations = 6;
+  SketchContours contours = 7;
+  // Set when items were cut off at the add-in's safety limit.
+  bool truncated = 8;
+}
+
+// Something a dimension or relation attaches to.
+message SketchRef {
+  oneof target {
+    SketchItemRef item = 1;
+    // The sketch origin (the part origin, seen from the sketch).
+    bool origin = 2;
+    // Model geometry outside the sketch: an edge or face persist_id from
+    // InspectModel.
+    bytes model_persist_id = 3;
+  }
+}
+
+enum DimensionKind {
+  DIMENSION_KIND_UNSPECIFIED = 0;
+  DIMENSION_KIND_LENGTH = 1;      // 1 line: its length (aligned)
+  DIMENSION_KIND_DISTANCE = 2;    // 2 refs: shortest/aligned distance
+  DIMENSION_KIND_HORIZONTAL = 3;  // 1 line or 2 refs: along sketch X
+  DIMENSION_KIND_VERTICAL = 4;    // 1 line or 2 refs: along sketch Y
+  DIMENSION_KIND_DIAMETER = 5;    // 1 circle or arc
+  DIMENSION_KIND_RADIUS = 6;      // 1 circle or arc
+  DIMENSION_KIND_ANGLE = 7;       // 2 lines
+}
+
+message SketchDimension {
+  DimensionKind kind = 1;
+  repeated SketchRef refs = 2;
+  // Drive the dimension to this value (meters, radians for ANGLE). Unset
+  // keeps the geometry's current value.
+  optional double value = 3;
+}
+
+message AddSketchDimensionsRequest {
+  // Empty means the sketch the first sketch item ref belongs to.
+  string sketch_name = 1;
+  repeated SketchDimension dimensions = 2;  // at least one
+}
+
+message AddSketchDimensionsResponse {
+  string sketch_name = 1;
+  // One per request dimension, with the value after solving.
+  repeated DimensionInfo dimensions = 2;
+  SketchState state = 3;
+}
+
+enum RelationKind {
+  RELATION_KIND_UNSPECIFIED = 0;
+  RELATION_KIND_HORIZONTAL = 1;     // lines, or 2 points
+  RELATION_KIND_VERTICAL = 2;       // lines, or 2 points
+  RELATION_KIND_COINCIDENT = 3;     // point + point/line/arc
+  RELATION_KIND_MIDPOINT = 4;       // point + line
+  RELATION_KIND_COLLINEAR = 5;      // lines
+  RELATION_KIND_PARALLEL = 6;       // lines
+  RELATION_KIND_PERPENDICULAR = 7;  // 2 lines
+  RELATION_KIND_TANGENT = 8;        // arc/circle/spline + line/arc
+  RELATION_KIND_CONCENTRIC = 9;     // arcs/circles/points
+  RELATION_KIND_CORADIAL = 10;      // 2 arcs/circles
+  RELATION_KIND_EQUAL = 11;         // lines, or arcs/circles
+  RELATION_KIND_FIXED = 12;         // anything
+  RELATION_KIND_SYMMETRIC = 13;     // 2 entities + a centerline, in that order
+  RELATION_KIND_MERGE = 14;         // 2 points
+}
+
+message SketchRelation {
+  RelationKind kind = 1;
+  repeated SketchRef refs = 2;
+}
+
+message AddSketchRelationsRequest {
+  // Empty means the sketch the first sketch item ref belongs to.
+  string sketch_name = 1;
+  repeated SketchRelation relations = 2;  // at least one
+}
+
+message AddSketchRelationsResponse {
+  string sketch_name = 1;
+  int32 added = 2;
+  SketchState state = 3;
+}
+
+enum DimensionScheme {
+  DIMENSION_SCHEME_UNSPECIFIED = 0;  // baseline
+  DIMENSION_SCHEME_BASELINE = 1;
+  DIMENSION_SCHEME_CHAIN = 2;
+  DIMENSION_SCHEME_ORDINATE = 3;
+}
+
+message FullyDefineSketchRequest {
+  // Empty means the last sketch in the feature tree.
+  string sketch_name = 1;
+  // Only add dimensions / only add relations.
+  bool skip_relations = 2;
+  bool skip_dimensions = 3;
+  DimensionScheme scheme = 4;
+  // What horizontal / vertical dimensions are measured from. Unset means
+  // the sketch origin.
+  SketchRef horizontal_datum = 5;
+  SketchRef vertical_datum = 6;
+}
+
+message FullyDefineSketchResponse {
+  string sketch_name = 1;
+  repeated DimensionInfo added_dimensions = 2;
+  int32 added_relations = 3;
+  SketchState state = 4;
+}
+
+message SetDimensionValueRequest {
+  string name = 1;  // e.g. "D1@Sketch1"
+  oneof value {
+    double length = 2;  // meters
+    double angle = 3;   // radians
+  }
+}
+
+message SetDimensionValueResponse {
+  DimensionInfo dimension = 1;
 }

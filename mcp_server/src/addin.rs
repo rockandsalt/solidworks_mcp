@@ -128,6 +128,48 @@ impl AddinClient {
         let response = client.get_mesh(request).await?;
         Ok(response.into_inner())
     }
+
+    pub async fn inspect_sketch(
+        &self,
+        request: proto::InspectSketchRequest,
+    ) -> Result<proto::InspectSketchResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.inspect_sketch(request).await?.into_inner())
+    }
+
+    /// Values in meters / radians.
+    pub async fn add_sketch_dimensions(
+        &self,
+        request: proto::AddSketchDimensionsRequest,
+    ) -> Result<proto::AddSketchDimensionsResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.add_sketch_dimensions(request).await?.into_inner())
+    }
+
+    pub async fn add_sketch_relations(
+        &self,
+        request: proto::AddSketchRelationsRequest,
+    ) -> Result<proto::AddSketchRelationsResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.add_sketch_relations(request).await?.into_inner())
+    }
+
+    pub async fn fully_define_sketch(
+        &self,
+        request: proto::FullyDefineSketchRequest,
+    ) -> Result<proto::FullyDefineSketchResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.fully_define_sketch(request).await?.into_inner())
+    }
+
+    /// Value in meters / radians.
+    pub async fn set_dimension_value(
+        &self,
+        request: proto::SetDimensionValueRequest,
+    ) -> Result<proto::SetDimensionValueResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.set_dimension_value(request).await?.into_inner())
+    }
 }
 
 /// Largest GetMesh reply accepted: about 5 million triangles with normals.

@@ -18,13 +18,34 @@ use crate::addin::proto;
 pub const MM_PER_M: f64 = 1000.0;
 
 /// What an ID refers to; only used as its readable prefix.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Feature,
     Body,
     Face,
     Edge,
+    // Entities inside a 2D sketch. Their "persist ID" is an encoded
+    // proto::SketchItemRef (see crate::sketch), not a SolidWorks persist ID.
+    SketchPoint,
+    Line,
+    Arc,
+    Circle,
+    Spline,
+    Ellipse,
+    Segment,
 }
+
+/// The kinds that name model geometry (vs. sketch entities).
+const MODEL_KINDS: [Kind; 4] = [Kind::Feature, Kind::Body, Kind::Face, Kind::Edge];
+pub const SKETCH_KINDS: [Kind; 7] = [
+    Kind::SketchPoint,
+    Kind::Line,
+    Kind::Arc,
+    Kind::Circle,
+    Kind::Spline,
+    Kind::Ellipse,
+    Kind::Segment,
+];
 
 impl Kind {
     fn prefix(self) -> &'static str {
@@ -33,7 +54,27 @@ impl Kind {
             Kind::Body => "body",
             Kind::Face => "face",
             Kind::Edge => "edge",
+            Kind::SketchPoint => "point",
+            Kind::Line => "line",
+            Kind::Arc => "arc",
+            Kind::Circle => "circle",
+            Kind::Spline => "spline",
+            Kind::Ellipse => "ellipse",
+            Kind::Segment => "segment",
         }
+    }
+
+    /// The kind an ID like "face:3" has, judging by its prefix alone.
+    pub fn of_id(id: &str) -> Option<Kind> {
+        let (prefix, n) = id.trim().split_once(':')?;
+        if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        MODEL_KINDS
+            .iter()
+            .chain(SKETCH_KINDS.iter())
+            .copied()
+            .find(|kind| kind.prefix() == prefix)
     }
 }
 
@@ -62,22 +103,20 @@ impl IdRegistry {
         Some(id)
     }
 
+    /// The short ID already handed out for these bytes, without minting one.
+    pub fn existing_id(&self, persist_id: &[u8]) -> Option<String> {
+        self.by_bytes.get(persist_id).cloned()
+    }
+
     /// The persist ID behind a short ID handed out earlier.
     pub fn persist_id(&self, id: &str) -> Option<Vec<u8>> {
         self.by_id.get(id.trim()).cloned()
     }
 
-    /// Whether `s` looks like one of our IDs (as opposed to, say, a feature
-    /// name), whether or not it's known.
+    /// Whether `s` looks like one of our model geometry IDs (as opposed to,
+    /// say, a feature name), whether or not it's known.
     pub fn looks_like_id(s: &str) -> bool {
-        let s = s.trim();
-        [Kind::Feature, Kind::Body, Kind::Face, Kind::Edge]
-            .iter()
-            .any(|kind| {
-                s.strip_prefix(kind.prefix())
-                    .and_then(|rest| rest.strip_prefix(':'))
-                    .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
-            })
+        Kind::of_id(s).is_some_and(|kind| MODEL_KINDS.contains(&kind))
     }
 }
 
@@ -137,14 +176,14 @@ fn norm(a: [f64; 3]) -> f64 {
 // ---- Number formatting -----------------------------------------------------
 
 /// Rounds to `places` decimals and turns -0 into 0, so the JSON stays short.
-fn round(value: f64, places: i32) -> f64 {
+pub fn round(value: f64, places: i32) -> f64 {
     let scale = 10f64.powi(places);
     let r = (value * scale).round() / scale;
     if r == 0.0 { 0.0 } else { r }
 }
 
 /// Meters -> millimeters, to 0.1 micron.
-fn mm(m: f64) -> f64 {
+pub fn mm(m: f64) -> f64 {
     round(m * MM_PER_M, 4)
 }
 
@@ -474,6 +513,12 @@ mod tests {
         assert!(!IdRegistry::looks_like_id("Boss-Extrude1"));
         assert!(!IdRegistry::looks_like_id("face:"));
         assert!(!IdRegistry::looks_like_id("face:x"));
+        // Sketch entity IDs aren't model geometry.
+        assert!(!IdRegistry::looks_like_id("line:3"));
+        assert_eq!(Kind::of_id("line:3"), Some(Kind::Line));
+        assert_eq!(Kind::of_id(" point:12 "), Some(Kind::SketchPoint));
+        assert_eq!(Kind::of_id("Sketch1"), None);
+        assert_eq!(Kind::of_id("line:"), None);
     }
 
     #[test]
