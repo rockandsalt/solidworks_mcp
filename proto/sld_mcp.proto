@@ -80,6 +80,19 @@ service SolidWorks {
   // Changes the value of an existing dimension by its full name, e.g.
   // "D1@Sketch1" or "D1@Boss-Extrude1", and rebuilds.
   rpc SetDimensionValue(SetDimensionValueRequest) returns (SetDimensionValueResponse);
+
+  // Hole Wizard: standard holes (clearance/drilled, counterbore, countersink
+  // or tapped), sized from SolidWorks' hole standards, at either
+  //   - the sketch points of an existing sketch, which becomes the hole
+  //     feature's placement sketch (so its dimensions keep locating the
+  //     holes) -- the usual way to make holes by hand; or
+  //   - points on a planar face of the active part; the feature then gets a
+  //     new placement sketch that the sketch RPCs can dimension.
+  // All the holes are one feature. Fails with INVALID_ARGUMENT if a location
+  // isn't on the face, and with FAILED_PRECONDITION if the active document
+  // isn't a part, a sketch is open, the sketch isn't usable, or SolidWorks
+  // rejects the hole (e.g. a size the fastener type doesn't have).
+  rpc HoleWizard(HoleWizardRequest) returns (HoleWizardResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -689,4 +702,108 @@ message SetDimensionValueRequest {
 
 message SetDimensionValueResponse {
   DimensionInfo dimension = 1;
+}
+
+// ---------------------------------------------------------------------------
+// HoleWizard
+
+// swWzdGeneralHoleTypes_e, the kinds this RPC supports.
+enum HoleKind {
+  HOLE_KIND_UNSPECIFIED = 0;
+  HOLE_KIND_HOLE = 1;         // plain drilled / clearance hole (swWzdHole)
+  HOLE_KIND_COUNTERBORE = 2;  // swWzdCounterBore
+  HOLE_KIND_COUNTERSINK = 3;  // swWzdCounterSink
+  HOLE_KIND_TAP = 4;          // straight tapped hole (swWzdTap)
+}
+
+// swWzdHoleScrewClearanceTypes_e. Clearance for the screw; only used when
+// the diameter comes from the standard.
+enum ScrewFit {
+  SCREW_FIT_UNSPECIFIED = 0;  // SolidWorks' default (normal)
+  SCREW_FIT_CLOSE = 1;
+  SCREW_FIT_NORMAL = 2;
+  SCREW_FIT_LOOSE = 3;
+}
+
+message HoleWizardRequest {
+  // Where the holes go: either `sketch_name`, or `face_persist_id` (with
+  // optional `locations`).
+  //
+  // A 2D sketch, e.g. "Sketch3", holding the hole centers as sketch points
+  // (construction geometry is allowed and ignored; its end and center
+  // points aren't holes). It must not be used by another feature yet; the
+  // hole feature absorbs it.
+  string sketch_name = 18;
+  // The planar face the holes start on (persist_id from InspectModel). The
+  // holes go into the material, against the face's outward normal, unless
+  // `reverse_direction`.
+  bytes face_persist_id = 1;
+  // Hole centers in model space, meters, each projected onto the face's
+  // plane; every one must land on the face. Empty means one hole at the
+  // center of the face's bounding box. At most 500.
+  repeated Vec3 locations = 2;
+
+  HoleKind kind = 3;
+  // swWzdHoleStandards_e, e.g. 8 = ISO.
+  int32 standard = 4;
+  // swWzdHoleStandardFastenerTypes_e, e.g. 139 = ISO socket head cap screw.
+  // Must belong to `standard` and suit `kind`.
+  int32 fastener_type = 5;
+  // A size from the standard's table for that fastener type, exactly as the
+  // Hole Wizard lists it, e.g. "M5", "#10", "1/4".
+  string size = 6;
+
+  // Through the whole part; otherwise blind to `depth`.
+  bool through_all = 7;
+  // Meters, > 0 unless through_all. For tapped holes, the drilled depth.
+  double depth = 8;
+  bool reverse_direction = 9;
+  // Clearance holes, counterbores and countersinks.
+  ScrewFit fit = 10;
+
+  // Overrides of the standard's values; unset keeps the standard's.
+  // Meters, angles in radians.
+  optional double diameter = 11;              // the hole itself
+  optional double counterbore_diameter = 12;  // counterbores only
+  optional double counterbore_depth = 13;     // counterbores only
+  optional double countersink_diameter = 14;  // countersinks only
+  optional double countersink_angle = 15;     // countersinks only, included angle
+  optional double thread_depth = 16;          // tapped holes only
+  // Tapped holes only: add a cosmetic thread (with its callout).
+  bool cosmetic_thread = 17;
+}
+
+// What SolidWorks built, read back from the feature
+// (IWizardHoleFeatureData2). Values SolidWorks doesn't report, or that don't
+// apply to the hole's kind, are 0 / empty. Meters, angles in radians.
+message HoleSpec {
+  string size = 1;
+  int32 standard = 2;       // swWzdHoleStandards_e
+  int32 fastener_type = 3;  // swWzdHoleStandardFastenerTypes_e
+  bool through_all = 4;
+  double diameter = 5;      // the (clearance / drilled) hole
+  double depth = 6;         // unset for through all
+  double counterbore_diameter = 7;
+  double counterbore_depth = 8;
+  double countersink_diameter = 9;
+  double countersink_angle = 10;
+  double tap_drill_diameter = 11;
+  double thread_diameter = 12;
+  double thread_depth = 13;
+}
+
+message HoleWizardResponse {
+  // Feature-tree name, e.g. "CBORE for M5 Socket Head Cap Screw1".
+  string feature_name = 1;
+  // The feature's placement sketch, which holds the hole centers: the
+  // request's sketch_name, or a new one.
+  string sketch_name = 2;
+  // One point per hole, with IDs for AddSketchDimensions etc. Positions in
+  // the placement sketch's coordinates.
+  repeated SketchItem centers = 3;
+  // The same centers in model space, in the same order.
+  repeated Vec3 centers_model = 4;
+  // The placement sketch's axes.
+  SketchFrame frame = 5;
+  HoleSpec spec = 6;
 }

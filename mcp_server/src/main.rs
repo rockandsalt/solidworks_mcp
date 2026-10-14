@@ -1,4 +1,5 @@
 mod addin;
+mod hole;
 mod inspect;
 mod render;
 mod sketch;
@@ -1622,6 +1623,47 @@ impl SolidWorksTools {
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
+
+    #[tool(
+        description = "SolidWorks Hole Wizard: add standard holes sized from a hole standard -- \
+                       screw clearance or drilled holes, counterbores, countersinks or tapped \
+                       (threaded) holes, e.g. kind=\"counterbore\", size=\"M5\". Usual way, as \
+                       done by hand: sketch_point the hole centers on the face, locate them with \
+                       dimension_sketch, then call this with that sketch_name -- the sketch \
+                       becomes the hole feature's placement sketch, so its dimensions keep \
+                       driving the holes. Quick alternative: `on` a planar face id from \
+                       inspect_model plus [x, y, z] model-mm `locations` (projected onto the \
+                       face; none = one hole mid-face), then dimension the placement sketch the \
+                       reply names. Blind to depth_mm, or through_all. All the holes are one \
+                       feature. Standard sizes can be overridden (diameter_mm, counterbore_*, \
+                       countersink_*, thread_depth_mm). For a non-standard round hole, \
+                       sketch_circle + cut_extrude_sketch is simpler. Requires an open part with \
+                       no sketch being edited."
+    )]
+    async fn hole_wizard(
+        &self,
+        Parameters(params): Parameters<hole::HoleWizardParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let face_persist_id = match hole::face_id(&params) {
+            None => Vec::new(),
+            Some(on) if Kind::of_id(on) == Some(Kind::Face) => self.resolve_id(on)?,
+            Some(on) => {
+                return Err(McpError::invalid_params(
+                    format!("`on` must be a face id like \"face:4\" from inspect_model, got {on:?}"),
+                    None,
+                ));
+            }
+        };
+        let request = hole::request(&params, face_persist_id)?;
+        let reply = self
+            .addin
+            .hole_wizard(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let text = hole::reply_text(&mut ids, &params, &reply);
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
 }
 
 impl SolidWorksTools {
@@ -1934,7 +1976,9 @@ impl ServerHandler for SolidWorksTools {
                  create_rectangle_sketch / create_square_sketch or, for any other profile, \
                  sketch_line, sketch_arc, sketch_circle, sketch_spline and sketch_point \
                  (pass sketch_name to keep adding to one sketch), then extrude_sketch or \
-                 cut_extrude_sketch. To make a sketch fully defined: the drawing tools \
+                 cut_extrude_sketch. hole_wizard adds standard clearance, counterbore, \
+                 countersink or tapped holes at the points of a (dimensioned) sketch, or at \
+                 locations on a face. To make a sketch fully defined: the drawing tools \
                  report entity ids (\"line:1\", \"point:2\"; inspect_sketch lists them all), \
                  dimension_sketch adds driving dimensions and add_sketch_relations adds \
                  relations for the sizes and alignments that matter, then fully_define_sketch \

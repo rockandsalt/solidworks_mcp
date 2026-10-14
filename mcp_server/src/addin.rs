@@ -170,6 +170,15 @@ impl AddinClient {
         let mut client = self.client.clone();
         Ok(client.set_dimension_value(request).await?.into_inner())
     }
+
+    /// Lengths in meters, angles in radians.
+    pub async fn hole_wizard(
+        &self,
+        request: proto::HoleWizardRequest,
+    ) -> Result<proto::HoleWizardResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.hole_wizard(request).await?.into_inner())
+    }
 }
 
 /// Largest GetMesh reply accepted: about 5 million triangles with normals.

@@ -63,6 +63,10 @@ public:
 		const sld_mcp::v1::SetDimensionValueRequest* request,
 		sld_mcp::v1::SetDimensionValueResponse* response) override;
 
+	grpc::Status HoleWizard(grpc::ServerContext* context,
+		const sld_mcp::v1::HoleWizardRequest* request,
+		sld_mcp::v1::HoleWizardResponse* response) override;
+
 private:
 	// gRPC runs handlers on its own thread pool, not on SolidWorks' main
 	// STA thread, so ISldWorks can't be used directly. This fetches a
