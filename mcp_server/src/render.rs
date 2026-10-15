@@ -70,6 +70,8 @@ pub enum Target {
     /// The faces the feature created.
     Feature(Vec<u8>),
     FeatureName(String),
+    /// Every face and edge of an assembly component.
+    Component(Vec<u8>),
 }
 
 impl Target {
@@ -79,6 +81,7 @@ impl Target {
             Target::Body(id) => face.body_persist_id == *id,
             Target::Feature(id) => face.feature_persist_id == *id,
             Target::FeatureName(name) => face.feature_name == *name,
+            Target::Component(id) => face.component_persist_id == *id,
             Target::Edge(_) => false,
         }
     }
@@ -87,12 +90,14 @@ impl Target {
         match self {
             Target::Edge(id) => edge.persist_id == *id,
             Target::Body(id) => edge.body_persist_id == *id,
+            Target::Component(id) => edge.component_persist_id == *id,
             _ => false,
         }
     }
 }
 
-/// Converts the add-in's mesh (meters) to a [`Model`] (millimeters), with
+/// Converts the add-in's mesh (meters, assembly components already placed by
+/// crate::assembly::place_mesh) to a [`Model`] (millimeters), with
 /// `targets[i]` drawn in `HIGHLIGHTS[i]`; the first matching target wins.
 /// Also returns how many faces/edges each target matched.
 pub fn model_from_mesh(mesh: &proto::GetMeshResponse, targets: &[Target]) -> (Model, Vec<usize>) {
@@ -660,6 +665,7 @@ mod tests {
                 persist_id: b"e1".to_vec(),
                 body_persist_id: b"b1".to_vec(),
                 points: vec![0.0, 0.0, 0.0, 0.001, 0.0, 0.0],
+                ..Default::default()
             }],
             ..Default::default()
         };

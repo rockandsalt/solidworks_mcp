@@ -1,4 +1,5 @@
 mod addin;
+mod assembly;
 mod hole;
 mod inspect;
 mod render;
@@ -389,16 +390,20 @@ struct CutExtrudeSketchParams {
 }
 
 /// What inspect_model lists.
-#[derive(Debug, Clone, Copy, Default, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 enum InspectWhat {
-    /// Features and bodies.
+    /// Features and bodies (and in an assembly, components and mates).
     #[default]
     Overview,
     Features,
     Bodies,
     Faces,
     Edges,
+    /// Assemblies: the components, with where each sits.
+    Components,
+    /// Assemblies: the mates.
+    Mates,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
@@ -449,12 +454,15 @@ const DEFAULT_INSPECT_LIMIT: usize = 100;
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 struct InspectModelParams {
-    /// What to list: "overview" (default; the feature tree and bodies), "features", "bodies",
-    /// "faces" or "edges".
+    /// What to list: "overview" (default; the feature tree and bodies, plus components and
+    /// mates in an assembly), "features", "bodies", "faces", "edges", or for assemblies
+    /// "components" or "mates".
     #[serde(default)]
     what: InspectWhat,
-    /// Faces/edges only: restrict to one body, feature or face (edges only), given as an id,
-    /// e.g. "body:1", or as a feature name, e.g. "Boss-Extrude1" (the faces that feature created).
+    /// Faces/edges: restrict to one body, feature or face (edges only), given as an id, e.g.
+    /// "body:1", or (parts only) as a feature name, e.g. "Boss-Extrude1" (the faces that feature
+    /// created). Assemblies: a component id, e.g. "component:2", restricts features (that
+    /// component's own tree, e.g. its planes), bodies, faces and edges to that component.
     #[serde(default)]
     within: Option<String>,
     /// Faces only: keep only faces of this surface type.
@@ -486,8 +494,8 @@ struct RenderViewsParams {
     #[serde(default)]
     views: Option<Vec<render::View>>,
     /// Entities to color in, each an id from inspect_model ("face:7", "edge:3", "body:1",
-    /// "feature:5") or a feature name ("Cut-Extrude1", for the faces it made). Up to 6; each
-    /// gets its own color, reported in the result.
+    /// "feature:5", or in an assembly "component:2") or a feature name ("Cut-Extrude1", for the
+    /// faces it made). Up to 6; each gets its own color, reported in the result.
     #[serde(default)]
     highlight: Vec<String>,
     /// Size of each view in pixels (square), 256 to 1024. Defaults to 512.
@@ -1184,7 +1192,7 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Look at the active part without changing it. \
+        description = "Look at the active part or assembly without changing it. \
                        what=\"overview\" (default) lists the feature tree (name, type, \
                        parents/children; type ProfileFeature is a sketch) and the bodies (bounding \
                        box, volume, centroid). what=\"faces\" lists faces with their geometry: \
@@ -1193,10 +1201,15 @@ impl SolidWorksTools {
                        what=\"edges\" lists edges with type, length, end points, circle \
                        center/radius and the faces they join. Narrow faces/edges with `within` \
                        (a body, a feature name like \"Boss-Extrude1\" for the faces it made, or a \
-                       face for its edges) and the filters. Every entity has an id such as \
-                       \"face:7\" that other tools accept, e.g. create_rectangle_sketch `on`. IDs \
-                       stay valid across edits for as long as the entity exists. All lengths and \
-                       coordinates are in millimeters, in the part's model space."
+                       face for its edges) and the filters. In an assembly the overview also \
+                       lists the components (\"component:2\": file, fixed or floating, origin \
+                       and axes in the assembly) and the mates; within=\"component:2\" narrows \
+                       features (that part's own planes, for mating), bodies, faces and edges to \
+                       one component, and every face/edge names its component. Every entity has \
+                       an id such as \"face:7\" that other tools accept, e.g. \
+                       create_rectangle_sketch `on` or add_mate `entities`. IDs stay valid across \
+                       edits for as long as the entity exists. All lengths and coordinates are in \
+                       millimeters, in the part's model space or the assembly's space."
     )]
     async fn inspect_model(
         &self,
@@ -1226,12 +1239,19 @@ impl SolidWorksTools {
             include_edges: matches!(what, InspectWhat::Edges),
             scope_persist_id,
             scope_feature_name,
+            include_components: matches!(what, InspectWhat::Overview | InspectWhat::Components),
+            include_mates: matches!(what, InspectWhat::Overview | InspectWhat::Mates),
         };
-        let reply = self
+        let mut reply = self
             .addin
             .inspect_model(request)
             .await
             .map_err(|status| self.addin_error(status))?;
+        assembly::place_inspect_reply(&mut reply);
+        let is_assembly = reply
+            .document
+            .as_ref()
+            .is_some_and(|d| d.r#type() == proto::DocumentType::Assembly);
 
         let filters = inspect::Filters {
             surface_type: params.surface_type.map(Into::into),
@@ -1240,18 +1260,33 @@ impl SolidWorksTools {
             offset: params.offset.unwrap_or(0),
             limit: params.limit.unwrap_or(DEFAULT_INSPECT_LIMIT),
         };
-        let json = {
+        let mut json = {
             let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             inspect::render(&mut ids, &reply, &filters)
         };
+        if let Some(obj) = json.as_object_mut() {
+            match what {
+                InspectWhat::Components | InspectWhat::Mates if !is_assembly => {
+                    obj.insert(
+                        "note".into(),
+                        serde_json::json!("the active document is a part; only assemblies have components and mates"),
+                    );
+                }
+                InspectWhat::Mates if reply.mates.is_empty() => {
+                    obj.insert("mates".into(), serde_json::json!([]));
+                }
+                _ => {}
+            }
+        }
         Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
     }
 
     #[tool(
-        description = "Draw the active part as a picture: shaded, with edges, in orthographic \
-                       standard views (front/back/left/right/top/bottom/isometric) at one shared \
-                       scale, as a grid in one PNG. Use it to check the overall shape after \
-                       edits -- which side a cut went, where a boss landed -- and `highlight` \
+        description = "Draw the active part or assembly as a picture: shaded, with edges, in \
+                       orthographic standard views (front/back/left/right/top/bottom/isometric) at \
+                       one shared scale, as a grid in one PNG. Use it to check the overall shape \
+                       after edits -- which side a cut went, where a boss landed, where a mate put \
+                       a component (highlight \"component:N\") -- and `highlight` \
                        ids from inspect_model to see which face or edge an id is before using \
                        it. Read exact sizes and positions from inspect_model, not the picture. \
                        Doesn't change the model."
@@ -1305,18 +1340,19 @@ impl SolidWorksTools {
             .map(|h| self.highlight_target(h))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let mesh = self
+        let mut mesh = self
             .addin
             .get_mesh(proto::GetMeshRequest {
                 include_edges: true,
             })
             .await
             .map_err(|status| self.addin_error(status))?;
+        assembly::place_mesh(&mut mesh);
         let (model, matched) = render::model_from_mesh(&mesh, &targets);
         if model.faces.is_empty() {
             return Err(McpError::invalid_params(
-                "the active part has nothing to draw yet (no visible bodies) -- create some \
-                 geometry first",
+                "the active document has nothing to draw yet (no visible bodies or components) \
+                 -- create some geometry first",
                 None,
             ));
         }
@@ -1345,7 +1381,7 @@ impl SolidWorksTools {
             views.len(),
             mesh.document
                 .as_ref()
-                .map_or("the active part", |d| d.title.as_str()),
+                .map_or("the active document", |d| d.title.as_str()),
             rendered.width,
             rendered.height,
             rendered.tile_span_mm
@@ -1367,7 +1403,7 @@ impl SolidWorksTools {
             };
         }
         if mesh.truncated {
-            text += "\nwarning: the part is too detailed to draw completely; some faces or edges are missing";
+            text += "\nwarning: the model is too detailed to draw completely; some faces or edges are missing";
         }
         Ok(CallToolResult::success(vec![
             ContentBlock::image(BASE64.encode(&rendered.png), "image/png"),
@@ -1588,8 +1624,10 @@ impl SolidWorksTools {
     #[tool(
         description = "Change the value of an existing dimension of the active part by its full \
                        name -- a sketch dimension like \"D1@Sketch1\" (inspect_sketch lists them) \
-                       or a feature's, like \"D1@Boss-Extrude1\" -- and rebuild. value_mm for \
-                       lengths, value_deg for angles. Requires no sketch open for editing."
+                       or a feature's, like \"D1@Boss-Extrude1\" -- and rebuild. In an assembly, \
+                       this changes a distance or angle mate, e.g. \"D1@Distance1\" (inspect_model \
+                       lists mates with their dimension names). value_mm for lengths, value_deg \
+                       for angles. Requires no sketch open for editing."
     )]
     async fn set_dimension(
         &self,
@@ -1662,6 +1700,44 @@ impl SolidWorksTools {
             .map_err(|status| self.addin_error(status))?;
         let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = hole::reply_text(&mut ids, &params, &reply);
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Mate two components of the active assembly, the way the Mate command \
+                       does: coincident (faces flush / planes together), concentric (pin in \
+                       hole: round faces, circular edges or axes share an axis), parallel, \
+                       perpendicular, tangent, distance (distance_mm apart), angle (angle_deg), \
+                       or lock (two components held as they are). `entities` = two ids from \
+                       inspect_model on the assembly, on different components: faces or edges \
+                       (what=\"faces\" within=\"component:N\" lists a component's faces, in \
+                       assembly coordinates), or reference planes/axes as \"feature:N\" (a \
+                       component's own Front/Top/Right planes come from what=\"features\" \
+                       within=\"component:N\"; the assembly's from its overview). alignment: \
+                       \"closest\" (default), \"aligned\" or \"anti_aligned\" (face against \
+                       face). SolidWorks then moves the components that aren't fixed. If the \
+                       mate is rejected, conflicts with other mates or can't be solved, it's \
+                       removed again and the reason reported. Reports where the mated \
+                       components ended up; render_views shows the result. Requires an open \
+                       assembly with no sketch being edited."
+    )]
+    async fn add_mate(
+        &self,
+        Parameters(params): Parameters<assembly::AddMateParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let entities = assembly::check(&params)?;
+        let persist_ids = [
+            self.resolve_id(&entities[0]).map_err(|e| prefix_error(e, "entity 1"))?,
+            self.resolve_id(&entities[1]).map_err(|e| prefix_error(e, "entity 2"))?,
+        ];
+        let request = assembly::request(&params, persist_ids);
+        let reply = self
+            .addin
+            .add_mate(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let text = assembly::reply_text(&mut ids, &params, &entities, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 }
@@ -1901,6 +1977,7 @@ impl SolidWorksTools {
             "face" => render::Target::Face(persist_id),
             "edge" => render::Target::Edge(persist_id),
             "body" => render::Target::Body(persist_id),
+            "component" => render::Target::Component(persist_id),
             _ => render::Target::Feature(persist_id),
         })
     }
@@ -1984,7 +2061,10 @@ impl ServerHandler for SolidWorksTools {
                  relations for the sizes and alignments that matter, then fully_define_sketch \
                  locks whatever is left. set_dimension changes a dimension later. render_views \
                  draws the part (optionally highlighting ids) to check its shape. \
-                 Lengths are in millimeters, angles in degrees."
+                 Assemblies: inspect_model lists the components and mates and, within a \
+                 component, its faces, edges and planes (in assembly coordinates); add_mate \
+                 mates two components by those ids, and render_views shows where they ended \
+                 up. Lengths are in millimeters, angles in degrees."
                     .to_string(),
             )
     }

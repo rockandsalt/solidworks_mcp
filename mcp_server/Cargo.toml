@@ -18,6 +18,8 @@ kiss3d = "0.47"
 # Same major version as kiss3d's; render.rs creates the GPU device itself.
 wgpu = "30"
 base64 = "0.22"
+# f64 affine transforms for assembly placements; same version kiss3d uses.
+glam = "0.33"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [build-dependencies]

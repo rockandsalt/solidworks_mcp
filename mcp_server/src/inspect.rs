@@ -24,6 +24,8 @@ pub enum Kind {
     Body,
     Face,
     Edge,
+    /// An assembly component.
+    Component,
     // Entities inside a 2D sketch. Their "persist ID" is an encoded
     // proto::SketchItemRef (see crate::sketch), not a SolidWorks persist ID.
     SketchPoint,
@@ -36,7 +38,7 @@ pub enum Kind {
 }
 
 /// The kinds that name model geometry (vs. sketch entities).
-const MODEL_KINDS: [Kind; 4] = [Kind::Feature, Kind::Body, Kind::Face, Kind::Edge];
+const MODEL_KINDS: [Kind; 5] = [Kind::Feature, Kind::Body, Kind::Face, Kind::Edge, Kind::Component];
 pub const SKETCH_KINDS: [Kind; 7] = [
     Kind::SketchPoint,
     Kind::Line,
@@ -54,6 +56,7 @@ impl Kind {
             Kind::Body => "body",
             Kind::Face => "face",
             Kind::Edge => "edge",
+            Kind::Component => "component",
             Kind::SketchPoint => "point",
             Kind::Line => "line",
             Kind::Arc => "arc",
@@ -247,11 +250,19 @@ fn insert_id(obj: &mut Map<String, Value>, key: &str, id: Option<String>) {
     obj.insert(key.to_string(), id.map_or(Value::Null, Value::String));
 }
 
+/// "component": its id, for entities of an assembly component.
+fn insert_component(ids: &mut IdRegistry, obj: &mut Map<String, Value>, component_persist_id: &[u8]) {
+    if let Some(id) = ids.id_for(Kind::Component, component_persist_id) {
+        obj.insert("component".into(), Value::String(id));
+    }
+}
+
 fn feature_json(ids: &mut IdRegistry, f: &proto::FeatureInfo) -> Value {
     let mut obj = Map::new();
     insert_id(&mut obj, "id", ids.id_for(Kind::Feature, &f.persist_id));
     obj.insert("name".into(), json!(f.name));
     obj.insert("type".into(), json!(f.type_name));
+    insert_component(ids, &mut obj, &f.component_persist_id);
     if f.suppressed {
         obj.insert("suppressed".into(), json!(true));
     }
@@ -268,6 +279,7 @@ fn body_json(ids: &mut IdRegistry, b: &proto::BodyInfo) -> Value {
     let mut obj = Map::new();
     insert_id(&mut obj, "id", ids.id_for(Kind::Body, &b.persist_id));
     obj.insert("name".into(), json!(b.name));
+    insert_component(ids, &mut obj, &b.component_persist_id);
     obj.insert("solid".into(), json!(b.solid));
     if let Some(bbox) = b.r#box.as_ref().and_then(box_mm) {
         obj.insert("bbox_mm".into(), bbox);
@@ -289,6 +301,7 @@ fn face_json(ids: &mut IdRegistry, f: &proto::FaceInfo) -> Value {
     let mut obj = Map::new();
     insert_id(&mut obj, "id", ids.id_for(Kind::Face, &f.persist_id));
     insert_id(&mut obj, "body", ids.id_for(Kind::Body, &f.body_persist_id));
+    insert_component(ids, &mut obj, &f.component_persist_id);
     if !f.feature_name.is_empty() {
         obj.insert("feature".into(), json!(f.feature_name));
     }
@@ -394,6 +407,7 @@ fn edge_json(ids: &mut IdRegistry, e: &proto::EdgeInfo) -> Value {
     let mut obj = Map::new();
     insert_id(&mut obj, "id", ids.id_for(Kind::Edge, &e.persist_id));
     insert_id(&mut obj, "body", ids.id_for(Kind::Body, &e.body_persist_id));
+    insert_component(ids, &mut obj, &e.component_persist_id);
     let curve = e.curve_type();
     obj.insert("type".into(), json!(curve_name(curve)));
     obj.insert("length_mm".into(), json!(mm(e.length)));
@@ -456,11 +470,27 @@ fn page<T>(
     out.insert(key.to_string(), Value::Array(shown));
 }
 
-/// The JSON for one InspectModel reply.
+/// The JSON for one InspectModel reply. Assembly geometry must already be
+/// in assembly space (crate::assembly::place_inspect_reply).
 pub fn render(ids: &mut IdRegistry, reply: &proto::InspectModelResponse, filters: &Filters) -> Value {
     let mut out = Map::new();
     if let Some(doc) = &reply.document {
         out.insert("document".into(), json!(doc.title));
+        if doc.r#type() == proto::DocumentType::Assembly {
+            out.insert("document_type".into(), json!("assembly"));
+        }
+    }
+    if !reply.components.is_empty() {
+        let components = reply
+            .components
+            .iter()
+            .map(|c| crate::assembly::component_json(ids, c))
+            .collect();
+        out.insert("components".into(), Value::Array(components));
+    }
+    if !reply.mates.is_empty() {
+        let mates = reply.mates.iter().map(|m| crate::assembly::mate_json(ids, m)).collect();
+        out.insert("mates".into(), Value::Array(mates));
     }
     if !reply.features.is_empty() {
         let features = reply.features.iter().map(|f| feature_json(ids, f)).collect();
@@ -479,7 +509,7 @@ pub fn render(ids: &mut IdRegistry, reply: &proto::InspectModelResponse, filters
     if reply.truncated {
         out.insert(
             "warning".into(),
-            json!("the part has more faces/edges than the add-in reports at once; narrow `within` to see the rest"),
+            json!("the model has more faces/edges than the add-in reports at once; narrow `within` to see the rest"),
         );
     }
     Value::Object(out)
@@ -511,6 +541,7 @@ mod tests {
         assert!(IdRegistry::looks_like_id("face:12"));
         assert!(IdRegistry::looks_like_id(" body:1"));
         assert!(!IdRegistry::looks_like_id("Boss-Extrude1"));
+        assert!(IdRegistry::looks_like_id("component:2"));
         assert!(!IdRegistry::looks_like_id("face:"));
         assert!(!IdRegistry::looks_like_id("face:x"));
         // Sketch entity IDs aren't model geometry.

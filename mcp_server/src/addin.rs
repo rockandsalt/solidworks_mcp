@@ -115,7 +115,7 @@ impl AddinClient {
         Ok(response.into_inner())
     }
 
-    /// The active part's tessellation; coordinates in meters.
+    /// The active part's (or assembly's) tessellation; coordinates in meters.
     pub async fn get_mesh(
         &self,
         request: proto::GetMeshRequest,
@@ -178,6 +178,15 @@ impl AddinClient {
     ) -> Result<proto::HoleWizardResponse, tonic::Status> {
         let mut client = self.client.clone();
         Ok(client.hole_wizard(request).await?.into_inner())
+    }
+
+    /// Distance in meters, angle in radians.
+    pub async fn add_mate(
+        &self,
+        request: proto::AddMateRequest,
+    ) -> Result<proto::AddMateResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.add_mate(request).await?.into_inner())
     }
 }
 

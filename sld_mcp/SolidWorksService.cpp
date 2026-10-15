@@ -12,6 +12,10 @@
 #include <string>
 #include <vector>
 
+// Eigen from vcpkg (manifest dependency "eigen3"), which installs its
+// headers under include/eigen3.
+#include <eigen3/Eigen/Geometry>
+
 namespace
 {
 	// Joins the calling gRPC worker thread to the MTA for the duration of one
@@ -72,8 +76,9 @@ namespace
 		return out;
 	}
 
-	// The active document, if it's a part.
-	grpc::Status GetActivePart(ISldWorks* swApp, ATL::CComPtr<IModelDoc2>& doc)
+	// The active document, if it's a part or an assembly; `docType` is its
+	// swDocumentTypes_e.
+	grpc::Status GetActiveModel(ISldWorks* swApp, ATL::CComPtr<IModelDoc2>& doc, long& docType)
 	{
 		HRESULT hr = swApp->get_IActiveDoc2(&doc);
 		if (FAILED(hr))
@@ -82,23 +87,38 @@ namespace
 			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
 				"no document is open in SolidWorks -- create or open a part first");
 
-		long docType = 0;
+		docType = swDocNONE;
 		hr = doc->GetType(&docType);
 		if (FAILED(hr))
 			return ComError("IModelDoc2::GetType", hr);
-		if (docType != swDocPART)
+		if (docType != swDocPART && docType != swDocASSEMBLY)
+		{
+			doc.Release();
 			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				"the active document isn't a part -- only parts are supported for now");
+				"the active document isn't a part or an assembly");
+		}
 		return grpc::Status::OK;
 	}
 
-	// The active document, if it's a part with no sketch open for editing --
-	// the state every model-building RPC needs to start from.
-	grpc::Status GetEditablePart(ISldWorks* swApp, ATL::CComPtr<IModelDoc2>& doc)
+	// The active document, if it's a part.
+	grpc::Status GetActivePart(ISldWorks* swApp, ATL::CComPtr<IModelDoc2>& doc)
 	{
-		if (grpc::Status status = GetActivePart(swApp, doc); !status.ok())
+		long docType = swDocNONE;
+		if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
 			return status;
+		if (docType != swDocPART)
+		{
+			doc.Release();
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"the active document is an assembly -- this only works on parts (open the part "
+				"itself to edit it)");
+		}
+		return grpc::Status::OK;
+	}
 
+	// FAILED_PRECONDITION if a sketch is open for editing.
+	grpc::Status CheckNoOpenSketch(IModelDoc2* doc)
+	{
 		// InsertSketch toggles, and features can't be added while a sketch is
 		// being edited, so insist on a closed one.
 		ATL::CComPtr<ISketch> openSketch;
@@ -108,6 +128,61 @@ namespace
 		if (openSketch)
 			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
 				"a sketch is already open for editing in SolidWorks -- exit it first");
+		return grpc::Status::OK;
+	}
+
+	// The active document, if it's a part with no sketch open for editing --
+	// the state every model-building RPC needs to start from.
+	grpc::Status GetEditablePart(ISldWorks* swApp, ATL::CComPtr<IModelDoc2>& doc)
+	{
+		if (grpc::Status status = GetActivePart(swApp, doc); !status.ok())
+			return status;
+		return CheckNoOpenSketch(doc);
+	}
+
+	// The active part or assembly, with no sketch open for editing.
+	grpc::Status GetEditableModel(ISldWorks* swApp, ATL::CComPtr<IModelDoc2>& doc)
+	{
+		long docType = swDocNONE;
+		if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
+			return status;
+		return CheckNoOpenSketch(doc);
+	}
+
+	// The active document, if it's an assembly that is itself being edited:
+	// no sketch open, and no component being edited in context (mates and
+	// other assembly features can't be added then).
+	grpc::Status GetEditableAssembly(ISldWorks* swApp, ATL::CComPtr<IModelDoc2>& doc)
+	{
+		long docType = swDocNONE;
+		if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
+			return status;
+		if (docType != swDocASSEMBLY)
+		{
+			doc.Release();
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"the active document isn't an assembly -- open (or switch to) the assembly first");
+		}
+		if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
+			return status;
+
+		ATL::CComQIPtr<IAssemblyDoc> assembly(doc.p);
+		if (!assembly)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "active assembly has no IAssemblyDoc interface");
+		ATL::CComPtr<IDispatch> target;
+		HRESULT hr = assembly->GetEditTarget(&target);
+		if (FAILED(hr))
+			return ComError("IAssemblyDoc::GetEditTarget", hr);
+		if (target)
+		{
+			ATL::CComPtr<IUnknown> targetIdentity, docIdentity;
+			target->QueryInterface(IID_PPV_ARGS(&targetIdentity));
+			doc->QueryInterface(IID_PPV_ARGS(&docIdentity));
+			if (targetIdentity != docIdentity)
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+					"a component is being edited in the context of the assembly -- return to editing "
+					"the assembly first");
+		}
 		return grpc::Status::OK;
 	}
 
@@ -236,7 +311,7 @@ namespace
 		return grpc::Status::OK;
 	}
 
-	// Looks up the entity a persist ID refers to in the active part.
+	// Looks up the entity a persist ID refers to in the active document.
 	grpc::Status ResolvePersistId(IModelDocExtension* ext, const std::string& persistId,
 		ATL::CComPtr<IDispatch>& obj)
 	{
@@ -249,7 +324,7 @@ namespace
 			return grpc::Status::OK;
 
 		obj.Release();
-		const char* why = "doesn't match anything in the active part (was it from another document?)";
+		const char* why = "doesn't match anything in the active document (was it from another document?)";
 		if (state & swPersistReferencedObject_Deleted)
 			why = "refers to geometry that no longer exists";
 		else if (state & swPersistReferencedObject_Suppressed)
@@ -265,6 +340,20 @@ namespace
 		out->set_x(p[0]);
 		out->set_y(p[1]);
 		out->set_z(p[2]);
+	}
+
+	void SetVec3(sld_mcp::v1::Vec3* out, const Eigen::Vector3d& p)
+	{
+		SetVec3(out, p.data());
+	}
+
+	// A SolidWorks box ([xmin, ymin, zmin, xmax, ymax, zmax]); an empty box
+	// if SolidWorks returned something else.
+	Eigen::AlignedBox3d ToAlignedBox(const std::vector<double>& b)
+	{
+		if (b.size() < 6)
+			return Eigen::AlignedBox3d();
+		return Eigen::AlignedBox3d(Eigen::Vector3d(b[0], b[1], b[2]), Eigen::Vector3d(b[3], b[4], b[5]));
 	}
 
 	// SolidWorks boxes are [xmin, ymin, zmin, xmax, ymax, zmax].
@@ -463,6 +552,43 @@ namespace
 		}
 	}
 
+	// Applies a SolidWorks transform to a point with an IMathPoint, so the
+	// transform's internal layout never matters.
+	bool TransformPoint(IMathUtility* math, IMathTransform* xform, const Eigen::Vector3d& in, Eigen::Vector3d& out)
+	{
+		if (!xform || !math)
+			return false;
+		ATL::CComVariant data = comvariant::FromDoubles(in.data(), 3);
+		ATL::CComPtr<IDispatch> pointDisp;
+		if (FAILED(math->CreatePoint(data, &pointDisp)))
+			return false;
+		ATL::CComQIPtr<IMathPoint> point(pointDisp.p);
+		ATL::CComPtr<IDispatch> movedDisp;
+		if (!point || FAILED(point->MultiplyTransform(xform, &movedDisp)))
+			return false;
+		ATL::CComQIPtr<IMathPoint> moved(movedDisp.p);
+		ATL::CComVariant result;
+		if (!moved || FAILED(moved->get_ArrayData(&result)))
+			return false;
+		const std::vector<double> p = comvariant::ToDoubles(result);
+		if (p.size() < 3)
+			return false;
+		out = Eigen::Vector3d(p[0], p[1], p[2]);
+		return true;
+	}
+
+	grpc::Status GetMathUtility(ISldWorks* swApp, ATL::CComQIPtr<IMathUtility>& math)
+	{
+		ATL::CComPtr<IDispatch> mathDisp;
+		HRESULT hr = swApp->GetMathUtility(&mathDisp);
+		if (FAILED(hr))
+			return ComError("ISldWorks::GetMathUtility", hr);
+		math = mathDisp;
+		if (!math)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no math utility");
+		return grpc::Status::OK;
+	}
+
 	// Converts points between model space and an open sketch's own space
 	// (x, y in the sketch plane; z = distance from it) with IMathPoints.
 	class SketchSpace
@@ -471,14 +597,7 @@ namespace
 		// Call before opening the sketch, so a failure here needs no cleanup.
 		grpc::Status Init(ISldWorks* swApp)
 		{
-			ATL::CComPtr<IDispatch> mathDisp;
-			HRESULT hr = swApp->GetMathUtility(&mathDisp);
-			if (FAILED(hr))
-				return ComError("ISldWorks::GetMathUtility", hr);
-			m_math = mathDisp;
-			if (!m_math)
-				return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no math utility");
-			return grpc::Status::OK;
+			return GetMathUtility(swApp, m_math);
 		}
 
 		// Once the sketch is open. If SolidWorks has no transform for it,
@@ -526,24 +645,11 @@ namespace
 	private:
 		bool Apply(IMathTransform* xform, const double in[3], double out[3]) const
 		{
-			if (!xform || !m_math)
+			Eigen::Vector3d moved;
+			if (!TransformPoint(m_math, xform, Eigen::Vector3d(in[0], in[1], in[2]), moved))
 				return false;
-			ATL::CComVariant data = comvariant::FromDoubles(in, 3);
-			ATL::CComPtr<IDispatch> pointDisp;
-			if (FAILED(m_math->CreatePoint(data, &pointDisp)))
-				return false;
-			ATL::CComQIPtr<IMathPoint> point(pointDisp.p);
-			ATL::CComPtr<IDispatch> movedDisp;
-			if (!point || FAILED(point->MultiplyTransform(xform, &movedDisp)))
-				return false;
-			ATL::CComQIPtr<IMathPoint> moved(movedDisp.p);
-			ATL::CComVariant result;
-			if (!moved || FAILED(moved->get_ArrayData(&result)))
-				return false;
-			const std::vector<double> p = comvariant::ToDoubles(result);
-			if (p.size() < 3)
-				return false;
-			std::copy(p.begin(), p.begin() + 3, out);
+			Eigen::Map<Eigen::Vector3d> result(out);
+			result = moved;
 			return true;
 		}
 
@@ -844,16 +950,16 @@ namespace
 	// huge part can't stall SolidWorks' UI thread for minutes.
 	constexpr size_t kMaxInspectedEntities = 2000;
 
-	// Every feature from the first reference plane on. The ones before it are
-	// the tree's fixed folders (History, Sensors, Annotations, Material, ...),
-	// which say nothing about the geometry.
-	grpc::Status InspectFeatures(IModelDoc2* doc, PersistIds& ids, sld_mcp::v1::InspectModelResponse* response)
+	// Every feature from `first` on, starting at the first reference plane.
+	// The ones before it are the tree's fixed folders (History, Sensors,
+	// Annotations, Material, ...), which say nothing about the geometry.
+	// `componentPid` is stamped on each (assembly component trees). With
+	// `skipAssemblyItems`, components and the mates folder are left out
+	// (an assembly's own tree; they're listed separately).
+	grpc::Status InspectFeatureList(ATL::CComPtr<IFeature> feature, PersistIds& ids,
+		const std::string& componentPid, bool skipAssemblyItems, sld_mcp::v1::InspectModelResponse* response)
 	{
-		ATL::CComPtr<IFeature> feature;
-		HRESULT hr = doc->IFirstFeature(&feature);
-		if (FAILED(hr))
-			return ComError("IModelDoc2::IFirstFeature", hr);
-
+		HRESULT hr = S_OK;
 		bool started = false;
 		while (feature)
 		{
@@ -863,13 +969,16 @@ namespace
 				return ComError("IFeature::GetTypeName2", hr);
 			if (typeName == L"RefPlane")
 				started = true;
+			const bool skip = skipAssemblyItems &&
+				(typeName == L"Reference" || typeName == L"MateGroup" || typeName == L"MateReferenceGroupFeature");
 
-			if (started)
+			if (started && !skip)
 			{
 				sld_mcp::v1::FeatureInfo* info = response->add_features();
 				info->set_persist_id(ids.Get(feature));
 				info->set_name(FeatureName(feature));
 				info->set_type_name(ToUtf8(typeName));
+				info->set_component_persist_id(componentPid);
 
 				VARIANT_BOOL suppressed = VARIANT_FALSE;
 				if (SUCCEEDED(feature->IsSuppressed(&suppressed)))
@@ -890,6 +999,16 @@ namespace
 			feature = next;
 		}
 		return grpc::Status::OK;
+	}
+
+	grpc::Status InspectFeatures(IModelDoc2* doc, PersistIds& ids, bool skipAssemblyItems,
+		sld_mcp::v1::InspectModelResponse* response)
+	{
+		ATL::CComPtr<IFeature> feature;
+		HRESULT hr = doc->IFirstFeature(&feature);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::IFirstFeature", hr);
+		return InspectFeatureList(feature, ids, {}, skipAssemblyItems, response);
 	}
 
 	void InspectBody(IBody2* body, PersistIds& ids, sld_mcp::v1::BodyInfo* info)
@@ -2708,6 +2827,727 @@ namespace
 		spec->set_thread_diameter(read(&IWizardHoleFeatureData2::get_ThreadDiameter));
 		spec->set_thread_depth(read(&IWizardHoleFeatureData2::get_ThreadDepth));
 	}
+
+	// ---- Assemblies ---------------------------------------------------------------
+
+	// The component an assembly entity (face, edge, vertex, ...) belongs to;
+	// null for the assembly's own entities or anything that isn't an IEntity.
+	ATL::CComPtr<IComponent2> ComponentOf(IUnknown* obj)
+	{
+		ATL::CComQIPtr<IEntity> entity(obj);
+		ATL::CComPtr<IDispatch> disp;
+		if (!entity || FAILED(entity->GetComponent(&disp)) || !disp)
+			return {};
+		ATL::CComQIPtr<IComponent2> component(disp.p);
+		return ATL::CComPtr<IComponent2>(component);
+	}
+
+	std::string ComponentName(IComponent2* component)
+	{
+		ATL::CComBSTR name;
+		if (component)
+			component->get_Name2(&name);
+		return ToUtf8(name);
+	}
+
+	// Every component of the assembly, nested ones included.
+	std::vector<ATL::CComPtr<IComponent2>> AllComponents(IAssemblyDoc* assembly)
+	{
+		std::vector<ATL::CComPtr<IComponent2>> out;
+		ATL::CComVariant all;
+		if (FAILED(assembly->GetComponents(VARIANT_FALSE, &all)))
+			return out;
+		for (const auto& disp : comvariant::ToDispatches(all))
+			if (ATL::CComQIPtr<IComponent2> component(disp.p); component)
+				out.push_back(ATL::CComPtr<IComponent2>(component));
+		return out;
+	}
+
+	bool IsSubassembly(IComponent2* component)
+	{
+		int children = 0;
+		return SUCCEEDED(component->IGetChildrenCount(&children)) && children > 0;
+	}
+
+	bool IsSuppressed(IComponent2* component)
+	{
+		long state = swComponentFullyResolved;
+		return SUCCEEDED(component->GetSuppression2(&state)) && state == swComponentSuppressed;
+	}
+
+	// The components that hold geometry: parts (subassemblies' bodies are
+	// their children's), not suppressed. `visibleOnly` also drops hidden ones.
+	std::vector<ATL::CComPtr<IComponent2>> GeometryComponents(IAssemblyDoc* assembly, bool visibleOnly)
+	{
+		std::vector<ATL::CComPtr<IComponent2>> out;
+		for (const auto& component : AllComponents(assembly))
+		{
+			if (IsSubassembly(component) || IsSuppressed(component))
+				continue;
+			VARIANT_BOOL hidden = VARIANT_FALSE;
+			if (visibleOnly && SUCCEEDED(component->IsHidden(VARIANT_TRUE, &hidden)) && hidden)
+				continue;
+			out.push_back(component);
+		}
+		return out;
+	}
+
+	// A component's solid and surface bodies.
+	std::vector<ATL::CComPtr<IBody2>> ComponentBodies(IComponent2* component)
+	{
+		std::vector<ATL::CComPtr<IBody2>> out;
+		for (long type : { static_cast<long>(swSolidBody), static_cast<long>(swSheetBody) })
+		{
+			ATL::CComVariant info, bodies;
+			if (FAILED(component->GetBodies3(type, &info, &bodies)))
+				continue;
+			for (const auto& disp : comvariant::ToDispatches(bodies))
+				if (ATL::CComQIPtr<IBody2> body(disp.p); body)
+					out.push_back(ATL::CComPtr<IBody2>(body));
+		}
+		return out;
+	}
+
+	// Fills the placement fields of `info` (origin + axes in assembly space)
+	// and decides `local_geometry`: whether the bodies' own boxes are in
+	// component coordinates. That's what the SolidWorks docs imply, but it's
+	// checked here rather than assumed -- the bodies' box, once placed,
+	// should land on the component's assembly-space box.
+	void DescribePlacement(IComponent2* component, IMathUtility* math, sld_mcp::v1::ComponentInfo* info)
+	{
+		info->set_local_geometry(true);
+		ATL::CComPtr<IMathTransform> xform;
+		if (FAILED(component->get_Transform2(&xform)) || !xform)
+			return;
+
+		// Where the component's origin and unit axes land pins down its
+		// component -> assembly transform, whatever IMathTransform's internal
+		// layout is.
+		const Eigen::Vector3d unit[4] = { Eigen::Vector3d::Zero(), Eigen::Vector3d::UnitX(),
+			Eigen::Vector3d::UnitY(), Eigen::Vector3d::UnitZ() };
+		Eigen::Vector3d placed[4];
+		for (int i = 0; i < 4; ++i)
+			if (!TransformPoint(math, xform, unit[i], placed[i]))
+				return;
+		Eigen::Affine3d placement = Eigen::Affine3d::Identity();
+		placement.translation() = placed[0];
+		for (int a = 0; a < 3; ++a)
+			placement.linear().col(a) = placed[a + 1] - placed[0];
+
+		SetVec3(info->mutable_origin(), Eigen::Vector3d(placement.translation()));
+		SetVec3(info->mutable_x_axis(), Eigen::Vector3d(placement.linear().col(0)));
+		SetVec3(info->mutable_y_axis(), Eigen::Vector3d(placement.linear().col(1)));
+		SetVec3(info->mutable_z_axis(), Eigen::Vector3d(placement.linear().col(2)));
+
+		// Assembly-space box of the component vs. its bodies' own boxes.
+		ATL::CComVariant assemblyBoxVar;
+		const Eigen::AlignedBox3d assemblyBox =
+			SUCCEEDED(component->GetBox(VARIANT_FALSE, VARIANT_FALSE, &assemblyBoxVar))
+			? ToAlignedBox(comvariant::ToDoubles(assemblyBoxVar)) : Eigen::AlignedBox3d();
+		Eigen::AlignedBox3d bodyBox;
+		for (const auto& body : ComponentBodies(component))
+		{
+			ATL::CComVariant box;
+			if (SUCCEEDED(body->GetBodyBox(&box)))
+				bodyBox.extend(ToAlignedBox(comvariant::ToDoubles(box)));
+		}
+		if (assemblyBox.isEmpty() || bodyBox.isEmpty())
+			return;
+		// The bodies' box with the placement applied (box of its 8 placed
+		// corners), compared with the box as it is: whichever is closer to
+		// the component's assembly-space box tells which space the body
+		// geometry is in. Comparing whole boxes, not just centers, also
+		// catches a part rotated about its own center. With an identity
+		// placement both match and either answer is right.
+		Eigen::AlignedBox3d movedBox;
+		for (int corner = 0; corner < 8; ++corner)
+			movedBox.extend(placement * bodyBox.corner(static_cast<Eigen::AlignedBox3d::CornerType>(corner)));
+		auto mismatch = [&](const Eigen::AlignedBox3d& box) {
+			return (box.min() - assemblyBox.min()).cwiseAbs().sum() + (box.max() - assemblyBox.max()).cwiseAbs().sum();
+		};
+		info->set_local_geometry(mismatch(movedBox) <= mismatch(bodyBox));
+	}
+
+	sld_mcp::v1::ComponentState ToComponentState(long state)
+	{
+		switch (state)
+		{
+		case swComponentSuppressed:
+			return sld_mcp::v1::COMPONENT_STATE_SUPPRESSED;
+		case swComponentLightweight:
+		case swComponentFullyLightweight:
+			return sld_mcp::v1::COMPONENT_STATE_LIGHTWEIGHT;
+		default:
+			return sld_mcp::v1::COMPONENT_STATE_RESOLVED;
+		}
+	}
+
+	void DescribeComponent(IComponent2* component, PersistIds& ids, IMathUtility* math,
+		sld_mcp::v1::ComponentInfo* info)
+	{
+		info->set_persist_id(ids.Get(component));
+		info->set_name(ComponentName(component));
+
+		ATL::CComBSTR path;
+		if (SUCCEEDED(component->GetPathName(&path)))
+			info->set_file(ToUtf8(path));
+		ATL::CComBSTR configuration;
+		if (SUCCEEDED(component->get_ReferencedConfiguration(&configuration)))
+			info->set_configuration(ToUtf8(configuration));
+
+		VARIANT_BOOL flag = VARIANT_FALSE;
+		if (SUCCEEDED(component->IsFixed(&flag)))
+			info->set_fixed(flag != VARIANT_FALSE);
+		flag = VARIANT_FALSE;
+		if (SUCCEEDED(component->IsHidden(VARIANT_FALSE, &flag)))
+			info->set_hidden(flag != VARIANT_FALSE);
+		long state = swComponentFullyResolved;
+		if (SUCCEEDED(component->GetSuppression2(&state)))
+			info->set_state(ToComponentState(state));
+		info->set_subassembly(IsSubassembly(component));
+
+		ATL::CComPtr<IComponent2> parent;
+		if (SUCCEEDED(component->GetParent(&parent)) && parent)
+			info->set_parent_persist_id(ids.Get(parent));
+
+		ATL::CComVariant box;
+		if (SUCCEEDED(component->GetBox(VARIANT_FALSE, VARIANT_FALSE, &box)))
+			SetBox(info->mutable_box(), comvariant::ToDoubles(box));
+
+		if (state != swComponentSuppressed)
+			DescribePlacement(component, math, info);
+	}
+
+	// The components listed in one reply, each described once.
+	class ComponentList
+	{
+	public:
+		ComponentList(PersistIds& ids, IMathUtility* math,
+			google::protobuf::RepeatedPtrField<sld_mcp::v1::ComponentInfo>* out)
+			: m_ids(ids), m_math(math), m_out(out) {}
+
+		// The component's persist id; describes it the first time. Empty for null.
+		std::string Add(IComponent2* component)
+		{
+			if (!component)
+				return {};
+			std::string pid = m_ids.Get(component);
+			if (!pid.empty() && m_listed.insert(pid).second)
+				DescribeComponent(component, m_ids, m_math, m_out->Add());
+			return pid;
+		}
+
+	private:
+		PersistIds& m_ids;
+		IMathUtility* m_math;
+		google::protobuf::RepeatedPtrField<sld_mcp::v1::ComponentInfo>* m_out;
+		std::set<std::string> m_listed;
+	};
+
+	// ---- Mates ----------------------------------------------------------------------
+
+	sld_mcp::v1::MateType ToMateType(long type)
+	{
+		switch (type)
+		{
+		case swMateCOINCIDENT:    return sld_mcp::v1::MATE_TYPE_COINCIDENT;
+		case swMateCONCENTRIC:    return sld_mcp::v1::MATE_TYPE_CONCENTRIC;
+		case swMatePERPENDICULAR: return sld_mcp::v1::MATE_TYPE_PERPENDICULAR;
+		case swMatePARALLEL:      return sld_mcp::v1::MATE_TYPE_PARALLEL;
+		case swMateTANGENT:       return sld_mcp::v1::MATE_TYPE_TANGENT;
+		case swMateDISTANCE:      return sld_mcp::v1::MATE_TYPE_DISTANCE;
+		case swMateANGLE:         return sld_mcp::v1::MATE_TYPE_ANGLE;
+		case swMateLOCK:          return sld_mcp::v1::MATE_TYPE_LOCK;
+		default:                  return sld_mcp::v1::MATE_TYPE_OTHER;
+		}
+	}
+
+	bool ToSwMateType(sld_mcp::v1::MateType type, long& out)
+	{
+		switch (type)
+		{
+		case sld_mcp::v1::MATE_TYPE_COINCIDENT:    out = swMateCOINCIDENT; return true;
+		case sld_mcp::v1::MATE_TYPE_CONCENTRIC:    out = swMateCONCENTRIC; return true;
+		case sld_mcp::v1::MATE_TYPE_PERPENDICULAR: out = swMatePERPENDICULAR; return true;
+		case sld_mcp::v1::MATE_TYPE_PARALLEL:      out = swMatePARALLEL; return true;
+		case sld_mcp::v1::MATE_TYPE_TANGENT:       out = swMateTANGENT; return true;
+		case sld_mcp::v1::MATE_TYPE_DISTANCE:      out = swMateDISTANCE; return true;
+		case sld_mcp::v1::MATE_TYPE_ANGLE:         out = swMateANGLE; return true;
+		case sld_mcp::v1::MATE_TYPE_LOCK:          out = swMateLOCK; return true;
+		default:                                   return false;
+		}
+	}
+
+	const char* MateTypeName(long type)
+	{
+		switch (type)
+		{
+		case swMateCOINCIDENT:    return "coincident";
+		case swMateCONCENTRIC:    return "concentric";
+		case swMatePERPENDICULAR: return "perpendicular";
+		case swMatePARALLEL:      return "parallel";
+		case swMateTANGENT:       return "tangent";
+		case swMateDISTANCE:      return "distance";
+		case swMateANGLE:         return "angle";
+		case swMateLOCK:          return "lock";
+		default:                  return "mate";
+		}
+	}
+
+	sld_mcp::v1::MateAlignment ToMateAlignment(long align)
+	{
+		switch (align)
+		{
+		case swMateAlignALIGNED:      return sld_mcp::v1::MATE_ALIGNMENT_ALIGNED;
+		case swMateAlignANTI_ALIGNED: return sld_mcp::v1::MATE_ALIGNMENT_ANTI_ALIGNED;
+		case swMateAlignCLOSEST:      return sld_mcp::v1::MATE_ALIGNMENT_CLOSEST;
+		default:                      return sld_mcp::v1::MATE_ALIGNMENT_UNSPECIFIED;
+		}
+	}
+
+	long ToSwMateAlign(sld_mcp::v1::MateAlignment align)
+	{
+		switch (align)
+		{
+		case sld_mcp::v1::MATE_ALIGNMENT_ALIGNED:      return swMateAlignALIGNED;
+		case sld_mcp::v1::MATE_ALIGNMENT_ANTI_ALIGNED: return swMateAlignANTI_ALIGNED;
+		default:                                       return swMateAlignCLOSEST;
+		}
+	}
+
+	// Mates live under the assembly's "MateGroup" feature, possibly inside
+	// folders; anything whose specific feature is an IMate2 is one.
+	constexpr size_t kMaxMates = 5000;
+
+	void CollectMates(IFeature* parent, int depth, std::vector<ATL::CComPtr<IFeature>>& mates,
+		std::set<std::string>& seen)
+	{
+		ATL::CComPtr<IFeature> sub;
+		if (FAILED(parent->IGetFirstSubFeature(&sub)))
+			return;
+		while (sub && mates.size() < kMaxMates)
+		{
+			ATL::CComPtr<IDispatch> specific;
+			if (SUCCEEDED(sub->GetSpecificFeature2(&specific)) && specific &&
+				ATL::CComQIPtr<IMate2>(specific.p))
+			{
+				if (seen.insert(FeatureName(sub)).second)
+					mates.push_back(sub);
+			}
+			else if (depth < 3)
+				CollectMates(sub, depth + 1, mates, seen);
+
+			ATL::CComPtr<IFeature> next;
+			if (FAILED(sub->IGetNextSubFeature(&next)))
+				break;
+			sub = next;
+		}
+	}
+
+	std::vector<ATL::CComPtr<IFeature>> MateFeatures(IModelDoc2* doc)
+	{
+		std::vector<ATL::CComPtr<IFeature>> mates;
+		std::set<std::string> seen;
+		ATL::CComPtr<IFeature> feature;
+		if (FAILED(doc->IFirstFeature(&feature)))
+			return mates;
+		while (feature)
+		{
+			ATL::CComBSTR typeName;
+			if (SUCCEEDED(feature->GetTypeName2(&typeName)) && typeName == L"MateGroup")
+				CollectMates(feature, 0, mates, seen);
+			ATL::CComPtr<IFeature> next;
+			if (FAILED(feature->IGetNextFeature(&next)))
+				break;
+			feature = next;
+		}
+		return mates;
+	}
+
+	std::set<std::string> MateNames(IModelDoc2* doc)
+	{
+		std::set<std::string> names;
+		for (const auto& mate : MateFeatures(doc))
+			names.insert(FeatureName(mate));
+		return names;
+	}
+
+	void DescribeMate(IFeature* feature, PersistIds& ids, sld_mcp::v1::MateInfo* info)
+	{
+		info->set_persist_id(ids.Get(feature));
+		info->set_name(FeatureName(feature));
+		ATL::CComBSTR typeName;
+		if (SUCCEEDED(feature->GetTypeName2(&typeName)))
+			info->set_type_name(ToUtf8(typeName));
+		VARIANT_BOOL flag = VARIANT_FALSE;
+		if (SUCCEEDED(feature->IsSuppressed(&flag)))
+			info->set_suppressed(flag != VARIANT_FALSE);
+		VARIANT_BOOL warning = VARIANT_FALSE;
+		long code = swFeatureErrorNone;
+		if (SUCCEEDED(feature->GetErrorCode2(&warning, &code)))
+		{
+			info->set_error_code(static_cast<int32_t>(code));
+			info->set_error_is_warning(code != swFeatureErrorNone && warning != VARIANT_FALSE);
+		}
+
+		ATL::CComPtr<IDispatch> specific;
+		if (SUCCEEDED(feature->GetSpecificFeature2(&specific)) && specific)
+		{
+			if (ATL::CComQIPtr<IMate2> mate(specific.p); mate)
+			{
+				long value = 0;
+				if (SUCCEEDED(mate->get_Type(&value)))
+					info->set_type(ToMateType(value));
+				if (SUCCEEDED(mate->get_Alignment(&value)))
+					info->set_alignment(ToMateAlignment(value));
+				flag = VARIANT_FALSE;
+				if (SUCCEEDED(mate->get_Flipped(&flag)))
+					info->set_flipped(flag != VARIANT_FALSE);
+
+				long count = 0;
+				std::set<std::string> components;
+				if (SUCCEEDED(mate->GetMateEntityCount(&count)))
+					for (long i = 0; i < count; ++i)
+					{
+						ATL::CComPtr<IMateEntity2> entity;
+						if (FAILED(mate->MateEntity(i, &entity)) || !entity)
+							continue;
+						ATL::CComPtr<IComponent2> component;
+						entity->get_ReferenceComponent(&component);
+						const std::string pid = component ? ids.Get(component) : std::string();
+						if (!components.insert(pid).second)
+							continue;
+						info->add_component_persist_ids(pid);
+						info->add_component_names(ComponentName(component));
+					}
+			}
+		}
+
+		// Distance and angle mates carry their value as a dimension.
+		for (const auto& display : FeatureDimensions(feature))
+			if (DescribeDimension(display, info->mutable_dimension()))
+				break;
+	}
+
+	std::string MateErrorText(long code)
+	{
+		switch (code)
+		{
+		case swFeatureErrorMateOverdefined:
+			return "it over-defines the assembly: it conflicts with existing mates or fixed components";
+		case swFeatureErrorMateIlldefined:
+			return "it can't be solved (ill-defined) from the components' positions";
+		case swFeatureErrorMateInvalidEdge:
+		case swFeatureErrorMateInvalidFace:
+		case swFeatureErrorMateInvalidEntity:
+		case swFeatureErrorMateEntityNotLinear:
+			return "that kind of mate doesn't work with those entities";
+		case swFeatureErrorMateUnknownTangent:
+			return "SolidWorks couldn't work out the tangency";
+		case swFeatureErrorMateDanglingGeometry:
+		case swFeatureErrorMateBroken:
+			return "it refers to geometry that's missing";
+		default:
+			return "SolidWorks reported error " + std::to_string(code);
+		}
+	}
+
+	std::string AddMateErrorText(long error, long type)
+	{
+		const std::string kind = MateTypeName(type);
+		switch (error)
+		{
+		case swAddMateError_IncorrectSelections:
+			return "SolidWorks can't make a " + kind + " mate between those two entities -- e.g. "
+				"concentric needs round faces/edges or axes, tangent needs a curved face, lock needs "
+				"two components";
+		case swAddMateError_IncorrectAlignment:
+			return "that alignment isn't possible for these entities -- try alignment \"closest\"";
+		case swAddMateError_OverDefinedAssembly:
+			return "the " + kind + " mate would over-define the assembly: it conflicts with existing "
+				"mates or fixed components";
+		case swAddMateError_IncorrectMateType:
+			return "SolidWorks rejected the mate type for these entities";
+		default:
+			return "SolidWorks couldn't add the " + kind + " mate (error " + std::to_string(error) + ")";
+		}
+	}
+
+	// Deletes a feature (e.g. a mate that failed). Best effort.
+	void DeleteFeature(IModelDoc2* doc, IFeature* feature)
+	{
+		doc->ClearSelection2(VARIANT_TRUE);
+		VARIANT_BOOL selected = VARIANT_FALSE;
+		if (feature && SUCCEEDED(feature->Select2(VARIANT_FALSE, 0, &selected)) && selected)
+			doc->EditDelete();
+		doc->ClearSelection2(VARIANT_TRUE);
+	}
+
+	// One side of a mate, resolved.
+	struct MateRef
+	{
+		ATL::CComPtr<IDispatch> obj;
+		ATL::CComPtr<IComponent2> component;  // null: the assembly's own (or unknown)
+		bool isComponent = false;
+		bool isFeature = false;
+		std::string what;  // for messages: "face", "Front Plane", "bracket-1", ...
+	};
+
+	// The component a reference plane/axis feature belongs to. Features may
+	// not answer IEntity::GetComponent, so failing that, look for a feature
+	// of the same name in each component and compare persist ids. Null for
+	// the assembly's own features.
+	ATL::CComPtr<IComponent2> ComponentOfFeature(IAssemblyDoc* assembly, IFeature* feature, PersistIds& ids)
+	{
+		if (ATL::CComPtr<IComponent2> component = ComponentOf(feature); component)
+			return component;
+		const std::string pid = ids.Get(feature);
+		const ATL::CComBSTR name = FromUtf8(FeatureName(feature));
+		if (pid.empty())
+			return {};
+		for (const auto& component : AllComponents(assembly))
+		{
+			ATL::CComPtr<IFeature> candidate;
+			if (SUCCEEDED(component->FeatureByName(name, &candidate)) && candidate && ids.Get(candidate) == pid)
+				return component;
+		}
+		return {};
+	}
+
+	grpc::Status ResolveMateRef(IModelDocExtension* ext, IAssemblyDoc* assembly, PersistIds& ids,
+		const std::string& persistId, long mateType, MateRef& ref)
+	{
+		if (grpc::Status status = ResolvePersistId(ext, persistId, ref.obj); !status.ok())
+			return status;
+		const bool lock = mateType == swMateLOCK;
+
+		if (ATL::CComQIPtr<IComponent2> component(ref.obj.p); component)
+		{
+			if (!lock)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"\"" + ComponentName(component) + "\" is a whole component; only lock mates take "
+					"components -- give a face, edge or reference plane/axis");
+			ref.component = component;
+			ref.isComponent = true;
+			ref.what = ComponentName(component);
+			return grpc::Status::OK;
+		}
+		if (lock)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"a lock mate takes two components, not faces or other geometry");
+
+		if (ATL::CComQIPtr<IFace2>(ref.obj.p))
+			ref.what = "face";
+		else if (ATL::CComQIPtr<IEdge>(ref.obj.p))
+			ref.what = "edge";
+		else if (ATL::CComQIPtr<IVertex>(ref.obj.p))
+			ref.what = "vertex";
+		else if (ATL::CComQIPtr<IFeature> feature(ref.obj.p); feature)
+		{
+			ATL::CComBSTR typeName;
+			feature->GetTypeName2(&typeName);
+			if (typeName != L"RefPlane" && typeName != L"RefAxis" && typeName != L"RefPoint" &&
+				typeName != L"CoordSys")
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"\"" + FeatureName(feature) + "\" (" + ToUtf8(typeName) + ") can't be mated -- give "
+					"a face, an edge, or a reference plane / axis / point");
+			ref.isFeature = true;
+			ref.what = FeatureName(feature);
+		}
+		else
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"that id isn't something a mate can use -- give a face, an edge, or a reference "
+				"plane / axis / point");
+
+		if (ref.isFeature)
+		{
+			ATL::CComQIPtr<IFeature> feature(ref.obj.p);
+			ref.component = ComponentOfFeature(assembly, feature, ids);
+		}
+		else
+			ref.component = ComponentOf(ref.obj);
+		if (!ref.component && !ref.isFeature)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"that " + ref.what + " isn't on a component of the active assembly");
+		if (ref.component && IsSuppressed(ref.component))
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"\"" + ComponentName(ref.component) + "\" is suppressed -- unsuppress it first");
+		return grpc::Status::OK;
+	}
+
+	// Appends a mate ref to the selection with mark 1, as AddMate5 expects.
+	bool SelectMateRef(const MateRef& ref, ISelectData* data)
+	{
+		VARIANT_BOOL selected = VARIANT_FALSE;
+		if (ref.isComponent)
+			return SUCCEEDED(ref.component->Select4(VARIANT_TRUE, data, VARIANT_FALSE, &selected)) && selected;
+		if (ref.isFeature)
+		{
+			ATL::CComQIPtr<IFeature> feature(ref.obj.p);
+			return feature && SUCCEEDED(feature->Select2(VARIANT_TRUE, 1, &selected)) && selected;
+		}
+		ATL::CComQIPtr<IEntity> entity(ref.obj.p);
+		return entity && SUCCEEDED(entity->Select4(VARIANT_TRUE, data, &selected)) && selected;
+	}
+
+	// Whether `component` is `ancestor` or inside it.
+	bool IsWithin(IComponent2* component, const std::string& ancestorPid, PersistIds& ids)
+	{
+		ATL::CComPtr<IComponent2> current(component);
+		for (int depth = 0; current && depth < 64; ++depth)
+		{
+			if (ids.Get(current) == ancestorPid)
+				return true;
+			ATL::CComPtr<IComponent2> parent;
+			if (FAILED(current->GetParent(&parent)))
+				break;
+			current = parent;
+		}
+		return false;
+	}
+
+	// InspectModel for an assembly; see the .proto for what's listed.
+	grpc::Status InspectAssembly(IModelDoc2* doc, IModelDocExtension* ext, PersistIds& ids, IMathUtility* math,
+		const sld_mcp::v1::InspectModelRequest& request, sld_mcp::v1::InspectModelResponse* response)
+	{
+		if (!request.scope_feature_name().empty())
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"in an assembly, narrow by a component id rather than a feature name (feature names "
+				"repeat across components)");
+		ATL::CComQIPtr<IAssemblyDoc> assembly(doc);
+		if (!assembly)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "active assembly has no IAssemblyDoc interface");
+		const bool wantGeometry = request.include_faces() || request.include_edges();
+		ComponentList components(ids, math, response->mutable_components());
+
+		if (request.include_components())
+			for (const auto& component : AllComponents(assembly))
+				components.Add(component);
+		if (request.include_mates())
+			for (const auto& mate : MateFeatures(doc))
+				DescribeMate(mate, ids, response->add_mates());
+
+		// A component scope narrows everything; any other scope (body,
+		// feature, face) only faces/edges, as in a part.
+		ATL::CComPtr<IComponent2> scopeComponent;
+		ATL::CComPtr<IDispatch> scope;
+		if (!request.scope_persist_id().empty())
+		{
+			if (grpc::Status status = ResolvePersistId(ext, request.scope_persist_id(), scope); !status.ok())
+				return status;
+			if (ATL::CComQIPtr<IComponent2> component(scope.p); component)
+			{
+				scopeComponent = component;
+				scope.Release();
+			}
+		}
+
+		if (request.include_features())
+		{
+			if (scopeComponent)
+			{
+				ATL::CComPtr<IFeature> first;
+				HRESULT hr = scopeComponent->FirstFeature(&first);
+				if (FAILED(hr))
+					return ComError("IComponent2::FirstFeature", hr);
+				const std::string pid = components.Add(scopeComponent);
+				if (grpc::Status status = InspectFeatureList(first, ids, pid, false, response); !status.ok())
+					return status;
+			}
+			else if (grpc::Status status = InspectFeatures(doc, ids, true, response); !status.ok())
+				return status;
+		}
+
+		// Bodies with their components: for the body list, and as the
+		// default face/edge scope. Next to the component list (the overview)
+		// every component's bodies would mostly repeat it, so they're only
+		// listed on their own or for one component.
+		const bool listBodies = request.include_bodies() && (scopeComponent || !request.include_components());
+		std::vector<std::pair<ATL::CComPtr<IBody2>, ATL::CComPtr<IComponent2>>> bodies;
+		if (listBodies || (wantGeometry && !scope))
+		{
+			std::vector<ATL::CComPtr<IComponent2>> owners;
+			if (scopeComponent && !IsSubassembly(scopeComponent))
+				owners.push_back(scopeComponent);
+			else
+			{
+				const std::string scopePid = scopeComponent ? ids.Get(scopeComponent) : std::string();
+				for (const auto& component : GeometryComponents(assembly, false))
+					if (scopePid.empty() || IsWithin(component, scopePid, ids))
+						owners.push_back(component);
+			}
+			for (const auto& owner : owners)
+				for (const auto& body : ComponentBodies(owner))
+					bodies.emplace_back(body, owner);
+		}
+		if (listBodies)
+			for (const auto& [body, owner] : bodies)
+			{
+				sld_mcp::v1::BodyInfo* info = response->add_bodies();
+				InspectBody(body, ids, info);
+				info->set_component_persist_id(components.Add(owner));
+			}
+
+		if (!wantGeometry)
+			return grpc::Status::OK;
+
+		EntitySet<IFace2> faces;
+		EntitySet<IEdge> edges;
+		auto addBody = [&](IBody2* body) {
+			ATL::CComVariant array;
+			if (request.include_faces() && SUCCEEDED(body->GetFaces(&array)))
+				faces.AddAll(array);
+			array.Clear();
+			if (request.include_edges() && SUCCEEDED(body->GetEdges(&array)))
+				edges.AddAll(array);
+		};
+		auto addFace = [&](IFace2* face) {
+			if (request.include_faces())
+				faces.Add(face);
+			ATL::CComVariant faceEdges;
+			if (request.include_edges() && SUCCEEDED(face->GetEdges(&faceEdges)))
+				edges.AddAll(faceEdges);
+		};
+
+		if (scope)
+		{
+			if (ATL::CComQIPtr<IBody2> body(scope.p); body)
+				addBody(body);
+			else if (ATL::CComQIPtr<IFace2> face(scope.p); face)
+				addFace(face);
+			else if (ATL::CComQIPtr<IFeature> feature(scope.p); feature)
+			{
+				ATL::CComVariant array;
+				if (SUCCEEDED(feature->GetFaces(&array)))
+					for (const auto& disp : comvariant::ToDispatches(array))
+						if (ATL::CComQIPtr<IFace2> face(disp.p); face)
+							addFace(face);
+			}
+			else
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"the scope must be a component, a body, a feature or a face");
+		}
+		else
+		{
+			for (const auto& [body, owner] : bodies)
+				addBody(body);
+		}
+
+		for (const auto& face : faces.Items())
+		{
+			sld_mcp::v1::FaceInfo* info = response->add_faces();
+			InspectFace(face, ids, info);
+			info->set_component_persist_id(components.Add(ComponentOf(face)));
+		}
+		for (const auto& edge : edges.Items())
+		{
+			sld_mcp::v1::EdgeInfo* info = response->add_edges();
+			InspectEdge(edge, ids, info);
+			info->set_component_persist_id(components.Add(ComponentOf(edge)));
+		}
+		response->set_truncated(faces.Truncated() || edges.Truncated());
+		return grpc::Status::OK;
+	}
 }
 
 SolidWorksService::SolidWorksService(IGlobalInterfaceTable* git, DWORD swAppCookie)
@@ -3316,11 +4156,9 @@ grpc::Status SolidWorksService::InspectModel(grpc::ServerContext* /*context*/,
 		return status;
 
 	ATL::CComPtr<IModelDoc2> doc;
-	if (grpc::Status status = GetActivePart(swApp, doc); !status.ok())
+	long docType = swDocNONE;
+	if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
 		return status;
-	ATL::CComQIPtr<IPartDoc> part(doc.p);
-	if (!part)
-		return grpc::Status(grpc::StatusCode::INTERNAL, "active part has no IPartDoc interface");
 
 	ATL::CComPtr<IModelDocExtension> ext;
 	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
@@ -3333,8 +4171,21 @@ grpc::Status SolidWorksService::InspectModel(grpc::ServerContext* /*context*/,
 		return ComError("IModelDoc2::GetTitle", hr);
 	response->mutable_document()->set_title(ToUtf8(title));
 
+	if (docType == swDocASSEMBLY)
+	{
+		response->mutable_document()->set_type(sld_mcp::v1::DOCUMENT_TYPE_ASSEMBLY);
+		ATL::CComQIPtr<IMathUtility> math;
+		if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
+			return status;
+		return InspectAssembly(doc, ext, ids, math, *request, response);
+	}
+	response->mutable_document()->set_type(sld_mcp::v1::DOCUMENT_TYPE_PART);
+	ATL::CComQIPtr<IPartDoc> part(doc.p);
+	if (!part)
+		return grpc::Status(grpc::StatusCode::INTERNAL, "active part has no IPartDoc interface");
+
 	if (request->include_features())
-		if (grpc::Status status = InspectFeatures(doc, ids, response); !status.ok())
+		if (grpc::Status status = InspectFeatures(doc, ids, false, response); !status.ok())
 			return status;
 
 	// Every body, for the body list and as the default face/edge scope.
@@ -3447,11 +4298,10 @@ grpc::Status SolidWorksService::GetMesh(grpc::ServerContext* /*context*/,
 		return status;
 
 	ATL::CComPtr<IModelDoc2> doc;
-	if (grpc::Status status = GetActivePart(swApp, doc); !status.ok())
+	long docType = swDocNONE;
+	if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
 		return status;
-	ATL::CComQIPtr<IPartDoc> part(doc.p);
-	if (!part)
-		return grpc::Status(grpc::StatusCode::INTERNAL, "active part has no IPartDoc interface");
+	const bool isAssembly = docType == swDocASSEMBLY;
 
 	ATL::CComPtr<IModelDocExtension> ext;
 	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
@@ -3463,36 +4313,59 @@ grpc::Status SolidWorksService::GetMesh(grpc::ServerContext* /*context*/,
 	if (FAILED(hr))
 		return ComError("IModelDoc2::GetTitle", hr);
 	response->mutable_document()->set_title(ToUtf8(title));
+	response->mutable_document()->set_type(isAssembly ? sld_mcp::v1::DOCUMENT_TYPE_ASSEMBLY
+	                                                  : sld_mcp::v1::DOCUMENT_TYPE_PART);
 
-	// Only what's shown: hidden bodies aren't in the picture either.
-	ATL::CComVariant all;
-	hr = part->GetBodies2(swAllBodies, VARIANT_TRUE, &all);
-	if (FAILED(hr))
-		return ComError("IPartDoc::GetBodies2", hr);
-	std::vector<ATL::CComPtr<IBody2>> bodies;
-	for (const auto& disp : comvariant::ToDispatches(all))
-		if (ATL::CComQIPtr<IBody2> body(disp.p); body)
-			bodies.push_back(body);
-
-	// Edge tessellation tolerances scale with the part: chords within 0.1%
-	// of its size, segments no longer than 5% of it.
-	double lo[3] = { HUGE_VAL, HUGE_VAL, HUGE_VAL }, hi[3] = { -HUGE_VAL, -HUGE_VAL, -HUGE_VAL };
-	for (const auto& body : bodies)
+	// Only what's shown: hidden bodies (or components) aren't in the picture
+	// either. In an assembly each body comes with its component, and its
+	// geometry may be in that component's coordinates; the overall size
+	// comes from the components' assembly-space boxes.
+	std::vector<std::pair<ATL::CComPtr<IBody2>, std::string>> bodies;  // body, component persist id
+	Eigen::AlignedBox3d sizeBox;
+	if (isAssembly)
 	{
-		ATL::CComVariant box;
-		const std::vector<double> b = SUCCEEDED(body->GetBodyBox(&box)) ? comvariant::ToDoubles(box) : std::vector<double>{};
-		if (b.size() < 6)
-			continue;
-		for (int i = 0; i < 3; ++i)
+		ATL::CComQIPtr<IAssemblyDoc> assembly(doc.p);
+		if (!assembly)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "active assembly has no IAssemblyDoc interface");
+		ATL::CComQIPtr<IMathUtility> math;
+		if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
+			return status;
+		ComponentList components(ids, math, response->mutable_components());
+		for (const auto& component : GeometryComponents(assembly, true))
 		{
-			lo[i] = std::min(lo[i], b[i]);
-			hi[i] = std::max(hi[i], b[i + 3]);
+			const std::vector<ATL::CComPtr<IBody2>> componentBodies = ComponentBodies(component);
+			if (componentBodies.empty())
+				continue;
+			const std::string pid = components.Add(component);
+			for (const auto& body : componentBodies)
+				bodies.emplace_back(body, pid);
+			ATL::CComVariant box;
+			if (SUCCEEDED(component->GetBox(VARIANT_FALSE, VARIANT_FALSE, &box)))
+				sizeBox.extend(ToAlignedBox(comvariant::ToDoubles(box)));
 		}
 	}
-	double size = 0.0;
-	if (lo[0] <= hi[0])
-		size = std::sqrt((hi[0] - lo[0]) * (hi[0] - lo[0]) + (hi[1] - lo[1]) * (hi[1] - lo[1]) +
-			(hi[2] - lo[2]) * (hi[2] - lo[2]));
+	else
+	{
+		ATL::CComQIPtr<IPartDoc> part(doc.p);
+		if (!part)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "active part has no IPartDoc interface");
+		ATL::CComVariant all;
+		hr = part->GetBodies2(swAllBodies, VARIANT_TRUE, &all);
+		if (FAILED(hr))
+			return ComError("IPartDoc::GetBodies2", hr);
+		for (const auto& disp : comvariant::ToDispatches(all))
+			if (ATL::CComQIPtr<IBody2> body(disp.p); body)
+			{
+				bodies.emplace_back(ATL::CComPtr<IBody2>(body), std::string());
+				ATL::CComVariant box;
+				if (SUCCEEDED(body->GetBodyBox(&box)))
+					sizeBox.extend(ToAlignedBox(comvariant::ToDoubles(box)));
+			}
+	}
+
+	// Edge tessellation tolerances scale with the model: chords within 0.1%
+	// of its size, segments no longer than 5% of it.
+	double size = sizeBox.isEmpty() ? 0.0 : sizeBox.diagonal().norm();
 	if (!(size > 0.0) || !std::isfinite(size))
 		size = 0.1;
 	const double chordTolerance = size * 1e-3;
@@ -3500,7 +4373,7 @@ grpc::Status SolidWorksService::GetMesh(grpc::ServerContext* /*context*/,
 
 	size_t faceCount = 0, edgeCount = 0;
 	bool truncated = false;
-	for (const auto& body : bodies)
+	for (const auto& [body, componentId] : bodies)
 	{
 		const std::string bodyId = ids.Get(body);
 
@@ -3522,6 +4395,7 @@ grpc::Status SolidWorksService::GetMesh(grpc::ServerContext* /*context*/,
 					continue;
 				mesh.set_persist_id(ids.Get(face));
 				mesh.set_body_persist_id(bodyId);
+				mesh.set_component_persist_id(componentId);
 				ATL::CComPtr<IFeature> feature;
 				if (SUCCEEDED(face->IGetFeature(&feature)) && feature)
 				{
@@ -3554,6 +4428,7 @@ grpc::Status SolidWorksService::GetMesh(grpc::ServerContext* /*context*/,
 				sld_mcp::v1::EdgePolyline* polyline = response->add_edges();
 				polyline->set_persist_id(ids.Get(edge));
 				polyline->set_body_persist_id(bodyId);
+				polyline->set_component_persist_id(componentId);
 				AppendFloats(points, polyline->mutable_points());
 				++edgeCount;
 			}
@@ -4156,7 +5031,7 @@ grpc::Status SolidWorksService::SetDimensionValue(grpc::ServerContext* /*context
 		return status;
 
 	ATL::CComPtr<IModelDoc2> doc;
-	if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
+	if (grpc::Status status = GetEditableModel(swApp, doc); !status.ok())
 		return status;
 
 	ATL::CComPtr<IDispatch> param;
@@ -4166,7 +5041,8 @@ grpc::Status SolidWorksService::SetDimensionValue(grpc::ServerContext* /*context
 	ATL::CComQIPtr<IDimension> dim(param.p);
 	if (!dim)
 		return grpc::Status(grpc::StatusCode::NOT_FOUND,
-			"the active part has no dimension named \"" + request->name() + "\" -- names look like D1@Sketch1");
+			"the active document has no dimension named \"" + request->name() + "\" -- names look like "
+			"D1@Sketch1");
 
 	long paramType = swDimensionParamTypeUnknown;
 	dim->GetType(&paramType);
@@ -4659,5 +5535,165 @@ grpc::Status SolidWorksService::HoleWizard(grpc::ServerContext* /*context*/,
 		*response->mutable_frame() = frame;
 
 	ReadHoleSpec(hole, response->mutable_spec());
+	return grpc::Status::OK;
+}
+
+grpc::Status SolidWorksService::AddMate(grpc::ServerContext* /*context*/,
+	const sld_mcp::v1::AddMateRequest* request,
+	sld_mcp::v1::AddMateResponse* response)
+{
+	// Validate before touching SolidWorks.
+	long mateType = swMateCOINCIDENT;
+	if (!ToSwMateType(request->type(), mateType))
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+			"give a mate type: coincident, concentric, perpendicular, parallel, tangent, distance, "
+			"angle or lock");
+	if (request->entity_persist_ids_size() != 2)
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a mate takes exactly two entities");
+	if (request->entity_persist_ids(0) == request->entity_persist_ids(1))
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "the two entities are the same one");
+	double distance = 0.0, angle = 0.0;
+	if (mateType == swMateDISTANCE)
+	{
+		distance = request->distance();
+		if (!std::isfinite(distance) || distance < 0.0)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "the distance must be 0 or more");
+	}
+	if (mateType == swMateANGLE)
+	{
+		angle = request->angle();
+		if (!std::isfinite(angle) || angle < 0.0 || angle > 3.14159265358979323846 + 1e-9)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "the angle must be 0 to 180 degrees");
+	}
+	const long alignment = mateType == swMateLOCK ? swMateAlignCLOSEST : ToSwMateAlign(request->alignment());
+	const VARIANT_BOOL flip = request->flip() ? VARIANT_TRUE : VARIANT_FALSE;
+	const VARIANT_BOOL lockRotation =
+		mateType == swMateCONCENTRIC && request->lock_rotation() ? VARIANT_TRUE : VARIANT_FALSE;
+
+	std::lock_guard<std::mutex> lock(m_editMutex);
+	ComApartment com;
+	if (!com.Ok())
+		return ComApartmentError();
+
+	ATL::CComPtr<ISldWorks> swApp;
+	if (grpc::Status status = GetSwApp(swApp); !status.ok())
+		return status;
+
+	ATL::CComPtr<IModelDoc2> doc;
+	if (grpc::Status status = GetEditableAssembly(swApp, doc); !status.ok())
+		return status;
+	ATL::CComQIPtr<IAssemblyDoc> assembly(doc.p);
+	if (!assembly)
+		return grpc::Status(grpc::StatusCode::INTERNAL, "active assembly has no IAssemblyDoc interface");
+	ATL::CComPtr<IModelDocExtension> ext;
+	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+		return status;
+	ATL::CComQIPtr<IMathUtility> math;
+	if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
+		return status;
+	PersistIds ids(ext);
+
+	MateRef refs[2];
+	for (int i = 0; i < 2; ++i)
+	{
+		grpc::Status status = ResolveMateRef(ext, assembly, ids, request->entity_persist_ids(i), mateType, refs[i]);
+		if (!status.ok())
+			return grpc::Status(status.error_code(),
+				"entity " + std::to_string(i + 1) + ": " + status.error_message());
+	}
+	const std::string componentIds[2] = { refs[0].component ? ids.Get(refs[0].component) : std::string(),
+		refs[1].component ? ids.Get(refs[1].component) : std::string() };
+	// (Two of the assembly's own planes, or planes whose component couldn't
+	// be worked out, are left for SolidWorks to judge.)
+	if (!componentIds[0].empty() && componentIds[0] == componentIds[1])
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+			"both entities are on \"" + ComponentName(refs[0].component) + "\" -- a mate joins two "
+			"different components");
+
+	// AddMate5 mates the current selection, marked 1.
+	ATL::CComPtr<ISelectionMgr> selectionManager;
+	HRESULT hr = doc->get_ISelectionManager(&selectionManager);
+	if (FAILED(hr) || !selectionManager)
+		return ComError("IModelDoc2::ISelectionManager", hr);
+	ATL::CComPtr<ISelectData> selectData;
+	hr = selectionManager->CreateSelectData(&selectData);
+	if (FAILED(hr) || !selectData)
+		return ComError("ISelectionMgr::CreateSelectData", hr);
+	selectData->put_Mark(1);
+
+	const std::set<std::string> matesBefore = MateNames(doc);
+	doc->ClearSelection2(VARIANT_TRUE);
+	for (int i = 0; i < 2; ++i)
+		if (!SelectMateRef(refs[i], selectData))
+		{
+			doc->ClearSelection2(VARIANT_TRUE);
+			return grpc::Status(grpc::StatusCode::INTERNAL,
+				"SolidWorks wouldn't select entity " + std::to_string(i + 1) + " (" + refs[i].what + ")");
+		}
+
+	long addError = swAddMateError_ErrorUknown;
+	ATL::CComPtr<IMate2> mate;
+	hr = assembly->AddMate5(mateType, alignment, flip,
+		distance, distance, distance,  // distance + its limits (same: not a limit mate)
+		1.0, 1.0,                      // gear ratio, unused
+		angle, angle, angle,           // angle + its limits
+		VARIANT_FALSE,                 // a real mate, not just for positioning
+		lockRotation,
+		0,                             // width mate option, unused
+		&addError, &mate);
+	doc->ClearSelection2(VARIANT_TRUE);
+
+	// The new mate is whatever wasn't in the Mates folder before. AddMate5
+	// can leave a broken mate behind even when it reports an error.
+	ATL::CComPtr<IFeature> mateFeature;
+	for (const auto& feature : MateFeatures(doc))
+		if (!matesBefore.count(FeatureName(feature)))
+		{
+			mateFeature = feature;
+			break;
+		}
+	auto removeMate = [&]() {
+		if (mateFeature)
+		{
+			DeleteFeature(doc, mateFeature);
+			VARIANT_BOOL rebuilt = VARIANT_FALSE;
+			doc->EditRebuild3(&rebuilt);
+		}
+	};
+
+	if (FAILED(hr))
+	{
+		removeMate();
+		return ComError("IAssemblyDoc::AddMate5", hr);
+	}
+	if (!mate || addError != swAddMateError_NoError)
+	{
+		removeMate();
+		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, AddMateErrorText(addError, mateType));
+	}
+	if (!mateFeature)
+		return grpc::Status(grpc::StatusCode::INTERNAL,
+			"SolidWorks reported the mate as added, but there's no new mate in the Mates folder");
+
+	VARIANT_BOOL rebuilt = VARIANT_FALSE;
+	hr = doc->EditRebuild3(&rebuilt);
+	if (FAILED(hr))
+		return ComError("IModelDoc2::EditRebuild3", hr);
+
+	VARIANT_BOOL warning = VARIANT_FALSE;
+	long errorCode = swFeatureErrorNone;
+	mateFeature->GetErrorCode2(&warning, &errorCode);
+	if (errorCode != swFeatureErrorNone && !warning)
+	{
+		removeMate();
+		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+			std::string("SolidWorks added the ") + MateTypeName(mateType) + " mate but couldn't solve it -- " +
+			MateErrorText(errorCode) + " -- so it was removed again");
+	}
+
+	DescribeMate(mateFeature, ids, response->mutable_mate());
+	ComponentList components(ids, math, response->mutable_components());
+	for (const auto& ref : refs)
+		components.Add(ref.component);
 	return grpc::Status::OK;
 }

@@ -43,15 +43,17 @@ service SolidWorks {
   // NOT_FOUND if a named sketch doesn't exist.
   rpc ExtrudeSketch(ExtrudeSketchRequest) returns (ExtrudeSketchResponse);
 
-  // Read-only look at the active part: its features, bodies, faces and/or
-  // edges with their geometry. Every entity comes with a persist_id that
-  // other RPCs accept to target it (e.g. sketching on a face). Fails with
-  // FAILED_PRECONDITION if the active document isn't a part.
+  // Read-only look at the active part or assembly: its features, bodies,
+  // faces and/or edges with their geometry, and in an assembly its
+  // components and mates. Every entity comes with a persist_id that other
+  // RPCs accept to target it (e.g. sketching on a face, mating two faces).
+  // Fails with FAILED_PRECONDITION if the active document is neither.
   rpc InspectModel(InspectModelRequest) returns (InspectModelResponse);
 
-  // Read-only: the active part's display tessellation (triangles per face)
-  // and edges as polylines, for the MCP server to render pictures from.
-  // Fails with FAILED_PRECONDITION if the active document isn't a part.
+  // Read-only: the active part's (or assembly's visible components')
+  // display tessellation (triangles per face) and edges as polylines, for
+  // the MCP server to render pictures from. Fails with FAILED_PRECONDITION
+  // if the active document is neither a part nor an assembly.
   rpc GetMesh(GetMeshRequest) returns (GetMeshResponse);
 
   // Read-only look at one 2D sketch: its segments and points (with IDs
@@ -78,7 +80,8 @@ service SolidWorks {
   rpc FullyDefineSketch(FullyDefineSketchRequest) returns (FullyDefineSketchResponse);
 
   // Changes the value of an existing dimension by its full name, e.g.
-  // "D1@Sketch1" or "D1@Boss-Extrude1", and rebuilds.
+  // "D1@Sketch1" or "D1@Boss-Extrude1" (or in an assembly, a distance or
+  // angle mate's "D1@Distance1"), and rebuilds.
   rpc SetDimensionValue(SetDimensionValueRequest) returns (SetDimensionValueResponse);
 
   // Hole Wizard: standard holes (clearance/drilled, counterbore, countersink
@@ -93,6 +96,16 @@ service SolidWorks {
   // isn't a part, a sketch is open, the sketch isn't usable, or SolidWorks
   // rejects the hole (e.g. a size the fastener type doesn't have).
   rpc HoleWizard(HoleWizardRequest) returns (HoleWizardResponse);
+
+  // Adds a mate between two components of the active assembly (faces,
+  // edges, reference planes/axes, or whole components for a lock mate) and
+  // solves it, moving the components that aren't fixed. All or nothing:
+  // a mate SolidWorks rejects, or that leaves the assembly over-defined or
+  // unsolvable, is deleted again (components the solver already moved
+  // stay where they went). Fails with FAILED_PRECONDITION if the active
+  // document isn't an assembly, a sketch is open, or a component is being
+  // edited in context.
+  rpc AddMate(AddMateRequest) returns (AddMateResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +133,14 @@ message GetActiveDocumentResponse {
 message Document {
   // Window title as SolidWorks shows it (IModelDoc2::GetTitle).
   string title = 1;
+  // Set by InspectModel and GetMesh.
+  DocumentType type = 2;
+}
+
+enum DocumentType {
+  DOCUMENT_TYPE_UNSPECIFIED = 0;
+  DOCUMENT_TYPE_PART = 1;
+  DOCUMENT_TYPE_ASSEMBLY = 2;
 }
 
 message NewPartRequest {}
@@ -308,8 +329,22 @@ message InspectModelRequest {
   // Restrict faces/edges to one entity: a body, a feature (the faces it
   // created) or a face (edges only). At most one of these may be set; with
   // neither, faces/edges cover every body in the part.
+  //
+  // Assemblies: scope_persist_id may also be a component, which narrows
+  // features, bodies, faces and edges to that component (features: the
+  // component's own feature tree, e.g. its reference planes). Without a
+  // component scope, features are the assembly's own (planes, ...; not its
+  // components or mates, which have their own lists) and bodies/faces/
+  // edges cover every (unsuppressed) component -- except that bodies
+  // aren't listed alongside include_components, which already says where
+  // each component is. scope_feature_name isn't supported in assemblies
+  // (feature names repeat across components).
   bytes scope_persist_id = 5;
   string scope_feature_name = 6;
+
+  // Assemblies only (ignored for parts): list every component / every mate.
+  bool include_components = 7;
+  bool include_mates = 8;
 }
 
 message InspectModelResponse {
@@ -321,6 +356,120 @@ message InspectModelResponse {
   // Set when faces or edges were cut off at the add-in's safety limit;
   // narrow the scope to see the rest.
   bool truncated = 6;
+  // Assemblies: with include_components, every component; otherwise (at
+  // least) the components the returned features, bodies, faces and edges
+  // belong to, so their geometry can be placed in assembly space.
+  repeated ComponentInfo components = 7;
+  // Assemblies, with include_mates.
+  repeated MateInfo mates = 8;
+}
+
+// ---------------------------------------------------------------------------
+// Assemblies
+//
+// Geometry read from a component's entities (faces, edges, bodies, their
+// tessellation) is in that component's own coordinate system unless
+// `local_geometry` says otherwise; ComponentInfo carries the placement that
+// maps it into the assembly. Everything else (component boxes, mate
+// values) is in assembly space.
+
+// swComponentSuppressionState_e, simplified.
+enum ComponentState {
+  COMPONENT_STATE_UNSPECIFIED = 0;
+  COMPONENT_STATE_RESOLVED = 1;
+  COMPONENT_STATE_LIGHTWEIGHT = 2;  // geometry not loaded; faces/bodies may be missing
+  COMPONENT_STATE_SUPPRESSED = 3;
+}
+
+message ComponentInfo {
+  bytes persist_id = 1;
+  // IComponent2::Name2, e.g. "bracket-1"; inside a subassembly SolidWorks
+  // prefixes the parent's name, e.g. "sub-1/bracket-1".
+  string name = 2;
+  string file = 3;           // full path of the part/assembly file
+  string configuration = 4;  // referenced configuration
+  bool fixed = 5;            // fixed in place (can't move), vs floating
+  ComponentState state = 6;
+  bool hidden = 7;
+  bool subassembly = 8;      // has components of its own
+  bytes parent_persist_id = 9;  // the subassembly it's in; empty at top level
+
+  // Placement in the assembly: where the component's own origin and unit
+  // axes are, in assembly space (IComponent2::Transform2). A point p in
+  // component coordinates is at origin + p.x*x_axis + p.y*y_axis + p.z*z_axis.
+  Vec3 origin = 10;
+  Vec3 x_axis = 11;
+  Vec3 y_axis = 12;
+  Vec3 z_axis = 13;
+  // Whether the component's entity geometry (faces, edges, bodies, mesh)
+  // comes back in component coordinates and needs the placement applied.
+  // Determined by comparing the bodies' boxes against IComponent2::GetBox.
+  bool local_geometry = 14;
+  // Assembly space. Unset if SolidWorks can't report it.
+  Box3 box = 15;
+}
+
+// swMateType_e, the kinds AddMate supports; anything else reads as OTHER.
+enum MateType {
+  MATE_TYPE_UNSPECIFIED = 0;
+  MATE_TYPE_COINCIDENT = 1;
+  MATE_TYPE_CONCENTRIC = 2;
+  MATE_TYPE_PERPENDICULAR = 3;
+  MATE_TYPE_PARALLEL = 4;
+  MATE_TYPE_TANGENT = 5;
+  MATE_TYPE_DISTANCE = 6;
+  MATE_TYPE_ANGLE = 7;
+  MATE_TYPE_LOCK = 8;
+  MATE_TYPE_OTHER = 9;  // gear, width, slot, ... (see type_name)
+}
+
+// swMateAlign_e.
+enum MateAlignment {
+  MATE_ALIGNMENT_UNSPECIFIED = 0;  // requests: CLOSEST
+  MATE_ALIGNMENT_ALIGNED = 1;      // normals / axes point the same way
+  MATE_ALIGNMENT_ANTI_ALIGNED = 2; // opposite ways (e.g. face against face)
+  MATE_ALIGNMENT_CLOSEST = 3;      // whichever is nearer the current position
+}
+
+message MateInfo {
+  bytes persist_id = 1;  // the mate feature
+  string name = 2;       // e.g. "Coincident1"
+  MateType type = 3;
+  string type_name = 4;  // IFeature::GetTypeName2, e.g. "MateCoincident"
+  MateAlignment alignment = 5;
+  bool flipped = 6;
+  // The components the mate ties together (empty persist id / name for
+  // the assembly's own planes etc.).
+  repeated bytes component_persist_ids = 7;
+  repeated string component_names = 8;
+  // DISTANCE / ANGLE mates: the dimension's full name ("D1@Distance1",
+  // for SetDimensionValue) and value (meters / radians).
+  DimensionInfo dimension = 9;
+  bool suppressed = 10;
+  // swFeatureError_e (0 = fine), e.g. 46 = over-defined.
+  int32 error_code = 11;
+  bool error_is_warning = 12;
+}
+
+message AddMateRequest {
+  MateType type = 1;  // anything but UNSPECIFIED / OTHER
+  // Exactly two persist ids from InspectModel on this assembly: faces or
+  // edges of components, reference plane / axis / point features (of a
+  // component or the assembly itself), or -- for LOCK, and only for it --
+  // two components. They must be on different components.
+  repeated bytes entity_persist_ids = 2;
+  MateAlignment alignment = 3;
+  // DISTANCE / ANGLE: measure to the other side.
+  bool flip = 4;
+  double distance = 5;     // DISTANCE only: meters, >= 0
+  double angle = 6;        // ANGLE only: radians, 0..pi
+  bool lock_rotation = 7;  // CONCENTRIC only: also stop rotation about the axis
+}
+
+message AddMateResponse {
+  MateInfo mate = 1;
+  // The mated components, placed where the solve left them.
+  repeated ComponentInfo components = 2;
 }
 
 // A persist_id is SolidWorks' persistent reference for an entity
@@ -335,6 +484,8 @@ message FeatureInfo {
   bool suppressed = 4;
   repeated string parents = 5;   // names of features this one depends on
   repeated string children = 6;  // names of features that depend on this one
+  // Assemblies: the component the feature is in (empty: the assembly's own).
+  bytes component_persist_id = 7;
 }
 
 message BodyInfo {
@@ -346,6 +497,9 @@ message BodyInfo {
   MassProperties mass = 5;
   int32 face_count = 6;
   int32 edge_count = 7;
+  // Assemblies: the component the body is in; `box` and `mass` are then in
+  // its coordinates (see ComponentInfo).
+  bytes component_persist_id = 8;
 }
 
 message MassProperties {
@@ -401,6 +555,10 @@ message FaceInfo {
   // tessellation. Unset if the face has no tessellation.
   Vec3 sample_point = 15;
   Vec3 sample_normal = 16;
+
+  // Assemblies: the component the face is in; all of the above is then in
+  // its coordinates (see ComponentInfo).
+  bytes component_persist_id = 17;
 }
 
 enum CurveType {
@@ -428,6 +586,8 @@ message EdgeInfo {
   Vec3 center = 8;
   Vec3 axis = 9;
   double radius = 10;
+  // Assemblies: as FaceInfo.component_persist_id.
+  bytes component_persist_id = 11;
 }
 
 // ---------------------------------------------------------------------------
@@ -447,6 +607,9 @@ message GetMeshResponse {
   repeated EdgePolyline edges = 3;
   // Set when faces or edges were cut off at the add-in's safety limit.
   bool truncated = 4;
+  // Assemblies: the components the faces/edges belong to, with their
+  // placements (component coordinates -> assembly).
+  repeated ComponentInfo components = 5;
 }
 
 message FaceMesh {
@@ -460,6 +623,9 @@ message FaceMesh {
   // One unit normal per vertex, pointing out of the material, in the same
   // order as `triangles` (IFace2::GetTessNorms). May be empty.
   repeated float normals = 6;
+  // Assemblies: the component the face is in; coordinates are then in its
+  // coordinate system if that component's local_geometry is set.
+  bytes component_persist_id = 7;
 }
 
 message EdgePolyline {
@@ -467,6 +633,8 @@ message EdgePolyline {
   bytes body_persist_id = 2;
   // Points along the edge, start to end (at least 2).
   repeated float points = 3;
+  // Assemblies: as FaceMesh.component_persist_id.
+  bytes component_persist_id = 4;
 }
 
 // ---------------------------------------------------------------------------
