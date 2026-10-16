@@ -116,6 +116,28 @@ service SolidWorks {
   // the MCP server's job. Fails with FAILED_PRECONDITION if the active
   // document is neither a part nor an assembly.
   rpc InspectAnnotations(InspectAnnotationsRequest) returns (InspectAnnotationsResponse);
+
+  // Read-only look at the active drawing: its sheets (size, scale,
+  // projection), the drawing views on each (type, orientation, scale, the
+  // model it shows, where it sits on the sheet and how model space maps
+  // onto the sheet), on request the visible edges / silhouette edges /
+  // vertices of some views -- what drawing dimensions attach to -- and the
+  // annotations (dimensions, notes, ...) in each view. Fails with
+  // FAILED_PRECONDITION if the active document isn't a drawing.
+  rpc InspectDrawing(InspectDrawingRequest) returns (InspectDrawingResponse);
+
+  // Adds dimensions to views of the active drawing, between entities that
+  // InspectDrawing listed, with their text at given sheet positions.
+  // Drawing dimensions measure the model; they don't drive it. All or
+  // nothing: if one can't be added, the ones added by this call are
+  // deleted again. FAILED_PRECONDITION if the active document isn't a
+  // drawing, NOT_FOUND if an entity is no longer in its view.
+  rpc AddDrawingDimensions(AddDrawingDimensionsRequest) returns (AddDrawingDimensionsResponse);
+
+  // SolidWorks' "Model Items": inserts the model's own dimensions (and
+  // optionally other annotations) into views of the active drawing
+  // (IDrawingDoc::InsertModelAnnotations3). Reports what each view gained.
+  rpc InsertModelItems(InsertModelItemsRequest) returns (InsertModelItemsResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -151,6 +173,7 @@ enum DocumentType {
   DOCUMENT_TYPE_UNSPECIFIED = 0;
   DOCUMENT_TYPE_PART = 1;
   DOCUMENT_TYPE_ASSEMBLY = 2;
+  DOCUMENT_TYPE_DRAWING = 3;
 }
 
 message NewPartRequest {}
@@ -1125,4 +1148,202 @@ message AnnotationGtol {
   string projected_zone_height = 5;
   // swGtolFormatType_e: 1 = before SOLIDWORKS 2022, 2 = 2022 and later.
   int32 format = 6;
+}
+
+// ---------------------------------------------------------------------------
+// Drawings: InspectDrawing, AddDrawingDimensions, InsertModelItems
+//
+// Sheet coordinates are meters from the sheet's lower-left corner, x to the
+// right and y up. Model geometry (ViewEntity.edge, start, end) is in the
+// space of the view's model, as InspectModel reports it -- for assembly
+// components with local_geometry, that component's space (see
+// ComponentInfo) -- and each ViewInfo says how model space maps onto the
+// sheet; projecting is the MCP server's job.
+
+message InspectDrawingRequest {
+  // Views (by name, e.g. "Drawing View1") whose visible entities to list.
+  // Empty: none (only sheets and views).
+  repeated string entity_views = 1;
+  // Also list those views' visible vertices. Edges and silhouette edges
+  // are always listed.
+  bool include_vertices = 2;
+  // Describe every view's (and sheet's) annotations. Otherwise only their
+  // types are reported.
+  bool include_annotations = 3;
+}
+
+message InspectDrawingResponse {
+  Document document = 1;
+  repeated SheetInfo sheets = 2;
+  // Set when entities or annotations were cut off at the add-in's safety
+  // limit.
+  bool truncated = 3;
+}
+
+message SheetInfo {
+  string name = 1;  // e.g. "Sheet1"
+  bool active = 2;  // the sheet SolidWorks is showing
+  // swDwgPaperSizes_e: 0 A (letter) landscape, 1 A portrait, 2 B, 3 C,
+  // 4 D, 5 E, 6 A4 landscape, 7 A4 portrait, 8 A3, 9 A2, 10 A1, 11 A0,
+  // 12 user defined. -1 if SolidWorks didn't report it.
+  int32 paper_size = 3;
+  double width = 4;   // meters
+  double height = 5;  // meters
+  // Sheet scale numerator : denominator, e.g. 1 : 2.
+  double scale_numerator = 6;
+  double scale_denominator = 7;
+  // First-angle projection (ISO default); otherwise third-angle (ANSI).
+  bool first_angle = 8;
+  string sheet_format = 9;  // the sheet format's name, if any
+  repeated ViewInfo views = 10;
+  // Annotations on the sheet itself rather than in a view (notes, ...):
+  // swAnnotationType_e of each, and with include_annotations, each
+  // described.
+  repeated int32 annotation_types = 11;
+  repeated AnnotationInfo annotations = 12;
+}
+
+enum ViewEntityKind {
+  VIEW_ENTITY_KIND_UNSPECIFIED = 0;
+  VIEW_ENTITY_KIND_EDGE = 1;
+  VIEW_ENTITY_KIND_VERTEX = 2;
+  // The outline of a curved face seen from the side, e.g. the two lines
+  // of a cylinder seen side-on. Not a model edge.
+  VIEW_ENTITY_KIND_SILHOUETTE = 3;
+}
+
+message ViewInfo {
+  string name = 1;  // e.g. "Drawing View1"
+  // swDrawingViewTypes_e: 2 section, 3 detail, 4 projected, 5 auxiliary,
+  // 6 standard, 7 named (from a model view), 8 relative, 9 detached,
+  // 10 alternate position.
+  int32 type = 2;
+  // IView::GetOrientationName, e.g. "*Front", "*Isometric"; may be empty
+  // for derived views.
+  string orientation = 3;
+  string model_file = 4;     // full path of the part/assembly shown
+  string configuration = 5;  // its configuration
+  // The model's type; UNSPECIFIED if it isn't loaded.
+  DocumentType model_type = 6;
+  bool model_loaded = 7;
+  double scale_numerator = 8;
+  double scale_denominator = 9;
+  bool uses_sheet_scale = 10;
+  // Sheet coordinates (z = 0): the view's bounding box and position.
+  Box3 outline = 11;
+  Vec3 position = 12;
+  // IView::ModelToViewTransform, as where the model's origin lands on the
+  // sheet and what its unit axes become (sheet vectors, so their length is
+  // the view's scale): model point p is at
+  //   model_origin + p.x*model_x + p.y*model_y + p.z*model_z
+  // whose x, y are sheet coordinates (z is depth, toward the viewer).
+  // Unset if SolidWorks didn't report the transform.
+  Vec3 model_origin = 13;
+  Vec3 model_x = 14;
+  Vec3 model_y = 15;
+  Vec3 model_z = 16;
+  // swDisplayMode_e: 0 wireframe, 1 hidden lines visible (greyed),
+  // 2 hidden lines removed, 3 shaded, 7 shaded with edges.
+  int32 display_mode = 17;
+  // The view this one is projected / derived from, if any.
+  string base_view = 18;
+  // Assemblies: the components the entities and annotation attachments
+  // belong to, with their placements.
+  repeated ComponentInfo components = 19;
+  // Set when this view's entities were asked for (InspectDrawingRequest.
+  // entity_views); `entities` may still be empty.
+  bool entities_listed = 20;
+  repeated ViewEntity entities = 21;
+  // swAnnotationType_e of each annotation in the view.
+  repeated int32 annotation_types = 22;
+  // With include_annotations: each annotation described. Persist ids of
+  // attached entities are the view model's, as in ViewEntity.
+  repeated AnnotationInfo annotations = 23;
+}
+
+// One thing visible in a drawing view.
+message ViewEntity {
+  ViewEntityKind kind = 1;
+  // What identifies it within the view, for DrawingEntityRef: the entity's
+  // persist id in the view's model (silhouettes: their face's), its
+  // component (assemblies), and an ordinal that tells apart entities with
+  // the same persist id and component (several silhouettes of one face, or
+  // entities SolidWorks can't give a persist id). Treat as opaque.
+  bytes persist_id = 2;
+  bytes component_persist_id = 3;
+  int32 ordinal = 4;
+  // EDGE: as InspectModel describes it (model space).
+  EdgeInfo edge = 5;
+  // SILHOUETTE: its end points; VERTEX: start = the point. Model space.
+  Vec3 start = 6;
+  Vec3 end = 7;
+}
+
+// Names an entity of a drawing view, from InspectDrawing's ViewInfo.name
+// and ViewEntity's kind / persist_id / component_persist_id / ordinal.
+message DrawingEntityRef {
+  string view_name = 1;
+  ViewEntityKind kind = 2;
+  bytes persist_id = 3;
+  bytes component_persist_id = 4;
+  int32 ordinal = 5;
+}
+
+message DrawingDimension {
+  // In drawings, HORIZONTAL / VERTICAL are along the sheet's x / y.
+  // LENGTH: 1 edge. DISTANCE: 2 entities. HORIZONTAL / VERTICAL: 1 edge or
+  // 2 entities. DIAMETER / RADIUS: 1 circular edge. ANGLE: 2 straight edges.
+  DimensionKind kind = 1;
+  // All in the same view.
+  repeated DrawingEntityRef refs = 2;
+  // Where the dimension text goes, sheet coordinates (meters).
+  double text_x = 3;
+  double text_y = 4;
+}
+
+message AddDrawingDimensionsRequest {
+  repeated DrawingDimension dimensions = 1;  // at least one
+}
+
+message DrawingDimensionResult {
+  string view_name = 1;
+  // The new dimension (type 4): name (e.g. "RD1@Drawing View1"), measured
+  // value, text, position, attached entities.
+  AnnotationInfo annotation = 2;
+}
+
+message AddDrawingDimensionsResponse {
+  // One per request dimension, in order.
+  repeated DrawingDimensionResult dimensions = 1;
+  // Assemblies: the components attached entities belong to.
+  repeated ComponentInfo components = 2;
+}
+
+message InsertModelItemsRequest {
+  // Views to insert into, all on one sheet. Empty: every view of the
+  // active sheet.
+  repeated string view_names = 1;
+  // swInsertAnnotation_e flags, e.g. 32768 = dimensions marked for drawing
+  // (the Model Items default), 524288 = dimensions not marked for drawing,
+  // 131072 = Hole Wizard locations, 1048576 = hole callouts, 2 = datums,
+  // 32 = geometric tolerances, 64 = notes, 128 = surface finish. 0 means
+  // 32768.
+  int32 types = 2;
+  // Also insert dimensions already shown in another view.
+  bool include_duplicates = 3;
+  // Also insert dimensions of features hidden in the view.
+  bool include_hidden_features = 4;
+}
+
+message ViewAnnotations {
+  string view_name = 1;
+  repeated AnnotationInfo annotations = 2;
+  repeated ComponentInfo components = 3;
+}
+
+message InsertModelItemsResponse {
+  // How many annotations SolidWorks says it inserted.
+  int32 inserted = 1;
+  // Per view, the annotations it has now that it didn't have before.
+  repeated ViewAnnotations views = 2;
 }

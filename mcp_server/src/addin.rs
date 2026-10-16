@@ -197,6 +197,37 @@ impl AddinClient {
             .await?
             .into_inner())
     }
+
+    /// The active drawing's sheets and views (optionally with view entities
+    /// and annotations); sheet coordinates in meters.
+    pub async fn inspect_drawing(
+        &self,
+        request: proto::InspectDrawingRequest,
+    ) -> Result<proto::InspectDrawingResponse, tonic::Status> {
+        // A detailed view lists thousands of edges.
+        let mut client = self
+            .client
+            .clone()
+            .max_decoding_message_size(MAX_MESH_MESSAGE);
+        Ok(client.inspect_drawing(request).await?.into_inner())
+    }
+
+    /// Text positions in sheet meters.
+    pub async fn add_drawing_dimensions(
+        &self,
+        request: proto::AddDrawingDimensionsRequest,
+    ) -> Result<proto::AddDrawingDimensionsResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.add_drawing_dimensions(request).await?.into_inner())
+    }
+
+    pub async fn insert_model_items(
+        &self,
+        request: proto::InsertModelItemsRequest,
+    ) -> Result<proto::InsertModelItemsResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.insert_model_items(request).await?.into_inner())
+    }
 }
 
 /// Largest GetMesh reply accepted: about 5 million triangles with normals.

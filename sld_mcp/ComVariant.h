@@ -209,6 +209,22 @@ namespace comvariant
 		return out;
 	}
 
+	// An array of VARIANTs (e.g. IDrawingDoc::GetViews: one array of views
+	// per sheet) as copies of its elements.
+	inline std::vector<ATL::CComVariant> ToVariants(const VARIANT& v)
+	{
+		std::vector<ATL::CComVariant> out;
+		SAFEARRAY* sa = detail::Array1D(v);
+		if (!sa || (v.vt & VT_TYPEMASK) != VT_VARIANT)
+			return out;
+		detail::WithData<VARIANT>(sa, [&](const VARIANT* p, size_t n) {
+			out.reserve(n);
+			for (size_t i = 0; i < n; ++i)
+				out.emplace_back(p[i]);
+		});
+		return out;
+	}
+
 	// A byte array (e.g. a persist ID) as a std::string of raw bytes.
 	inline std::string ToBytes(const VARIANT& v)
 	{

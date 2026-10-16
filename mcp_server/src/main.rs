@@ -1,5 +1,6 @@
 mod addin;
 mod assembly;
+mod drawing;
 mod hole;
 mod inspect;
 mod pmi;
@@ -747,6 +748,9 @@ struct SolidWorksTools {
     /// Short IDs handed out by inspect_model, shared by every tool call.
     ids: Arc<Mutex<IdRegistry>>,
     renderer: Arc<render::Renderer>,
+    /// Sheet geometry of the drawing view entities inspect_drawing listed,
+    /// for checking and placing drawing dimensions.
+    drawings: Arc<Mutex<drawing::Cache>>,
 }
 
 #[tool_router]
@@ -757,6 +761,7 @@ impl SolidWorksTools {
             addin,
             ids: Arc::default(),
             renderer: Arc::default(),
+            drawings: Arc::default(),
         }
     }
 
@@ -1313,6 +1318,101 @@ impl SolidWorksTools {
         let json = {
             let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             pmi::render(&mut ids, &reply, &params, on.as_deref())
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+    }
+
+    #[tool(
+        description = "Look at the active drawing (.SLDDRW) without changing it: its sheets \
+                       (paper size, scale, first/third-angle projection) and their drawing views \
+                       (type, orientation such as *Front, scale, the part or assembly shown, the \
+                       view's outline on the sheet, which model axes point right/up on the sheet, \
+                       and how many dimensions/notes it has). With view=\"Drawing View1\" it also \
+                       lists that view's visible edges with ids (\"view_edge:3\"; \"silhouette:1\" \
+                       for the outline of a curved face seen side-on, e.g. a cylinder's sides; \
+                       vertices with include_vertices) and what each looks like on the sheet: \
+                       lines with start/end, circles/arcs seen face-on with center and \
+                       diameter/radius, or seen edge-on as a line -- plus the view's dimensions \
+                       (name, value, tolerance, text position, the edges they're attached to) and \
+                       other annotations. Positions are sheet millimeters from the sheet's \
+                       lower-left corner; sizes are the model's true sizes. Use the ids with \
+                       add_drawing_dimensions."
+    )]
+    async fn inspect_drawing(
+        &self,
+        Parameters(params): Parameters<drawing::InspectDrawingParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let reply = self
+            .addin
+            .inspect_drawing(drawing::inspect_request(&params))
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let json = {
+            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            drawing::render_inspect(&mut ids, &mut cache, &reply, &params)
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+    }
+
+    #[tool(
+        description = "Add dimensions to views of the active drawing, measuring the edges \
+                       inspect_drawing listed (call it with the view first for ids). Kinds: length (1 \
+                       straight edge), distance (2 entities: between parallel edges, from a point or \
+                       a circle's center to an edge, ...), horizontal / vertical (1 edge's extent or \
+                       the distance between 2 entities, along the sheet's x / y), diameter / radius \
+                       (1 circle or arc seen face-on), angle (2 straight edges). The entities of one \
+                       dimension must be in one view. Text goes at at_mm ([x, y] sheet mm) or by \
+                       default outside the view on the side nearer the measured edges (above/below \
+                       for horizontal, left/right for vertical), next to the circle for \
+                       diameter/radius, inside the corner for angles. Drawing dimensions show the model's sizes; \
+                       they don't change the model (to change a size, edit the part's own \
+                       dimensions). All dimensions of a call are added together, or none if one \
+                       fails. To bring in the model's own sketch/feature dimensions instead, use \
+                       insert_model_items."
+    )]
+    async fn add_drawing_dimensions(
+        &self,
+        Parameters(params): Parameters<drawing::AddDrawingDimensionsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let (request, labels) = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            drawing::dimensions_request(&ids, &cache, &params)?
+        };
+        let reply = self
+            .addin
+            .add_drawing_dimensions(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            drawing::dimensions_reply_text(&reply, &labels),
+        )]))
+    }
+
+    #[tool(
+        description = "SolidWorks' Model Items for the active drawing: insert the model's own \
+                       dimensions (the sketch and feature dimensions that define the part, those \
+                       marked for drawing by default) into drawing views, placed where they sit in \
+                       the model's sketches. Optionally also hole callouts, Hole Wizard locations, \
+                       datums, geometric tolerances, surface finish symbols, notes or cosmetic \
+                       threads. Unlike add_drawing_dimensions these stay linked to the model: \
+                       changing one in the drawing changes the part. Defaults to every view of the \
+                       active sheet; dimensions already shown in another view are skipped unless \
+                       include_duplicates. Reports what each view gained."
+    )]
+    async fn insert_model_items(
+        &self,
+        Parameters(params): Parameters<drawing::InsertModelItemsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let reply = self
+            .addin
+            .insert_model_items(drawing::model_items_request(&params))
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let json = {
+            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            drawing::render_model_items(&mut ids, &reply)
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
     }
@@ -2101,8 +2201,11 @@ impl ServerHandler for SolidWorksTools {
                  component, its faces, edges and planes (in assembly coordinates); add_mate \
                  mates two components by those ids, and render_views shows where they ended \
                  up. inspect_annotations reads the model's MBD / PMI (DimXpert dimensions, \
-                 tolerances, datums, feature control frames). Lengths are in millimeters, \
-                 angles in degrees."
+                 tolerances, datums, feature control frames). Drawings: inspect_drawing lists \
+                 the sheets and views and, for one view, its visible edges with ids and \
+                 sheet positions; add_drawing_dimensions dimensions those edges, and \
+                 insert_model_items brings in the model's own dimensions. Lengths are in \
+                 millimeters, angles in degrees."
                     .to_string(),
             )
     }

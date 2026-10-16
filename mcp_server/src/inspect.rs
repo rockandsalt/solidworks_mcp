@@ -35,6 +35,11 @@ pub enum Kind {
     Spline,
     Ellipse,
     Segment,
+    // Entities of a drawing view. Their "persist ID" is an encoded
+    // proto::DrawingEntityRef (see crate::drawing).
+    ViewEdge,
+    ViewVertex,
+    Silhouette,
 }
 
 /// The kinds that name model geometry (vs. sketch entities).
@@ -48,6 +53,7 @@ pub const SKETCH_KINDS: [Kind; 7] = [
     Kind::Ellipse,
     Kind::Segment,
 ];
+pub const DRAWING_KINDS: [Kind; 3] = [Kind::ViewEdge, Kind::ViewVertex, Kind::Silhouette];
 
 impl Kind {
     fn prefix(self) -> &'static str {
@@ -64,6 +70,9 @@ impl Kind {
             Kind::Spline => "spline",
             Kind::Ellipse => "ellipse",
             Kind::Segment => "segment",
+            Kind::ViewEdge => "view_edge",
+            Kind::ViewVertex => "view_vertex",
+            Kind::Silhouette => "silhouette",
         }
     }
 
@@ -76,6 +85,7 @@ impl Kind {
         MODEL_KINDS
             .iter()
             .chain(SKETCH_KINDS.iter())
+            .chain(DRAWING_KINDS.iter())
             .copied()
             .find(|kind| kind.prefix() == prefix)
     }
@@ -229,7 +239,7 @@ fn surface_name(t: proto::SurfaceType) -> &'static str {
     }
 }
 
-fn curve_name(t: proto::CurveType) -> &'static str {
+pub fn curve_name(t: proto::CurveType) -> &'static str {
     use proto::CurveType as C;
     match t {
         C::Line => "line",

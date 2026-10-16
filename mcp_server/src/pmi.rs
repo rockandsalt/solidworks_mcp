@@ -83,7 +83,7 @@ pub fn kind_of(a: &proto::AnnotationInfo) -> AnnotationKind {
 }
 
 /// swAnnotationType_e as a word.
-fn type_name(t: i32) -> &'static str {
+pub fn type_name(t: i32) -> &'static str {
     match t {
         sw::CTHREAD => "cosmetic_thread",
         sw::DATUM_TAG => "datum",
@@ -236,7 +236,7 @@ fn attached_json(ids: &mut IdRegistry, a: &proto::AnnotationInfo, obj: &mut Map<
 }
 
 /// A value in mm (or degrees for angles), rounded.
-fn value_of(value: f64, angular: bool) -> f64 {
+pub fn value_of(value: f64, angular: bool) -> f64 {
     if angular { round(value.to_degrees(), 4) } else { mm(value) }
 }
 
@@ -428,6 +428,18 @@ fn gtol_json(g: &proto::AnnotationGtol, obj: &mut Map<String, Value>) {
 }
 
 pub fn annotation_json(ids: &mut IdRegistry, a: &proto::AnnotationInfo) -> Value {
+    let mut obj = annotation_fields(a);
+    attached_json(ids, a, &mut obj);
+    if let Some(p) = &a.position {
+        obj.insert("position_mm".into(), point_mm(p));
+    }
+    Value::Object(obj)
+}
+
+/// Everything annotation_json shows except what it's attached to and
+/// where it is, which depend on whether it's a 3D annotation or one on a
+/// drawing sheet.
+pub fn annotation_fields(a: &proto::AnnotationInfo) -> Map<String, Value> {
     let mut obj = Map::new();
     obj.insert("type".into(), json!(type_name(a.r#type)));
     if !a.name.is_empty() {
@@ -462,7 +474,6 @@ pub fn annotation_json(ids: &mut IdRegistry, a: &proto::AnnotationInfo) -> Value
         }
         _ => {}
     }
-    attached_json(ids, a, &mut obj);
     // Raw display text: for notes it's the content; for the rest it fills
     // in what the structured fields don't cover. A dimension's is mostly
     // the "<DIM>" placeholder, so it's only shown when it says more.
@@ -474,9 +485,6 @@ pub fn annotation_json(ids: &mut IdRegistry, a: &proto::AnnotationInfo) -> Value
         .collect();
     if !text.is_empty() {
         obj.insert("text".into(), json!(text));
-    }
-    if let Some(p) = &a.position {
-        obj.insert("position_mm".into(), point_mm(p));
     }
     match a.visibility {
         2 => {
@@ -490,7 +498,7 @@ pub fn annotation_json(ids: &mut IdRegistry, a: &proto::AnnotationInfo) -> Value
     if a.dangling {
         obj.insert("dangling".into(), json!(true));
     }
-    Value::Object(obj)
+    obj
 }
 
 /// The inspect_annotations JSON. `on` is a resolved persist id.

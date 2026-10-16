@@ -62,6 +62,10 @@ impl Placement {
         self.0.transform_point3(p)
     }
 
+    pub fn vector(&self, v: DVec3) -> DVec3 {
+        self.0.transform_vector3(v)
+    }
+
     fn place_point(&self, v: &mut Option<proto::Vec3>) {
         if let Some(v) = v {
             *v = to_proto(self.point(dvec3(v)));

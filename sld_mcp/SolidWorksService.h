@@ -75,6 +75,18 @@ public:
 		const sld_mcp::v1::InspectAnnotationsRequest* request,
 		sld_mcp::v1::InspectAnnotationsResponse* response) override;
 
+	grpc::Status InspectDrawing(grpc::ServerContext* context,
+		const sld_mcp::v1::InspectDrawingRequest* request,
+		sld_mcp::v1::InspectDrawingResponse* response) override;
+
+	grpc::Status AddDrawingDimensions(grpc::ServerContext* context,
+		const sld_mcp::v1::AddDrawingDimensionsRequest* request,
+		sld_mcp::v1::AddDrawingDimensionsResponse* response) override;
+
+	grpc::Status InsertModelItems(grpc::ServerContext* context,
+		const sld_mcp::v1::InsertModelItemsRequest* request,
+		sld_mcp::v1::InsertModelItemsResponse* response) override;
+
 private:
 	// gRPC runs handlers on its own thread pool, not on SolidWorks' main
 	// STA thread, so ISldWorks can't be used directly. This fetches a
