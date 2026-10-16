@@ -87,6 +87,10 @@ namespace comvariant
 			return out;
 		switch (v.vt & VT_TYPEMASK)
 		{
+		case VT_I2:
+		case VT_BOOL: // VARIANT_BOOL: -1 (true) / 0
+			detail::WithData<SHORT>(sa, [&](const SHORT* p, size_t n) { out.assign(p, p + n); });
+			break;
 		case VT_I4:
 		case VT_INT:
 			detail::WithData<LONG>(sa, [&](const LONG* p, size_t n) { out.assign(p, p + n); });
@@ -168,6 +172,37 @@ namespace comvariant
 					else
 						add(nullptr);
 				}
+			});
+			break;
+		}
+		return out;
+	}
+
+	// A string array (or a single string). Non-string VARIANT elements read
+	// as empty strings so positions stay meaningful.
+	inline std::vector<ATL::CComBSTR> ToBstrs(const VARIANT& v)
+	{
+		std::vector<ATL::CComBSTR> out;
+		if (v.vt == VT_BSTR)
+		{
+			out.emplace_back(v.bstrVal);
+			return out;
+		}
+		SAFEARRAY* sa = detail::Array1D(v);
+		if (!sa)
+			return out;
+		switch (v.vt & VT_TYPEMASK)
+		{
+		case VT_BSTR:
+			detail::WithData<BSTR>(sa, [&](const BSTR* p, size_t n) {
+				for (size_t i = 0; i < n; ++i)
+					out.emplace_back(p[i]);
+			});
+			break;
+		case VT_VARIANT:
+			detail::WithData<VARIANT>(sa, [&](const VARIANT* p, size_t n) {
+				for (size_t i = 0; i < n; ++i)
+					out.emplace_back(p[i].vt == VT_BSTR ? p[i].bstrVal : nullptr);
 			});
 			break;
 		}

@@ -2,6 +2,7 @@ mod addin;
 mod assembly;
 mod hole;
 mod inspect;
+mod pmi;
 mod render;
 mod sketch;
 
@@ -1282,6 +1283,41 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "Read the active part's (or assembly's) MBD / PMI: the 3D annotations \
+                       made with SolidWorks' MBD Dimension (DimXpert) tools or the annotation \
+                       tools, without changing anything. Lists dimensions with their tolerances \
+                       (bilateral, limit, symmetric, basic, fits like H7) and nominal values, \
+                       datum feature symbols (\"A\", \"B\"), geometric tolerances as feature \
+                       control frames (characteristic, tolerance, diameter zone, MMC/LMC \
+                       modifiers, datum references, plus a one-line callout such as \"position | \
+                       dia 0.1 (M) | A | B | C\"), datum targets, surface finish symbols and notes. \
+                       Each annotation lists the faces/edges it's attached to as inspect_model \
+                       ids (\"face:7\"), so render_views can highlight them; filter by `kind` \
+                       or by an entity with `on`. Dimensions that drive sketches/features are \
+                       left out unless include_feature_dimensions is set. Millimeters and \
+                       degrees."
+    )]
+    async fn inspect_annotations(
+        &self,
+        Parameters(params): Parameters<pmi::InspectAnnotationsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let on = match params.on.as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some(id) => Some(self.resolve_id(id)?),
+        };
+        let reply = self
+            .addin
+            .inspect_annotations()
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let json = {
+            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            pmi::render(&mut ids, &reply, &params, on.as_deref())
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+    }
+
+    #[tool(
         description = "Draw the active part or assembly as a picture: shaded, with edges, in \
                        orthographic standard views (front/back/left/right/top/bottom/isometric) at \
                        one shared scale, as a grid in one PNG. Use it to check the overall shape \
@@ -2064,7 +2100,9 @@ impl ServerHandler for SolidWorksTools {
                  Assemblies: inspect_model lists the components and mates and, within a \
                  component, its faces, edges and planes (in assembly coordinates); add_mate \
                  mates two components by those ids, and render_views shows where they ended \
-                 up. Lengths are in millimeters, angles in degrees."
+                 up. inspect_annotations reads the model's MBD / PMI (DimXpert dimensions, \
+                 tolerances, datums, feature control frames). Lengths are in millimeters, \
+                 angles in degrees."
                     .to_string(),
             )
     }

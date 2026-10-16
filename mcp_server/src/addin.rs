@@ -188,6 +188,15 @@ impl AddinClient {
         let mut client = self.client.clone();
         Ok(client.add_mate(request).await?.into_inner())
     }
+
+    /// The active document's 3D annotations (PMI); meters / radians.
+    pub async fn inspect_annotations(&self) -> Result<proto::InspectAnnotationsResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client
+            .inspect_annotations(proto::InspectAnnotationsRequest {})
+            .await?
+            .into_inner())
+    }
 }
 
 /// Largest GetMesh reply accepted: about 5 million triangles with normals.

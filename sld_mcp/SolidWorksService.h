@@ -71,6 +71,10 @@ public:
 		const sld_mcp::v1::AddMateRequest* request,
 		sld_mcp::v1::AddMateResponse* response) override;
 
+	grpc::Status InspectAnnotations(grpc::ServerContext* context,
+		const sld_mcp::v1::InspectAnnotationsRequest* request,
+		sld_mcp::v1::InspectAnnotationsResponse* response) override;
+
 private:
 	// gRPC runs handlers on its own thread pool, not on SolidWorks' main
 	// STA thread, so ISldWorks can't be used directly. This fetches a

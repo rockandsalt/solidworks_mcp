@@ -106,6 +106,16 @@ service SolidWorks {
   // document isn't an assembly, a sketch is open, or a component is being
   // edited in context.
   rpc AddMate(AddMateRequest) returns (AddMateResponse);
+
+  // Read-only: the active part's (or assembly's) 3D annotations, i.e. its
+  // PMI / MBD data -- what the MBD Dimension (DimXpert) tools and the
+  // annotation tools put on the model: dimensions with their tolerances,
+  // datums, geometric tolerance frames, datum targets, surface finish
+  // symbols, notes, ... -- each with the faces/edges it's attached to.
+  // Codes are passed through as SolidWorks' own enum values; naming them is
+  // the MCP server's job. Fails with FAILED_PRECONDITION if the active
+  // document is neither a part nor an assembly.
+  rpc InspectAnnotations(InspectAnnotationsRequest) returns (InspectAnnotationsResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -974,4 +984,145 @@ message HoleWizardResponse {
   // The placement sketch's axes.
   SketchFrame frame = 5;
   HoleSpec spec = 6;
+}
+
+// ---------------------------------------------------------------------------
+// InspectAnnotations (PMI / MBD)
+//
+// Lengths in meters, angles in radians, as everywhere else. Enum-valued
+// fields carry SolidWorks' raw values (named in the comments); the MCP
+// server turns them into words.
+
+message InspectAnnotationsRequest {}
+
+message InspectAnnotationsResponse {
+  Document document = 1;
+  repeated AnnotationInfo annotations = 2;
+  // Assemblies: the components the attached entities belong to.
+  repeated ComponentInfo components = 3;
+  // Set when annotations were cut off at the add-in's safety limit.
+  bool truncated = 4;
+}
+
+// What kind of thing an annotation is attached to.
+enum AttachedKind {
+  ATTACHED_KIND_UNSPECIFIED = 0;
+  ATTACHED_KIND_FACE = 1;
+  ATTACHED_KIND_EDGE = 2;
+  ATTACHED_KIND_VERTEX = 3;
+  ATTACHED_KIND_FEATURE = 4;  // reference plane / axis / point, sketch, ...
+  ATTACHED_KIND_OTHER = 5;    // sketch entity, silhouette, ...
+}
+
+message AttachedEntity {
+  AttachedKind kind = 1;
+  bytes persist_id = 2;  // empty if SolidWorks can't reference it
+  // Assemblies: the component the entity is in (empty: the assembly's own).
+  bytes component_persist_id = 3;
+}
+
+message AnnotationInfo {
+  // IAnnotation::GetName, e.g. "DatumTag1", "Gtol1", "RD1@Annotations".
+  string name = 1;
+  // swAnnotationType_e: 1 cosmetic thread, 2 datum tag, 3 datum target,
+  // 4 dimension, 5 geometric tolerance, 6 note, 7 surface finish, 8 weld
+  // symbol, 9 custom symbol, 10 dowel pin, 13 center mark, 16 datum origin,
+  // 19 imported PMI, ...
+  int32 type = 2;
+  // Created by DimXpert, which the SolidWorks UI calls "MBD Dimension".
+  bool dimxpert = 3;
+  // DimXpert's own name for the annotation (IAnnotation::GetDimXpertName).
+  string dimxpert_name = 4;
+  // The DimXpert feature the annotation is applied to, e.g. "Plane1",
+  // "Simple Hole1", "Hole Pattern1" (IDimXpertFeature::Name).
+  string dimxpert_feature = 5;
+  // swAnnotationVisibilityState_e: 1 visible, 2 half hidden, 3 hidden.
+  int32 visibility = 6;
+  // Lost its references (the geometry it pointed at is gone).
+  bool dangling = 7;
+  // swPMIType_e, for PMI imported from a neutral file (STEP AP242):
+  // 1 dimension, 2 datum, 3 geometric tolerance, 4 unknown. 0 otherwise.
+  int32 pmi_type = 8;
+  // Where the annotation's text sits, model (or assembly) space.
+  Vec3 position = 9;
+  // What it's attached to. For DimXpert annotations that SolidWorks doesn't
+  // report attachments for, the DimXpert feature's faces.
+  repeated AttachedEntity attached = 10;
+  // The text SolidWorks displays, as it reports it: notes, datum letters,
+  // the pieces of a feature control frame, a dimension's prefix/suffix,
+  // ... Symbols appear as SolidWorks codes, e.g. "<MOD-DIAM>".
+  repeated string text = 11;
+
+  // Detail for the common PMI types; at most one is set.
+  AnnotationDimension dimension = 12;  // type 4
+  AnnotationGtol gtol = 13;            // type 5
+  string datum_label = 14;             // type 2: the datum letter, e.g. "A"
+}
+
+message AnnotationDimension {
+  // Full name ("D1@Sketch1", "RD1@Annotations", ...), measurement type,
+  // nominal value, driven. Not set if SolidWorks gives no IDimension.
+  DimensionInfo dimension = 1;
+  // swTolType_e: 0 none, 1 basic, 2 bilateral, 3 limit, 4 symmetric,
+  // 5 min, 6 max, 7 fit, 8 fit with tolerance, 9 fit tolerance only,
+  // 10 block, 11 general.
+  int32 tolerance_type = 2;
+  // IDimensionTolerance::GetMaxValue / GetMinValue: the upper and lower
+  // deviation from the nominal value, meters (radians for angles).
+  double tolerance_max = 3;
+  double tolerance_min = 4;
+  // Fit classes, e.g. "H7" / "g6", for the fit tolerance types.
+  string hole_fit = 5;
+  string shaft_fit = 6;
+  // A reference dimension (shown in parentheses, not toleranced).
+  bool reference = 7;
+  // A hole callout (Hole Wizard / DimXpert hole).
+  bool hole_callout = 8;
+  // Inspection dimension (shown in an oval).
+  bool inspection = 9;
+  // The feature that owns the dimension ("Sketch1", "Boss-Extrude1", ...),
+  // empty for dimensions that only annotate (DimXpert, reference).
+  string owner_feature = 10;
+  string owner_feature_type = 11;  // IFeature::GetTypeName2
+  // Text added around the value (IDisplayDimension::GetText), e.g. a
+  // prefix "4X " on a pattern of holes.
+  string prefix = 12;
+  string suffix = 13;
+  string callout_above = 14;
+  string callout_below = 15;
+}
+
+// One row of a feature control frame.
+message GtolFrame {
+  // swGtolGeomCharSymbol_e: 12 none, 13 symmetry, 14 straightness,
+  // 15 flatness, 16 circularity, 17 cylindricity, 18 profile of a line,
+  // 19 profile of a surface, 20 angularity, 21 perpendicularity,
+  // 22 parallelism, 23 position, 24 concentricity, 25 circular runout,
+  // 26 total runout, ... -1 if SolidWorks didn't report it.
+  int32 symbol = 1;
+  // Tolerance values as typed, e.g. "0.05".
+  string tolerance1 = 2;
+  string tolerance2 = 3;
+  bool tolerance1_diameter = 4;  // diameter (cylindrical) tolerance zone
+  bool tolerance2_diameter = 5;
+  // swGtolMatCondition_e: 0 none, 1 MMC, 2 RFS, 3 LMC, ...
+  int32 tolerance1_condition = 6;
+  int32 tolerance2_condition = 7;
+  // Primary, secondary, tertiary datum references (empty when unused),
+  // e.g. "A", "B-C".
+  repeated string datums = 8;
+  // swGtolMatCondition_e per datum, same order.
+  repeated int32 datum_conditions = 9;
+}
+
+message AnnotationGtol {
+  repeated GtolFrame frames = 1;
+  // A datum feature symbol shown on the frame (IGtol::GetDatumIdentifier).
+  string datum_label = 2;
+  bool composite = 3;
+  bool all_around = 4;
+  // Projected tolerance zone height, as typed.
+  string projected_zone_height = 5;
+  // swGtolFormatType_e: 1 = before SOLIDWORKS 2022, 2 = 2022 and later.
+  int32 format = 6;
 }
