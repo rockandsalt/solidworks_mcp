@@ -521,3 +521,5 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+# NSIS installer output (.\build.ps1 -Target installer)
+installer/out/

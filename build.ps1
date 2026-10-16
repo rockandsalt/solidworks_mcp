@@ -11,6 +11,7 @@
     .\build.ps1 -Target test-session             # open the MCP test session in its own window
     .\build.ps1 -Cycle                           # stop the test session, build both, resume it
     .\build.ps1 -Target server -Cycle            # same, MCP server only
+    .\build.ps1 -Target installer                # Release builds + NSIS setup in installer\out
 
 .NOTES
     SolidWorks is started and closed by hand; the add-in build still stops
@@ -21,10 +22,14 @@
     It holds mcp_server.exe open, so -Cycle stops it before building the server
     and resumes the same conversation afterwards.
     Any other MCP client running mcp_server.exe still blocks the server build.
+
+    The installer target always builds Release, needs NSIS (makensis.exe on
+    PATH, in its default install folder, or in MAKENSIS), and bundles the
+    vc_redist.x64.exe of the Visual Studio that built the add-in.
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('all', 'addin', 'server', 'register', 'test-session')]
+    [ValidateSet('all', 'addin', 'server', 'register', 'test-session', 'installer')]
     [string]$Target = 'all',
 
     [ValidateSet('Debug', 'Release')]
@@ -38,6 +43,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# The installer only ships Release builds.
+if ($Target -eq 'installer') { $Configuration = 'Release' }
 $root = $PSScriptRoot
 $solution = Join-Path $root 'sld_mcp\sld_mcp.slnx'
 $dll = Join-Path $root "sld_mcp\x64\$Configuration\sld_mcp.dll"
@@ -199,6 +206,92 @@ function Assert-ServerNotRunning {
         "using it (Claude Desktop, MCP Inspector, ...), or test through -Target test-session so -Cycle can restart it.")
 }
 
+function Find-VsInstallPath {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (-not (Test-Path $vswhere)) { return $null }
+    foreach ($prerelease in $false, $true) {
+        $vswhereArgs = @('-latest', '-products', '*', '-version', '[18.0,)',
+                         '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+                         '-property', 'installationPath')
+        if ($prerelease) { $vswhereArgs += '-prerelease' }
+        $found = & $vswhere @vswhereArgs | Select-Object -First 1
+        if ($found) { return $found }
+    }
+    return $null
+}
+
+# The redistributable that ships with the Visual Studio building the add-in,
+# so it's at least as new as the toolset (which the runtime must be).
+function Find-VcRedist {
+    $vsPath = Find-VsInstallPath
+    if (-not $vsPath) { return $null }
+    $redistRoot = Join-Path $vsPath 'VC\Redist\MSVC'
+    $versionFile = Join-Path $vsPath 'VC\Auxiliary\Build\Microsoft.VCRedistVersion.default.txt'
+    if (Test-Path -LiteralPath $versionFile) {
+        $candidate = Join-Path $redistRoot "$((Get-Content -LiteralPath $versionFile -Raw).Trim())\vc_redist.x64.exe"
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+    }
+    # Otherwise the newest versioned folder that has one.
+    $newest = Get-ChildItem -LiteralPath $redistRoot -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -as [version] } |
+        Sort-Object { [version]$_.Name } -Descending |
+        ForEach-Object { Join-Path $_.FullName 'vc_redist.x64.exe' } |
+        Where-Object { Test-Path -LiteralPath $_ } |
+        Select-Object -First 1
+    return $newest
+}
+
+function Find-MakeNsis {
+    if ($env:MAKENSIS) {
+        if (Test-Path -LiteralPath $env:MAKENSIS) { return $env:MAKENSIS }
+        throw "MAKENSIS is set to '$env:MAKENSIS', which doesn't exist."
+    }
+    $onPath = Get-Command makensis -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($onPath) { return $onPath.Source }
+    # The NSIS installer records its folder as the default value of this key.
+    foreach ($key in 'HKLM:\SOFTWARE\WOW6432Node\NSIS', 'HKLM:\SOFTWARE\NSIS') {
+        $dir = (Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue).'(default)'
+        if ($dir -and (Test-Path -LiteralPath (Join-Path $dir 'makensis.exe'))) { return (Join-Path $dir 'makensis.exe') }
+    }
+    foreach ($dir in ${env:ProgramFiles(x86)}, $env:ProgramFiles) {
+        $candidate = Join-Path $dir 'NSIS\makensis.exe'
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+    }
+    throw "makensis.exe not found -- install NSIS from https://nsis.sourceforge.io, or set MAKENSIS to its full path."
+}
+
+function Build-Installer {
+    $makensis = Find-MakeNsis
+    foreach ($file in $dll, $exe) {
+        if (-not (Test-Path -LiteralPath $file)) { throw "$file not found -- the build didn't produce it." }
+    }
+    $cargoToml = Join-Path $serverDir 'Cargo.toml'
+    $versionMatch = Select-String -LiteralPath $cargoToml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+    if (-not $versionMatch) { throw "No version found in $cargoToml." }
+    $version = $versionMatch.Matches[0].Groups[1].Value
+
+    $outDir = Join-Path $root 'installer\out'
+    New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+    $setup = Join-Path $outDir "sld_mcp-setup-$version.exe"
+    $nsisArgs = @('/V2', '/INPUTCHARSET', 'UTF8', "/DVERSION=$version", "/DADDIN_DLL=$dll",
+                  "/DSERVER_EXE=$exe", "/DOUTFILE=$setup")
+    $redist = Find-VcRedist
+    if ($redist) {
+        $nsisArgs += "/DVCREDIST=$redist"
+    }
+    else {
+        Write-Warning ("vc_redist.x64.exe not found in the Visual Studio install, so the installer won't " +
+            "include the Visual C++ runtime. Machines without a recent one will fail to register the add-in.")
+    }
+    $nsisArgs += Join-Path $root 'installer\sld_mcp.nsi'
+
+    Write-Step "Installer: makensis ($version)"
+    if ($redist) { Write-Host "    bundling $redist" }
+    & $makensis @nsisArgs
+    if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE." }
+    Write-Host "    $setup" -ForegroundColor Green
+}
+
 function Find-MSBuild {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
     if (-not (Test-Path $vswhere)) {
@@ -259,6 +352,9 @@ function Register-Addin {
     if ($process.ExitCode -ne 0) { throw "regsvr32 failed with exit code $($process.ExitCode)." }
 }
 
+if ($Clean -and $Target -eq 'installer') {
+    throw "-Clean doesn't apply to the installer; use it with -Target all, addin or server."
+}
 if ($Cycle -and ($Clean -or $Target -notin 'all', 'server')) {
     throw "-Cycle restarts the test session around the server build, so it needs -Target all or server, without -Clean."
 }
@@ -271,6 +367,7 @@ switch ($Target) {
     'server'   { Build-Server }
     'register' { Register-Addin }
     'test-session' { Start-TestSession }
+    'installer' { Build-Addin; Build-Server; Build-Installer }
 }
 # Only reached when the builds succeeded: after a failed build there's nothing
 # new to test, so the test session stays closed until the next good build.

@@ -74,6 +74,17 @@
             ]
         },
         {
+            "label": "Build installer (Release)",
+            "type": "process",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\build.ps1", "-Target", "installer"],
+            "group": "build",
+            "problemMatcher": [
+                "$msCompile",
+                { "base": "$rustc", "fileLocation": ["autoDetect", "${workspaceFolder}\\mcp_server"] }
+            ]
+        },
+        {
             "label": "Clean all (Debug)",
             "type": "process",
             "command": "powershell.exe",
