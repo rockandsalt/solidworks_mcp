@@ -164,6 +164,16 @@ service SolidWorks {
   // (INVALID_ARGUMENT otherwise). Checks every entity before deleting
   // anything; FAILED_PRECONDITION if a sketch is already open.
   rpc DeleteSketchEntities(DeleteSketchEntitiesRequest) returns (DeleteSketchEntitiesResponse);
+
+  // What's wrong with the active part's or assembly's feature tree, e.g.
+  // after a feature or mate was deleted: rebuilds (unless skip_rebuild),
+  // then reports every feature that fails or warns (IFeature::GetErrorCode2
+  // plus IModelDocExtension::GetWhatsWrong) with its parents and children,
+  // every sketch with dangling / over-defining / broken relations or
+  // dimensions or a missing sketch plane, and for mates which mated entity
+  // is gone. Changes nothing but the rebuild. FAILED_PRECONDITION if the
+  // active document is neither a part nor an assembly, or a sketch is open.
+  rpc DiagnoseModel(DiagnoseModelRequest) returns (DiagnoseModelResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -545,6 +555,10 @@ message FeatureInfo {
   repeated string children = 6;  // names of features that depend on this one
   // Assemblies: the component the feature is in (empty: the assembly's own).
   bytes component_persist_id = 7;
+  // swFeatureError_e as of the last rebuild (0 = fine, e.g. 13 = a fillet
+  // whose edges are gone), and whether SolidWorks only warns about it.
+  int32 error_code = 8;
+  bool error_is_warning = 9;
 }
 
 message BodyInfo {
@@ -1462,4 +1476,105 @@ message DeleteSketchEntitiesResponse {
   // Features whose rebuild error is new or different since the delete, e.g.
   // an extrude of the sketch whose profile is now open.
   repeated FeatureProblem new_errors = 9;
+}
+
+// ---------------------------------------------------------------------------
+// Diagnosing
+
+message DiagnoseModelRequest {
+  // Report the errors as of the last rebuild instead of rebuilding first.
+  bool skip_rebuild = 1;
+}
+
+enum RelationProblem {
+  RELATION_PROBLEM_UNSPECIFIED = 0;
+  // An entity it's attached to is gone (swDangling), e.g. a model edge
+  // that a deleted feature made.
+  RELATION_PROBLEM_DANGLING = 1;
+  // It conflicts with others or can't be solved (swOverDefining).
+  RELATION_PROBLEM_OVER_DEFINING = 2;
+  // A broken external (in-context) reference (swBroken).
+  RELATION_PROBLEM_BROKEN = 3;
+}
+
+// A sketch relation or dimension with a problem.
+message SketchRelationProblem {
+  // The worst problem SolidWorks lists it under: dangling, then broken,
+  // then over-defining.
+  RelationProblem problem = 1;
+  int32 constraint_type = 2;  // swConstraintType_e
+  // Dimensions (distance, angle, radius, diameter): the full name, e.g.
+  // "D2@Sketch3".
+  string dimension_name = 3;
+  // Its entities that are in the sketch.
+  repeated SketchItemRef items = 4;
+  // swSketchRelationEntityTypes_e of each entity it was made between,
+  // missing ones included, as far as SolidWorks reports them.
+  repeated int32 entity_types = 5;
+  // Entities outside the sketch that still exist (the origin, model edges).
+  int32 external_count = 6;
+  // Entities that are gone (null in the relation's entity list).
+  int32 missing_count = 7;
+}
+
+message SketchDiagnosis {
+  DefinitionStatus status = 1;
+  repeated SketchRelationProblem relations = 2;
+  // Dimensions IAnnotation::IsDangling flags that `relations` doesn't
+  // already list.
+  repeated string dangling_dimensions = 3;
+  // A 2D sketch whose plane or face (ISketch::GetReferenceEntity) is gone.
+  bool plane_missing = 4;
+}
+
+// One of the two (or more) things a mate ties together.
+message MateEntityState {
+  // What it's attached to: "face", "edge", "vertex", "plane", "axis",
+  // "point", "coordinate system", "component", "other"; empty if missing.
+  string kind = 1;
+  bytes persist_id = 2;
+  // The mate lost this reference (IMateEntity2::Reference is null).
+  bool missing = 3;
+  int32 reference_type = 4;  // swMateEntity2ReferenceType_e
+  // The component it's on, when SolidWorks still says (even for a missing
+  // reference).
+  bytes component_persist_id = 5;
+  string component_name = 6;
+}
+
+// A feature that fails or warns on rebuild, or a sketch with problems.
+message FeatureDiagnosis {
+  bytes persist_id = 1;
+  string name = 2;
+  string type_name = 3;  // IFeature::GetTypeName2
+  // Assemblies: set for a component's feature that What's Wrong lists.
+  bytes component_persist_id = 4;
+  // swFeatureError_e (0 when only the sketch has problems).
+  int32 error_code = 5;
+  bool warning = 6;
+  bool suppressed = 7;
+  // SolidWorks' What's Wrong list has it.
+  bool whats_wrong = 8;
+  // Features it depends on (IFeature::GetParents) and that depend on it
+  // (IFeature::GetChildren).
+  repeated FeatureRef parents = 9;
+  repeated FeatureRef children = 10;
+  // Sketches (ProfileFeature, 3DProfileFeature) only.
+  SketchDiagnosis sketch = 11;
+  // Mates only, in IMate2::MateEntity order.
+  repeated MateEntityState mate_entities = 12;
+}
+
+message DiagnoseModelResponse {
+  Document document = 1;
+  // EditRebuild3 ran (and said it succeeded).
+  bool rebuilt = 2;
+  // In feature-tree order; features only What's Wrong knows (a component's)
+  // come last.
+  repeated FeatureDiagnosis problems = 3;
+  // How many features and sketches were looked at.
+  int32 checked_features = 4;
+  int32 checked_sketches = 5;
+  // Set when problems were cut off at the add-in's limit.
+  bool truncated = 6;
 }

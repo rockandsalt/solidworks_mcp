@@ -1,6 +1,7 @@
 mod addin;
 mod assembly;
 mod delete;
+mod diagnose;
 mod drawing;
 mod hole;
 mod inspect;
@@ -1201,8 +1202,9 @@ impl SolidWorksTools {
     #[tool(
         description = "Look at the active part or assembly without changing it. \
                        what=\"overview\" (default) lists the feature tree (name, type, \
-                       parents/children; type ProfileFeature is a sketch) and the bodies (bounding \
-                       box, volume, centroid). what=\"faces\" lists faces with their geometry: \
+                       parents/children; type ProfileFeature is a sketch; features that fail to \
+                       rebuild carry an `error` or `warning` -- diagnose_model explains them) and \
+                       the bodies (bounding box, volume, centroid). what=\"faces\" lists faces with their geometry: \
                        planes with outward normal and a point on the plane, cylinders with axis, \
                        radius and whether they're holes, plus area and bounding box. \
                        what=\"edges\" lists edges with type, length, end points, circle \
@@ -1947,6 +1949,37 @@ impl SolidWorksTools {
         let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = delete::sketch_reply_text(&mut ids, &params.entities, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Find out what's wrong with the active part's or assembly's feature tree, \
+                       e.g. after deleting a feature or mate, or when inspect_model shows \
+                       features with errors. Rebuilds (unless rebuild=false), then lists every \
+                       feature that fails or warns, every sketch with dangling, broken or \
+                       over-defining relations/dimensions or a missing sketch plane, and every \
+                       mate whose mated face/edge/plane is gone (with which one and on which \
+                       component). Each problem says what's wrong, its parents and children, \
+                       and whether it's a root cause (nothing it depends on fails -- usually what \
+                       referenced the deleted geometry, with a suggested fix) or only fails \
+                       because of a parent (`caused_by`); root causes come first. Sketch entity \
+                       ids work with inspect_sketch / delete_sketch_entities, feature ids with \
+                       delete_features. Changes nothing apart from the rebuild. Requires no \
+                       sketch open for editing."
+    )]
+    async fn diagnose_model(
+        &self,
+        Parameters(params): Parameters<diagnose::DiagnoseModelParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let reply = self
+            .addin
+            .diagnose_model(params.request())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let json = {
+            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            diagnose::render(&mut ids, &reply)
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
     }
 }
 

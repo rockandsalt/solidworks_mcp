@@ -95,6 +95,10 @@ public:
 		const sld_mcp::v1::DeleteSketchEntitiesRequest* request,
 		sld_mcp::v1::DeleteSketchEntitiesResponse* response) override;
 
+	grpc::Status DiagnoseModel(grpc::ServerContext* context,
+		const sld_mcp::v1::DiagnoseModelRequest* request,
+		sld_mcp::v1::DiagnoseModelResponse* response) override;
+
 private:
 	// gRPC runs handlers on its own thread pool, not on SolidWorks' main
 	// STA thread, so ISldWorks can't be used directly. This fetches a

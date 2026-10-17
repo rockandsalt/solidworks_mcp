@@ -203,7 +203,7 @@ pub fn dimension_text(d: &proto::DimensionInfo) -> String {
 }
 
 /// swConstraintType_e as a readable name.
-fn relation_name(constraint_type: i32) -> String {
+pub fn relation_name(constraint_type: i32) -> String {
     match constraint_type {
         4 | 25 => "horizontal",
         5 | 26 => "vertical",
@@ -229,19 +229,20 @@ fn relation_name(constraint_type: i32) -> String {
     .to_string()
 }
 
+/// The short ID for a sketch entity a relation names. The ref doesn't say
+/// what kind of segment it is, so this reuses the ID the entity already got
+/// when it was listed ("line:3"), else mints a generic one.
+pub fn relation_entity_id(ids: &mut IdRegistry, item: &proto::SketchItemRef) -> Option<String> {
+    let bytes = item.encode_to_vec();
+    let kind = if item.point { Kind::SketchPoint } else { Kind::Segment };
+    ids.existing_id(&bytes).or_else(|| ids.id_for(kind, &bytes))
+}
+
 fn relation_json(ids: &mut IdRegistry, r: &proto::RelationInfo) -> Value {
     let mut entities: Vec<Value> = r
         .items
         .iter()
-        .filter_map(|item| {
-            // The ref doesn't say what kind of segment it is; reuse the ID the
-            // entity already got when it was listed.
-            let bytes = item.encode_to_vec();
-            let kind = if item.point { Kind::SketchPoint } else { Kind::Segment };
-            ids.existing_id(&bytes)
-                .or_else(|| ids.id_for(kind, &bytes))
-                .map(Value::String)
-        })
+        .filter_map(|item| relation_entity_id(ids, item).map(Value::String))
         .collect();
     for _ in 0..r.external_count {
         entities.push(json!("external"));

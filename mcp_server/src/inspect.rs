@@ -276,6 +276,10 @@ fn feature_json(ids: &mut IdRegistry, f: &proto::FeatureInfo) -> Value {
     if f.suppressed {
         obj.insert("suppressed".into(), json!(true));
     }
+    if f.error_code != 0 {
+        let key = if f.error_is_warning { "warning" } else { "error" };
+        obj.insert(key.into(), json!(crate::delete::feature_error_name(f.error_code)));
+    }
     if !f.parents.is_empty() {
         obj.insert("parents".into(), json!(f.parents));
     }
@@ -505,6 +509,20 @@ pub fn render(ids: &mut IdRegistry, reply: &proto::InspectModelResponse, filters
     if !reply.features.is_empty() {
         let features = reply.features.iter().map(|f| feature_json(ids, f)).collect();
         out.insert("features".into(), Value::Array(features));
+        let failing = reply.features.iter().filter(|f| f.error_code != 0).count();
+        if failing > 0 {
+            let what = if failing == 1 {
+                "1 feature has a rebuild error or warning".to_string()
+            } else {
+                format!("{failing} features have rebuild errors or warnings")
+            };
+            out.insert(
+                "rebuild_note".into(),
+                json!(format!(
+                    "{what} -- diagnose_model says which are the root causes and what each lost"
+                )),
+            );
+        }
     }
     if !reply.bodies.is_empty() {
         let bodies = reply.bodies.iter().map(|b| body_json(ids, b)).collect();
@@ -544,6 +562,29 @@ mod tests {
         assert_eq!(ids.persist_id(" face:2 ").unwrap(), b"bbb");
         assert!(ids.persist_id("face:9").is_none());
         assert!(ids.id_for(Kind::Face, b"").is_none());
+    }
+
+    #[test]
+    fn features_carry_rebuild_errors() {
+        let mut ids = IdRegistry::default();
+        let feature = |name: &str, error_code: i32, error_is_warning: bool| proto::FeatureInfo {
+            persist_id: name.as_bytes().to_vec(),
+            name: name.into(),
+            type_name: "Fillet".into(),
+            error_code,
+            error_is_warning,
+            ..Default::default()
+        };
+        let reply = proto::InspectModelResponse {
+            features: vec![feature("Fillet1", 13, false), feature("Fillet2", 0, false), feature("Fillet3", 12, true)],
+            ..Default::default()
+        };
+        let json = render(&mut ids, &reply, &Filters { limit: 100, ..Default::default() });
+        let features = json["features"].as_array().unwrap();
+        assert!(features[0]["error"].as_str().unwrap().starts_with("the fillet can't be made"));
+        assert!(features[1].get("error").is_none() && features[1].get("warning").is_none());
+        assert!(features[2]["warning"].is_string());
+        assert!(json["rebuild_note"].as_str().unwrap().starts_with("2 features have rebuild errors"));
     }
 
     #[test]

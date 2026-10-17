@@ -244,6 +244,14 @@ impl AddinClient {
         let mut client = self.client.clone();
         Ok(client.delete_sketch_entities(request).await?.into_inner())
     }
+
+    pub async fn diagnose_model(
+        &self,
+        request: proto::DiagnoseModelRequest,
+    ) -> Result<proto::DiagnoseModelResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.diagnose_model(request).await?.into_inner())
+    }
 }
 
 /// Largest GetMesh reply accepted: about 5 million triangles with normals.

@@ -261,7 +261,7 @@ fn plural(n: usize, singular: &str, plural: &str) -> String {
     }
 }
 
-/// What a swFeatureError_e code means, roughly.
+/// What a swFeatureError_e code means, roughly (values from swconst.tlh).
 pub fn feature_error_name(code: i32) -> String {
     match code {
         1 => "unknown error (often a missing reference)".into(),
@@ -271,12 +271,18 @@ pub fn feature_error_name(code: i32) -> String {
         32 => "bad geometric conditions for the extrusion".into(),
         33..=37 => "the sketch profile isn't valid any more (open, or open and closed contours)".into(),
         38 | 39 | 41 | 44 => "the mated entities don't suit this mate type".into(),
+        40 => "SolidWorks couldn't make a surface for a mated entity".into(),
         42 => "unknown tangency".into(),
         43 | 48 => "a mated entity is missing".into(),
         45 => "a mated entity failed".into(),
         46 => "over-defined: conflicts with other mates or fixed components".into(),
         47 => "can't be solved (ill-defined)".into(),
+        49 => "the feature type is deprecated".into(),
+        50 => "the feature type is obsolete".into(),
         51 => "an external sketch reference failed (the geometry it referenced is gone)".into(),
+        52..=68 => "the partial edge fillet can't be made (its edge or reference entities are gone or changed)".into(),
+        69 => "the swept flange's profile or path isn't valid".into(),
+        70 => "the swept flange intersects itself".into(),
         71 => "the cut doesn't intersect the model".into(),
         72 => "the sketch has a self-intersecting contour".into(),
         73 => "items the feature uses are missing".into(),
