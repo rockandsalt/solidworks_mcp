@@ -19,8 +19,26 @@ deleting, drawings, installer, devloop). Read the relevant one before changing
 an area, and update it when you change the design or learn how SolidWorks
 actually behaves.
 
+## Testing in SolidWorks (dev loop)
+Verify changes against real SolidWorks yourself; details in
+`docs/notes/devloop.md`:
+
+- `devloop\cycle.ps1 -Build all|addin|server|none -Scenario smoke,...`:
+  stop SolidWorks if the add-in is rebuilt (it locks the DLL), build, start
+  SolidWorks, run scenarios. Exit code 0 = everything passed.
+- `devloop\sw.ps1 status|start|stop|reset|screenshot`: SolidWorks control.
+- `py -3 devloop\mcp_client.py call <tool> '{json}'` for a one-off call;
+  scenarios in `devloop\scenarios\*.py`. Output (transcript, server log,
+  PNGs) goes to `devloop\out\`.
+- `devloop\agent.ps1 "<task>" [-Resume]`: a headless Claude session with only
+  the MCP tools tries a plain-language task and reports what was confusing or
+  broken (costs API money, ~$0.50 a task).
+
+Run the PowerShell scripts with `powershell.exe -NoProfile -ExecutionPolicy
+Bypass -File <absolute path>` (Windows PowerShell 5.1: COM needs it).
+
 ## Solidworks
-Solidworks can be started with the following command : 
+Solidworks can be started with the following command (`devloop\sw.ps1 start` runs it): 
 
 ```powershell
 "C:\Program Files\Dassault Systemes\SOLIDWORKS 3DEXPERIENCE R2026x\win_b64\code\bin\CATSTART.exe" -run "SWXDesktopLauncher.exe" -object "--AppName=\"SWXCSWK_AP\" -tenant=OI000596756 -monoapp -3DRegistryURL=https://eu1-makers-registry.3dexperience.3ds.com -LaunchAppDir=\"C:\Program Files\Dassault Systemes\SOLIDWORKS Apps 2026\SOLIDWORKS\" " -nowindow

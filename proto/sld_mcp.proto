@@ -383,6 +383,10 @@ message ExtrudeSketchResponse {
   string sketch_name = 2;
   // How fully defined that sketch was.
   DefinitionStatus sketch_status = 3;
+  // Cuts only: the default direction (against the sketch normal) removed
+  // nothing, e.g. a sketch on a plane with the material on its normal side,
+  // so the cut went the other way, as reverse_direction would have.
+  bool direction_flipped = 4;
 }
 
 // ---------------------------------------------------------------------------

@@ -18,7 +18,9 @@
     early if SolidWorks is running, since it locks sld_mcp.dll.
 
     The test session is an interactive Claude Code session that has only this
-    MCP server, run from an empty folder so it sees the tools but not the code.
+    MCP server, run from an empty folder outside the repo (%LOCALAPPDATA%\sld_mcp\
+    test-session) so it sees the tools but not the code or CLAUDE.md.
+    devloop\agent.ps1 runs the same kind of session headless.
     It holds mcp_server.exe open, so -Cycle stops it before building the server
     and resumes the same conversation afterwards.
     Any other MCP client running mcp_server.exe still blocks the server build.
@@ -51,8 +53,10 @@ $dll = Join-Path $root "sld_mcp\x64\$Configuration\sld_mcp.dll"
 $serverDir = Join-Path $root 'mcp_server'
 $exe = Join-Path $serverDir "target\$($Configuration.ToLower())\mcp_server.exe"
 
-# Under target\, so it's ignored by git; cargo clean resets it to a new session.
-$testSessionDir = Join-Path $serverDir 'target\test-session'
+# Outside the repo: Claude Code loads every CLAUDE.md in the folders above its
+# working folder, and the tester mustn't see the project's instructions.
+# Deleting the folder starts a new session.
+$testSessionDir = Join-Path $env:LOCALAPPDATA 'sld_mcp\test-session'
 $testSessionConfig = Join-Path $testSessionDir 'mcp.json'
 $testSessionIdFile = Join-Path $testSessionDir 'session-id.txt'
 $testSessionHostFile = Join-Path $testSessionDir 'host-pid.txt'

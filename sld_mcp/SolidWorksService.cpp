@@ -1422,8 +1422,9 @@ namespace
 	constexpr int kMaxListedUndefined = 50;
 	// Requests with more dimensions or relations than this are refused.
 	constexpr int kMaxSketchConstraints = 200;
-	// Most refs one dimension or relation can have.
-	constexpr int kMaxConstraintRefs = 3;
+	// Most refs a many-entity relation (equal, parallel, ...) can have. Must
+	// match MAX_RELATION_ENTITIES in mcp_server/src/main.rs.
+	constexpr int kMaxRelationRefs = 32;
 
 	// The last 2D sketch in the feature tree, used by a feature or not --
 	// "the sketch I just drew".
@@ -1887,8 +1888,10 @@ namespace
 		ATL::CComPtr<IDimension> dim;
 		if (FAILED(display->GetDimension2(0, &dim)) || !dim)
 			return false;
+		// Type2, not the obsolete GetType: GetType says swRadialDimension for a
+		// diameter dimension (seen in SOLIDWORKS 2026 on AddDiameterDimension2's).
 		long type = 0;
-		if (SUCCEEDED(display->GetType(&type)))
+		if (SUCCEEDED(display->get_Type2(&type)))
 			info->set_type(ToDimensionType(type));
 		DescribeDimensionValue(dim, info);
 		return true;
@@ -2541,13 +2544,13 @@ namespace
 		case K::RELATION_KIND_VERTICAL:
 		case K::RELATION_KIND_FIXED:
 			lo = 1;
-			hi = kMaxConstraintRefs;
+			hi = kMaxRelationRefs;
 			break;
 		case K::RELATION_KIND_COLLINEAR:
 		case K::RELATION_KIND_PARALLEL:
 		case K::RELATION_KIND_CONCENTRIC:
 		case K::RELATION_KIND_EQUAL:
-			hi = kMaxConstraintRefs;
+			hi = kMaxRelationRefs;
 			break;
 		case K::RELATION_KIND_SYMMETRIC:
 			lo = hi = 3;
@@ -5637,17 +5640,6 @@ grpc::Status SolidWorksService::ExtrudeSketch(grpc::ServerContext* /*context*/,
 	if (!featureManager)
 		return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no feature manager");
 
-	// FeatureExtrusion3 / FeatureCut4 extrude whatever profile is selected.
-	hr = doc->ClearSelection2(VARIANT_TRUE);
-	if (FAILED(hr))
-		return ComError("IModelDoc2::ClearSelection2", hr);
-	VARIANT_BOOL selected = VARIANT_FALSE;
-	hr = sketch->Select2(VARIANT_FALSE, 0, &selected);
-	if (FAILED(hr))
-		return ComError("IFeature::Select2", hr);
-	if (!selected)
-		return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks wouldn't select the sketch");
-
 	// Mid-plane takes the total depth in D1 and splits it across both sides;
 	// it has no direction, so `reverse_direction` doesn't apply. Through-all
 	// overrides both.
@@ -5655,73 +5647,102 @@ grpc::Status SolidWorksService::ExtrudeSketch(grpc::ServerContext* /*context*/,
 	const VARIANT_BOOL reverse = (!midPlane && request->reverse_direction()) ? VARIANT_TRUE : VARIANT_FALSE;
 	const long endCondition = throughAll ? swEndCondThroughAll : midPlane ? swEndCondMidPlane : swEndCondBlind;
 
+	// FeatureExtrusion3 / FeatureCut4 extrude whatever profile is selected.
 	ATL::CComPtr<IFeature> extrusion;
-	if (cut)
-		hr = featureManager->FeatureCut4(
-			VARIANT_TRUE,       // Sd: one direction only
-			VARIANT_FALSE,      // Flip: keep the material outside the profile
-			reverse,            // Dir: reverse direction 1
-			endCondition,       // T1
-			swEndCondBlind,     // T2 (unused, single direction)
-			depth,              // D1
-			0.0,                // D2
-			VARIANT_FALSE,      // Dchk1: no draft
-			VARIANT_FALSE,      // Dchk2
-			VARIANT_FALSE,      // Ddir1
-			VARIANT_FALSE,      // Ddir2
-			0.0,                // Dang1
-			0.0,                // Dang2
-			VARIANT_FALSE,      // OffsetReverse1
-			VARIANT_FALSE,      // OffsetReverse2
-			VARIANT_FALSE,      // TranslateSurface1
-			VARIANT_FALSE,      // TranslateSurface2
-			VARIANT_FALSE,      // NormalCut (sheet metal only)
-			VARIANT_TRUE,       // UseFeatScope
-			VARIANT_TRUE,       // UseAutoSelect: all bodies in scope
-			VARIANT_FALSE,      // AssemblyFeatureScope (assemblies only)
-			VARIANT_FALSE,      // AutoSelectComponents
-			VARIANT_FALSE,      // PropagateFeatureToParts
-			swStartSketchPlane, // T0: start at the sketch plane
-			0.0,                // StartOffset
-			VARIANT_FALSE,      // FlipStartOffset
-			VARIANT_FALSE,      // OptimizeGeometry
-			&extrusion);
-	else
-		hr = featureManager->FeatureExtrusion3(
-			VARIANT_TRUE,       // Sd: one direction only
-			VARIANT_FALSE,      // Flip: side to cut (cuts only)
-			reverse,            // Dir: reverse direction 1
-			endCondition,       // T1
-			swEndCondBlind,     // T2 (unused, single direction)
-			depth,              // D1
-			0.0,                // D2
-			VARIANT_FALSE,      // Dchk1: no draft
-			VARIANT_FALSE,      // Dchk2
-			VARIANT_FALSE,      // Ddir1
-			VARIANT_FALSE,      // Ddir2
-			0.0,                // Dang1
-			0.0,                // Dang2
-			VARIANT_FALSE,      // OffsetReverse1
-			VARIANT_FALSE,      // OffsetReverse2
-			VARIANT_FALSE,      // TranslateSurface1
-			VARIANT_FALSE,      // TranslateSurface2
-			VARIANT_TRUE,       // Merge with existing bodies
-			VARIANT_TRUE,       // UseFeatScope
-			VARIANT_TRUE,       // UseAutoSelect: all bodies in scope
-			swStartSketchPlane, // T0: start at the sketch plane
-			0.0,                // StartOffset
-			VARIANT_FALSE,      // FlipStartOffset
-			&extrusion);
+	bool notSelected = false;
+	auto create = [&](VARIANT_BOOL dir) -> HRESULT {
+		HRESULT selectHr = doc->ClearSelection2(VARIANT_TRUE);
+		if (FAILED(selectHr))
+			return selectHr;
+		VARIANT_BOOL selected = VARIANT_FALSE;
+		selectHr = sketch->Select2(VARIANT_FALSE, 0, &selected);
+		if (FAILED(selectHr))
+			return selectHr;
+		notSelected = !selected;
+		if (notSelected)
+			return S_OK;
+		extrusion.Release();
+		if (cut)
+			return featureManager->FeatureCut4(
+				VARIANT_TRUE,       // Sd: one direction only
+				VARIANT_FALSE,      // Flip: keep the material outside the profile
+				dir,                // Dir: reverse direction 1
+				endCondition,       // T1
+				swEndCondBlind,     // T2 (unused, single direction)
+				depth,              // D1
+				0.0,                // D2
+				VARIANT_FALSE,      // Dchk1: no draft
+				VARIANT_FALSE,      // Dchk2
+				VARIANT_FALSE,      // Ddir1
+				VARIANT_FALSE,      // Ddir2
+				0.0,                // Dang1
+				0.0,                // Dang2
+				VARIANT_FALSE,      // OffsetReverse1
+				VARIANT_FALSE,      // OffsetReverse2
+				VARIANT_FALSE,      // TranslateSurface1
+				VARIANT_FALSE,      // TranslateSurface2
+				VARIANT_FALSE,      // NormalCut (sheet metal only)
+				VARIANT_TRUE,       // UseFeatScope
+				VARIANT_TRUE,       // UseAutoSelect: all bodies in scope
+				VARIANT_FALSE,      // AssemblyFeatureScope (assemblies only)
+				VARIANT_FALSE,      // AutoSelectComponents
+				VARIANT_FALSE,      // PropagateFeatureToParts
+				swStartSketchPlane, // T0: start at the sketch plane
+				0.0,                // StartOffset
+				VARIANT_FALSE,      // FlipStartOffset
+				VARIANT_FALSE,      // OptimizeGeometry
+				&extrusion);
+		else
+			return featureManager->FeatureExtrusion3(
+				VARIANT_TRUE,       // Sd: one direction only
+				VARIANT_FALSE,      // Flip: side to cut (cuts only)
+				dir,                // Dir: reverse direction 1
+				endCondition,       // T1
+				swEndCondBlind,     // T2 (unused, single direction)
+				depth,              // D1
+				0.0,                // D2
+				VARIANT_FALSE,      // Dchk1: no draft
+				VARIANT_FALSE,      // Dchk2
+				VARIANT_FALSE,      // Ddir1
+				VARIANT_FALSE,      // Ddir2
+				0.0,                // Dang1
+				0.0,                // Dang2
+				VARIANT_FALSE,      // OffsetReverse1
+				VARIANT_FALSE,      // OffsetReverse2
+				VARIANT_FALSE,      // TranslateSurface1
+				VARIANT_FALSE,      // TranslateSurface2
+				VARIANT_TRUE,       // Merge with existing bodies
+				VARIANT_TRUE,       // UseFeatScope
+				VARIANT_TRUE,       // UseAutoSelect: all bodies in scope
+				swStartSketchPlane, // T0: start at the sketch plane
+				0.0,                // StartOffset
+				VARIANT_FALSE,      // FlipStartOffset
+				&extrusion);
+	};
+	hr = create(reverse);
+	// A cut goes against the sketch normal by default: into the material for
+	// a sketch on a face, but into nothing for a sketch on a plane with the
+	// material on its normal side. Unless a direction was asked for, try the
+	// other way before giving up (a failed attempt creates nothing).
+	bool flipped = false;
+	if (SUCCEEDED(hr) && !notSelected && !extrusion && cut && !midPlane && !reverse)
+	{
+		hr = create(VARIANT_TRUE);
+		flipped = SUCCEEDED(hr) && extrusion;
+	}
 	doc->ClearSelection2(VARIANT_TRUE);
 	if (FAILED(hr))
 		return ComError(cut ? "IFeatureManager::FeatureCut4" : "IFeatureManager::FeatureExtrusion3", hr);
+	if (notSelected)
+		return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks wouldn't select the sketch");
 	if (!extrusion)
 	{
 		if (cut)
 			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
 				"SolidWorks couldn't cut with " + ToUtf8(sketchName) +
 				" -- the sketch must contain a closed, non-self-intersecting profile, and the cut "
-				"must pass through material (if the sketch is on a face, try reversing the direction)");
+				"must pass through material" +
+				std::string(midPlane || reverse ? "" : " (tried both directions)"));
 		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
 			"SolidWorks couldn't extrude " + ToUtf8(sketchName) +
 			" -- the sketch must contain a closed, non-self-intersecting profile");
@@ -5734,6 +5755,7 @@ grpc::Status SolidWorksService::ExtrudeSketch(grpc::ServerContext* /*context*/,
 
 	response->set_feature_name(ToUtf8(featureName));
 	response->set_sketch_name(ToUtf8(sketchName));
+	response->set_direction_flipped(flipped);
 	return grpc::Status::OK;
 }
 

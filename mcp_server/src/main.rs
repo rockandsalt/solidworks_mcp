@@ -385,7 +385,8 @@ struct CutExtrudeSketchParams {
     /// recently created sketch that no feature uses yet.
     #[serde(default)]
     sketch_name: Option<String>,
-    /// Cut in the opposite direction. Ignored with mid_plane. Defaults to false.
+    /// Cut along the sketch's normal (the way a boss would grow) instead of against it, and
+    /// only that way. Ignored with mid_plane. Defaults to false.
     #[serde(default)]
     reverse_direction: bool,
     /// Cut symmetrically to both sides of the sketch plane. Defaults to false.
@@ -738,8 +739,11 @@ struct SetDimensionParams {
     value_deg: Option<f64>,
 }
 
-/// Most entities one dimension or relation takes.
-const MAX_CONSTRAINT_ENTITIES: usize = 3;
+/// Most entities one dimension takes.
+const MAX_DIMENSION_ENTITIES: usize = 3;
+/// Most entities one relation takes (equal, parallel, ... across many entities at once;
+/// the add-in's limit).
+const MAX_RELATION_ENTITIES: usize = 32;
 /// Most dimensions or relations per call (the add-in's limit).
 const MAX_CONSTRAINTS: usize = 200;
 
@@ -1139,9 +1143,11 @@ impl SolidWorksTools {
                        (cut-extrude), removing material to a depth or through the whole part. \
                        By default uses the most recently created sketch that isn't used by a \
                        feature yet. Typical use: inspect_model to find a face, \
-                       create_rectangle_sketch on it, then this. If SolidWorks reports that the \
-                       cut removes nothing, retry with reverse_direction. Requires an open part \
-                       with no sketch being edited."
+                       create_rectangle_sketch on it, then this. Cuts against the sketch's \
+                       normal (into the part, for a sketch on a face); if that would remove \
+                       nothing, e.g. a sketch on a plane with the part on its normal side, it \
+                       cuts the other way and says so. Requires an open part with no sketch \
+                       being edited."
     )]
     async fn cut_extrude_sketch(
         &self,
@@ -1191,8 +1197,13 @@ impl SolidWorksTools {
         } else {
             format!("{depth_mm} mm")
         };
+        let flipped = if result.direction_flipped {
+            " It cut along the sketch normal (reversed): against it there was nothing to remove."
+        } else {
+            ""
+        };
         Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-            "created {} by cutting with {} {how}.{}",
+            "created {} by cutting with {} {how}.{flipped}{}",
             result.feature_name,
             result.sketch_name,
             sketch_status_note(&result)
@@ -1607,7 +1618,7 @@ impl SolidWorksTools {
         for (i, spec) in params.dimensions.iter().enumerate() {
             let at = |e: McpError| prefix_error(e, &format!("dimension {}", i + 1));
             let value = dimension_value(spec).map_err(at)?;
-            let refs = self.sketch_refs(&spec.entities).map_err(at)?;
+            let refs = self.sketch_refs(&spec.entities, MAX_DIMENSION_ENTITIES).map_err(at)?;
             dimensions.push(proto::SketchDimension {
                 kind: proto::DimensionKind::from(spec.kind).into(),
                 refs,
@@ -1663,7 +1674,7 @@ impl SolidWorksTools {
         let mut labels = Vec::with_capacity(n);
         for (i, spec) in params.relations.iter().enumerate() {
             let refs = self
-                .sketch_refs(&spec.entities)
+                .sketch_refs(&spec.entities, MAX_RELATION_ENTITIES)
                 .map_err(|e| prefix_error(e, &format!("relation {}", i + 1)))?;
             relations.push(proto::SketchRelation {
                 kind: proto::RelationKind::from(spec.kind).into(),
@@ -2153,12 +2164,9 @@ impl SolidWorksTools {
     }
 
     /// The wire refs for a dimension's or relation's entities.
-    fn sketch_refs(&self, entities: &[String]) -> Result<Vec<proto::SketchRef>, McpError> {
-        if entities.is_empty() || entities.len() > MAX_CONSTRAINT_ENTITIES {
-            return Err(McpError::invalid_params(
-                format!("give 1 to {MAX_CONSTRAINT_ENTITIES} entities"),
-                None,
-            ));
+    fn sketch_refs(&self, entities: &[String], max: usize) -> Result<Vec<proto::SketchRef>, McpError> {
+        if entities.is_empty() || entities.len() > max {
+            return Err(McpError::invalid_params(format!("give 1 to {max} entities"), None));
         }
         entities.iter().map(|e| self.sketch_ref(e)).collect()
     }
