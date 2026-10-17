@@ -138,6 +138,32 @@ service SolidWorks {
   // optionally other annotations) into views of the active drawing
   // (IDrawingDoc::InsertModelAnnotations3). Reports what each view gained.
   rpc InsertModelItems(InsertModelItemsRequest) returns (InsertModelItemsResponse);
+
+  // Deletes features of the active part or assembly the way the Delete key
+  // does (IModelDocExtension::DeleteSelection2): sketches, extrudes, cuts,
+  // holes, fillets, reference geometry, ..., and in an assembly its mates
+  // and assembly features. Features that depend on the deleted ones
+  // (children, e.g. a fillet on an extrude's edges, or the extrude of a
+  // sketch) are deleted too only with children = DELETE; with REFUSE (the
+  // default) such a request fails with FAILED_PRECONDITION naming them, and
+  // with KEEP they stay and lose those references. Sketches a deleted
+  // feature absorbed (an extrude's profile) stay in the tree unless
+  // delete_absorbed. Rebuilds and reports what's gone and which remaining
+  // features now have errors. FAILED_PRECONDITION if the active document
+  // isn't a part or an assembly, a sketch is open, or a feature is one of
+  // the tree's fixed items (origin, default planes, folders), a component,
+  // or a feature inside a component (open the part to delete those).
+  rpc DeleteFeatures(DeleteFeaturesRequest) returns (DeleteFeaturesResponse);
+
+  // Deletes segments (lines, arcs, circles, splines, ...) and standalone
+  // points from a 2D sketch of the active part, together with the
+  // dimensions and relations attached to them, then closes the sketch,
+  // rebuilds and reports what's left: the sketch's definition state, its
+  // contours, and features (e.g. the sketch's extrude) that now have
+  // errors. A segment's end or center point can only go with its segment
+  // (INVALID_ARGUMENT otherwise). Checks every entity before deleting
+  // anything; FAILED_PRECONDITION if a sketch is already open.
+  rpc DeleteSketchEntities(DeleteSketchEntitiesRequest) returns (DeleteSketchEntitiesResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -1346,4 +1372,94 @@ message InsertModelItemsResponse {
   int32 inserted = 1;
   // Per view, the annotations it has now that it didn't have before.
   repeated ViewAnnotations views = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Deleting
+
+// A feature to delete: its persist_id (InspectModel's features and mates)
+// or its feature-tree name.
+message FeatureTarget {
+  oneof target {
+    bytes persist_id = 1;
+    string name = 2;  // e.g. "Boss-Extrude1", "Sketch2", "Coincident3"
+  }
+}
+
+// What to do with features that depend on the ones being deleted.
+enum ChildFeatures {
+  CHILD_FEATURES_UNSPECIFIED = 0;  // = REFUSE
+  // Fail (FAILED_PRECONDITION, naming them) if there are any.
+  CHILD_FEATURES_REFUSE = 1;
+  // Delete them too (swDelete_Children).
+  CHILD_FEATURES_DELETE = 2;
+  // Leave them; they lose their references to the deleted features and
+  // may fail to rebuild.
+  CHILD_FEATURES_KEEP = 3;
+}
+
+message DeleteFeaturesRequest {
+  repeated FeatureTarget features = 1;  // at least one
+  ChildFeatures children = 2;
+  // Also delete the features the deleted ones absorbed, e.g. an extrude's
+  // profile sketch (swDelete_Absorbed). Off, they stay in the tree, as
+  // SolidWorks' own default does.
+  bool delete_absorbed = 3;
+}
+
+message FeatureRef {
+  string name = 1;
+  string type_name = 2;  // IFeature::GetTypeName2, e.g. "Extrusion", "ProfileFeature"
+}
+
+// A feature that fails (or warns) on rebuild.
+message FeatureProblem {
+  string name = 1;
+  string type_name = 2;
+  int32 error_code = 3;  // swFeatureError_e
+  bool warning = 4;      // SolidWorks only warns; the feature still rebuilt
+}
+
+message DeleteFeaturesResponse {
+  // Every feature that is gone, in tree order: the requested ones plus, with
+  // children = DELETE or delete_absorbed, what went with them.
+  repeated FeatureRef deleted = 1;
+  // Requested features SolidWorks didn't delete (the call still succeeds if
+  // it deleted any).
+  repeated FeatureRef not_deleted = 2;
+  // Features the deleted ones had absorbed that are still there (now
+  // standalone in the tree), e.g. a deleted extrude's sketch.
+  repeated FeatureRef kept_absorbed = 3;
+  // Features that depended on deleted ones and are still there
+  // (children = KEEP).
+  repeated FeatureRef kept_children = 4;
+  // Remaining features whose rebuild error is new or different since the
+  // delete.
+  repeated FeatureProblem new_errors = 5;
+}
+
+message DeleteSketchEntitiesRequest {
+  // E.g. "Sketch1". Empty: the sketch the items belong to.
+  string sketch_name = 1;
+  // Segments and/or standalone points, all in that sketch; at least one.
+  repeated SketchItemRef items = 2;
+}
+
+message DeleteSketchEntitiesResponse {
+  string sketch_name = 1;
+  // How many of the requested items are gone.
+  int32 deleted = 2;
+  // Requested items SolidWorks didn't delete.
+  repeated SketchItemRef kept = 3;
+  // End/center points that went with the deleted segments.
+  int32 points_removed = 4;
+  // Dimensions that went with them, e.g. "D2@Sketch1".
+  repeated string dimensions_removed = 5;
+  // Relations (not dimensions) that went with them.
+  int32 relations_removed = 6;
+  SketchState state = 7;
+  SketchContours contours = 8;
+  // Features whose rebuild error is new or different since the delete, e.g.
+  // an extrude of the sketch whose profile is now open.
+  repeated FeatureProblem new_errors = 9;
 }

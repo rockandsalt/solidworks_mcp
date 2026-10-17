@@ -87,6 +87,14 @@ public:
 		const sld_mcp::v1::InsertModelItemsRequest* request,
 		sld_mcp::v1::InsertModelItemsResponse* response) override;
 
+	grpc::Status DeleteFeatures(grpc::ServerContext* context,
+		const sld_mcp::v1::DeleteFeaturesRequest* request,
+		sld_mcp::v1::DeleteFeaturesResponse* response) override;
+
+	grpc::Status DeleteSketchEntities(grpc::ServerContext* context,
+		const sld_mcp::v1::DeleteSketchEntitiesRequest* request,
+		sld_mcp::v1::DeleteSketchEntitiesResponse* response) override;
+
 private:
 	// gRPC runs handlers on its own thread pool, not on SolidWorks' main
 	// STA thread, so ISldWorks can't be used directly. This fetches a

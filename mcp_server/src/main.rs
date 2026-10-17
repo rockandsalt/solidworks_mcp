@@ -1,5 +1,6 @@
 mod addin;
 mod assembly;
+mod delete;
 mod drawing;
 mod hole;
 mod inspect;
@@ -1876,6 +1877,77 @@ impl SolidWorksTools {
         let text = assembly::reply_text(&mut ids, &params, &entities, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
+
+    #[tool(
+        description = "Delete features of the active part or assembly, like selecting them in \
+                       the FeatureManager tree and pressing Delete: sketches, extrudes, cuts, \
+                       holes, fillets, chamfers, patterns, reference planes/axes, ..., and in an \
+                       assembly its mates (and assembly features). `features` = \"feature:N\" \
+                       ids from inspect_model (what=\"features\", or what=\"mates\" in an \
+                       assembly) or feature-tree names like \"Cut-Extrude1\". If other features \
+                       depend on them (a fillet on the extrude's edges, a sketch on its face, \
+                       the extrude made from a sketch), nothing is deleted and they're named, \
+                       unless children=\"delete\" (delete those too) or \"keep\" (leave them; \
+                       they lose those references). An extrude's or cut's own sketch stays in \
+                       the tree unless delete_absorbed=true. The default planes, origin and \
+                       components can't be deleted, nor a component's features from the \
+                       assembly (open the part). Rebuilds, and reports what's gone and what now \
+                       fails to rebuild. To remove lines/arcs/points from a sketch, use \
+                       delete_sketch_entities. Requires no sketch open for editing."
+    )]
+    async fn delete_features(
+        &self,
+        Parameters(params): Parameters<delete::DeleteFeaturesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let features = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            delete::feature_targets(&ids, &params.features)?
+        };
+        let reply = self
+            .addin
+            .delete_features(proto::DeleteFeaturesRequest {
+                features,
+                children: proto::ChildFeatures::from(params.children).into(),
+                delete_absorbed: params.delete_absorbed,
+            })
+            .await
+            .map_err(|status| delete::with_legend(self.addin_error(status), "feature", &params.features))?;
+        let text = delete::features_reply_text(&params, &reply);
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Delete entities from a sketch of the active part: segments (lines, \
+                       arcs, circles, splines, ...) and standalone points, by the sketch ids \
+                       inspect_sketch and the sketch_* tools report (\"line:3\", \"point:7\"), \
+                       all in one sketch. Their dimensions and relations go with them, and a \
+                       segment's end/center points go with the segment (they can't be deleted \
+                       on their own). Everything is checked before anything is deleted. \
+                       Reports what went, the sketch's contours and definition state, and \
+                       features (e.g. the sketch's extrude) that now fail to rebuild. To delete \
+                       a whole sketch, use delete_features with its name. Requires no sketch \
+                       open for editing."
+    )]
+    async fn delete_sketch_entities(
+        &self,
+        Parameters(params): Parameters<delete::DeleteSketchEntitiesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let items = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            delete::sketch_items(&ids, &params.entities)?
+        };
+        let reply = self
+            .addin
+            .delete_sketch_entities(proto::DeleteSketchEntitiesRequest {
+                sketch_name: trimmed(params.sketch_name.clone()),
+                items,
+            })
+            .await
+            .map_err(|status| delete::with_legend(self.addin_error(status), "entity", &params.entities))?;
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let text = delete::sketch_reply_text(&mut ids, &params.entities, &reply);
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
 }
 
 impl SolidWorksTools {
@@ -2204,8 +2276,12 @@ impl ServerHandler for SolidWorksTools {
                  tolerances, datums, feature control frames). Drawings: inspect_drawing lists \
                  the sheets and views and, for one view, its visible edges with ids and \
                  sheet positions; add_drawing_dimensions dimensions those edges, and \
-                 insert_model_items brings in the model's own dimensions. Lengths are in \
-                 millimeters, angles in degrees."
+                 insert_model_items brings in the model's own dimensions. To undo or \
+                 rework: delete_features removes features (sketches, extrudes, cuts, holes, \
+                 fillets, planes, mates, ...) by inspect_model id or name, refusing unless told \
+                 what to do with features that depend on them; delete_sketch_entities removes \
+                 lines, arcs, points, ... from a sketch. Lengths are in millimeters, angles in \
+                 degrees."
                     .to_string(),
             )
     }

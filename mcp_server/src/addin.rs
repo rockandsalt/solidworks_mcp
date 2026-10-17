@@ -228,6 +228,22 @@ impl AddinClient {
         let mut client = self.client.clone();
         Ok(client.insert_model_items(request).await?.into_inner())
     }
+
+    pub async fn delete_features(
+        &self,
+        request: proto::DeleteFeaturesRequest,
+    ) -> Result<proto::DeleteFeaturesResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.delete_features(request).await?.into_inner())
+    }
+
+    pub async fn delete_sketch_entities(
+        &self,
+        request: proto::DeleteSketchEntitiesRequest,
+    ) -> Result<proto::DeleteSketchEntitiesResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.delete_sketch_entities(request).await?.into_inner())
+    }
 }
 
 /// Largest GetMesh reply accepted: about 5 million triangles with normals.
