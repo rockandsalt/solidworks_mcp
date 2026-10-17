@@ -8032,12 +8032,18 @@ grpc::Status SolidWorksService::DeleteSketchEntities(grpc::ServerContext* /*cont
 		return grpc::Status::OK;
 	}();
 
+	// Closed without the exit rebuild: when the deletion broke the profile of
+	// the sketch's feature, InsertSketch(TRUE) opens the Repair Sketch dialog
+	// and leaves the sketch open. EditRebuild3 then rebuilds without one.
 	doc->ClearSelection2(VARIANT_TRUE);
-	const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_TRUE);
+	const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_FALSE);
 	if (!failure.ok())
 		return failure;
 	if (FAILED(closeHr))
 		return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
+	if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
+		return grpc::Status(grpc::StatusCode::INTERNAL,
+			"the entities were deleted, but SolidWorks left \"" + sketchName + "\" open for editing");
 	VARIANT_BOOL rebuilt = VARIANT_FALSE;
 	doc->EditRebuild3(&rebuilt);
 

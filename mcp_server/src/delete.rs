@@ -58,8 +58,9 @@ pub struct DeleteFeaturesParams {
     /// to rebuild).
     #[serde(default)]
     pub children: Children,
-    /// Also delete what the features absorbed, e.g. an extrude's or cut's profile sketch, or a
-    /// hole's placement sketch. Default false: like SolidWorks, the sketch stays in the tree.
+    /// Also delete what the features absorbed, e.g. an extrude's or cut's profile sketch.
+    /// Default false: like SolidWorks, the sketch stays in the tree. (A Hole Wizard hole's own
+    /// sketches always go with it; a sketch given to hole_wizard as sketch_name stays.)
     #[serde(default)]
     pub delete_absorbed: bool,
 }

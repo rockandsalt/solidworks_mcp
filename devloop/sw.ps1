@@ -14,6 +14,7 @@
     stop and reset refuse when a saved file has unsaved changes (someone's
     work), unless -Force.
     .\devloop\sw.ps1 screenshot    # PNG of the whole desktop, e.g. to see a dialog
+    .\devloop\sw.ps1 dialogs       # titles of the dialogs SolidWorks has open, one per line
 
 .NOTES
     Windows PowerShell 5.1 (COM through Marshal.GetActiveObject, which
@@ -30,7 +31,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('status', 'start', 'stop', 'restart', 'reset', 'screenshot')]
+    [ValidateSet('status', 'start', 'stop', 'restart', 'reset', 'screenshot', 'dialogs')]
     [string]$Action = 'status',
 
     # stop: discard unsaved changes, and kill SolidWorks if it doesn't exit.
@@ -149,6 +150,42 @@ function Save-Screenshot([string]$name = 'screenshot') {
     }
 }
 
+# Titles of SolidWorks' visible dialog windows (class #32770), modal or not
+# -- e.g. one an API call opened and left behind. Covered windows count too,
+# unlike in a screenshot.
+function Get-SwDialogs {
+    if (-not ('DevloopWindows' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System; using System.Collections.Generic; using System.Runtime.InteropServices; using System.Text;
+public static class DevloopWindows {
+    delegate bool EnumProc(IntPtr hwnd, IntPtr lParam);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc proc, IntPtr lParam);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hwnd, StringBuilder s, int n);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hwnd, StringBuilder s, int n);
+    public static List<string> Dialogs(uint pid) {
+        var titles = new List<string>();
+        EnumWindows((hwnd, _) => {
+            uint owner;
+            GetWindowThreadProcessId(hwnd, out owner);
+            var cls = new StringBuilder(64);
+            GetClassName(hwnd, cls, cls.Capacity);
+            if (owner == pid && IsWindowVisible(hwnd) && cls.ToString() == "#32770") {
+                var title = new StringBuilder(256);
+                GetWindowText(hwnd, title, title.Capacity);
+                titles.Add(title.Length > 0 ? title.ToString() : "(untitled dialog)");
+            }
+            return true;
+        }, IntPtr.Zero);
+        return titles;
+    }
+}
+'@
+    }
+    foreach ($proc in Get-SwProcess) { [DevloopWindows]::Dialogs([uint32]$proc.Id) }
+}
+
 # Something went wrong while SolidWorks may be showing a dialog: keep a
 # screenshot and the window titles, then fail.
 function Fail-WithDiagnostics([string]$message) {
@@ -170,6 +207,8 @@ function Show-Status {
     }
     Write-Host "SolidWorks: running (PID $($procs.Id -join ', '), started $($procs[0].StartTime))"
     Write-Host ("Add-in:     {0} on 127.0.0.1:{1}" -f $(if (Test-AddinListening) { 'listening' } else { 'NOT listening' }), $port)
+    $dialogs = @(Get-SwDialogs)
+    if ($dialogs.Count) { Write-Host "Dialogs:    $($dialogs -join ', ')" }
     try {
         $docs = @(Invoke-SwCom $listDocuments -timeoutSec 20)
         Write-Host "Documents:  $(if ($docs.Count) { '' } else { '(none)' })"
@@ -305,4 +344,5 @@ switch ($Action) {
     'restart'    { Stop-Sw; Start-Sw }
     'reset'      { Reset-Sw }
     'screenshot' { Save-Screenshot }
+    'dialogs'    { Get-SwDialogs }
 }

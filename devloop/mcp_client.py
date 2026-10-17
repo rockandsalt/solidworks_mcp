@@ -248,7 +248,8 @@ def main(argv: list[str]) -> int:
             for path in argv[2:]:
                 print(f"\n=== scenario {path}")
                 source = Path(path).read_text(encoding="utf-8")
-                exec(compile(source, path, "exec"), {"mcp": client, "ToolError": ToolError, "__name__": "__scenario__"})
+                exec(compile(source, path, "exec"), {"mcp": client, "ToolError": ToolError, "__name__": "__scenario__",
+                                                  "__file__": str(Path(path).resolve())})
                 print(f"\n=== {path}: PASSED")
     except Exception:
         traceback.print_exc()

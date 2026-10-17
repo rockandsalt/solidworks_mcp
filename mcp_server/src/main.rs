@@ -1902,7 +1902,8 @@ impl SolidWorksTools {
                        the extrude made from a sketch), nothing is deleted and they're named, \
                        unless children=\"delete\" (delete those too) or \"keep\" (leave them; \
                        they lose those references). An extrude's or cut's own sketch stays in \
-                       the tree unless delete_absorbed=true. The default planes, origin and \
+                       the tree unless delete_absorbed=true; a hole's own sketches always go \
+                       with it. The default planes, origin and \
                        components can't be deleted, nor a component's features from the \
                        assembly (open the part). Rebuilds, and reports what's gone and what now \
                        fails to rebuild. To remove lines/arcs/points from a sketch, use \
