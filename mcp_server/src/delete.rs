@@ -215,7 +215,9 @@ pub fn type_label(type_name: &str) -> &str {
         "ProfileFeature" => "sketch",
         "3DProfileFeature" => "3D sketch",
         "Extrusion" | "BaseBody" | "Boss" => "boss-extrude",
-        "Cut" | "ICE" => "cut-extrude",
+        "Cut" => "cut-extrude",
+        // SolidWorks 2026 types both a boss on an existing body and a cut "ICE".
+        "ICE" => "extrude",
         "Revolution" | "RevCut" => "revolve",
         "HoleWzd" | "AdvHoleWzd" => "hole",
         "Fillet" | "VarFillet" | "FaceFillet" | "FullRoundFillet" => "fillet",

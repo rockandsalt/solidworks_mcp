@@ -1790,7 +1790,33 @@ namespace
 
 		const std::vector<Entry>& All() const { return m_entries; }
 
+		// Whether `entity` is one of these segments or points. A relation to
+		// model geometry lists a hidden stand-in segment instead of the edge,
+		// whose sketch is this one and whose ID can equal a real segment's
+		// (seen in SOLIDWORKS 2026: a converted edge's model edge came back
+		// as line [0,1] next to the sketch's circle [0,1]), so segments must
+		// match in type too.
+		bool Contains(IDispatch* entity) const
+		{
+			bool point = false;
+			long long id0 = 0, id1 = 0;
+			if (!SketchEntityId(entity, point, id0, id1))
+				return false;
+			for (const Entry& e : m_entries)
+				if (e.point == point && e.id0 == id0 && e.id1 == id1)
+					return point || SegmentType(e.obj) == SegmentType(entity);
+			return false;
+		}
+
 	private:
+		static long SegmentType(IDispatch* entity)
+		{
+			long type = -1;
+			if (ATL::CComQIPtr<ISketchSegment> segment(entity); segment)
+				segment->GetType(&type);
+			return type;
+		}
+
 		void Add(const VARIANT& array)
 		{
 			for (const auto& disp : comvariant::ToDispatches(array))
@@ -1825,18 +1851,6 @@ namespace
 			}
 		}
 		state->set_not_fully_defined_count(count);
-	}
-
-	// Whether a sketch segment or point belongs to the sketch called `sketchName`.
-	bool InSketch(IDispatch* entity, const std::string& sketchName)
-	{
-		ATL::CComPtr<ISketch> sketch;
-		if (ATL::CComQIPtr<ISketchSegment> segment(entity); segment)
-			segment->GetSketch(&sketch);
-		else if (ATL::CComQIPtr<ISketchPoint> point(entity); point)
-			point->GetSketch(&sketch);
-		ATL::CComQIPtr<IFeature> feature(sketch.p);
-		return feature && FeatureName(feature) == sketchName;
 	}
 
 	// ---- Dimensions -------------------------------------------------------------
@@ -2637,7 +2651,7 @@ namespace
 		}
 	}
 
-	void DescribeRelation(ISketchRelation* relation, const std::string& sketchPid, const std::string& sketchName,
+	void DescribeRelation(ISketchRelation* relation, const std::string& sketchPid, const SketchItems& items,
 		sld_mcp::v1::RelationInfo* info)
 	{
 		long type = 0;
@@ -2649,7 +2663,7 @@ namespace
 		for (const auto& entity : comvariant::ToDispatches(entities))
 		{
 			sld_mcp::v1::SketchItemRef ref;
-			if (entity && InSketch(entity, sketchName) && SetItemRef(entity, sketchPid, &ref))
+			if (entity && items.Contains(entity) && SetItemRef(entity, sketchPid, &ref))
 				*info->add_items() = ref;
 			else
 				info->set_external_count(info->external_count() + 1);
@@ -4656,17 +4670,39 @@ namespace
 		const char* fixed = nullptr;
 	};
 
-	void CollectSubFeatures(IFeature* parent, const char* parentFixed, int depth, std::vector<TreeFeature>& out)
+	// COM identity -> index in the tree being collected.
+	using SeenFeatures = std::map<IUnknown*, size_t>;
+
+	// Adds `f` unless it's already in `out` (then only its fixed reason is
+	// kept). True if added.
+	bool AddTreeFeature(TreeFeature f, SeenFeatures& seen, std::vector<TreeFeature>& out)
+	{
+		ATL::CComPtr<IUnknown> identity;
+		if (SUCCEEDED(f.feature->QueryInterface(IID_PPV_ARGS(&identity))))
+		{
+			// `out` holds a reference, so the pointer stays valid as a key.
+			const auto [it, added] = seen.emplace(identity.p, out.size());
+			if (!added)
+			{
+				if (!out[it->second].fixed)
+					out[it->second].fixed = f.fixed;
+				return false;
+			}
+		}
+		out.push_back(std::move(f));
+		return true;
+	}
+
+	void CollectSubFeatures(IFeature* parent, const char* parentFixed, int depth, SeenFeatures& seen,
+		std::vector<TreeFeature>& out)
 	{
 		ATL::CComPtr<IFeature> sub;
 		if (FAILED(parent->IGetFirstSubFeature(&sub)))
 			return;
 		while (sub)
 		{
-			TreeFeature f{sub, FeatureName(sub), FeatureTypeName(sub), parentFixed};
-			out.push_back(f);
-			if (depth < 3)
-				CollectSubFeatures(sub, parentFixed, depth + 1, out);
+			if (AddTreeFeature({sub, FeatureName(sub), FeatureTypeName(sub), parentFixed}, seen, out) && depth < 3)
+				CollectSubFeatures(sub, parentFixed, depth + 1, seen, out);
 			ATL::CComPtr<IFeature> next;
 			if (FAILED(sub->IGetNextSubFeature(&next)))
 				break;
@@ -4677,10 +4713,12 @@ namespace
 	// Every feature of the active document's own tree, in tree order: the
 	// top-level ones and, recursively, their sub-features (absorbed
 	// sketches, the mates in the mates folder, ...). Components' trees
-	// aren't entered.
+	// aren't entered. Each feature once: GetNextFeature also visits absorbed
+	// sketches, which come again as their feature's sub-features.
 	std::vector<TreeFeature> FeatureTree(IModelDoc2* doc)
 	{
 		std::vector<TreeFeature> out;
+		SeenFeatures seen;
 		ATL::CComPtr<IFeature> feature;
 		if (FAILED(doc->IFirstFeature(&feature)))
 			return out;
@@ -4703,11 +4741,12 @@ namespace
 				f.fixed = "is the mates folder -- delete the mates in it instead";
 			else if (f.type == "Reference")
 				f.fixed = "is a component -- deleting components isn't supported yet";
-			out.push_back(f);
 			// The mates folder's mates are deletable; anything else inside a
 			// fixed item isn't.
-			if (f.type != "Reference")
-				CollectSubFeatures(feature, f.type == "MateGroup" ? nullptr : f.fixed, 0, out);
+			const char* subFixed = f.type == "MateGroup" ? nullptr : f.fixed;
+			const bool component = f.type == "Reference";
+			if (AddTreeFeature(f, seen, out) && !component)
+				CollectSubFeatures(feature, subFixed, 0, seen, out);
 
 			ATL::CComPtr<IFeature> next;
 			if (FAILED(feature->IGetNextFeature(&next)))
@@ -4938,7 +4977,7 @@ namespace
 	}
 
 	void DescribeRelationProblem(ISketchRelation* relation, sld_mcp::v1::RelationProblem problem,
-		const std::string& sketchPid, const std::string& sketchName, sld_mcp::v1::SketchRelationProblem* out)
+		const std::string& sketchPid, const SketchItems& items, sld_mcp::v1::SketchRelationProblem* out)
 	{
 		out->set_problem(problem);
 		long type = 0;
@@ -4963,11 +5002,15 @@ namespace
 		if (SUCCEEDED(relation->GetEntities(&entities)))
 			for (const auto& entity : comvariant::ToDispatches(entities))
 			{
+				// A lost model edge/face isn't null but a stand-in segment
+				// outside the sketch's own (SketchItems::Contains), so in a
+				// dangling relation anything outside the sketch counts as
+				// missing.
 				sld_mcp::v1::SketchItemRef ref;
-				if (!entity)
-					out->set_missing_count(out->missing_count() + 1);
-				else if (InSketch(entity, sketchName) && SetItemRef(entity, sketchPid, &ref))
+				if (entity && items.Contains(entity) && SetItemRef(entity, sketchPid, &ref))
 					*out->add_items() = ref;
+				else if (!entity || problem == sld_mcp::v1::RELATION_PROBLEM_DANGLING)
+					out->set_missing_count(out->missing_count() + 1);
 				else
 					out->set_external_count(out->external_count() + 1);
 			}
@@ -4981,9 +5024,10 @@ namespace
 		ATL::CComPtr<ISketch> sketch;
 		if (!SketchOf(feature, sketch).ok())
 			return false;
-		const std::string sketchName = FeatureName(feature);
 		const std::string sketchPid = PersistIdOf(ext, feature);
 		out->set_status(SketchStatus(sketch));
+		SketchItems items;
+		items.Load(sketch);
 
 		// A relation can be on several lists; it's reported once, under the
 		// first (worst) one.
@@ -5005,7 +5049,7 @@ namespace
 				if (out->relations_size() >= static_cast<int>(kMaxSketchItems))
 					break;
 				sld_mcp::v1::SketchRelationProblem* p = out->add_relations();
-				DescribeRelationProblem(relation, problem, sketchPid, sketchName, p);
+				DescribeRelationProblem(relation, problem, sketchPid, items, p);
 				if (!p->dimension_name().empty())
 					dimensionNames.insert(p->dimension_name());
 			}
@@ -6133,7 +6177,7 @@ grpc::Status SolidWorksService::InspectSketch(grpc::ServerContext* /*context*/,
 			(type == swConstraintType_DISTANCE || type == swConstraintType_ANGLE ||
 			 type == swConstraintType_RADIUS || type == swConstraintType_DIAMETER))
 			continue;
-		DescribeRelation(relation, sketchPid, sketchName, response->add_relations());
+		DescribeRelation(relation, sketchPid, items, response->add_relations());
 	}
 
 	sld_mcp::v1::SketchContours contours;
@@ -8127,9 +8171,10 @@ grpc::Status SolidWorksService::DiagnoseModel(grpc::ServerContext* /*context*/,
 		// No "What's Wrong" dialog popping up over the errors being read.
 		PreferenceToggles toggles(swApp);
 		toggles.Set(swShowErrorsEveryRebuild, false);
-		VARIANT_BOOL rebuilt = VARIANT_FALSE;
-		if (SUCCEEDED(doc->EditRebuild3(&rebuilt)))
-			response->set_rebuilt(rebuilt != VARIANT_FALSE);
+		// It returns false when the rebuild has errors, which is what
+		// we're here for: rebuilt means it ran.
+		VARIANT_BOOL ok = VARIANT_FALSE;
+		response->set_rebuilt(SUCCEEDED(doc->EditRebuild3(&ok)));
 	}
 
 	const std::vector<TreeFeature> tree = FeatureTree(doc);

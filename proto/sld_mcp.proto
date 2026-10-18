@@ -1571,7 +1571,8 @@ message FeatureDiagnosis {
 
 message DiagnoseModelResponse {
   Document document = 1;
-  // EditRebuild3 ran (and said it succeeded).
+  // EditRebuild3 ran (it reports failure when features fail, so that's not
+  // taken into account).
   bool rebuilt = 2;
   // In feature-tree order; features only What's Wrong knows (a component's)
   // come last.

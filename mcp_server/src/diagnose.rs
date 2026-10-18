@@ -148,6 +148,12 @@ fn is_mate(p: &proto::FeatureDiagnosis) -> bool {
     p.type_name.starts_with("Mate") && !matches!(p.type_name.as_str(), "MateGroup" | "MateReferenceGroupFeature")
 }
 
+/// An assembly's component: SolidWorks flags it (and What's Wrong lists it)
+/// when its part fails to rebuild, rather than listing the part's features.
+fn is_component(type_name: &str) -> bool {
+    type_name == "Reference"
+}
+
 /// One phrase saying what's wrong with a problem feature.
 fn what_is_wrong(p: &proto::FeatureDiagnosis) -> String {
     let mut found = Vec::new();
@@ -175,8 +181,10 @@ fn what_is_wrong(p: &proto::FeatureDiagnosis) -> String {
     }
 
     let mut parts = Vec::new();
-    // "Unknown error" says nothing once something specific was found.
-    if p.error_code != 0 && !(p.error_code == 1 && !found.is_empty()) {
+    if is_component(&p.type_name) && p.error_code == 1 {
+        parts.push("its part has rebuild errors of its own".to_string());
+    } else if p.error_code != 0 && !(p.error_code == 1 && !found.is_empty()) {
+        // ("Unknown error" says nothing once something specific was found.)
         parts.push(feature_error_name(p.error_code));
     }
     parts.extend(found);
@@ -219,6 +227,14 @@ fn fix_hint(p: &proto::FeatureDiagnosis) -> Option<String> {
                 p.name
             ));
         }
+    }
+    if is_component(&p.type_name) {
+        return Some(format!(
+            "the part {} uses fails to rebuild; SolidWorks lists the component, not that part's \
+             features. No tool opens a component's part yet: open it in SolidWorks (right-click > \
+             Open Part) and run diagnose_model there",
+            p.name
+        ));
     }
     if is_mate(p) {
         return Some(match p.error_code {
@@ -266,10 +282,13 @@ fn failing_names(problems: &[proto::FeatureDiagnosis]) -> HashSet<&str> {
     problems.iter().map(|p| p.name.as_str()).collect()
 }
 
-/// The problem's parents that are problems too.
+/// The problem's parents that are problems too. A failing component doesn't
+/// explain a mate's problem (its part's errors needn't touch the mated
+/// faces), so a mate's components don't count.
 fn caused_by<'a>(p: &'a proto::FeatureDiagnosis, failing: &HashSet<&str>) -> Vec<&'a str> {
     p.parents
         .iter()
+        .filter(|f| !(is_mate(p) && is_component(&f.type_name)))
         .map(|f| f.name.as_str())
         .filter(|name| *name != p.name && failing.contains(name))
         .collect()
@@ -513,6 +532,29 @@ mod tests {
         assert_eq!(mate["mated_entities"][0]["id"], "face:1");
         assert_eq!(mate["mated_entities"][0]["component"], "component:1");
         assert_eq!(mate["mated_entities"][1], json!({"missing": true, "component_name": "bracket-1"}));
+        assert!(mate["fix"].as_str().unwrap().contains("add_mate"));
+    }
+
+    #[test]
+    fn a_failing_component_is_its_own_root_cause_and_not_the_mates() {
+        let component = proto::FeatureDiagnosis {
+            persist_id: b"comp-a".to_vec(),
+            name: "block-1".into(),
+            type_name: "Reference".into(),
+            error_code: 1,
+            whats_wrong: true,
+            ..Default::default()
+        };
+        let mut reply = reply();
+        reply.problems[2].parents = vec![feature("block-1", "Reference"), feature("Mates", "MateGroup")];
+        reply.problems.insert(0, component);
+        let mut ids = IdRegistry::default();
+        let json = render(&mut ids, &reply);
+        let block = &json["problems"][0];
+        assert_eq!(block["problem"], "its part has rebuild errors of its own");
+        assert!(block["fix"].as_str().unwrap().contains("Open Part"), "{block}");
+        let mate = json["problems"].as_array().unwrap().iter().find(|p| p["name"] == "Coincident3").unwrap();
+        assert_eq!(mate["root_cause"], true, "{mate}");
         assert!(mate["fix"].as_str().unwrap().contains("add_mate"));
     }
 
