@@ -5,6 +5,7 @@ mod diagnose;
 mod drawing;
 mod drawing_image;
 mod edit;
+mod files;
 mod hole;
 mod inspect;
 mod pmi;
@@ -774,7 +775,10 @@ impl SolidWorksTools {
         }
     }
 
-    #[tool(description = "Get the name of the currently active SolidWorks document")]
+    #[tool(
+        description = "Get the name of the currently active SolidWorks document, its type and \
+                       its file (or that it was never saved)"
+    )]
     async fn get_active_document_name(&self) -> Result<CallToolResult, McpError> {
         let document = self
             .addin
@@ -783,9 +787,58 @@ impl SolidWorksTools {
             .map_err(|status| self.addin_error(status))?;
 
         let name = document
-            .map(|doc| doc.title)
+            .map(|doc| files::describe(&doc))
             .unwrap_or_else(|| "(no active document)".to_string());
         Ok(CallToolResult::success(vec![ContentBlock::text(name)]))
+    }
+
+    #[tool(
+        description = "Save the active document (part, assembly or drawing), without any \
+                       SolidWorks dialogs. No path: save it to its own file (a document never \
+                       saved needs a path). With an absolute path, the extension picks what \
+                       happens: .SLDPRT / .SLDASM / .SLDDRW = Save As (the document becomes that \
+                       file, unless copy=true); .STEP/.STP, .IGS/.IGES, .X_T/.X_B, .SAT, .STL, \
+                       .3MF (parts, assemblies) or .PDF, .DXF, .DWG (drawings) = export a copy \
+                       with SolidWorks' own export options. An existing file is only replaced \
+                       with overwrite=true. Saving an assembly or drawing to its own SolidWorks \
+                       file also saves the changed parts it uses. A part with rebuild errors is \
+                       still saved, and the reply says so."
+    )]
+    async fn save_document(
+        &self,
+        Parameters(params): Parameters<files::SaveDocumentParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = files::save_request(&params)?;
+        let reply = self
+            .addin
+            .save_document(request.clone())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let text = files::save_reply_text(&request, &reply)?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Open a SolidWorks part, assembly or drawing file (.SLDPRT, .SLDASM, \
+                       .SLDDRW, by absolute path) and make it the active document, without any \
+                       SolidWorks dialogs; a document that's already open is just made active \
+                       again, so this also switches between open documents. Reports problems \
+                       SolidWorks found, e.g. an assembly's missing components. The other tools \
+                       then work on it: call inspect_model (or inspect_drawing) first, ids from \
+                       another document don't apply to it."
+    )]
+    async fn open_document(
+        &self,
+        Parameters(params): Parameters<files::OpenDocumentParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = files::open_request(&params)?;
+        let reply = self
+            .addin
+            .open_document(request.clone())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let text = files::open_reply_text(&request, &reply)?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     #[tool(

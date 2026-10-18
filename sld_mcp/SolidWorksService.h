@@ -115,6 +115,14 @@ public:
 		const sld_mcp::v1::EditMateRequest* request,
 		sld_mcp::v1::EditMateResponse* response) override;
 
+	grpc::Status SaveDocument(grpc::ServerContext* context,
+		const sld_mcp::v1::SaveDocumentRequest* request,
+		sld_mcp::v1::SaveDocumentResponse* response) override;
+
+	grpc::Status OpenDocument(grpc::ServerContext* context,
+		const sld_mcp::v1::OpenDocumentRequest* request,
+		sld_mcp::v1::OpenDocumentResponse* response) override;
+
 private:
 	// gRPC runs handlers on its own thread pool, not on SolidWorks' main
 	// STA thread, so ISldWorks can't be used directly. This fetches a

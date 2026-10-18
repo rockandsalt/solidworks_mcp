@@ -1238,7 +1238,7 @@ mod tests {
         view.entities = entities;
         view.annotation_types = vec![4, 4, 6];
         proto::InspectDrawingResponse {
-            document: Some(proto::Document { title: "bracket - Sheet1".into(), r#type: 3 }),
+            document: Some(proto::Document { title: "bracket - Sheet1".into(), r#type: 3, path: String::new() }),
             sheets: vec![proto::SheetInfo {
                 name: "Sheet1".into(),
                 active: true,

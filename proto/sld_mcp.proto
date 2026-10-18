@@ -216,6 +216,25 @@ service SolidWorks {
   // is undone by editing the mate back (components the solver moved may
   // stay moved). Preconditions as AddMate.
   rpc EditMate(EditMateRequest) returns (EditMateResponse);
+
+  // Saves the active document, silently (no dialogs): to its own file
+  // (IModelDoc2::Save3), or with a path as a new file / an export in the
+  // format of the path's extension (IModelDocExtension::SaveAs, with the
+  // user's export options). Native saves also save modified documents it
+  // references (a drawing's part, an assembly's components). Whether it
+  // worked comes back in `saved` with SolidWorks' error / warning bits,
+  // which the MCP server names. FAILED_PRECONDITION if no document is open,
+  // the document was never saved and no path is given,
+  // the format doesn't suit the document type, or another open document is
+  // that file.
+  rpc SaveDocument(SaveDocumentRequest) returns (SaveDocumentResponse);
+
+  // Opens a part, assembly or drawing file silently (ISldWorks::OpenDoc6)
+  // and makes it the active document; a document that's already open is
+  // just activated. A file SolidWorks can't open comes back with
+  // `opened` false and its error bits (swFileLoadError_e) for the MCP
+  // server to name; warnings (missing references, ...) likewise.
+  rpc OpenDocument(OpenDocumentRequest) returns (OpenDocumentResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -243,8 +262,12 @@ message GetActiveDocumentResponse {
 message Document {
   // Window title as SolidWorks shows it (IModelDoc2::GetTitle).
   string title = 1;
-  // Set by InspectModel and GetMesh.
+  // Set by InspectModel, GetMesh, GetActiveDocument, SaveDocument and
+  // OpenDocument.
   DocumentType type = 2;
+  // The file (IModelDoc2::GetPathName); empty for a document never saved.
+  // Set by GetActiveDocument, SaveDocument and OpenDocument.
+  string path = 3;
 }
 
 enum DocumentType {
@@ -258,6 +281,52 @@ message NewPartRequest {}
 
 message NewPartResponse {
   Document document = 1;
+}
+
+message SaveDocumentRequest {
+  // Empty: save the document to its own file. Otherwise an absolute path:
+  // a native file of the document's type (.SLDPRT / .SLDASM / .SLDDRW) is
+  // a Save As (the document becomes that file, unless `copy`), any other
+  // extension an export (always a copy). An existing file is overwritten:
+  // checking is the MCP server's job.
+  string path = 1;
+  // Save As copy: write `path` but keep the document as it was.
+  bool copy = 2;
+  // The document types the path's format holds (the MCP server's table);
+  // empty = any.
+  repeated DocumentType allowed_types = 3;
+}
+
+message SaveDocumentResponse {
+  // The document after saving (its path is the new one after a Save As).
+  Document document = 1;
+  // The file written.
+  string saved_path = 2;
+  // SolidWorks reported success, or the file was written anyway (a part
+  // with rebuild errors saves but reports swFileSaveWithRebuildError).
+  bool saved = 3;
+  // swFileSaveError_e / swFileSaveWarning_e bits.
+  int32 errors = 4;
+  int32 warnings = 5;
+}
+
+message OpenDocumentRequest {
+  // Absolute path of a .SLDPRT, .SLDASM or .SLDDRW file.
+  string path = 1;
+  // From the extension.
+  DocumentType type = 2;
+  bool read_only = 3;
+}
+
+message OpenDocumentResponse {
+  // Unset when SolidWorks couldn't open it.
+  Document document = 1;
+  bool opened = 2;
+  // It was open already; it's only been activated.
+  bool already_open = 3;
+  // swFileLoadError_e / swFileLoadWarning_e bits.
+  int32 errors = 4;
+  int32 warnings = 5;
 }
 
 // The three default reference planes every part starts with. Resolved by
