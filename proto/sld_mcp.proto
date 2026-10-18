@@ -84,6 +84,18 @@ service SolidWorks {
   // angle mate's "D1@Distance1"), and rebuilds.
   rpc SetDimensionValue(SetDimensionValueRequest) returns (SetDimensionValueResponse);
 
+  // Sets the tolerance of an existing dimension of the active part,
+  // assembly or drawing, found by its full name ("D1@Sketch1",
+  // "RD1@Drawing View1", "D1@Boss-Extrude1@block.Part" in a drawing):
+  // tolerance type, upper/lower deviation, fit classes, and optionally the
+  // decimal places shown (IDimensionTolerance + IDisplayDimension::
+  // SetPrecision3). A model dimension shown in a drawing is the model's
+  // own, so its tolerance changes in the model too. All or nothing: if
+  // SolidWorks refuses part of the change, the old tolerance is put back.
+  // NOT_FOUND if there's no such dimension; INVALID_ARGUMENT if the values
+  // don't suit the type or the dimension (angles vs lengths).
+  rpc SetDimensionTolerance(SetDimensionToleranceRequest) returns (SetDimensionToleranceResponse);
+
   // Hole Wizard: standard holes (clearance/drilled, counterbore, countersink
   // or tapped), sized from SolidWorks' hole standards, at either
   //   - the sketch points of an existing sketch, which becomes the hole
@@ -968,6 +980,44 @@ message SetDimensionValueRequest {
 
 message SetDimensionValueResponse {
   DimensionInfo dimension = 1;
+}
+
+message SetDimensionToleranceRequest {
+  // Full name, as InspectSketch / InspectAnnotations / InspectDrawing
+  // report it.
+  string name = 1;
+  // swTolType_e: 0 none, 1 basic, 2 bilateral, 3 limit, 4 symmetric,
+  // 5 min, 6 max, 7 fit, 8 fit with tolerance, 9 fit tolerance only.
+  int32 tolerance_type = 2;
+  // Bilateral, limit, symmetric: the upper (max) and lower (min) deviation
+  // from the nominal value (IDimensionTolerance::SetValues2), meters, or
+  // radians with `angle`. Symmetric: lower = -upper.
+  double upper = 3;
+  double lower = 4;
+  // The deviations are angles; the dimension has to be an angle (and
+  // without it, a length).
+  bool angle = 5;
+  // Fit types: ISO fit classes, e.g. "H7" / "g6" (either may be empty).
+  string hole_fit = 6;
+  string shaft_fit = 7;
+  // Decimal places of the nominal value / of the tolerance values. Unset:
+  // unchanged. -2: the document's setting; tolerance -3: same as the value.
+  optional int32 value_precision = 8;
+  optional int32 tolerance_precision = 9;
+}
+
+message SetDimensionToleranceResponse {
+  // The dimension afterwards (name, value, tolerance, owner, ...).
+  AnnotationDimension dimension = 1;
+  // Drawings: the view the dimension is in.
+  string view_name = 2;
+  // Decimal places shown now, -1 if SolidWorks didn't say (no display
+  // dimension found).
+  int32 value_precision = 3;
+  int32 tolerance_precision = 4;
+  // Drawings: other views showing the same (model) dimension, which show
+  // the new tolerance too.
+  repeated string other_views = 5;
 }
 
 // ---------------------------------------------------------------------------

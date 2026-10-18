@@ -171,6 +171,15 @@ impl AddinClient {
         Ok(client.set_dimension_value(request).await?.into_inner())
     }
 
+    /// Deviations in meters / radians.
+    pub async fn set_dimension_tolerance(
+        &self,
+        request: proto::SetDimensionToleranceRequest,
+    ) -> Result<proto::SetDimensionToleranceResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.set_dimension_tolerance(request).await?.into_inner())
+    }
+
     /// Lengths in meters, angles in radians.
     pub async fn hole_wizard(
         &self,

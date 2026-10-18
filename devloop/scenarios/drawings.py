@@ -248,3 +248,71 @@ r = mcp.call("insert_model_items", views=["Drawing View3"])
 print("    model items View3:", r.text)
 assert r.json["inserted"] > 0 and r.json["views"][0]["added"], r.json
 assert active_sheets() == ["Sheet1"]
+
+# ---- set_dimension_tolerance ----------------------------------------------------
+def tol(**kw):
+    r = mcp.call("set_dimension_tolerance", **kw)
+    print(f"    tolerance {kw['name']}: {r.text}")
+    return r.json
+
+
+# Bilateral on a reference dimension, by its short name; inspect_drawing reads
+# back what the reply says.
+r = tol(name="RD1@Drawing View1", tolerance="bilateral", upper_mm=0.1, lower_mm=-0.05, tolerance_decimals=2)
+assert r["view"] == "Drawing View1" and r["value_mm"] == 40.0, r
+assert r["tolerance"] == {"type": "bilateral", "upper_mm": 0.1, "lower_mm": -0.05, "limits_mm": [39.95, 40.1]}, r
+assert r["tolerance_decimals"] == 2 and "notes" not in r, r
+d1 = dims_by_name(view_json("Drawing View1"))
+assert d1["RD1"]["tolerance"] == r["tolerance"], d1["RD1"]
+# Symmetric on the hole's diameter, by its full name; an angle in degrees.
+r = tol(name=d1["RD3"]["dimension"], tolerance="symmetric", plus_minus_mm=0.02)
+assert r["tolerance"]["limits_mm"] == [5.98, 6.02], r
+r = tol(name="RD5@Drawing View1", tolerance="symmetric", plus_minus_deg=0.5)
+assert r["tolerance"]["plus_minus_deg"] == 0.5, r
+r = mcp.call("set_dimension_tolerance", expect_error=True, name="RD5@Drawing View1", tolerance="symmetric",
+             plus_minus_mm=0.5)
+print("    mm on an angle:", r.text)
+# A fit on the boss's diameter in the 1:2 view; limit; then none removes it.
+r = tol(name="RD2@Drawing View2", tolerance="fit", shaft_fit="g6")
+assert r["tolerance"]["type"] == "fit" and r["tolerance"].get("shaft_fit") == "g6", r
+r = tol(name="RD2@Drawing View2", tolerance="limit", upper_mm=0.0, lower_mm=-0.1)
+assert r["tolerance"]["limits_mm"] == [5.9, 6.0], r
+r = tol(name="RD2@Drawing View2", tolerance="none")
+assert "tolerance" not in r, r
+# RD1 is in Drawing View1, View2 and View3: the shortest name fits all of them.
+r = mcp.call("set_dimension_tolerance", expect_error=True, name="RD1", tolerance="basic")
+print("    ambiguous:", r.text)
+assert "several" in r.text, r.text
+r = mcp.call("set_dimension_tolerance", expect_error=True, name="RD99@Drawing View1", tolerance="basic")
+assert "no dimension" in r.text, r.text
+
+# The model's own dimension in a drawing: the boss height. The part shows it.
+model_dim = "D1@Boss-Extrude2@drawing-block.Part"
+r = tol(name=model_dim, tolerance="bilateral", upper_mm=0.2, lower_mm=0.0)
+assert r["view"] == "Drawing View1" and r["value_mm"] == 8.0 and r["feature"] == "Boss-Extrude2", r
+assert r["tolerance"]["limits_mm"] == [8.0, 8.2] and r.get("notes"), r
+# Insert_model_items put it in the assembly's view too: same dimension.
+assert r.get("also_in_views") == ["Drawing View3"], r
+d3 = [a for a in dims_by_name(view_json("Drawing View3")).values() if a.get("dimension") == model_dim]
+assert d3 and d3[0]["tolerance"]["limits_mm"] == [8.0, 8.2], d3
+drawing_title = com("""Com (Com $sw ActiveDoc -Get) GetTitle""")
+com(f"""if (-not (Com $sw ActivateDoc @('{part.name}'))) {{ throw 'ActivateDoc part failed' }}""")
+# Feature dimensions that aren't displayed aren't annotations
+# (inspect_annotations doesn't see them): read the part's through COM.
+part_tol = com("""$dim = Com (Com $sw ActiveDoc -Get) Parameter @('D1@Boss-Extrude2')
+$t = Com $dim Tolerance -Get
+"$(Com $t Type -Get) $(Com $t GetMaxValue) $(Com $t GetMinValue)"
+""")
+kind_, upper_, lower_ = part_tol.split()
+assert kind_ == "2" and abs(float(upper_) - 0.0002) < 1e-12 and abs(float(lower_)) < 1e-12, part_tol
+# ... and in the part itself, by the part's name for it.
+r = tol(name="D1@Boss-Extrude1", tolerance="symmetric", plus_minus_mm=0.1, decimals=1)
+assert r["value_mm"] == 10.0 and r["tolerance"]["limits_mm"] == [9.9, 10.1] and r["decimals"] == 1, r
+com(f"""if (-not (Com $sw ActivateDoc @('{drawing_title}')) -and -not (Com $sw ActivateDoc @('{drawing_title.split(' - ')[0]}'))) {{
+    throw 'ActivateDoc drawing failed' }}""")
+d2 = dims_by_name(view_json("Drawing View2"))
+depth = [a for a in d2.values() if a.get("dimension") == "D1@Boss-Extrude1@drawing-block.Part"]
+assert depth and depth[0]["tolerance"]["limits_mm"] == [9.9, 10.1], d2
+assert not sw_dialogs(), sw_dialogs()
+# Saved, so the next run's reset doesn't refuse over its unsaved tolerances.
+com(f"""$p = Com $sw GetOpenDocumentByName @('{part}'); if ($p) {{ Com $p Save2 @($true) | Out-Null }}""")

@@ -9,6 +9,7 @@ mod inspect;
 mod pmi;
 mod render;
 mod sketch;
+mod tolerance;
 
 use std::sync::{Arc, Mutex};
 
@@ -1814,6 +1815,36 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "Set the tolerance of an existing dimension -- in a drawing (the names \
+                       inspect_drawing lists: \"RD1@Drawing View1\", or a model dimension like \
+                       \"D1@Boss-Extrude1@block.Part\"), a part (\"D1@Sketch1\", \
+                       \"D1@Boss-Extrude1\") or an assembly's mate dimension. tolerance = \
+                       \"bilateral\" (upper_mm / lower_mm, signed deviations: 0.1 and -0.05 for \
+                       40 +0.1/-0.05), \"limit\" (same deviations, shown as the two limits), \
+                       \"symmetric\" (plus_minus_mm), \"fit\" / \"fit_with_tolerance\" / \
+                       \"fit_tolerance_only\" (hole_fit like \"H7\" and/or shaft_fit like \"g6\"), \
+                       \"basic\", \"min\", \"max\" or \"none\" to remove it. Angle dimensions take \
+                       the _deg fields instead. Optionally decimals / tolerance_decimals (places \
+                       shown). A model dimension shown in a drawing is the model's own: its \
+                       tolerance changes in the model too. If SolidWorks refuses part of it, the \
+                       old tolerance is put back. Replies with the dimension as inspect_drawing \
+                       shows it, including the resulting limits."
+    )]
+    async fn set_dimension_tolerance(
+        &self,
+        Parameters(params): Parameters<tolerance::SetToleranceParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = tolerance::request(&params)?;
+        let reply = self
+            .addin
+            .set_dimension_tolerance(request.clone())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let json = tolerance::reply_json(&request, &reply);
+        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+    }
+
+    #[tool(
         description = "SolidWorks Hole Wizard: add standard holes sized from a hole standard -- \
                        screw clearance or drilled holes, counterbores, countersinks or tapped \
                        (threaded) holes, e.g. kind=\"counterbore\", size=\"M5\". Usual way, as \
@@ -2393,8 +2424,9 @@ impl ServerHandler for SolidWorksTools {
                  up. inspect_annotations reads the model's MBD / PMI (DimXpert dimensions, \
                  tolerances, datums, feature control frames). Drawings: inspect_drawing lists \
                  the sheets and views and, for one view, its visible edges with ids and \
-                 sheet positions; add_drawing_dimensions dimensions those edges, and \
-                 insert_model_items brings in the model's own dimensions. To undo or \
+                 sheet positions; add_drawing_dimensions dimensions those edges, \
+                 insert_model_items brings in the model's own dimensions, and \
+                 set_dimension_tolerance tolerances a dimension (drawing or model). To undo or \
                  rework: delete_features removes features (sketches, extrudes, cuts, holes, \
                  fillets, planes, mates, ...) by inspect_model id or name, refusing unless told \
                  what to do with features that depend on them; delete_sketch_entities removes \

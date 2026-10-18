@@ -240,6 +240,14 @@ pub fn value_of(value: f64, angular: bool) -> f64 {
     if angular { round(value.to_degrees(), 4) } else { mm(value) }
 }
 
+/// A dimension's fields as inspect_annotations / inspect_drawing show them
+/// (name, value, tolerance, ...).
+pub fn dimension_fields(d: &proto::AnnotationDimension) -> Map<String, Value> {
+    let mut obj = Map::new();
+    dimension_json(d, &mut obj);
+    obj
+}
+
 fn dimension_json(d: &proto::AnnotationDimension, obj: &mut Map<String, Value>) {
     use proto::DimensionType as T;
     let unit = |angular: bool| if angular { "deg" } else { "mm" };

@@ -63,6 +63,10 @@ public:
 		const sld_mcp::v1::SetDimensionValueRequest* request,
 		sld_mcp::v1::SetDimensionValueResponse* response) override;
 
+	grpc::Status SetDimensionTolerance(grpc::ServerContext* context,
+		const sld_mcp::v1::SetDimensionToleranceRequest* request,
+		sld_mcp::v1::SetDimensionToleranceResponse* response) override;
+
 	grpc::Status HoleWizard(grpc::ServerContext* context,
 		const sld_mcp::v1::HoleWizardRequest* request,
 		sld_mcp::v1::HoleWizardResponse* response) override;
