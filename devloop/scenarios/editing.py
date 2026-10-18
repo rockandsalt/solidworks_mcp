@@ -138,7 +138,7 @@ assert "no feature named" in r.text, r.text
 mcp.call("create_part")
 mcp.call("create_rectangle_sketch", width_mm=30, height_mm=30)
 mcp.call("extrude_sketch", depth_mm=10)
-block = mcp.run_dir / "block.SLDPRT"
+block = mcp.run_dir / "edit-block.SLDPRT"
 plane_name = com(f"""$d = Com $sw ActiveDoc -Get
 $e = Com $d SaveAs3 @('{block}', 0, 1); if ($e -ne 0) {{ throw "SaveAs3: $e" }}
 $template = Com $sw GetUserPreferenceStringValue @(9)  # swDefaultTemplateAssembly

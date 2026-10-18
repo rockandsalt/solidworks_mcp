@@ -2882,6 +2882,23 @@ namespace
 		return ToUtf8(name);
 	}
 
+	// The assembly's own component behind one a drawing view of it hands out
+	// (IView::GetVisibleComponents, an entity's GetComponent). Those are
+	// drawing-side stand-ins without a transform or persist id, named after
+	// the view's root plus the component's path ("pair-1/block-2"), so the
+	// leading names are dropped until the assembly knows the rest.
+	ATL::CComPtr<IComponent2> AssemblyComponentOf(IAssemblyDoc* assembly, IComponent2* viewComponent)
+	{
+		ATL::CComPtr<IComponent2> found;
+		for (std::string name = ComponentName(viewComponent); !name.empty() && !found;)
+		{
+			assembly->GetComponentByName(FromUtf8(name), &found);
+			const size_t slash = name.find('/');
+			name = slash == std::string::npos ? std::string() : name.substr(slash + 1);
+		}
+		return found;
+	}
+
 	// Every component of the assembly, nested ones included.
 	std::vector<ATL::CComPtr<IComponent2>> AllComponents(IAssemblyDoc* assembly)
 	{
@@ -3054,18 +3071,23 @@ namespace
 	class ComponentList
 	{
 	public:
+		// With `viewAssembly`, the components given are a drawing view's
+		// stand-ins for that assembly's (see AssemblyComponentOf).
 		ComponentList(PersistIds& ids, IMathUtility* math,
-			google::protobuf::RepeatedPtrField<sld_mcp::v1::ComponentInfo>* out)
-			: m_ids(ids), m_math(math), m_out(out) {}
+			google::protobuf::RepeatedPtrField<sld_mcp::v1::ComponentInfo>* out, IAssemblyDoc* viewAssembly = nullptr)
+			: m_ids(ids), m_math(math), m_out(out), m_viewAssembly(viewAssembly) {}
 
 		// The component's persist id; describes it the first time. Empty for null.
 		std::string Add(IComponent2* component)
 		{
 			if (!component)
 				return {};
-			std::string pid = m_ids.Get(component);
+			ATL::CComPtr<IComponent2> own(component);
+			if (m_viewAssembly && !(own = AssemblyComponentOf(m_viewAssembly, component)))
+				return {};
+			std::string pid = m_ids.Get(own);
 			if (!pid.empty() && m_listed.insert(pid).second)
-				DescribeComponent(component, m_ids, m_math, m_out->Add());
+				DescribeComponent(own, m_ids, m_math, m_out->Add());
 			return pid;
 		}
 
@@ -3073,6 +3095,7 @@ namespace
 		PersistIds& m_ids;
 		IMathUtility* m_math;
 		google::protobuf::RepeatedPtrField<sld_mcp::v1::ComponentInfo>* m_out;
+		ATL::CComPtr<IAssemblyDoc> m_viewAssembly;
 		std::set<std::string> m_listed;
 	};
 
@@ -4219,15 +4242,22 @@ namespace
 		int ordinal = 0;
 	};
 
-	// Appends a view's visible entities of one kind (of one component) to
-	// `out`. False if `budget` ran out first.
-	bool ListViewEntities(IView* view, IComponent2* component, sld_mcp::v1::ViewEntityKind kind,
-		PersistIds& ids, size_t& budget, std::vector<ViewEntityItem>& out)
+	// Appends a view's visible entities of one kind (of one component, known
+	// by `componentPid`) to `out`. `ids` must be the drawing's: the view's
+	// model gives all of a view's entities the same persist id. False if
+	// `budget` ran out first.
+	bool ListViewEntities(IView* view, IComponent2* component, const std::string& componentPid,
+		sld_mcp::v1::ViewEntityKind kind, PersistIds& ids, size_t& budget, std::vector<ViewEntityItem>& out)
 	{
 		ATL::CComVariant entities;
-		if (FAILED(view->GetVisibleEntities2(component, SwViewEntityType(kind), &entities)))
+		// GetVisibleEntities2's silhouettes in a part view can have no face
+		// and no end points (after the view's scale changed, until the next
+		// GetVisibleEntities call); GetVisibleEntities' are whole.
+		const HRESULT hr = kind == sld_mcp::v1::VIEW_ENTITY_KIND_SILHOUETTE
+			? view->GetVisibleEntities(component, SwViewEntityType(kind), &entities)
+			: view->GetVisibleEntities2(component, SwViewEntityType(kind), &entities);
+		if (FAILED(hr))
 			return true;
-		const std::string componentPid = component ? ids.Get(component) : std::string();
 		std::map<std::string, int> seen;
 		for (const auto& disp : comvariant::ToDispatches(entities))
 		{
@@ -4268,7 +4298,50 @@ namespace
 		return true;
 	}
 
-	void DescribeViewEntity(const ViewEntityItem& item, PersistIds& ids, sld_mcp::v1::ViewEntity* out)
+	// A view vertex's point in its model. IVertex::GetPoint on the vertices
+	// GetVisibleEntities2 hands out comes back shifted by the view's
+	// position on the sheet (model x + view x, model y + view y; SOLIDWORKS
+	// 2026), while the end vertices of its edges are in model space: the
+	// one nearest the unshifted point is this vertex.
+	bool ViewVertexPoint(IVertex* vertex, const Eigen::Vector2d& viewPosition, Eigen::Vector3d& out)
+	{
+		ATL::CComVariant pointVar;
+		if (FAILED(vertex->GetPoint(&pointVar)))
+			return false;
+		const std::vector<double> p = comvariant::ToDoubles(pointVar);
+		if (p.size() < 3)
+			return false;
+		const Eigen::Vector3d unshifted(p[0] - viewPosition.x(), p[1] - viewPosition.y(), p[2]);
+		out = unshifted;
+		double best = std::numeric_limits<double>::infinity();
+		ATL::CComVariant edges;
+		if (SUCCEEDED(vertex->GetEdges(&edges)))
+			for (const auto& disp : comvariant::ToDispatches(edges))
+				if (ATL::CComQIPtr<IEdge> edge(disp.p); edge)
+					for (const bool start : { true, false })
+					{
+						ATL::CComPtr<IDispatch> endDisp;
+						if (FAILED(start ? edge->GetStartVertex(&endDisp) : edge->GetEndVertex(&endDisp)) || !endDisp)
+							continue;
+						ATL::CComQIPtr<IVertex> end(endDisp.p);
+						ATL::CComVariant endVar;
+						if (!end || FAILED(end->GetPoint(&endVar)))
+							continue;
+						const std::vector<double> e = comvariant::ToDoubles(endVar);
+						if (e.size() < 3)
+							continue;
+						const Eigen::Vector3d candidate(e[0], e[1], e[2]);
+						if (const double d = (candidate - unshifted).norm(); d < best)
+						{
+							best = d;
+							out = candidate;
+						}
+					}
+		return out.allFinite();
+	}
+
+	void DescribeViewEntity(const ViewEntityItem& item, const Eigen::Vector2d& viewPosition, PersistIds& ids,
+		sld_mcp::v1::ViewEntity* out)
 	{
 		out->set_kind(item.kind);
 		out->set_persist_id(item.persistId);
@@ -4286,10 +4359,9 @@ namespace
 		case sld_mcp::v1::VIEW_ENTITY_KIND_VERTEX:
 			if (ATL::CComQIPtr<IVertex> vertex(item.obj.p); vertex)
 			{
-				ATL::CComVariant pointVar;
-				if (SUCCEEDED(vertex->GetPoint(&pointVar)))
-					if (const std::vector<double> p = comvariant::ToDoubles(pointVar); p.size() >= 3)
-						SetVec3(out->mutable_start(), p.data());
+				Eigen::Vector3d point;
+				if (ViewVertexPoint(vertex, viewPosition, point))
+					SetVec3(out->mutable_start(), point);
 			}
 			break;
 		case sld_mcp::v1::VIEW_ENTITY_KIND_SILHOUETTE:
@@ -4384,8 +4456,8 @@ namespace
 		}
 	}
 
-	void DescribeView(IView* view, IMathUtility* math, bool listEntities, bool includeVertices,
-		bool includeAnnotations, DrawingBudget& budget, sld_mcp::v1::ViewInfo* info)
+	void DescribeView(IView* view, IModelDocExtension* drawingExt, IMathUtility* math, bool listEntities,
+		bool includeVertices, bool includeAnnotations, DrawingBudget& budget, sld_mcp::v1::ViewInfo* info)
 	{
 		info->set_name(ViewName(view));
 		info->set_type(static_cast<int32_t>(ViewType(view)));
@@ -4423,11 +4495,13 @@ namespace
 				SetVec3(info->mutable_outline()->mutable_max(), hi);
 			}
 		ATL::CComVariant position;
+		Eigen::Vector2d viewPosition = Eigen::Vector2d::Zero();
 		if (SUCCEEDED(view->get_Position(&position)))
 			if (const std::vector<double> p = comvariant::ToDoubles(position); p.size() >= 2)
 			{
 				const double at[3] = { p[0], p[1], 0.0 };
 				SetVec3(info->mutable_position(), at);
+				viewPosition = Eigen::Vector2d(p[0], p[1]);
 			}
 		long mode = 0;
 		if (SUCCEEDED(view->GetDisplayMode2(&mode)))
@@ -4441,10 +4515,14 @@ namespace
 		const ViewModel model = ViewModelOf(view);
 		if (model.doc)
 			info->set_model_type(ToDocumentType(model.type));
-		PersistIds ids(model.ext);
+		// View entities (and what annotations are attached to) by the
+		// drawing's persist ids, components by the assembly's.
+		PersistIds ids(drawingExt);
+		PersistIds modelIds(model.ext);
 		std::optional<ComponentList> components;
 		if (model.type == swDocASSEMBLY)
-			components.emplace(ids, math, info->mutable_components());
+			components.emplace(modelIds, math, info->mutable_components(),
+				ATL::CComQIPtr<IAssemblyDoc>(model.doc.p));
 
 		if (listEntities)
 		{
@@ -4455,15 +4533,14 @@ namespace
 				kinds.push_back(sld_mcp::v1::VIEW_ENTITY_KIND_VERTEX);
 			std::vector<ViewEntityItem> items;
 			for (const auto& component : ViewComponents(view, model))
-				for (const auto kind : kinds)
-					if (!ListViewEntities(view, component, kind, ids, budget.entities, items))
-						budget.truncated = true;
-			for (const auto& item : items)
 			{
-				if (components)
-					components->Add(item.component);
-				DescribeViewEntity(item, ids, info->add_entities());
+				const std::string componentPid = components ? components->Add(component) : std::string();
+				for (const auto kind : kinds)
+					if (!ListViewEntities(view, component, componentPid, kind, ids, budget.entities, items))
+						budget.truncated = true;
 			}
+			for (const auto& item : items)
+				DescribeViewEntity(item, viewPosition, ids, info->add_entities());
 		}
 		DescribeViewAnnotations(view, includeAnnotations, ids, components ? &*components : nullptr, budget, info);
 	}
@@ -4496,8 +4573,8 @@ namespace
 				info->set_sheet_format(ToUtf8(format));
 		}
 		for (const auto& view : sheet.views)
-			DescribeView(view, math, entityViews.count(ViewName(view)) > 0, includeVertices, includeAnnotations,
-				budget, info->add_views());
+			DescribeView(view, drawingExt, math, entityViews.count(ViewName(view)) > 0, includeVertices,
+				includeAnnotations, budget, info->add_views());
 		if (sheet.sheetView)
 		{
 			PersistIds ids(drawingExt);
@@ -4512,7 +4589,8 @@ namespace
 		ATL::CComPtr<IView> view;
 		std::string sheetName;
 		ViewModel model;
-		std::unique_ptr<PersistIds> ids;
+		std::unique_ptr<PersistIds> ids;  // the drawing's, as DescribeView
+		std::unique_ptr<PersistIds> modelIds;
 		std::vector<ATL::CComPtr<IComponent2>> components;
 		std::unique_ptr<ComponentList> componentList;  // assemblies
 		// Visible entities by kind and component persist id.
@@ -4525,12 +4603,13 @@ namespace
 		ATL::CComPtr<IComponent2> component;
 		if (!ref.component_persist_id().empty())
 		{
-			for (const auto& c : ctx.components)
-				if (c && ctx.ids->Get(c) == ref.component_persist_id())
-				{
-					component = c;
-					break;
-				}
+			if (ctx.componentList)
+				for (const auto& c : ctx.components)
+					if (c && ctx.componentList->Add(c) == ref.component_persist_id())
+					{
+						component = c;
+						break;
+					}
 			if (!component)
 				return grpc::Status(grpc::StatusCode::NOT_FOUND, where +
 					": its component isn't visible in " + ViewName(ctx.view) + " any more -- inspect the drawing again");
@@ -4541,7 +4620,7 @@ namespace
 		{
 			std::vector<ViewEntityItem> items;
 			size_t unlimited = std::numeric_limits<size_t>::max();
-			ListViewEntities(ctx.view, component, ref.kind(), *ctx.ids, unlimited, items);
+			ListViewEntities(ctx.view, component, ref.component_persist_id(), ref.kind(), *ctx.ids, unlimited, items);
 			it = ctx.entities.emplace(key, std::move(items)).first;
 		}
 		for (const auto& item : it->second)
@@ -8013,6 +8092,9 @@ grpc::Status SolidWorksService::AddDrawingDimensions(grpc::ServerContext* /*cont
 	ATL::CComQIPtr<IDrawingDoc> drawing;
 	if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
 		return status;
+	ATL::CComPtr<IModelDocExtension> drawingExt;
+	if (grpc::Status status = GetExtension(doc, drawingExt); !status.ok())
+		return status;
 	ATL::CComQIPtr<IMathUtility> math;
 	if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
 		return status;
@@ -8029,10 +8111,12 @@ grpc::Status SolidWorksService::AddDrawingDimensions(grpc::ServerContext* /*cont
 		if (grpc::Status status = FindDrawingView(sheets, viewName, made->view, made->sheetName); !status.ok())
 			return status;
 		made->model = ViewModelOf(made->view);
-		made->ids = std::make_unique<PersistIds>(made->model.ext);
+		made->ids = std::make_unique<PersistIds>(drawingExt);
+		made->modelIds = std::make_unique<PersistIds>(made->model.ext);
 		made->components = ViewComponents(made->view, made->model);
 		if (made->model.type == swDocASSEMBLY)
-			made->componentList = std::make_unique<ComponentList>(*made->ids, math, response->mutable_components());
+			made->componentList = std::make_unique<ComponentList>(*made->modelIds, math,
+				response->mutable_components(), ATL::CComQIPtr<IAssemblyDoc>(made->model.doc.p));
 		ctx = made.get();
 		contexts.emplace(viewName, std::move(made));
 		return grpc::Status::OK;
@@ -8217,13 +8301,15 @@ grpc::Status SolidWorksService::InsertModelItems(grpc::ServerContext* /*context*
 
 	for (size_t i = 0; i < targets.size(); ++i)
 	{
+		// Ids as DescribeView hands them out.
 		const ViewModel model = ViewModelOf(targets[i]);
-		PersistIds ids(model.ext);
+		PersistIds ids(ext);
+		PersistIds modelIds(model.ext);
 		sld_mcp::v1::ViewAnnotations* out = response->add_views();
 		out->set_view_name(ViewName(targets[i]));
 		std::optional<ComponentList> components;
 		if (model.type == swDocASSEMBLY)
-			components.emplace(ids, math, out->mutable_components());
+			components.emplace(modelIds, math, out->mutable_components(), ATL::CComQIPtr<IAssemblyDoc>(model.doc.p));
 		size_t described = 0;
 		for (const auto& annotation : ViewAnnotationList(targets[i]))
 			if (!before[i].Contains(annotation) && described++ < kMaxAnnotations)
