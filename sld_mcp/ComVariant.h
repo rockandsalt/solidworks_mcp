@@ -292,4 +292,19 @@ namespace comvariant
 		v.parray = sa;
 		return v;
 	}
+
+	// Objects as a VARIANT holding a SAFEARRAY of VT_DISPATCH (each AddRef'd
+	// by the array).
+	inline ATL::CComVariant FromDispatches(const std::vector<IDispatch*>& objects)
+	{
+		ATL::CComVariant v;
+		SAFEARRAY* sa = SafeArrayCreateVector(VT_DISPATCH, 0, static_cast<ULONG>(objects.size()));
+		if (!sa)
+			return v;
+		for (LONG i = 0; i < static_cast<LONG>(objects.size()); ++i)
+			SafeArrayPutElement(sa, &i, objects[i]);
+		v.vt = VT_ARRAY | VT_DISPATCH;
+		v.parray = sa;
+		return v;
+	}
 }

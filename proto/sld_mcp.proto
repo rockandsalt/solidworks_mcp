@@ -174,6 +174,27 @@ service SolidWorks {
   // is gone. Changes nothing but the rebuild. FAILED_PRECONDITION if the
   // active document is neither a part nor an assembly, or a sketch is open.
   rpc DiagnoseModel(DiagnoseModelRequest) returns (DiagnoseModelResponse);
+
+  // Changes a boss- or cut-extrude of the active part, as Edit Feature
+  // does: end condition (blind, through all, mid plane, up to next),
+  // depth, direction, a second direction, draft, and for cuts the side to
+  // cut (IExtrudeFeatureData2 + IFeature::ModifyDefinition). Unset fields
+  // keep their value; with none set it only reports the definition. All or
+  // nothing: if SolidWorks rejects the change, or the feature fails to
+  // rebuild with it, the old definition is put back. Features downstream
+  // that now fail are reported, not undone. FAILED_PRECONDITION if the
+  // active document isn't a part or a sketch is open; INVALID_ARGUMENT if
+  // the feature isn't an extrude.
+  rpc EditExtrude(EditExtrudeRequest) returns (EditExtrudeResponse);
+
+  // Changes a mate of the active assembly: its type, the two entities it
+  // mates, alignment, flip, distance / angle, lock rotation
+  // (IAssemblyDoc::EditMate4 with the mate and its entities selected).
+  // Unset fields keep their value. All or nothing like AddMate: a change
+  // SolidWorks rejects, or that leaves the mate over-defined or unsolvable,
+  // is undone by editing the mate back (components the solver moved may
+  // stay moved). Preconditions as AddMate.
+  rpc EditMate(EditMateRequest) returns (EditMateResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -1582,4 +1603,106 @@ message DiagnoseModelResponse {
   int32 checked_sketches = 5;
   // Set when problems were cut off at the add-in's limit.
   bool truncated = 6;
+}
+
+// ---------------------------------------------------------------------------
+// Editing features: EditExtrude, EditMate
+
+// swEndConditions_e, the ones EditExtrude can set (those that need no
+// reference entity).
+enum EndCondition {
+  END_CONDITION_UNSPECIFIED = 0;  // requests: keep
+  END_CONDITION_BLIND = 1;
+  END_CONDITION_THROUGH_ALL = 2;
+  // Direction 1 only: depth is the total, split across both sides.
+  END_CONDITION_MID_PLANE = 3;
+  END_CONDITION_UP_TO_NEXT = 4;
+  // Cuts, direction 1 only: through all to both sides.
+  END_CONDITION_THROUGH_ALL_BOTH = 5;
+  // Up to vertex / surface / body, offset from surface, ...: reported (see
+  // raw_end_condition), can't be set.
+  END_CONDITION_OTHER = 6;
+}
+
+message ExtrudeDirection {
+  EndCondition end_condition = 1;
+  int32 raw_end_condition = 2;  // swEndConditions_e
+  // Meters. Meaningful for blind and mid plane (the total), and as the
+  // offset for offset-from-surface.
+  double depth = 3;
+  // Taper while extruding, radians; 0 = no draft.
+  double draft_angle = 4;
+  bool draft_outward = 5;
+}
+
+message ExtrudeDefinition {
+  string name = 1;
+  string type_name = 2;  // IFeature::GetTypeName2: Extrusion, Cut, ICE, ...
+  bool cut = 3;
+  bool thin = 4;  // thin feature (wall thickness isn't editable here)
+  // The profile sketch (the extrude's absorbed sketch), if found.
+  string sketch_name = 5;
+  ExtrudeDirection direction1 = 6;
+  // Set when the extrude goes both ways (BothDirections).
+  ExtrudeDirection direction2 = 7;
+  // Direction 1 points against the sketch normal.
+  bool reverse_direction = 8;
+  // Cuts: remove the material outside the profile instead of inside.
+  bool flip_side_to_cut = 9;
+  // Its dimensions (D1@Boss-Extrude1 = depth, ...), for SetDimensionValue.
+  repeated DimensionInfo dimensions = 10;
+  // swFeatureError_e as of the last rebuild.
+  int32 error_code = 11;
+  bool error_is_warning = 12;
+}
+
+message EditExtrudeRequest {
+  FeatureTarget feature = 1;
+  // Direction 1. UNSPECIFIED keeps the current one; OTHER is invalid.
+  EndCondition end_condition = 2;
+  optional double depth = 3;  // meters, > 0
+  optional bool reverse_direction = 4;
+  // Radians, 0 (no draft) to < pi/2.
+  optional double draft_angle = 5;
+  optional bool draft_outward = 6;
+  optional bool flip_side_to_cut = 7;  // cuts only
+  // Direction 2: false removes it. Not with mid plane / through all both.
+  optional bool both_directions = 8;
+  EndCondition end_condition2 = 9;
+  optional double depth2 = 10;
+}
+
+message EditExtrudeResponse {
+  ExtrudeDefinition before = 1;
+  // Unset when the request changed nothing (only `before` is reported).
+  ExtrudeDefinition after = 2;
+  // Other features whose rebuild error is new or different since the edit.
+  repeated FeatureProblem new_errors = 3;
+}
+
+message EditMateRequest {
+  FeatureTarget mate = 1;
+  // UNSPECIFIED keeps the type. Changing to DISTANCE / ANGLE needs a
+  // distance / angle unless the mate already has one; LOCK needs two
+  // components as entities, and leaving LOCK needs other entities.
+  MateType type = 2;
+  // Empty keeps the mated entities; otherwise exactly two, as AddMate.
+  repeated bytes entity_persist_ids = 3;
+  // UNSPECIFIED keeps the alignment.
+  MateAlignment alignment = 4;
+  optional bool flip = 5;
+  optional double distance = 6;  // meters, >= 0
+  optional double angle = 7;     // radians, 0..pi
+  optional bool lock_rotation = 8;  // concentric only
+}
+
+message EditMateResponse {
+  MateInfo before = 1;
+  MateInfo after = 2;
+  // The mated entities after the edit, as DiagnoseModel reports them.
+  repeated MateEntityState entities = 3;
+  // The mated components, where the solve left them.
+  repeated ComponentInfo components = 4;
+  // Other features (mates) whose rebuild error is new or different.
+  repeated FeatureProblem new_errors = 5;
 }

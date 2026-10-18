@@ -3,6 +3,7 @@ mod assembly;
 mod delete;
 mod diagnose;
 mod drawing;
+mod edit;
 mod hole;
 mod inspect;
 mod pmi;
@@ -1992,6 +1993,81 @@ impl SolidWorksTools {
             diagnose::render(&mut ids, &reply)
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+    }
+
+    #[tool(
+        description = "Change an existing boss-extrude or cut-extrude of the active part, like \
+                       Edit Feature: end_condition (\"blind\" to depth_mm, \"through_all\", \
+                       \"mid_plane\", \"up_to_next\", for cuts \"through_all_both\"), depth_mm, \
+                       reverse_direction, a draft (draft_deg, draft_outward), a second direction \
+                       (both_directions, end_condition2, depth2_mm), and for cuts \
+                       flip_side_to_cut. `feature` = \"feature:N\" from inspect_model or a name \
+                       like \"Cut-Extrude1\". Only what's given changes; with nothing else given \
+                       it just reports the extrude's current settings and dimension names. If \
+                       SolidWorks rejects the change or the extrude fails to rebuild with it (e.g. \
+                       a cut reversed into empty space), the old settings are put back and the \
+                       reason reported. Reports before/after and other features that now fail. \
+                       To change the profile, edit its sketch with the sketch tools; for just a \
+                       depth, set_dimension on D1@<feature> works too. Requires no sketch open for \
+                       editing."
+    )]
+    async fn edit_extrude(
+        &self,
+        Parameters(params): Parameters<edit::EditExtrudeParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            edit::extrude_request(&ids, &params)?
+        };
+        let reply = self
+            .addin
+            .edit_extrude(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let text = edit::extrude_reply_text(&params, &reply);
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Change an existing mate of the active assembly, like Edit Mate: its kind \
+                       (e.g. coincident -> distance with distance_mm), the two entities it mates \
+                       (as in add_mate), alignment (\"aligned\"/\"anti_aligned\"/\"closest\" -- \
+                       turns a component around), flip (distance/angle), distance_mm, angle_deg \
+                       or lock_rotation (concentric). `mate` = \"feature:N\" from inspect_model \
+                       what=\"mates\" or a name like \"Coincident1\". Only what's given changes. \
+                       A new kind replaces the mate with one named after the kind (Coincident1 -> \
+                       Distance1), and the mate's id changes with every edit: use the one in the \
+                       reply. SolidWorks then re-solves and moves the components that aren't fixed. If \
+                       the change is rejected, over-defines the assembly or can't be solved, the \
+                       mate is edited back and the reason reported. Reports before/after, the \
+                       mated entities and where the components ended up. For only a distance/angle \
+                       value, set_dimension on the mate's dimension works too. Requires an open \
+                       assembly with no sketch being edited."
+    )]
+    async fn edit_mate(
+        &self,
+        Parameters(params): Parameters<edit::EditMateParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let entities = edit::check_mate(&params)?;
+        let mut persist_ids = Vec::new();
+        for (i, entity) in entities.iter().enumerate() {
+            persist_ids.push(
+                self.resolve_id(entity)
+                    .map_err(|e| prefix_error(e, &format!("entity {}", i + 1)))?,
+            );
+        }
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            edit::mate_request(&ids, &params, persist_ids)?
+        };
+        let reply = self
+            .addin
+            .edit_mate(request)
+            .await
+            .map_err(|status| delete::with_legend(self.addin_error(status), "entity", &entities))?;
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let text = edit::mate_reply_text(&mut ids, &reply);
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 }
 

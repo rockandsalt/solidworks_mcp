@@ -227,7 +227,7 @@ pub fn component_json(ids: &mut IdRegistry, c: &proto::ComponentInfo) -> Value {
     Value::Object(obj)
 }
 
-fn mate_type_name(t: proto::MateType) -> &'static str {
+pub fn mate_type_name(t: proto::MateType) -> &'static str {
     use proto::MateType as M;
     match t {
         M::Coincident => "coincident",
@@ -242,7 +242,7 @@ fn mate_type_name(t: proto::MateType) -> &'static str {
     }
 }
 
-fn alignment_name(a: proto::MateAlignment) -> Option<&'static str> {
+pub fn alignment_name(a: proto::MateAlignment) -> Option<&'static str> {
     use proto::MateAlignment as A;
     match a {
         A::Aligned => Some("aligned"),
@@ -253,7 +253,7 @@ fn alignment_name(a: proto::MateAlignment) -> Option<&'static str> {
 }
 
 /// swFeatureError_e values that concern mates.
-fn mate_error_name(code: i32) -> String {
+pub fn mate_error_name(code: i32) -> String {
     match code {
         38 | 39 | 41 | 44 => "the mated entities don't suit this mate type".into(),
         42 => "unknown tangency".into(),
@@ -510,7 +510,7 @@ pub fn request(params: &AddMateParams, persist_ids: [Vec<u8>; 2]) -> proto::AddM
 }
 
 /// Where a component ended up, in words.
-fn placement_text(c: &proto::ComponentInfo) -> String {
+pub fn placement_text(c: &proto::ComponentInfo) -> String {
     let mut text = c.name.clone();
     if c.fixed {
         text += " (fixed)";

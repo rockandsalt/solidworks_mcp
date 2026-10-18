@@ -252,6 +252,22 @@ impl AddinClient {
         let mut client = self.client.clone();
         Ok(client.diagnose_model(request).await?.into_inner())
     }
+
+    pub async fn edit_extrude(
+        &self,
+        request: proto::EditExtrudeRequest,
+    ) -> Result<proto::EditExtrudeResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.edit_extrude(request).await?.into_inner())
+    }
+
+    pub async fn edit_mate(
+        &self,
+        request: proto::EditMateRequest,
+    ) -> Result<proto::EditMateResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.edit_mate(request).await?.into_inner())
+    }
 }
 
 /// Largest GetMesh reply accepted: about 5 million triangles with normals.

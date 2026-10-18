@@ -99,6 +99,14 @@ public:
 		const sld_mcp::v1::DiagnoseModelRequest* request,
 		sld_mcp::v1::DiagnoseModelResponse* response) override;
 
+	grpc::Status EditExtrude(grpc::ServerContext* context,
+		const sld_mcp::v1::EditExtrudeRequest* request,
+		sld_mcp::v1::EditExtrudeResponse* response) override;
+
+	grpc::Status EditMate(grpc::ServerContext* context,
+		const sld_mcp::v1::EditMateRequest* request,
+		sld_mcp::v1::EditMateResponse* response) override;
+
 private:
 	// gRPC runs handlers on its own thread pool, not on SolidWorks' main
 	// STA thread, so ISldWorks can't be used directly. This fetches a

@@ -118,7 +118,7 @@ fn sketch_json(ids: &mut IdRegistry, s: &proto::SketchDiagnosis) -> Value {
     Value::Object(obj)
 }
 
-fn mate_entity_json(ids: &mut IdRegistry, e: &proto::MateEntityState) -> Value {
+pub fn mate_entity_json(ids: &mut IdRegistry, e: &proto::MateEntityState) -> Value {
     let mut obj = Map::new();
     if e.missing {
         obj.insert("missing".into(), json!(true));

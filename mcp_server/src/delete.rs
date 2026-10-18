@@ -293,7 +293,7 @@ pub fn feature_error_name(code: i32) -> String {
     }
 }
 
-fn problems_text(problems: &[proto::FeatureProblem]) -> String {
+pub fn problems_text(problems: &[proto::FeatureProblem]) -> String {
     let describe = |p: &proto::FeatureProblem| {
         let label = type_label(&p.type_name);
         let what = if label.is_empty() {

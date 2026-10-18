@@ -15,7 +15,7 @@ MCP client ──stdio──▶ mcp_server (Rust, rmcp) ──gRPC 127.0.0.1:505
 
 Design notes, per area, with each feature's "Untested in SolidWorks —
 verify: …" list: `docs/notes/` (architecture.md first; also diagnosing,
-deleting, drawings, installer, devloop). Read the relevant one before changing
+deleting, editing, drawings, installer, devloop). Read the relevant one before changing
 an area, and update it when you change the design or learn how SolidWorks
 actually behaves.
 
