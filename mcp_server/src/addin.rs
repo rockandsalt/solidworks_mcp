@@ -262,6 +262,16 @@ impl AddinClient {
         Ok(client.diagnose_model(request).await?.into_inner())
     }
 
+    /// The image of a whole sheet; can be several MB for a big sheet at a
+    /// high resolution.
+    pub async fn render_drawing(
+        &self,
+        request: proto::RenderDrawingRequest,
+    ) -> Result<proto::RenderDrawingResponse, tonic::Status> {
+        let mut client = self.client.clone().max_decoding_message_size(MAX_MESH_MESSAGE);
+        Ok(client.render_drawing(request).await?.into_inner())
+    }
+
     pub async fn edit_extrude(
         &self,
         request: proto::EditExtrudeRequest,

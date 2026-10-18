@@ -3,6 +3,7 @@ mod assembly;
 mod delete;
 mod diagnose;
 mod drawing;
+mod drawing_image;
 mod edit;
 mod hole;
 mod inspect;
@@ -1434,6 +1435,69 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "Look at a sheet of the active drawing as SolidWorks prints it: a PNG of the \
+                       sheet with rulers in sheet mm along the left and bottom edges and light grid \
+                       lines, so positions read the same as inspect_drawing's and at_mm. Use it \
+                       after placing views or dimensions to check the layout: overlapping or \
+                       crowded dimension text, dimensions crossing views or other dimensions, \
+                       things off the sheet or outside the border. `view` zooms to one view (and the \
+                       dimensions around it), `region_mm` to a rectangle; defaults to the whole \
+                       active sheet (`sheet` for another). Each picture costs about 1-2k tokens; \
+                       zoom in when the whole sheet is too small to read."
+    )]
+    async fn render_drawing(
+        &self,
+        Parameters(params): Parameters<drawing_image::RenderDrawingParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use drawing_image as di;
+        let max_px = di::max_px(&params)?;
+        let region = di::region(&params)?;
+        let view = params.view.as_deref().map(str::trim).filter(|v| !v.is_empty());
+        let sheet = params.sheet.as_deref().map(str::trim).unwrap_or_default().to_string();
+        // The whole sheet: the add-in fits it to max_px. A zoom: the
+        // region's resolution, or a guess for a view until its outline is
+        // known.
+        let (dpi, cap) = match (region, view) {
+            (Some(r), _) => (di::dpi_for(r.width_m().max(r.height_m()), max_px), 0),
+            (None, Some(_)) => (di::VIEW_DPI, 0),
+            (None, None) => (di::MAX_DPI, max_px as i32),
+        };
+        let request = |sheet_name: String, dpi: i32, max_px: i32| proto::RenderDrawingRequest {
+            sheet_name,
+            view_name: view.unwrap_or_default().to_string(),
+            dpi,
+            max_px,
+        };
+        let mut reply = self
+            .addin
+            .render_drawing(request(sheet, dpi, cap))
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let mut image = di::decode(&reply)?;
+        let mut crop = di::crop_rect(&reply, view, region)?;
+        // Ask again at the resolution the region shown needs.
+        if di::needs_other_dpi(di::crop_pixels(&image, &reply, crop), max_px) {
+            let better = di::dpi_for(crop.width_m().max(crop.height_m()), max_px);
+            if better != reply.dpi {
+                reply = self
+                    .addin
+                    .render_drawing(request(reply.sheet_name.clone(), better, cap))
+                    .await
+                    .map_err(|status| self.addin_error(status))?;
+                image = di::decode(&reply)?;
+                crop = di::crop_rect(&reply, view, region)?;
+            }
+        }
+        let picture = di::picture(&image, &reply, crop, max_px)?;
+        let document = if reply.document_title.is_empty() { "the drawing" } else { reply.document_title.as_str() };
+        let text = di::reply_text(&reply, document, crop, &picture);
+        Ok(CallToolResult::success(vec![
+            ContentBlock::image(BASE64.encode(&picture.png), "image/png"),
+            ContentBlock::text(text),
+        ]))
+    }
+
+    #[tool(
         description = "Draw the active part or assembly as a picture: shaded, with edges, in \
                        orthographic standard views (front/back/left/right/top/bottom/isometric) at \
                        one shared scale, as a grid in one PNG. Use it to check the overall shape \
@@ -2425,8 +2489,9 @@ impl ServerHandler for SolidWorksTools {
                  tolerances, datums, feature control frames). Drawings: inspect_drawing lists \
                  the sheets and views and, for one view, its visible edges with ids and \
                  sheet positions; add_drawing_dimensions dimensions those edges, \
-                 insert_model_items brings in the model's own dimensions, and \
-                 set_dimension_tolerance tolerances a dimension (drawing or model). To undo or \
+                 insert_model_items brings in the model's own dimensions, \
+                 set_dimension_tolerance tolerances a dimension (drawing or model), and \
+                 render_drawing shows the sheet as printed to check the layout. To undo or \
                  rework: delete_features removes features (sketches, extrudes, cuts, holes, \
                  fillets, planes, mates, ...) by inspect_model id or name, refusing unless told \
                  what to do with features that depend on them; delete_sketch_entities removes \

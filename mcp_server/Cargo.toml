@@ -20,7 +20,7 @@ wgpu = "30"
 base64 = "0.22"
 # f64 affine transforms for assembly placements; same version kiss3d uses.
 glam = "0.33"
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 [build-dependencies]
 tonic-prost-build = "0.14"

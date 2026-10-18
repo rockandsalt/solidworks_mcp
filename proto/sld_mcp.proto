@@ -151,6 +151,15 @@ service SolidWorks {
   // (IDrawingDoc::InsertModelAnnotations3). Reports what each view gained.
   rpc InsertModelItems(InsertModelItemsRequest) returns (InsertModelItemsResponse);
 
+  // A picture of one sheet of the active drawing as SolidWorks prints it:
+  // the sheet saved as an image (PNG, else JPEG) with the "print capture"
+  // export options at the sheet's own size, plus the sheet's size and its
+  // views' outlines for mapping pixels to sheet coordinates. The export
+  // options and the user's active sheet are put back after.
+  // FAILED_PRECONDITION if the active document isn't a drawing or
+  // SolidWorks won't save the image; NOT_FOUND for an unknown sheet.
+  rpc RenderDrawing(RenderDrawingRequest) returns (RenderDrawingResponse);
+
   // Deletes features of the active part or assembly the way the Delete key
   // does (IModelDocExtension::DeleteSelection2): sketches, extrudes, cuts,
   // holes, fillets, reference geometry, ..., and in an assembly its mates
@@ -1461,6 +1470,33 @@ message InsertModelItemsResponse {
   int32 inserted = 1;
   // Per view, the annotations it has now that it didn't have before.
   repeated ViewAnnotations views = 2;
+}
+
+message RenderDrawingRequest {
+  // Empty: the sheet `view_name` is on, else the active sheet.
+  string sheet_name = 1;
+  string view_name = 3;
+  // Resolution, dots per inch of the sheet, 100..300 (what SolidWorks
+  // exports); 0 means 150. Lowered so the image's longer side stays within
+  // max_px, but not below 100.
+  int32 dpi = 2;
+  int32 max_px = 4;  // 0 means 8000
+}
+
+message SheetViewOutline {
+  string name = 1;
+  Box3 outline = 2;  // sheet meters (z = 0)
+}
+
+message RenderDrawingResponse {
+  string sheet_name = 1;
+  double width = 2;   // sheet, meters
+  double height = 3;
+  int32 dpi = 4;       // what was asked of SolidWorks
+  string format = 5;   // "png" or "jpg"
+  bytes image = 6;     // the file SolidWorks wrote; covers the whole sheet
+  repeated SheetViewOutline views = 7;
+  string document_title = 8;
 }
 
 // ---------------------------------------------------------------------------

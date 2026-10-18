@@ -7,6 +7,8 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <map>
 #include <memory>
@@ -1970,6 +1972,16 @@ namespace
 		{
 			for (auto it = m_saved.rbegin(); it != m_saved.rend(); ++it)
 				m_app->SetUserPreferenceToggle(it->first, it->second);
+			for (auto it = m_savedIntegers.rbegin(); it != m_savedIntegers.rend(); ++it)
+			{
+				VARIANT_BOOL ok = VARIANT_FALSE;
+				m_app->SetUserPreferenceIntegerValue(it->first, it->second, &ok);
+			}
+			for (auto it = m_savedDoubles.rbegin(); it != m_savedDoubles.rend(); ++it)
+			{
+				VARIANT_BOOL ok = VARIANT_FALSE;
+				m_app->SetUserPreferenceDoubleValue(it->first, it->second, &ok);
+			}
 		}
 		PreferenceToggles(const PreferenceToggles&) = delete;
 		PreferenceToggles& operator=(const PreferenceToggles&) = delete;
@@ -1983,9 +1995,31 @@ namespace
 			m_app->SetUserPreferenceToggle(preference, on ? VARIANT_TRUE : VARIANT_FALSE);
 		}
 
+		void SetInteger(long preference, long value)
+		{
+			long previous = 0;
+			if (FAILED(m_app->GetUserPreferenceIntegerValue(preference, &previous)))
+				return;
+			m_savedIntegers.emplace_back(preference, previous);
+			VARIANT_BOOL ok = VARIANT_FALSE;
+			m_app->SetUserPreferenceIntegerValue(preference, value, &ok);
+		}
+
+		void SetDouble(long preference, double value)
+		{
+			double previous = 0.0;
+			if (FAILED(m_app->GetUserPreferenceDoubleValue(preference, &previous)))
+				return;
+			m_savedDoubles.emplace_back(preference, previous);
+			VARIANT_BOOL ok = VARIANT_FALSE;
+			m_app->SetUserPreferenceDoubleValue(preference, value, &ok);
+		}
+
 	private:
 		ATL::CComPtr<ISldWorks> m_app;
 		std::vector<std::pair<long, VARIANT_BOOL>> m_saved;
+		std::vector<std::pair<long, long>> m_savedIntegers;
+		std::vector<std::pair<long, double>> m_savedDoubles;
 	};
 
 	// No dialogs while adding dimensions: don't ask for a value on creation,
@@ -8646,6 +8680,156 @@ grpc::Status SolidWorksService::InsertModelItems(grpc::ServerContext* /*context*
 				DescribeAnnotation(annotation, ids, components ? &*components : nullptr, out->add_annotations());
 	}
 	doc->GraphicsRedraw2();
+	return grpc::Status::OK;
+}
+
+grpc::Status SolidWorksService::RenderDrawing(grpc::ServerContext* /*context*/,
+	const sld_mcp::v1::RenderDrawingRequest* request,
+	sld_mcp::v1::RenderDrawingResponse* response)
+{
+	constexpr double kMetersPerInch = 0.0254;
+	double dpi = request->dpi() == 0 ? 150.0 : request->dpi();
+	const double maxSide = request->max_px() == 0 ? 8000.0 : request->max_px();  // pixels
+	// SolidWorks' range: asked for less than 100 it wrote 100; for 433 it
+	// silently used another setting.
+	if (dpi < 100.0 || dpi > 300.0 || maxSide < 100.0 || maxSide > 8000.0)
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "dpi must be 100..300 and max_px 100..8000");
+
+	std::lock_guard<std::mutex> lock(m_editMutex);
+	ComApartment com;
+	if (!com.Ok())
+		return ComApartmentError();
+
+	ATL::CComPtr<ISldWorks> swApp;
+	if (grpc::Status status = GetSwApp(swApp); !status.ok())
+		return status;
+
+	ATL::CComPtr<IModelDoc2> doc;
+	ATL::CComQIPtr<IDrawingDoc> drawing;
+	if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
+		return status;
+	ATL::CComPtr<IModelDocExtension> ext;
+	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+		return status;
+
+	const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
+	std::string wanted = request->sheet_name();
+	if (wanted.empty() && !request->view_name().empty())
+	{
+		ATL::CComPtr<IView> view;
+		if (grpc::Status status = FindDrawingView(sheets, request->view_name(), view, wanted); !status.ok())
+			return status;
+	}
+	if (wanted.empty())
+		wanted = ActiveSheetName(drawing);
+	auto sheet = std::find_if(sheets.begin(), sheets.end(), [&](const DrawingSheet& s) { return s.name == wanted; });
+	if (sheet == sheets.end())
+	{
+		std::string names;
+		for (const auto& s : sheets)
+			names += (names.empty() ? "" : ", ") + s.name;
+		return grpc::Status(grpc::StatusCode::NOT_FOUND, "the drawing has no sheet \"" + wanted + "\" (it has " +
+			names + ")");
+	}
+
+	// [paper size, template, scale 1, scale 2, first angle, width, height, ...]
+	double width = 0.0, height = 0.0;
+	ATL::CComVariant properties;
+	if (sheet->sheet && SUCCEEDED(sheet->sheet->GetProperties2(&properties)))
+		if (const std::vector<double> p = comvariant::ToDoubles(properties); p.size() >= 7)
+		{
+			width = p[5];
+			height = p[6];
+		}
+	if (!(width > 0.0 && height > 0.0))
+		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't give sheet " + wanted + "'s size");
+	dpi = std::max(100.0, std::floor(std::min(dpi, maxSide * kMetersPerInch / std::max(width, height))));
+
+	SheetActivation sheetActivation(drawing);
+	if (!sheetActivation.Show(sheet->name))
+		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "couldn't switch to sheet " + sheet->name);
+
+	// File > Save As image uses the TIF/PSD/JPG/PNG export options: print
+	// capture of the active sheet, in color, on a user-defined paper the
+	// size of the sheet. (swTiffPrintUseSheetSize alone was ignored: the
+	// image came out US Letter with the sheet scaled into it.)
+	PreferenceToggles prefs(swApp);
+	prefs.Set(swTiffPrintAllSheets, false);
+	prefs.SetInteger(swTiffScreenOrPrintCapture, 1);
+	prefs.SetInteger(swTiffPrintPaperSize, swDwgPapersUserDefined);
+	prefs.SetDouble(swTiffPrintDrawingPaperWidth, width);
+	prefs.SetDouble(swTiffPrintDrawingPaperHeight, height);
+	prefs.SetInteger(swTiffImageType, swTiffImageRGB);
+	prefs.SetInteger(swTiffPrintDPI, static_cast<long>(dpi));
+
+	// A folder of its own, since SolidWorks may name the file after the sheet.
+	std::error_code ec;
+	const std::filesystem::path dir = std::filesystem::temp_directory_path(ec) /
+		("sld_mcp_render_" + std::to_string(GetCurrentProcessId()) + "_" + std::to_string(GetTickCount64()));
+	if (ec || !std::filesystem::create_directories(dir, ec))
+		return grpc::Status(grpc::StatusCode::INTERNAL, "couldn't make a temporary folder: " + ec.message());
+	struct RemoveDir
+	{
+		std::filesystem::path path;
+		~RemoveDir() { std::error_code ignored; std::filesystem::remove_all(path, ignored); }
+	} removeDir{ dir };
+
+	std::string failures;
+	for (const char* format : { "png", "jpg" })
+	{
+		const std::filesystem::path file = dir / (std::string("sheet.") + format);
+		long errors = 0, warnings = 0;
+		VARIANT_BOOL ok = VARIANT_FALSE;
+		const HRESULT hr = ext->SaveAs(ATL::CComBSTR(file.wstring().c_str()), swSaveAsCurrentVersion,
+			swSaveAsOptions_Silent | swSaveAsOptions_Copy, nullptr, &errors, &warnings, &ok);
+		// The file SolidWorks wrote, whatever it called it.
+		std::filesystem::path written;
+		for (const auto& entry : std::filesystem::directory_iterator(dir, ec))
+			if (entry.is_regular_file() && entry.path().extension() == file.extension())
+				written = entry.path();
+		if (written.empty())
+		{
+			failures += std::string(failures.empty() ? "" : "; ") + format + ": SaveAs -> " +
+				(FAILED(hr) ? "HRESULT failure" : std::to_string(ok != VARIANT_FALSE)) + ", errors " +
+				std::to_string(errors);
+			continue;
+		}
+		std::ifstream in(written, std::ios::binary);
+		std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+		if (bytes.empty())
+		{
+			failures += std::string(failures.empty() ? "" : "; ") + format + ": empty file";
+			continue;
+		}
+		response->set_image(std::move(bytes));
+		response->set_format(format);
+		break;
+	}
+	if (response->image().empty())
+		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+			"SolidWorks didn't save sheet " + sheet->name + " as an image (" + failures + ")");
+
+	ATL::CComBSTR title;
+	if (SUCCEEDED(doc->GetTitle(&title)))
+		response->set_document_title(ToUtf8(title));
+	response->set_sheet_name(sheet->name);
+	response->set_width(width);
+	response->set_height(height);
+	response->set_dpi(static_cast<int32_t>(dpi));
+	for (const auto& view : sheet->views)
+	{
+		ATL::CComVariant outline;
+		if (FAILED(view->GetOutline(&outline)))
+			continue;
+		const std::vector<double> o = comvariant::ToDoubles(outline);
+		if (o.size() < 4)
+			continue;
+		sld_mcp::v1::SheetViewOutline* out = response->add_views();
+		out->set_name(ViewName(view));
+		const double lo[3] = { o[0], o[1], 0.0 }, hi[3] = { o[2], o[3], 0.0 };
+		SetVec3(out->mutable_outline()->mutable_min(), lo);
+		SetVec3(out->mutable_outline()->mutable_max(), hi);
+	}
 	return grpc::Status::OK;
 }
 

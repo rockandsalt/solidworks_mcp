@@ -314,5 +314,82 @@ d2 = dims_by_name(view_json("Drawing View2"))
 depth = [a for a in d2.values() if a.get("dimension") == "D1@Boss-Extrude1@drawing-block.Part"]
 assert depth and depth[0]["tolerance"]["limits_mm"] == [9.9, 10.1], d2
 assert not sw_dialogs(), sw_dialogs()
+# ---- render_drawing --------------------------------------------------------------
+import re
+import struct
+import zlib
+
+
+def read_png(path):
+    """(width, height, rows of RGB tuples) of an 8-bit RGB/RGBA PNG (stdlib only)."""
+    data = Path(path).read_bytes()
+    pos, idat, w = 8, b"", 0
+    while pos < len(data):
+        n, kind = struct.unpack(">I4s", data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + n]
+        if kind == b"IHDR":
+            w, h, depth, color = struct.unpack(">IIBB", body[:10])
+            assert depth == 8 and color in (2, 6), (depth, color)
+            bpp = 3 if color == 2 else 4
+        elif kind == b"IDAT":
+            idat += body
+        pos += 12 + n
+    raw, stride, rows, prev = zlib.decompress(idat), w * bpp, [], bytearray(w * bpp)
+    for y in range(h):
+        f, line = raw[y * (stride + 1)], bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+        for i in range(stride):
+            a = line[i - bpp] if i >= bpp else 0
+            b, c = prev[i], prev[i - bpp] if i >= bpp else 0
+            if f == 1: line[i] = (line[i] + a) & 255
+            elif f == 2: line[i] = (line[i] + b) & 255
+            elif f == 3: line[i] = (line[i] + (a + b) // 2) & 255
+            elif f == 4:
+                pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                line[i] = (line[i] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        rows.append([tuple(line[i:i + 3]) for i in range(0, stride, bpp)])
+        prev = line
+    return w, h, rows
+
+
+def render(**kw):
+    r = mcp.call("render_drawing", **kw)
+    print(f"    render {kw}: {r.text.splitlines()[0]}")
+    assert len(r.images) == 1, r.text
+    m = re.search(r"x ([\d.]+)\.\.([\d.]+) mm, y ([\d.]+)\.\.([\d.]+) mm: (\d+) x (\d+) px", r.text)
+    x0, x1, y0, y1, w, h = map(float, m.groups())
+    pw, ph, rows = read_png(r.images[0])
+    assert (pw, ph) == (w, h), (pw, ph, r.text)
+
+    def dark_near(x_mm, y_mm, reach=3):
+        """Whether the drawing is drawn (dark pixel) near sheet point (x, y) mm."""
+        px = 60 + (x_mm - x0) / (x1 - x0) * (w - 60)
+        py = (y1 - y_mm) / (y1 - y0) * (h - 30)
+        return any(sum(rows[j][i]) < 3 * 160
+                   for j in range(max(0, int(py) - reach), min(int(h) - 30, int(py) + reach + 1))
+                   for i in range(max(60, int(px) - reach), min(int(w), int(px) + reach + 1)))
+    return r, dark_near
+
+
+# The whole active sheet: View1's box (x 80..120, y 136..156 mm) is where the
+# rulers say, empty paper next to it isn't.
+r, dark_near = render()
+assert "Sheet1 of" in r.text and "Drawing View1: x" in r.text, r.text
+assert dark_near(100, 136) and dark_near(80, 146) and dark_near(120, 146), r.text
+assert not dark_near(160, 146, reach=2), "paper between the views should be blank"
+# Zoomed on View1 (its outline + 20 mm): sharper, same coordinates.
+r, dark_near = render(view="Drawing View1")
+assert dark_near(100, 136, reach=2) and dark_near(110, 149, reach=2), r.text  # bottom edge, top of the hole
+assert not dark_near(88, 140, reach=2), r.text  # inside the box, inside the angle's arc
+# A view on Sheet2 (the sheet is shown for the call, then put back).
+r, dark_near = render(view="Drawing View3")
+assert "Sheet2 of" in r.text and dark_near(180, 166, reach=2), r.text  # upper block's bottom edge
+assert active_sheets() == ["Sheet1"]
+# A region of the 1:2 Top view: its 40 mm edge is 20 mm long at y 147.5.
+r, dark_near = render(region_mm=[[235, 140], [265, 160]], max_px=800)
+assert dark_near(250, 147.5, reach=2) and not dark_near(250, 143, reach=1), r.text
+r = mcp.call("render_drawing", expect_error=True, sheet="Sheet9")
+assert "no sheet" in r.text, r.text
+assert not sw_dialogs(), sw_dialogs()
+
 # Saved, so the next run's reset doesn't refuse over its unsaved tolerances.
 com(f"""$p = Com $sw GetOpenDocumentByName @('{part}'); if ($p) {{ Com $p Save2 @($true) | Out-Null }}""")

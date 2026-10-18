@@ -91,6 +91,10 @@ public:
 		const sld_mcp::v1::InsertModelItemsRequest* request,
 		sld_mcp::v1::InsertModelItemsResponse* response) override;
 
+	grpc::Status RenderDrawing(grpc::ServerContext* context,
+		const sld_mcp::v1::RenderDrawingRequest* request,
+		sld_mcp::v1::RenderDrawingResponse* response) override;
+
 	grpc::Status DeleteFeatures(grpc::ServerContext* context,
 		const sld_mcp::v1::DeleteFeaturesRequest* request,
 		sld_mcp::v1::DeleteFeaturesResponse* response) override;
