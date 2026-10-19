@@ -13,6 +13,12 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="Source Files\service">
+      <UniqueIdentifier>{0c6f3e2a-5d41-4b8e-9a77-3f1d2c9b8e10}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\service">
+      <UniqueIdentifier>{7b2d9e41-8c35-4f0a-b6d2-1e4a5c7f9d23}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Generated Files">
       <UniqueIdentifier>{8ac992cf-4969-4a59-a1f8-b6e1d26197f5}</UniqueIdentifier>
       <SourceControlFiles>False</SourceControlFiles>
@@ -52,6 +58,27 @@
     <ClInclude Include="ComVariant.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="service\AnnotationHelpers.h">
+      <Filter>Header Files\service</Filter>
+    </ClInclude>
+    <ClInclude Include="service\AssemblyHelpers.h">
+      <Filter>Header Files\service</Filter>
+    </ClInclude>
+    <ClInclude Include="service\Common.h">
+      <Filter>Header Files\service</Filter>
+    </ClInclude>
+    <ClInclude Include="service\DimensionHelpers.h">
+      <Filter>Header Files\service</Filter>
+    </ClInclude>
+    <ClInclude Include="service\DrawingHelpers.h">
+      <Filter>Header Files\service</Filter>
+    </ClInclude>
+    <ClInclude Include="service\FeatureTreeHelpers.h">
+      <Filter>Header Files\service</Filter>
+    </ClInclude>
+    <ClInclude Include="service\SketchHelpers.h">
+      <Filter>Header Files\service</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="sld_mcp.cpp">
@@ -74,6 +101,69 @@
     </ClCompile>
     <ClCompile Include="SolidWorksService.cpp">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="service\AnnotationHelpers.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\Annotations.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\AssemblyHelpers.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\Common.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\Deleting.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\Diagnosing.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\DimensionHelpers.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\DrawingHelpers.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\Drawings.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\Editing.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\Extrude.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\FeatureTreeHelpers.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\Files.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\HoleWizard.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\InspectModel.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\Mates.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\Mesh.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\SketchConstraints.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\SketchHelpers.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\Sketches.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\Tolerances.cpp">
+      <Filter>Source Files\service</Filter>
     </ClCompile>
     <ClCompile Include="$(SldMcpProtoOutDir)\sld_mcp.pb.cc">
       <Filter>Generated Files</Filter>

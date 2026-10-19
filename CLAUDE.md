@@ -10,8 +10,10 @@ MCP client ──stdio──▶ mcp_server (Rust, rmcp) ──gRPC 127.0.0.1:505
 - `mcp_server/`: the MCP tools (`src/main.rs`), gRPC client, and everything 
   that can live outside SolidWorks: units (tools take mm, the wire is meters),
   id registry, enum names, JSON, filtering, geometry math, rendering.
-- `sld_mcp/`: the add-in. `SolidWorksService.cpp` implements the RPCs with
-  COM calls. Keep it thin: logic goes to the Rust side.
+- `sld_mcp/`: the add-in. `service/` implements the RPCs with COM calls, one
+  file per area (`Sketches.cpp`, `Drawings.cpp`, ...), helpers shared between
+  areas in `service/*Helpers.h` and `Common.h`. Keep it thin: logic goes to
+  the Rust side.
 
 Design notes, per area, with each feature's "Untested in SolidWorks —
 verify: …" list: `docs/notes/` (architecture.md first; also diagnosing,

@@ -2,7 +2,8 @@
 //
 // Implements the RPCs declared in proto/sld_mcp.proto. Adding a tool means:
 // add the rpc + messages to the .proto, override the generated method here,
-// and implement it in SolidWorksService.cpp.
+/// and implement it in the matching service/<Area>.cpp (helpers that more than
+// one area needs go in service/*Helpers.h or service/Common.h).
 #pragma once
 
 #include "GrpcIncludes.h"

@@ -136,8 +136,10 @@
       <PreprocessorDefinitions>WIN32;_WINDOWS;_DEBUG;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>$(SwTypeLibDir);$(SldMcpProtoOutDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(SwTypeLibDir);$(SldMcpProtoOutDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
+      <!-- One process per .cpp: the RPCs are split over many files (service\). -->
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
     <Midl>
       <MkTypLibCompatible>false</MkTypLibCompatible>
@@ -176,8 +178,10 @@
       <PreprocessorDefinitions>WIN32;_WINDOWS;NDEBUG;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>$(SwTypeLibDir);$(SldMcpProtoOutDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(SwTypeLibDir);$(SldMcpProtoOutDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
+      <!-- One process per .cpp: the RPCs are split over many files (service\). -->
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
     <Midl>
       <MkTypLibCompatible>false</MkTypLibCompatible>
@@ -218,8 +222,10 @@
       <PreprocessorDefinitions>_WINDOWS;_DEBUG;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>$(SwTypeLibDir);$(SldMcpProtoOutDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(SwTypeLibDir);$(SldMcpProtoOutDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
+      <!-- One process per .cpp: the RPCs are split over many files (service\). -->
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
     <Midl>
       <MkTypLibCompatible>false</MkTypLibCompatible>
@@ -257,8 +263,10 @@
       <PreprocessorDefinitions>_WINDOWS;NDEBUG;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>$(SwTypeLibDir);$(SldMcpProtoOutDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MSBuildProjectDirectory);$(SwTypeLibDir);$(SldMcpProtoOutDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
+      <!-- One process per .cpp: the RPCs are split over many files (service\). -->
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
     <Midl>
       <MkTypLibCompatible>false</MkTypLibCompatible>
@@ -299,6 +307,13 @@
     <ClInclude Include="RpcServer.h" />
     <ClInclude Include="SolidWorksService.h" />
     <ClInclude Include="ComVariant.h" />
+    <ClInclude Include="service\AnnotationHelpers.h" />
+    <ClInclude Include="service\AssemblyHelpers.h" />
+    <ClInclude Include="service\Common.h" />
+    <ClInclude Include="service\DimensionHelpers.h" />
+    <ClInclude Include="service\DrawingHelpers.h" />
+    <ClInclude Include="service\FeatureTreeHelpers.h" />
+    <ClInclude Include="service\SketchHelpers.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="dllmain.cpp">
@@ -339,6 +354,27 @@
     <ClCompile Include="SwAddin.cpp" />
     <ClCompile Include="RpcServer.cpp" />
     <ClCompile Include="SolidWorksService.cpp" />
+    <ClCompile Include="service\AnnotationHelpers.cpp" />
+    <ClCompile Include="service\Annotations.cpp" />
+    <ClCompile Include="service\AssemblyHelpers.cpp" />
+    <ClCompile Include="service\Common.cpp" />
+    <ClCompile Include="service\Deleting.cpp" />
+    <ClCompile Include="service\Diagnosing.cpp" />
+    <ClCompile Include="service\DimensionHelpers.cpp" />
+    <ClCompile Include="service\DrawingHelpers.cpp" />
+    <ClCompile Include="service\Drawings.cpp" />
+    <ClCompile Include="service\Editing.cpp" />
+    <ClCompile Include="service\Extrude.cpp" />
+    <ClCompile Include="service\FeatureTreeHelpers.cpp" />
+    <ClCompile Include="service\Files.cpp" />
+    <ClCompile Include="service\HoleWizard.cpp" />
+    <ClCompile Include="service\InspectModel.cpp" />
+    <ClCompile Include="service\Mates.cpp" />
+    <ClCompile Include="service\Mesh.cpp" />
+    <ClCompile Include="service\SketchConstraints.cpp" />
+    <ClCompile Include="service\SketchHelpers.cpp" />
+    <ClCompile Include="service\Sketches.cpp" />
+    <ClCompile Include="service\Tolerances.cpp" />
     <ClCompile Include="$(SldMcpProtoOutDir)\sld_mcp.pb.cc">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <!-- /Z7: keep debug info in the .obj instead of the shared vc145.pdb (avoids C1090 PDB errors). -->

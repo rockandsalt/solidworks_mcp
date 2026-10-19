@@ -1,7 +1,7 @@
 // GrpcIncludes.h : the one place grpc++ / protobuf headers enter this project.
 //
 // Include it only from .cpp files on the gRPC side of the add-in
-// (RpcServer.cpp, SolidWorksService.cpp, via SolidWorksService.h) -- never
+/// (RpcServer.cpp, SolidWorksService.cpp and service/*, via SolidWorksService.h) -- never
 // from anything SwAddin.cpp or the rest of the COM plumbing includes, so
 // that code keeps full /sdl checking.
 //
