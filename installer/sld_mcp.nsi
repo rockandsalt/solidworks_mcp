@@ -36,6 +36,7 @@ RequestExecutionLevel admin
 !endif
 
 !define APP_NAME "SolidWorks MCP"
+!define PUBLISHER "Marc Wang"
 !define APP_KEY "sld_mcp"
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_KEY}"
 ; Lowest SOLIDWORKS release the add-in is built for, and how far ahead to
@@ -58,6 +59,17 @@ InstallDirRegKey HKLM "Software\${APP_KEY}" "InstallDir"
 BrandingText "${APP_NAME} ${VERSION}"
 ShowInstDetails show
 ShowUninstDetails show
+
+; Version resource of the setup .exe (Properties > Details). VIProductVersion
+; wants four numbers; VERSION is Cargo's MAJOR.MINOR.PATCH.
+VIProductVersion "${VERSION}.0"
+VIFileVersion "${VERSION}.0"
+VIAddVersionKey /LANG=0 "ProductName" "${APP_NAME}"
+VIAddVersionKey /LANG=0 "CompanyName" "${PUBLISHER}"
+VIAddVersionKey /LANG=0 "LegalCopyright" "Copyright (C) 2026 ${PUBLISHER}"
+VIAddVersionKey /LANG=0 "FileDescription" "${APP_NAME} Setup"
+VIAddVersionKey /LANG=0 "FileVersion" "${VERSION}"
+VIAddVersionKey /LANG=0 "ProductVersion" "${VERSION}"
 
 Var SwReleases    ; installed SOLIDWORKS releases found, e.g. "2025, 2026"
 
@@ -186,6 +198,7 @@ Section "-Finish"
   SetRegView 64
   WriteRegStr HKLM "${UNINST_KEY}" "DisplayName" "${APP_NAME}"
   WriteRegStr HKLM "${UNINST_KEY}" "DisplayVersion" "${VERSION}"
+  WriteRegStr HKLM "${UNINST_KEY}" "Publisher" "${PUBLISHER}"
   WriteRegStr HKLM "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKLM "${UNINST_KEY}" "UninstallString" '"$INSTDIR\uninstall.exe"'
   WriteRegStr HKLM "${UNINST_KEY}" "QuietUninstallString" '"$INSTDIR\uninstall.exe" /S'
