@@ -171,8 +171,10 @@ assert len(lone) == 1, lone
 assert len(before["dimensions"]) == 1, before["dimensions"]
 print("    before:", before)
 
-# A corner is an end point of two sides: refused, naming them.
-r = mcp.call("delete_sketch_entities", entities=["point:1"], expect_error=True)
+# A corner is an end point of two sides: refused, naming them. (Looked up:
+# ids number on across documents, so it isn't point:1 after other scenarios.)
+corner = next(s["start"] for s in before["segments"] if s.get("name") == "Line1")
+r = mcp.call("delete_sketch_entities", entities=[corner], expect_error=True)
 assert "end or center point of" in r.text and "Line1" in r.text, r.text
 
 # The line and its (unshared) end points, dimension and relation go
@@ -199,14 +201,15 @@ assert r.text.startswith(f"deleted 1 entity from Sketch1 ({lone[0]})."), r.text
 # them), its horizontal relation goes, the profile opens and the extrude
 # fails -- closing the sketch must not pop up a dialog.
 before = sketch()
-r = mcp.call("delete_sketch_entities", entities=["line:1"])
+side = next(s["id"] for s in before["segments"] if s.get("name") == "Line1")
+r = mcp.call("delete_sketch_entities", entities=[side])
 print("    side:", r.text)
-assert r.text.startswith("deleted 1 entity from Sketch1 (line:1), along with 1 relation."), r.text
+assert r.text.startswith(f"deleted 1 entity from Sketch1 ({side}), along with 1 relation."), r.text
 assert "0 closed contours and 1 open contour" in r.text, r.text
 assert "Now failing to rebuild: Boss-Extrude1" in r.text, r.text
 after = sketch()
-assert set(by_id(before)) - set(by_id(after)) == {"line:1"}
-assert not sw_dialogs(), sw_dialogs()
+assert set(by_id(before)) - set(by_id(after)) == {side}
+assert not (open_dialogs := sw_dialogs()), open_dialogs
 # (diagnose_model also fails if the sketch was left open.)
 assert "Boss-Extrude1" in mcp.call("diagnose_model").text
 
@@ -281,4 +284,4 @@ for name in ("Parallel1", "Coincident2"):
 r = mcp.call("delete_features", features=[plane_name], children="delete")
 assert r.text.startswith(f"deleted 2 features: {plane_name}") and "Coincident1" in r.text, r.text
 assert not mcp.call("inspect_model", what="mates").json.get("mates"), "mates left"
-assert not sw_dialogs(), sw_dialogs()
+assert not (open_dialogs := sw_dialogs()), open_dialogs

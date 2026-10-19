@@ -181,6 +181,19 @@ pub fn describe(doc: &proto::Document) -> String {
     format!("{} ({}, {file})", doc.title, type_name(doc.r#type()))
 }
 
+/// Which document ids belong to (`IdRegistry::set_document`), and its name for
+/// messages; an empty key when nothing is open. A saved document is its file
+/// (persist ids are stable in a file, so its ids even survive SolidWorks
+/// restarting); one never saved is its title ("Part1") in this SolidWorks
+/// session, since titles start over at Part1 after a restart.
+pub fn document_key(reply: &proto::GetActiveDocumentResponse) -> (String, String) {
+    match &reply.document {
+        None => (String::new(), String::new()),
+        Some(doc) if !doc.path.is_empty() => (format!("file:{}", doc.path.to_lowercase()), doc.title.clone()),
+        Some(doc) => (format!("new:{}:{}", reply.session, doc.title), doc.title.clone()),
+    }
+}
+
 /// Names of the bits set in `bits`, from a (bit, name) table; unknown bits
 /// by number.
 fn bit_names(bits: i32, table: &[(i32, &str)]) -> Vec<String> {
@@ -361,6 +374,24 @@ mod tests {
 
     fn save(path: Option<&str>) -> SaveDocumentParams {
         SaveDocumentParams { path: path.map(Into::into), copy: false, overwrite: false }
+    }
+
+    #[test]
+    fn documents_are_keyed_by_file_else_session_and_title() {
+        let reply = |title: &str, path: &str, session: &str| proto::GetActiveDocumentResponse {
+            document: Some(proto::Document { title: title.into(), r#type: 1, path: path.into() }),
+            session: session.into(),
+        };
+        let saved = document_key(&reply("block.SLDPRT", r"C:\Dir\Block.SLDPRT", "s1"));
+        assert_eq!(saved, (r"file:c:\dir\block.sldprt".to_string(), "block.SLDPRT".to_string()));
+        // Same file after SolidWorks restarted: same document.
+        assert_eq!(document_key(&reply("block.SLDPRT", r"c:\dir\block.sldprt", "s2")).0, saved.0);
+        // Part1 of another session is another document.
+        let new1 = document_key(&reply("Part1", "", "s1")).0;
+        assert_ne!(new1, document_key(&reply("Part1", "", "s2")).0);
+        assert_ne!(new1, document_key(&reply("Part2", "", "s1")).0);
+        let none = proto::GetActiveDocumentResponse { document: None, session: "s1".into() };
+        assert_eq!(document_key(&none).0, "");
     }
 
     #[test]

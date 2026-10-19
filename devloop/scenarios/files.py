@@ -171,9 +171,9 @@ try:
     assert "opened files-pair" in r.text and "suppressed" in r.text, r.text
     components = mcp.call("inspect_model", what="components").json["components"]
     assert [c.get("state") for c in components] == ["suppressed"] * 2, components
-    assert not sw_dialogs(), sw_dialogs()
+    assert not (open_dialogs := sw_dialogs()), open_dialogs
 finally:
     close_all()
     moved.rename(block)
 
-assert not sw_dialogs(), sw_dialogs()
+assert not (open_dialogs := sw_dialogs()), open_dialogs

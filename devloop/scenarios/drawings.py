@@ -222,7 +222,7 @@ r = mcp.call("add_drawing_dimensions", expect_error=True, dimensions=[
 ])
 print("    impossible:", r.text)
 assert dims_by_name(view_json("Drawing View1")).keys() == d1.keys()
-assert not sw_dialogs(), sw_dialogs()
+assert not (open_dialogs := sw_dialogs()), open_dialogs
 
 # ---- insert_model_items --------------------------------------------------------
 # Only the selected view: the box's depth (along X) shows in the Top view.
@@ -241,7 +241,7 @@ final = mcp.call("inspect_drawing", list_annotations=True).json
 dump("final", final)
 v3 = [v for s in final["sheets"] for v in s["views"] if v["name"] == "Drawing View3"][0]
 assert v3["annotation_counts"] == {"dimension": 1}, v3
-assert not sw_dialogs(), sw_dialogs()
+assert not (open_dialogs := sw_dialogs()), open_dialogs
 # ... though it had items to bring in (so AllViews=TRUE stays on the active
 # sheet), on a sheet that isn't showing.
 r = mcp.call("insert_model_items", views=["Drawing View3"])
@@ -313,7 +313,7 @@ com(f"""if (-not (Com $sw ActivateDoc @('{drawing_title}')) -and -not (Com $sw A
 d2 = dims_by_name(view_json("Drawing View2"))
 depth = [a for a in d2.values() if a.get("dimension") == "D1@Boss-Extrude1@drawing-block.Part"]
 assert depth and depth[0]["tolerance"]["limits_mm"] == [9.9, 10.1], d2
-assert not sw_dialogs(), sw_dialogs()
+assert not (open_dialogs := sw_dialogs()), open_dialogs
 # ---- render_drawing --------------------------------------------------------------
 import re
 import struct
@@ -389,7 +389,7 @@ r, dark_near = render(region_mm=[[235, 140], [265, 160]], max_px=800)
 assert dark_near(250, 147.5, reach=2) and not dark_near(250, 143, reach=1), r.text
 r = mcp.call("render_drawing", expect_error=True, sheet="Sheet9")
 assert "no sheet" in r.text, r.text
-assert not sw_dialogs(), sw_dialogs()
+assert not (open_dialogs := sw_dialogs()), open_dialogs
 
 # Saved, so the next run's reset doesn't refuse over its unsaved tolerances.
 com(f"""$p = Com $sw GetOpenDocumentByName @('{part}'); if ($p) {{ Com $p Save2 @($true) | Out-Null }}""")

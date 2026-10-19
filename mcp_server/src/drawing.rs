@@ -191,10 +191,7 @@ pub fn decode_ref(ids: &IdRegistry, id: &str) -> Result<proto::DrawingEntityRef,
         .and_then(|bytes| proto::DrawingEntityRef::decode(bytes.as_slice()).ok())
         .ok_or_else(|| {
             McpError::invalid_params(
-                format!(
-                    "unknown id {id:?} -- ids come from inspect_drawing (and are forgotten if the MCP \
-                     server restarts); call it with the view to get current ones"
-                ),
+                ids.unknown_id(id, "inspect_drawing", "call inspect_drawing with the view for current ones"),
                 None,
             )
         })

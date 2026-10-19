@@ -22,9 +22,11 @@ use addin::proto;
 use inspect::{IdRegistry, Kind, MM_PER_M, SKETCH_KINDS};
 use sketch::RefTarget;
 use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CacheScope, CallToolResult, ContentBlock, Implementation, ListToolsResult,
+    CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
+    ListToolsResult,
     PaginatedRequestParams, ProtocolVersion, ServerCapabilities, ServerInfo,
 };
 use rmcp::service::RequestContext;
@@ -40,6 +42,11 @@ use tracing_subscriber::EnvFilter;
 /// How long a client may cache the tool list. The list is fixed for the life
 /// of the process, so this only bounds how long a cache outlives a rebuild.
 const TOOL_LIST_TTL_MS: u64 = 5 * 60 * 1000;
+
+/// How long the active-document check before each tool call may take. It's a
+/// few COM calls; if SolidWorks is too busy for that, the call goes ahead with
+/// the document the last check found.
+const DOCUMENT_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// One of the three default reference planes every part starts with.
 #[derive(Debug, Clone, Copy, Default, Deserialize, schemars::JsonSchema)]
@@ -780,13 +787,14 @@ impl SolidWorksTools {
                        its file (or that it was never saved)"
     )]
     async fn get_active_document_name(&self) -> Result<CallToolResult, McpError> {
-        let document = self
+        let reply = self
             .addin
-            .get_active_document()
+            .get_active_document(None)
             .await
             .map_err(|status| self.addin_error(status))?;
 
-        let name = document
+        let name = reply
+            .document
             .map(|doc| files::describe(&doc))
             .unwrap_or_else(|| "(no active document)".to_string());
         Ok(CallToolResult::success(vec![ContentBlock::text(name)]))
@@ -814,6 +822,8 @@ impl SolidWorksTools {
             .save_document(request.clone())
             .await
             .map_err(|status| self.addin_error(status))?;
+        // Save As gives the document another file, and so another key.
+        self.track_document(true).await;
         let text = files::save_reply_text(&request, &reply)?;
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -2410,10 +2420,10 @@ impl SolidWorksTools {
                     .map(|r| RefTarget::Item(r).into_proto())
                     .ok_or_else(|| {
                         McpError::invalid_params(
-                            format!(
-                                "unknown sketch entity id {entity:?} -- ids come from inspect_sketch \
-                                 and the sketch_* tools (and are forgotten if the MCP server \
-                                 restarts); call inspect_sketch to get current ones"
+                            ids.unknown_id(
+                                entity,
+                                "inspect_sketch and the sketch_* tools",
+                                "call inspect_sketch for current ones",
                             ),
                             None,
                         )
@@ -2456,15 +2466,32 @@ impl SolidWorksTools {
         })
     }
 
+    /// Points the id registry at the active document, so the ids the tool
+    /// call about to run mints and resolves are that document's. `rename`:
+    /// the active document is the one the registry has, under a new file
+    /// (Save As), so its ids carry over.
+    async fn track_document(&self, rename: bool) {
+        match self.addin.get_active_document(Some(DOCUMENT_CHECK_TIMEOUT)).await {
+            Ok(reply) => {
+                let (key, name) = files::document_key(&reply);
+                let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                if rename {
+                    ids.rename_document(&key, &name);
+                } else {
+                    ids.set_document(&key, &name);
+                }
+            }
+            // The tool call itself then says what's wrong with the add-in.
+            Err(status) => tracing::debug!("couldn't check the active document: {status}"),
+        }
+    }
+
     /// The persist ID behind an id handed out by inspect_model.
     fn resolve_id(&self, id: &str) -> Result<Vec<u8>, McpError> {
         let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         ids.persist_id(id).ok_or_else(|| {
             McpError::invalid_params(
-                format!(
-                    "unknown id {id:?} -- ids come from inspect_model (and are forgotten if \
-                     the MCP server restarts); call it to get current ones"
-                ),
+                ids.unknown_id(id, "inspect_model", "call inspect_model for current ones"),
                 None,
             )
         })
@@ -2498,6 +2525,17 @@ impl SolidWorksTools {
 // Self::tool_router() again on every request.
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for SolidWorksTools {
+    // Written by hand to check which document is active first: ids belong to
+    // a document (see IdRegistry).
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, McpError> {
+        self.track_document(false).await;
+        self.tool_router.call(ToolCallContext::new(self, request, context)).await
+    }
+
     // Written by hand because the one #[tool_handler] generates leaves out
     // ttlMs and cacheScope. Protocol 2026-07-28 requires both on tools/list,
     // and Claude Code rejects the whole tool list without them.

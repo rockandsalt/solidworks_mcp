@@ -103,11 +103,12 @@ pub fn feature_targets(
             let target = match Kind::of_id(feature) {
                 None => Target::Name(feature.to_string()),
                 Some(Kind::Feature) => Target::PersistId(ids.persist_id(feature).ok_or_else(|| {
-                    invalid(format!(
-                        "{what}: unknown id {feature:?} -- ids come from inspect_model (and are \
-                         forgotten if the MCP server restarts); call it to get current ones, or \
-                         give the feature's name"
-                    ))
+                    let why = ids.unknown_id(
+                        feature,
+                        "inspect_model",
+                        "call inspect_model for current ones, or give the feature's name",
+                    );
+                    invalid(format!("{what}: {why}"))
                 })?),
                 Some(kind) if SKETCH_KINDS.contains(&kind) => {
                     return Err(invalid(format!(
@@ -157,11 +158,12 @@ pub fn sketch_items(
             match Kind::of_id(entity) {
                 Some(kind) if SKETCH_KINDS.contains(&kind) => {
                     sketch::decode_ref(ids, entity).ok_or_else(|| {
-                        invalid(format!(
-                            "{what}: unknown sketch entity id {entity:?} -- ids come from \
-                             inspect_sketch and the sketch_* tools (and are forgotten if the MCP \
-                             server restarts); call inspect_sketch to get current ones"
-                        ))
+                        let why = ids.unknown_id(
+                            entity,
+                            "inspect_sketch and the sketch_* tools",
+                            "call inspect_sketch for current ones",
+                        );
+                        invalid(format!("{what}: {why}"))
                     })
                 }
                 Some(Kind::Feature) => Err(invalid(format!(

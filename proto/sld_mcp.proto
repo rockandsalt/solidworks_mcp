@@ -257,6 +257,10 @@ message GetActiveDocumentRequest {}
 message GetActiveDocumentResponse {
   // Unset when SolidWorks has no document open.
   Document document = 1;
+  // Different for every SolidWorks process (its id + start time): titles
+  // of documents never saved ("Part1") repeat after SolidWorks restarts, so
+  // the MCP server keys those by session + title.
+  string session = 2;
 }
 
 message Document {

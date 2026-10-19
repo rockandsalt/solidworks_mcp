@@ -25,6 +25,17 @@ namespace
 		out->set_path(ToUtf8(path));
 		return grpc::Status::OK;
 	}
+
+	// This SolidWorks process: its id and start time (process ids get reused).
+	std::string ProcessSession()
+	{
+		FILETIME created{}, exited{}, kernel{}, user{};
+		GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user);
+		char text[48];
+		std::snprintf(text, sizeof(text), "%lu-%08lx%08lx", GetCurrentProcessId(),
+			created.dwHighDateTime, created.dwLowDateTime);
+		return text;
+	}
 }
 
 grpc::Status SolidWorksService::GetActiveDocument(grpc::ServerContext* /*context*/,
@@ -38,6 +49,9 @@ grpc::Status SolidWorksService::GetActiveDocument(grpc::ServerContext* /*context
 	ATL::CComPtr<ISldWorks> swApp;
 	if (grpc::Status status = GetSwApp(swApp); !status.ok())
 		return status;
+
+	static const std::string session = ProcessSession();
+	response->set_session(session);
 
 	ATL::CComPtr<IModelDoc2> doc;
 	HRESULT hr = swApp->get_IActiveDoc2(&doc);

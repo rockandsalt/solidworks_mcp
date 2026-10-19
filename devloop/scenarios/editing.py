@@ -292,4 +292,4 @@ assert "not a mate" in r.text, r.text
 
 problems = mcp.call("diagnose_model").json.get("problems", [])
 assert not problems, problems
-assert not sw_dialogs(), sw_dialogs()
+assert not (open_dialogs := sw_dialogs()), open_dialogs

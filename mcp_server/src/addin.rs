@@ -59,14 +59,20 @@ impl AddinClient {
         &self.endpoint
     }
 
-    pub async fn get_active_document(&self) -> Result<Option<proto::Document>, tonic::Status> {
+    /// The active document (none = nothing open) and the SolidWorks session;
+    /// `timeout` shortens the usual REQUEST_TIMEOUT.
+    pub async fn get_active_document(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<proto::GetActiveDocumentResponse, tonic::Status> {
         // Clients are cheap handles onto the shared channel; tonic needs a
         // &mut one per call.
         let mut client = self.client.clone();
-        let response = client
-            .get_active_document(proto::GetActiveDocumentRequest {})
-            .await?;
-        Ok(response.into_inner().document)
+        let mut request = tonic::Request::new(proto::GetActiveDocumentRequest {});
+        if let Some(timeout) = timeout {
+            request.set_timeout(timeout);
+        }
+        Ok(client.get_active_document(request).await?.into_inner())
     }
 
     pub async fn new_part(&self) -> Result<Option<proto::Document>, tonic::Status> {

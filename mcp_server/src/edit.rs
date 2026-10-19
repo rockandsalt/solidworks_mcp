@@ -30,9 +30,10 @@ fn feature_target(ids: &IdRegistry, feature: &str, noun: &str) -> Result<proto::
     let target = match Kind::of_id(feature) {
         None => Target::Name(feature.to_string()),
         Some(Kind::Feature) => Target::PersistId(ids.persist_id(feature).ok_or_else(|| {
-            invalid(format!(
-                "unknown id {feature:?} -- ids come from inspect_model (and are forgotten if the \
-                 MCP server restarts); call it to get current ones, or give the {noun}'s name"
+            invalid(ids.unknown_id(
+                feature,
+                "inspect_model",
+                &format!("call inspect_model for current ones, or give the {noun}'s name"),
             ))
         })?),
         Some(_) => {

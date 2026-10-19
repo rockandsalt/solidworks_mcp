@@ -45,3 +45,20 @@ mcp.call("cut_extrude_sketch", depth_mm=2, reverse_direction=True, expect_error=
 mcp.call("cut_extrude_sketch", depth_mm=2)
 
 mcp.call("render_views", views=["right", "isometric"])
+
+# 4. Ids belong to their document (2026-10-18): a second part hands out the
+# same sketch-entity bytes, which used to come back as the first part's ids
+# ("line:8" for a circle) and resolve in the wrong document.
+first_part_face = far_face[0]["id"]
+mcp.call("create_part")
+mcp.call("sketch_circle", plane="front", center=[0, 0], diameter_mm=6)
+mcp.call("sketch_circle", sketch_name="Sketch1", center=[20, 0], diameter_mm=5)
+new_ids = [e["id"] for e in mcp.call("inspect_sketch", sketch_name="Sketch1").json["segments"]]
+assert len(new_ids) == 2 and all(i.startswith("circle:") for i in new_ids), new_ids
+assert not set(new_ids) & set(circles), (new_ids, circles)
+# The first part's ids are refused here, saying why.
+r = mcp.call("sketch_circle", on=first_part_face, center=[0, 0], diameter_mm=2, expect_error=True)
+assert "is from another document" in r.text, r.text
+r = mcp.call("add_sketch_relations", relations=[{"kind": "equal", "entities": [circles[0], new_ids[0]]}],
+             expect_error=True)
+assert "is from another document" in r.text, r.text

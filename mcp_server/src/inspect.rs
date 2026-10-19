@@ -91,39 +91,118 @@ impl Kind {
     }
 }
 
+/// Short IDs for persist IDs, per document. Persist IDs only mean something
+/// in the document they came from, and two documents can hand out the same
+/// bytes (a sketch entity's ref is the sketch's persist id + two small
+/// numbers), so every ID belongs to the document that was active when it was
+/// minted and only resolves while that document is active again. The numbers
+/// are shared by all documents, so an ID never names two things.
 #[derive(Default)]
 pub struct IdRegistry {
-    by_bytes: HashMap<Vec<u8>, String>,
-    by_id: HashMap<String, Vec<u8>>,
+    /// Index into `documents` of the active one; 0 = not known yet.
+    document: usize,
+    /// (key, name to show) per document seen; index 0 is the unknown one.
+    documents: Vec<(String, String)>,
+    by_bytes: HashMap<(usize, Vec<u8>), String>,
+    by_id: HashMap<String, (usize, Vec<u8>)>,
     next: HashMap<&'static str, u32>,
 }
 
 impl IdRegistry {
+    /// Makes the document with this key (see `main::document_key`) the one
+    /// IDs are minted for and resolved in.
+    pub fn set_document(&mut self, key: &str, name: &str) {
+        self.document = self.document_index(key);
+        self.documents[self.document].1 = name.to_string();
+    }
+
+    /// The active document now has this key, e.g. after Save As: its IDs
+    /// keep working under the new key.
+    pub fn rename_document(&mut self, key: &str, name: &str) {
+        if self.document == 0 || key.is_empty() {
+            return self.set_document(key, name);
+        }
+        // A document seen earlier under that key (e.g. a file that was
+        // saved over) loses it: its IDs are for what the file used to be.
+        for doc in &mut self.documents[1..] {
+            if doc.0 == key {
+                doc.0.clear();
+            }
+        }
+        self.documents[self.document] = (key.to_string(), name.to_string());
+    }
+
+    fn document_index(&mut self, key: &str) -> usize {
+        if self.documents.is_empty() {
+            self.documents.push((String::new(), String::new()));
+        }
+        if key.is_empty() {
+            return 0;
+        }
+        if let Some(i) = self.documents.iter().skip(1).position(|(k, _)| k == key) {
+            return i + 1;
+        }
+        self.documents.push((key.to_string(), String::new()));
+        self.documents.len() - 1
+    }
+
     /// The short ID for a persist ID, minting one if it's new. None for an
     /// empty persist ID (SolidWorks couldn't reference the entity).
     pub fn id_for(&mut self, kind: Kind, persist_id: &[u8]) -> Option<String> {
         if persist_id.is_empty() {
             return None;
         }
-        if let Some(id) = self.by_bytes.get(persist_id) {
+        let key = (self.document, persist_id.to_vec());
+        // Same bytes as another kind: they name something else now (a sketch
+        // entity's numbers reused for a different kind of entity).
+        if let Some(id) = self.by_bytes.get(&key)
+            && Kind::of_id(id) == Some(kind)
+        {
             return Some(id.clone());
         }
         let counter = self.next.entry(kind.prefix()).or_insert(0);
         *counter += 1;
         let id = format!("{}:{}", kind.prefix(), counter);
-        self.by_bytes.insert(persist_id.to_vec(), id.clone());
-        self.by_id.insert(id.clone(), persist_id.to_vec());
+        self.by_id.insert(id.clone(), key.clone());
+        self.by_bytes.insert(key, id.clone());
         Some(id)
     }
 
-    /// The short ID already handed out for these bytes, without minting one.
+    /// The short ID already handed out for these bytes in the active
+    /// document, of whatever kind, without minting one.
     pub fn existing_id(&self, persist_id: &[u8]) -> Option<String> {
-        self.by_bytes.get(persist_id).cloned()
+        self.by_bytes.get(&(self.document, persist_id.to_vec())).cloned()
     }
 
-    /// The persist ID behind a short ID handed out earlier.
+    /// The persist ID behind a short ID handed out earlier for the active
+    /// document. `unknown_id` says why there's none.
     pub fn persist_id(&self, id: &str) -> Option<Vec<u8>> {
-        self.by_id.get(id.trim()).cloned()
+        match self.by_id.get(id.trim()) {
+            Some((doc, bytes)) if *doc == self.document => Some(bytes.clone()),
+            _ => None,
+        }
+    }
+
+    /// Why `persist_id(id)` found nothing, for an error message: `source` is
+    /// where IDs come from ("inspect_model"), `then` what to do instead.
+    pub fn unknown_id(&self, id: &str, source: &str, then: &str) -> String {
+        let id = id.trim();
+        let name = |doc: usize, unnamed: &str| match self.documents.get(doc) {
+            Some((_, name)) if !name.is_empty() => name.clone(),
+            _ => unnamed.to_string(),
+        };
+        match self.by_id.get(id) {
+            Some((doc, _)) if *doc != self.document => format!(
+                "{id} is from another document ({}), not the active one ({}) -- ids only work \
+                 in the document they came from; {then}",
+                name(*doc, "an earlier one"),
+                name(self.document, "none")
+            ),
+            _ => format!(
+                "unknown id {id:?} -- ids come from {source} (and are forgotten if the MCP server \
+                 restarts); {then}"
+            ),
+        }
     }
 
     /// Whether `s` looks like one of our model geometry IDs (as opposed to,
@@ -562,6 +641,56 @@ mod tests {
         assert_eq!(ids.persist_id(" face:2 ").unwrap(), b"bbb");
         assert!(ids.persist_id("face:9").is_none());
         assert!(ids.id_for(Kind::Face, b"").is_none());
+    }
+
+    #[test]
+    fn ids_belong_to_their_document() {
+        // Two parts both hand out the same bytes (Sketch2's ref + entity
+        // numbers): a line in the first, a circle in the second.
+        let mut ids = IdRegistry::default();
+        ids.set_document("new:s:Part1", "Part1");
+        let line = ids.id_for(Kind::Line, b"sketch2/8").unwrap();
+        ids.set_document("new:s:Part2", "Part2");
+        let circle = ids.id_for(Kind::Circle, b"sketch2/8").unwrap();
+        assert_eq!((line.as_str(), circle.as_str()), ("line:1", "circle:1"));
+        assert_eq!(ids.persist_id(&circle).unwrap(), b"sketch2/8");
+        // The first part's line doesn't resolve while Part2 is active...
+        assert!(ids.persist_id(&line).is_none());
+        let why = ids.unknown_id(&line, "inspect_sketch", "call inspect_sketch for current ones");
+        assert!(why.starts_with("line:1 is from another document (Part1), not the active one (Part2)"), "{why}");
+        assert!(ids.unknown_id("line:7", "inspect_sketch", "x").starts_with("unknown id \"line:7\""));
+        // ...and does again once it is.
+        ids.set_document("new:s:Part1", "Part1");
+        assert_eq!(ids.persist_id(&line).unwrap(), b"sketch2/8");
+        assert_eq!(ids.id_for(Kind::Line, b"sketch2/8").unwrap(), line);
+    }
+
+    #[test]
+    fn bytes_seen_as_another_kind_get_a_new_id() {
+        let mut ids = IdRegistry::default();
+        assert_eq!(ids.id_for(Kind::Segment, b"s/1").unwrap(), "segment:1");
+        assert_eq!(ids.existing_id(b"s/1").unwrap(), "segment:1");
+        assert_eq!(ids.id_for(Kind::Line, b"s/1").unwrap(), "line:1");
+        assert_eq!(ids.existing_id(b"s/1").unwrap(), "line:1");
+        assert_eq!(ids.persist_id("segment:1").unwrap(), b"s/1");
+    }
+
+    #[test]
+    fn save_as_keeps_the_ids() {
+        let mut ids = IdRegistry::default();
+        ids.set_document("file:c:\\old.sldprt", "old.SLDPRT");
+        let old_face = ids.id_for(Kind::Face, b"f").unwrap();
+        ids.set_document("new:s:Part1", "Part1");
+        let face = ids.id_for(Kind::Face, b"f").unwrap();
+        // Part1 saved over old.sldprt.
+        ids.rename_document("file:c:\\old.sldprt", "old.SLDPRT");
+        assert_eq!(ids.persist_id(&face).unwrap(), b"f");
+        assert!(ids.persist_id(&old_face).is_none());
+        // Opening the file again finds Part1's ids, not the old file's.
+        ids.set_document("", "");
+        ids.set_document("file:c:\\old.sldprt", "old.SLDPRT");
+        assert_eq!(ids.persist_id(&face).unwrap(), b"f");
+        assert!(ids.persist_id(&old_face).is_none());
     }
 
     #[test]
