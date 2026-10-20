@@ -374,6 +374,7 @@
     <ClCompile Include="service\Mesh.cpp" />
     <ClCompile Include="service\ReferenceGeometry.cpp" />
     <ClCompile Include="service\ReferenceHelpers.cpp" />
+    <ClCompile Include="service\Revolve.cpp" />
     <ClCompile Include="service\SketchConstraints.cpp" />
     <ClCompile Include="service\SketchHelpers.cpp" />
     <ClCompile Include="service\Sketches.cpp" />

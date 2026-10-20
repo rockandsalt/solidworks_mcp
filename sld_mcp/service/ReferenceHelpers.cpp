@@ -1,6 +1,8 @@
 // ReferenceHelpers.cpp : see ReferenceHelpers.h.
 #include "pch.h"
 #include "ReferenceHelpers.h"
+#include "FeatureTreeHelpers.h"
+#include "SketchHelpers.h"
 
 namespace sld_mcp::service
 {
@@ -22,6 +24,36 @@ namespace sld_mcp::service
 				axes[a] = Eigen::Vector3d(m[3 * a], m[3 * a + 1], m[3 * a + 2]).normalized();
 			origin = Eigen::Vector3d(m[9], m[10], m[11]);
 			return true;
+		}
+
+		// Reference features (planes, axes, ...) can be references; other
+		// features can't.
+		grpc::Status PickFeature(IFeature* feature, Pick& out)
+		{
+			const std::string type = FeatureTypeName(feature);
+			const std::string name = FeatureName(feature);
+			if (!IsReferenceType(type))
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"\"" + name + "\" (" + type + ") isn't reference geometry -- reference faces, edges, vertices, "
+					"sketch entities, the origin, or reference planes / axes / points / coordinate systems");
+			out.kind = Pick::Feature;
+			out.obj = feature;
+			out.what = name;
+			return grpc::Status::OK;
+		}
+
+		const char* SketchSegmentName(ISketchSegment* segment)
+		{
+			long type = -1;
+			segment->GetType(&type);
+			switch (type)
+			{
+			case swSketchLINE:    return "sketch line";
+			case swSketchARC:     return "sketch arc";
+			case swSketchSPLINE:  return "sketch spline";
+			case swSketchELLIPSE: return "sketch ellipse";
+			default:              return "sketch segment";
+			}
 		}
 	}
 
@@ -90,5 +122,179 @@ namespace sld_mcp::service
 			return true;
 		}
 		return false;
+	}
+
+	grpc::Status ResolvePick(IModelDoc2* doc, IModelDocExtension* ext, const sld_mcp::v1::GeometryRef& ref,
+		Pick& out)
+	{
+		using Ref = sld_mcp::v1::GeometryRef;
+		switch (ref.target_case())
+		{
+		case Ref::kModelPersistId:
+		{
+			if (grpc::Status status = ResolvePersistId(ext, ref.model_persist_id(), out.obj); !status.ok())
+				return status;
+			if (ATL::CComQIPtr<IFeature> feature(out.obj.p); feature)
+				return PickFeature(feature, out);
+			out.kind = Pick::Entity;
+			if (ATL::CComQIPtr<IFace2>(out.obj.p))
+				out.what = "face";
+			else if (ATL::CComQIPtr<IEdge>(out.obj.p))
+				out.what = "edge";
+			else if (ATL::CComQIPtr<IVertex>(out.obj.p))
+				out.what = "vertex";
+			else
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"only faces, edges, vertices and reference features can be referenced by id");
+			return grpc::Status::OK;
+		}
+		case Ref::kSketchItem:
+		{
+			ATL::CComPtr<IDispatch> sketchObj;
+			if (grpc::Status status = ResolvePersistId(ext, ref.sketch_item().sketch_persist_id(), sketchObj);
+				!status.ok())
+				return grpc::Status(status.error_code(), "the entity's sketch " + status.error_message());
+			ATL::CComQIPtr<IFeature> sketchFeature(sketchObj.p);
+			ATL::CComPtr<ISketch> sketch;
+			if (!sketchFeature)
+				return grpc::Status(grpc::StatusCode::INTERNAL, "a sketch reference didn't resolve to a feature");
+			if (grpc::Status status = SketchOf(sketchFeature, sketch); !status.ok())
+				return status;
+			SketchItems items;
+			items.Load(sketch);
+			out.obj = items.Find(ref.sketch_item());
+			if (!out.obj)
+				return grpc::Status(grpc::StatusCode::NOT_FOUND,
+					"no such entity in sketch \"" + FeatureName(sketchFeature) +
+					"\" (deleted or merged?) -- inspect the sketch again for current IDs");
+			if (ATL::CComQIPtr<ISketchSegment> segment(out.obj.p); segment)
+			{
+				out.kind = Pick::SketchSegment;
+				out.what = SketchSegmentName(segment);
+			}
+			else
+			{
+				out.kind = Pick::SketchPoint;
+				out.what = "sketch point";
+			}
+			out.what += " of " + FeatureName(sketchFeature);
+			return grpc::Status::OK;
+		}
+		case Ref::kOrigin:
+		{
+			ATL::CComPtr<ISketchPoint> point;
+			std::string originName;
+			FindOrigin(doc, point, originName);
+			out.what = "the origin";
+			if (point)
+			{
+				out.kind = Pick::SketchPoint;
+				out.obj = point;
+				return grpc::Status::OK;
+			}
+			if (originName.empty())
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "couldn't find the part's origin");
+			// The origin's point as the UI names it ("Point1@Origin").
+			out.kind = Pick::ByName;
+			out.selectName = "Point1@" + originName;
+			return grpc::Status::OK;
+		}
+		case Ref::kStandardPlane:
+		{
+			int index = 0;
+			if (!StandardPlaneIndex(ref.standard_plane(), index))
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "plane must be FRONT, TOP or RIGHT");
+			ATL::CComPtr<IFeature> plane;
+			if (grpc::Status status = FindStandardPlane(doc, index, plane); !status.ok())
+				return status;
+			return PickFeature(plane, out);
+		}
+		case Ref::kFeatureName:
+		{
+			ATL::CComQIPtr<IPartDoc> part(doc);
+			ATL::CComPtr<IFeature> feature;
+			if (!part || FAILED(part->IFeatureByName(FromUtf8(ref.feature_name()), &feature)) || !feature)
+				return grpc::Status(grpc::StatusCode::NOT_FOUND,
+					"the active part has no feature named \"" + ref.feature_name() + "\"");
+			return PickFeature(feature, out);
+		}
+		default:
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a reference is empty");
+		}
+	}
+
+	bool SelectPick(IModelDocExtension* ext, ISelectData* data, const Pick& pick, long mark)
+	{
+		data->put_Mark(mark);
+		VARIANT_BOOL selected = VARIANT_FALSE;
+		switch (pick.kind)
+		{
+		case Pick::Entity:
+		{
+			ATL::CComQIPtr<IEntity> entity(pick.obj.p);
+			return entity && SUCCEEDED(entity->Select4(VARIANT_TRUE, data, &selected)) && selected;
+		}
+		case Pick::Feature:
+		{
+			ATL::CComQIPtr<IFeature> feature(pick.obj.p);
+			return feature && SUCCEEDED(feature->Select2(VARIANT_TRUE, mark, &selected)) && selected;
+		}
+		case Pick::SketchSegment:
+		{
+			ATL::CComQIPtr<ISketchSegment> segment(pick.obj.p);
+			return segment && SUCCEEDED(segment->Select4(VARIANT_TRUE, data, &selected)) && selected;
+		}
+		case Pick::SketchPoint:
+		{
+			ATL::CComQIPtr<ISketchPoint> point(pick.obj.p);
+			return point && SUCCEEDED(point->Select4(VARIANT_TRUE, data, &selected)) && selected;
+		}
+		case Pick::ByName:
+			return SUCCEEDED(ext->SelectByID2(FromUtf8(pick.selectName), ATL::CComBSTR(L"EXTSKETCHPOINT"),
+				0.0, 0.0, 0.0, VARIANT_TRUE, mark, nullptr, swSelectOptionDefault, &selected)) && selected;
+		}
+		return false;
+	}
+
+	grpc::Status Selection::Add(IModelDoc2* doc, IModelDocExtension* ext, const sld_mcp::v1::GeometryRef& ref,
+		long mark, const std::string& label)
+	{
+		Pick pick;
+		if (grpc::Status status = ResolvePick(doc, ext, ref, pick); !status.ok())
+			return grpc::Status(status.error_code(), label + ": " + status.error_message());
+		picks.push_back(pick);
+		marks.push_back(mark);
+		return grpc::Status::OK;
+	}
+
+	std::string Selection::Describe() const
+	{
+		std::string text;
+		for (const Pick& p : picks)
+			text += (text.empty() ? "" : ", ") + p.what;
+		return text;
+	}
+
+	grpc::Status Selection::Select(IModelDoc2* doc, IModelDocExtension* ext) const
+	{
+		ATL::CComPtr<ISelectionMgr> selectionManager;
+		HRESULT hr = doc->get_ISelectionManager(&selectionManager);
+		if (FAILED(hr) || !selectionManager)
+			return ComError("IModelDoc2::ISelectionManager", hr);
+		ATL::CComPtr<ISelectData> data;
+		hr = selectionManager->CreateSelectData(&data);
+		if (FAILED(hr) || !data)
+			return ComError("ISelectionMgr::CreateSelectData", hr);
+
+		doc->ClearSelection2(VARIANT_TRUE);
+		for (size_t i = 0; i < picks.size(); ++i)
+			if (!SelectPick(ext, data, picks[i], marks[i]))
+			{
+				doc->ClearSelection2(VARIANT_TRUE);
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+					"SolidWorks wouldn't select reference " + std::to_string(i + 1) + " (" + picks[i].what +
+					") -- is it hidden or suppressed?");
+			}
+		return grpc::Status::OK;
 	}
 }

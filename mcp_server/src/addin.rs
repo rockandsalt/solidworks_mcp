@@ -111,6 +111,15 @@ impl AddinClient {
         Ok(response.into_inner())
     }
 
+    /// Angle in radians.
+    pub async fn revolve_sketch(
+        &self,
+        request: proto::RevolveSketchRequest,
+    ) -> Result<proto::RevolveSketchResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.revolve_sketch(request).await?.into_inner())
+    }
+
     /// Lengths in meters.
     pub async fn inspect_model(
         &self,

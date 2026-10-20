@@ -243,7 +243,7 @@ pub struct CoordinateSystemParams {
 
 /// What a reference string names, as far as its form tells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Shape {
+pub(crate) enum Shape {
     /// A vertex, sketch point or the origin.
     Point,
     /// A face or a default plane.
@@ -270,7 +270,7 @@ fn standard_plane(s: &str) -> Option<proto::Plane> {
 }
 
 /// One reference string -> its wire ref and shape. `what` names it in errors.
-fn geometry_ref(ids: &IdRegistry, entity: &str, what: &str) -> Result<(proto::GeometryRef, Shape), McpError> {
+pub(crate) fn geometry_ref(ids: &IdRegistry, entity: &str, what: &str) -> Result<(proto::GeometryRef, Shape), McpError> {
     use proto::geometry_ref::Target;
     let entity = entity.trim();
     if entity.is_empty() {

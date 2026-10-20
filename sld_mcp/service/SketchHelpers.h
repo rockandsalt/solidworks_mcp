@@ -111,6 +111,11 @@ namespace sld_mcp::service
 	// "the sketch I just drew".
 	grpc::Status FindLatestSketch(IModelDoc2* doc, ATL::CComPtr<IFeature>& sketch);
 
+	// The last 2D sketch in the feature tree that no feature uses yet, i.e.
+	// what a user means by "extrude this sketch". Sketches a feature has
+	// absorbed have that feature as a child, so they're skipped.
+	grpc::Status FindLatestUnusedSketch(IModelDoc2* doc, ATL::CComPtr<IFeature>& sketch);
+
 	// A sketch by name, or the latest one when `name` is empty.
 	grpc::Status ResolveSketchFeature(IModelDoc2* doc, const std::string& name, ATL::CComPtr<IFeature>& sketch);
 

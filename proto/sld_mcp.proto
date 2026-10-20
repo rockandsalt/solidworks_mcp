@@ -43,6 +43,14 @@ service SolidWorks {
   // NOT_FOUND if a named sketch doesn't exist.
   rpc ExtrudeSketch(ExtrudeSketchRequest) returns (ExtrudeSketchResponse);
 
+  // Revolves a closed sketch of the active part about an axis into a boss
+  // (merging with any existing body) or a cut (IFeatureManager::
+  // FeatureRevolve2). Same preconditions and sketch defaulting as
+  // ExtrudeSketch; INVALID_ARGUMENT for a bad angle or an axis that can't
+  // be one, FAILED_PRECONDITION when no axis is given and the sketch doesn't
+  // have exactly one centerline, or SolidWorks won't make the feature.
+  rpc RevolveSketch(RevolveSketchRequest) returns (RevolveSketchResponse);
+
   // Read-only look at the active part or assembly: its features, bodies,
   // faces and/or edges with their geometry, and in an assembly its
   // components and mates. Every entity comes with a persist_id that other
@@ -513,6 +521,42 @@ message ExtrudeSketchResponse {
   // nothing, e.g. a sketch on a plane with the material on its normal side,
   // so the cut went the other way, as reverse_direction would have.
   bool direction_flipped = 4;
+}
+
+message RevolveSketchRequest {
+  // Feature-tree name of the sketch to revolve, e.g. "Sketch1". Empty means
+  // the most recent sketch not yet used by any feature.
+  string sketch_name = 1;
+  // The axis of revolution: a sketch line (usually a centerline of the
+  // sketch itself), a straight model edge or a reference axis. Unset means
+  // the sketch's only centerline (construction line).
+  GeometryRef axis = 2;
+  // Radians, more than 0 and at most 2*pi (a full turn). With mid_plane the
+  // total, split evenly across both sides of the sketch plane.
+  double angle = 3;
+  // Revolve the other way round the axis. Ignored with mid_plane.
+  bool reverse_direction = 4;
+  // Revolve symmetrically to both sides of the sketch plane.
+  bool mid_plane = 5;
+  // Remove material (cut-revolve) instead of adding it.
+  bool cut = 6;
+}
+
+message RevolveSketchResponse {
+  // Feature-tree name of the new feature, e.g. "Revolve1", "Cut-Revolve1".
+  string feature_name = 1;
+  // The sketch that was revolved (useful when the request left it empty).
+  string sketch_name = 2;
+  // How fully defined that sketch was.
+  DefinitionStatus sketch_status = 3;
+  // What the axis was, e.g. "sketch line of Sketch1", "edge", "Axis1".
+  string axis = 4;
+  // The axis' sketch line, when it is one (e.g. the centerline found when
+  // the request gave no axis).
+  SketchItemRef axis_item = 5;
+  // Cuts only, partial turns: the default direction removed nothing, so
+  // the cut went the other way, as reverse_direction would have.
+  bool direction_flipped = 6;
 }
 
 // ---------------------------------------------------------------------------

@@ -171,6 +171,9 @@
     <ClCompile Include="service\ReferenceHelpers.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>
+    <ClCompile Include="service\Revolve.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
     <ClCompile Include="service\Tolerances.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>

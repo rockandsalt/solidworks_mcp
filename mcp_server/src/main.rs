@@ -11,6 +11,7 @@ mod inspect;
 mod pmi;
 mod refgeom;
 mod render;
+mod revolve;
 mod sketch;
 mod tolerance;
 
@@ -281,13 +282,12 @@ impl PointConverter {
     }
 }
 
-/// Flags an extruded sketch that isn't fully defined.
-fn sketch_status_note(result: &proto::ExtrudeSketchResponse) -> String {
-    match result.sketch_status() {
+/// Flags an extruded or revolved sketch that isn't fully defined.
+fn sketch_status_note(sketch_name: &str, status: proto::DefinitionStatus) -> String {
+    match status {
         proto::DefinitionStatus::Fully | proto::DefinitionStatus::Unspecified => String::new(),
         status => format!(
-            " Note: {} is {} (dimension_sketch / fully_define_sketch can fix that).",
-            result.sketch_name,
+            " Note: {sketch_name} is {} (dimension_sketch / fully_define_sketch can fix that).",
             sketch::status_name(status)
         ),
     }
@@ -1201,7 +1201,7 @@ impl SolidWorksTools {
             "created {} by extruding {} {depth_mm} mm{how}.{}",
             result.feature_name,
             result.sketch_name,
-            sketch_status_note(&result)
+            sketch_status_note(&result.sketch_name, result.sketch_status())
         ))]))
     }
 
@@ -1273,8 +1273,42 @@ impl SolidWorksTools {
             "created {} by cutting with {} {how}.{flipped}{}",
             result.feature_name,
             result.sketch_name,
-            sketch_status_note(&result)
+            sketch_status_note(&result.sketch_name, result.sketch_status())
         ))]))
+    }
+
+    #[tool(
+        description = "Revolve a closed sketch of the active part about an axis into a solid \
+                       (revolved boss: a shaft, knob, flange, ...), merging with any existing \
+                       body. The axis is the sketch's centerline by default: draw the half \
+                       profile on one side of a sketch_line with construction=true, in the same \
+                       sketch. Or give axis = a sketch line id, a straight edge or a reference \
+                       axis. A full turn (360 degrees) unless angle_deg says otherwise. By \
+                       default revolves the most recently created sketch that isn't used by a \
+                       feature yet. The profile may touch the axis but not cross it. Requires an \
+                       open part with no sketch being edited."
+    )]
+    async fn revolve_sketch(
+        &self,
+        Parameters(params): Parameters<revolve::RevolveParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.revolve(params, false).await
+    }
+
+    #[tool(
+        description = "Cut by revolving a closed sketch of the active part about an axis \
+                       (cut-revolve), removing material: a groove round a shaft, a turned \
+                       recess, a chamfer-like profile. Axis, angle and sketch as for \
+                       revolve_sketch (default: the sketch's centerline, a full turn); typically \
+                       the sketch is on a plane through the part's axis. For a partial turn that \
+                       would remove nothing the default way, it cuts the other way and says so. \
+                       Requires an open part with no sketch being edited."
+    )]
+    async fn cut_revolve_sketch(
+        &self,
+        Parameters(params): Parameters<revolve::RevolveParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.revolve(params, true).await
     }
 
     #[tool(
@@ -2335,6 +2369,23 @@ impl SolidWorksTools {
 }
 
 impl SolidWorksTools {
+    /// Shared by revolve_sketch and cut_revolve_sketch.
+    async fn revolve(&self, params: revolve::RevolveParams, cut: bool) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            revolve::request(&ids, &params, cut)?
+        };
+        let reply = self
+            .addin
+            .revolve_sketch(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let text = revolve::reply_text(&mut ids, &params, &reply, cut)
+            + &sketch_status_note(&reply.sketch_name, reply.sketch_status());
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
     /// Shared by the reference geometry tools: `from` describes the
     /// references for the reply, `given` numbers them for error messages.
     async fn reference_geometry(
@@ -2694,7 +2745,8 @@ impl ServerHandler for SolidWorksTools {
                  create_rectangle_sketch / create_square_sketch or, for any other profile, \
                  sketch_line, sketch_arc, sketch_circle, sketch_spline and sketch_point \
                  (pass sketch_name to keep adding to one sketch), then extrude_sketch or \
-                 cut_extrude_sketch. hole_wizard adds standard clearance, counterbore, \
+                 cut_extrude_sketch, or for round parts revolve_sketch / cut_revolve_sketch \
+                 about a centerline (sketch_line with construction=true). hole_wizard adds standard clearance, counterbore, \
                  countersink or tapped holes at the points of a (dimensioned) sketch, or at \
                  locations on a face. To make a sketch fully defined: the drawing tools \
                  report entity ids (\"line:1\", \"point:2\"; inspect_sketch lists them all), \

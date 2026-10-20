@@ -36,6 +36,10 @@ public:
 		const sld_mcp::v1::ExtrudeSketchRequest* request,
 		sld_mcp::v1::ExtrudeSketchResponse* response) override;
 
+	grpc::Status RevolveSketch(grpc::ServerContext* context,
+		const sld_mcp::v1::RevolveSketchRequest* request,
+		sld_mcp::v1::RevolveSketchResponse* response) override;
+
 	grpc::Status InspectModel(grpc::ServerContext* context,
 		const sld_mcp::v1::InspectModelRequest* request,
 		sld_mcp::v1::InspectModelResponse* response) override;

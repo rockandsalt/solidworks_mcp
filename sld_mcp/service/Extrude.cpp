@@ -5,49 +5,6 @@
 
 using namespace sld_mcp::service;
 
-namespace
-{
-	// The last 2D sketch in the feature tree that no feature uses yet, i.e.
-	// what a user means by "extrude this sketch". Sketches a feature has
-	// absorbed have that feature as a child, so they're skipped.
-	grpc::Status FindLatestUnusedSketch(IModelDoc2* doc, ATL::CComPtr<IFeature>& sketch)
-	{
-		ATL::CComPtr<IFeature> feature;
-		HRESULT hr = doc->IFirstFeature(&feature);
-		if (FAILED(hr))
-			return ComError("IModelDoc2::IFirstFeature", hr);
-
-		sketch.Release();
-		while (feature)
-		{
-			ATL::CComBSTR typeName;
-			hr = feature->GetTypeName2(&typeName);
-			if (FAILED(hr))
-				return ComError("IFeature::GetTypeName2", hr);
-			if (typeName == L"ProfileFeature")
-			{
-				long children = 0;
-				hr = feature->IGetChildCount(&children);
-				if (FAILED(hr))
-					return ComError("IFeature::IGetChildCount", hr);
-				if (children == 0)
-					sketch = feature;
-			}
-
-			ATL::CComPtr<IFeature> next;
-			hr = feature->IGetNextFeature(&next);
-			if (FAILED(hr))
-				return ComError("IFeature::IGetNextFeature", hr);
-			feature = next;
-		}
-		if (!sketch)
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				"the active part has no sketch that isn't already used by a feature -- "
-				"create a sketch first");
-		return grpc::Status::OK;
-	}
-}
-
 grpc::Status SolidWorksService::ExtrudeSketch(grpc::ServerContext* /*context*/,
 	const sld_mcp::v1::ExtrudeSketchRequest* request,
 	sld_mcp::v1::ExtrudeSketchResponse* response)

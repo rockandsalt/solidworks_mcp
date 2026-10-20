@@ -149,6 +149,43 @@ namespace sld_mcp::service
 		return grpc::Status::OK;
 	}
 
+	grpc::Status FindLatestUnusedSketch(IModelDoc2* doc, ATL::CComPtr<IFeature>& sketch)
+	{
+		ATL::CComPtr<IFeature> feature;
+		HRESULT hr = doc->IFirstFeature(&feature);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::IFirstFeature", hr);
+
+		sketch.Release();
+		while (feature)
+		{
+			ATL::CComBSTR typeName;
+			hr = feature->GetTypeName2(&typeName);
+			if (FAILED(hr))
+				return ComError("IFeature::GetTypeName2", hr);
+			if (typeName == L"ProfileFeature")
+			{
+				long children = 0;
+				hr = feature->IGetChildCount(&children);
+				if (FAILED(hr))
+					return ComError("IFeature::IGetChildCount", hr);
+				if (children == 0)
+					sketch = feature;
+			}
+
+			ATL::CComPtr<IFeature> next;
+			hr = feature->IGetNextFeature(&next);
+			if (FAILED(hr))
+				return ComError("IFeature::IGetNextFeature", hr);
+			feature = next;
+		}
+		if (!sketch)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"the active part has no sketch that isn't already used by a feature -- "
+				"create a sketch first");
+		return grpc::Status::OK;
+	}
+
 	grpc::Status ResolveSketchFeature(IModelDoc2* doc, const std::string& name, ATL::CComPtr<IFeature>& sketch)
 	{
 		return name.empty() ? FindLatestSketch(doc, sketch) : FindSketchByName(doc, name, sketch);
