@@ -9,6 +9,7 @@ mod files;
 mod hole;
 mod inspect;
 mod pmi;
+mod refgeom;
 mod render;
 mod sketch;
 mod tolerance;
@@ -2227,9 +2228,131 @@ impl SolidWorksTools {
         let text = edit::mate_reply_text(&mut ids, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
+    #[tool(
+        description = "Add a reference plane to the active part, like Insert > Reference Geometry \
+                       > Plane: from one to three references, each with how the plane relates to \
+                       it. References are model geometry (inspect_model ids: \"face:3\", \
+                       \"edge:7\", \"vertex:2\" from an edge's start_vertex/end_vertex, \
+                       \"feature:1\" for a plane/axis/point), sketch entities (\"line:3\", \
+                       \"point:7\", from the sketch_* tools or inspect_sketch), \"origin\", \
+                       \"front\"/\"top\"/\"right\", or a feature name like \"Plane1\". Common \
+                       cases: offset [{\"entity\": \"top\", \"offset_mm\": 20}]; through an edge \
+                       at an angle to a face [{\"entity\": \"face:3\", \"angle_deg\": 30}, \
+                       {\"entity\": \"edge:5\"}]; through three points; normal to a sketch line / \
+                       edge at a point [{\"entity\": \"line:2\", \"relation\": \"perpendicular\"}, \
+                       {\"entity\": \"point:3\"}]; midway between two faces (both \"mid_plane\"); \
+                       tangent to a cylinder at a line on it. Reports the plane's normal and a \
+                       point on it; sketch on it with the sketch tools' on=\"feature:N\". If \
+                       SolidWorks can't make the plane from the references (or it fails to \
+                       rebuild), nothing is added. Requires a part with no sketch open."
+    )]
+    async fn create_reference_plane(
+        &self,
+        Parameters(params): Parameters<refgeom::ReferencePlaneParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            refgeom::plane_request(&ids, &params)?
+        };
+        let given: Vec<String> = params.references.iter().map(|r| r.entity.clone()).collect();
+        self.reference_geometry(request, &refgeom::plane_from_text(&params), &given).await
+    }
+
+    #[tool(
+        description = "Add a reference axis to the active part, like Insert > Reference Geometry \
+                       > Axis, from one or two references: a straight edge or sketch line; a \
+                       cylindrical or conical face (its axis, e.g. through a hole); two planes or \
+                       planar faces (where they meet); two vertices / sketch points / \"origin\"; \
+                       or a point and a face/plane (through the point, normal to it). References \
+                       as in create_reference_plane (inspect_model ids, sketch entity ids, \
+                       \"origin\", \"front\"/\"top\"/\"right\", feature names). Reports the axis' \
+                       direction and a point on it; its \"feature:N\" id works as a reference for \
+                       planes, points and coordinate systems, and in add_mate. Requires a part \
+                       with no sketch open."
+    )]
+    async fn create_reference_axis(
+        &self,
+        Parameters(params): Parameters<refgeom::ReferenceAxisParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            refgeom::axis_request(&ids, &params)?
+        };
+        let refs: Vec<&str> = params.references.iter().map(String::as_str).collect();
+        self.reference_geometry(request, &refgeom::from_text(&refs), &params.references).await
+    }
+
+    #[tool(
+        description = "Add reference points to the active part, like Insert > Reference Geometry \
+                       > Point: at the center of a circular edge or sketch arc/circle \
+                       (kind=\"center\"), the center of a face (\"face_center\"), a vertex or \
+                       sketch point projected onto a face/plane (\"projection\"), where two \
+                       edges/sketch segments cross or an edge meets a face/plane \
+                       (\"intersection\"), at a vertex or sketch point (\"at\"), or along an edge \
+                       / sketch segment (\"along\": distance_mm or percent from one end, count \
+                       for several -- alone, count points spread evenly). kind can usually be left \
+                       out: it follows from the references. References as in \
+                       create_reference_plane. Reports each point's position; their \"feature:N\" \
+                       ids work as references for planes, axes and coordinate systems. Requires a \
+                       part with no sketch open."
+    )]
+    async fn create_reference_point(
+        &self,
+        Parameters(params): Parameters<refgeom::ReferencePointParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            refgeom::point_request(&ids, &params)?
+        };
+        let refs: Vec<&str> = params.references.iter().map(String::as_str).collect();
+        self.reference_geometry(request, &refgeom::from_text(&refs), &params.references).await
+    }
+
+    #[tool(
+        description = "Add a coordinate system to the active part, like Insert > Reference \
+                       Geometry > Coordinate System: `origin` at a vertex, sketch point or \
+                       reference point (default: the part origin), and up to two of x_axis / \
+                       y_axis / z_axis, each following an edge, sketch line or axis, a plane or \
+                       planar face's normal, or pointing at a vertex/point; flip_x/y/z reverse \
+                       one. References as in create_reference_plane. Reports the origin and axes \
+                       in model coordinates. Requires a part with no sketch open."
+    )]
+    async fn create_coordinate_system(
+        &self,
+        Parameters(params): Parameters<refgeom::CoordinateSystemParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            refgeom::coordinate_system_request(&ids, &params)?
+        };
+        let given: Vec<String> = [&params.origin, &params.x_axis, &params.y_axis, &params.z_axis]
+            .iter()
+            .filter_map(|r| (*r).clone())
+            .collect();
+        let refs: Vec<&str> = given.iter().map(String::as_str).collect();
+        self.reference_geometry(request, &refgeom::from_text(&refs), &[]).await
+    }
 }
 
 impl SolidWorksTools {
+    /// Shared by the reference geometry tools: `from` describes the
+    /// references for the reply, `given` numbers them for error messages.
+    async fn reference_geometry(
+        &self,
+        request: proto::CreateReferenceGeometryRequest,
+        from: &str,
+        given: &[String],
+    ) -> Result<CallToolResult, McpError> {
+        let reply = self
+            .addin
+            .create_reference_geometry(request)
+            .await
+            .map_err(|status| delete::with_legend(self.addin_error(status), "reference", given))?;
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let text = refgeom::reply_text(&mut ids, &reply, from);
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
     /// Shared by the square and rectangle tools. Takes millimeters.
     async fn rectangle_sketch(
         &self,
@@ -2462,6 +2585,12 @@ impl SolidWorksTools {
             "edge" => render::Target::Edge(persist_id),
             "body" => render::Target::Body(persist_id),
             "component" => render::Target::Component(persist_id),
+            "vertex" => {
+                return Err(McpError::invalid_params(
+                    format!("{highlight} is a vertex; render_views can't highlight those -- highlight an edge at it"),
+                    None,
+                ));
+            }
             _ => render::Target::Feature(persist_id),
         })
     }
@@ -2586,7 +2715,11 @@ impl ServerHandler for SolidWorksTools {
                  rework: delete_features removes features (sketches, extrudes, cuts, holes, \
                  fillets, planes, mates, ...) by inspect_model id or name, refusing unless told \
                  what to do with features that depend on them; delete_sketch_entities removes \
-                 lines, arcs, points, ... from a sketch. Lengths are in millimeters, angles in \
+                 lines, arcs, points, ... from a sketch. Reference geometry: \
+                 create_reference_plane / _axis / _point and create_coordinate_system build \
+                 planes, axes, points and coordinate systems from faces, edges, vertices, sketch \
+                 entities, the origin or the default planes; sketch on a new plane with \
+                 on=\"feature:N\". Lengths are in millimeters, angles in \
                  degrees."
                     .to_string(),
             )

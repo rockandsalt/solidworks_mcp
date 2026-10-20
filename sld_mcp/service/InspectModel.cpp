@@ -5,6 +5,7 @@
 #include "pch.h"
 #include "Common.h"
 #include "AssemblyHelpers.h"
+#include "ReferenceHelpers.h"
 
 using namespace sld_mcp::service;
 
@@ -48,9 +49,12 @@ namespace
 	// Annotations, Material, ...), which say nothing about the geometry.
 	// `componentPid` is stamped on each (assembly component trees). With
 	// `skipAssemblyItems`, components and the mates folder are left out
-	// (an assembly's own tree; they're listed separately).
+	// (an assembly's own tree; they're listed separately). With
+	// `referenceExt` (the document's own tree), reference features say where
+	// they are.
 	grpc::Status InspectFeatureList(ATL::CComPtr<IFeature> feature, PersistIds& ids,
-		const std::string& componentPid, bool skipAssemblyItems, sld_mcp::v1::InspectModelResponse* response)
+		const std::string& componentPid, bool skipAssemblyItems, IModelDocExtension* referenceExt,
+		sld_mcp::v1::InspectModelResponse* response)
 	{
 		HRESULT hr = S_OK;
 		bool started = false;
@@ -91,6 +95,9 @@ namespace
 				ATL::CComVariant children;
 				if (SUCCEEDED(feature->GetChildren(&children)))
 					AddFeatureNames(children, info->mutable_children());
+
+				if (referenceExt && IsReferenceType(info->type_name()))
+					DescribeReferenceGeometry(referenceExt, feature, info->type_name(), info->mutable_reference());
 			}
 
 			ATL::CComPtr<IFeature> next;
@@ -102,14 +109,14 @@ namespace
 		return grpc::Status::OK;
 	}
 
-	grpc::Status InspectFeatures(IModelDoc2* doc, PersistIds& ids, bool skipAssemblyItems,
+	grpc::Status InspectFeatures(IModelDoc2* doc, IModelDocExtension* ext, PersistIds& ids, bool skipAssemblyItems,
 		sld_mcp::v1::InspectModelResponse* response)
 	{
 		ATL::CComPtr<IFeature> feature;
 		HRESULT hr = doc->IFirstFeature(&feature);
 		if (FAILED(hr))
 			return ComError("IModelDoc2::IFirstFeature", hr);
-		return InspectFeatureList(feature, ids, {}, skipAssemblyItems, response);
+		return InspectFeatureList(feature, ids, {}, skipAssemblyItems, ext, response);
 	}
 
 	void InspectBody(IBody2* body, PersistIds& ids, sld_mcp::v1::BodyInfo* info)
@@ -376,10 +383,10 @@ namespace
 				if (FAILED(hr))
 					return ComError("IComponent2::FirstFeature", hr);
 				const std::string pid = components.Add(scopeComponent);
-				if (grpc::Status status = InspectFeatureList(first, ids, pid, false, response); !status.ok())
+				if (grpc::Status status = InspectFeatureList(first, ids, pid, false, nullptr, response); !status.ok())
 					return status;
 			}
-			else if (grpc::Status status = InspectFeatures(doc, ids, true, response); !status.ok())
+			else if (grpc::Status status = InspectFeatures(doc, ext, ids, true, response); !status.ok())
 				return status;
 		}
 
@@ -525,7 +532,7 @@ grpc::Status SolidWorksService::InspectModel(grpc::ServerContext* /*context*/,
 		return grpc::Status(grpc::StatusCode::INTERNAL, "active part has no IPartDoc interface");
 
 	if (request->include_features())
-		if (grpc::Status status = InspectFeatures(doc, ids, false, response); !status.ok())
+		if (grpc::Status status = InspectFeatures(doc, ext, ids, false, response); !status.ok())
 			return status;
 
 	// Every body, for the body list and as the default face/edge scope.

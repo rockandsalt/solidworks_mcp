@@ -76,6 +76,9 @@
     <ClInclude Include="service\FeatureTreeHelpers.h">
       <Filter>Header Files\service</Filter>
     </ClInclude>
+    <ClInclude Include="service\ReferenceHelpers.h">
+      <Filter>Header Files\service</Filter>
+    </ClInclude>
     <ClInclude Include="service\SketchHelpers.h">
       <Filter>Header Files\service</Filter>
     </ClInclude>
@@ -160,6 +163,12 @@
       <Filter>Source Files\service</Filter>
     </ClCompile>
     <ClCompile Include="service\Sketches.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\ReferenceGeometry.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\ReferenceHelpers.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>
     <ClCompile Include="service\Tolerances.cpp">

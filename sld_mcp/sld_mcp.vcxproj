@@ -313,6 +313,7 @@
     <ClInclude Include="service\DimensionHelpers.h" />
     <ClInclude Include="service\DrawingHelpers.h" />
     <ClInclude Include="service\FeatureTreeHelpers.h" />
+    <ClInclude Include="service\ReferenceHelpers.h" />
     <ClInclude Include="service\SketchHelpers.h" />
   </ItemGroup>
   <ItemGroup>
@@ -371,6 +372,8 @@
     <ClCompile Include="service\InspectModel.cpp" />
     <ClCompile Include="service\Mates.cpp" />
     <ClCompile Include="service\Mesh.cpp" />
+    <ClCompile Include="service\ReferenceGeometry.cpp" />
+    <ClCompile Include="service\ReferenceHelpers.cpp" />
     <ClCompile Include="service\SketchConstraints.cpp" />
     <ClCompile Include="service\SketchHelpers.cpp" />
     <ClCompile Include="service\Sketches.cpp" />

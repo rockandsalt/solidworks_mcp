@@ -24,6 +24,7 @@ pub enum Kind {
     Body,
     Face,
     Edge,
+    Vertex,
     /// An assembly component.
     Component,
     // Entities inside a 2D sketch. Their "persist ID" is an encoded
@@ -43,7 +44,8 @@ pub enum Kind {
 }
 
 /// The kinds that name model geometry (vs. sketch entities).
-const MODEL_KINDS: [Kind; 5] = [Kind::Feature, Kind::Body, Kind::Face, Kind::Edge, Kind::Component];
+const MODEL_KINDS: [Kind; 6] =
+    [Kind::Feature, Kind::Body, Kind::Face, Kind::Edge, Kind::Vertex, Kind::Component];
 pub const SKETCH_KINDS: [Kind; 7] = [
     Kind::SketchPoint,
     Kind::Line,
@@ -62,6 +64,7 @@ impl Kind {
             Kind::Body => "body",
             Kind::Face => "face",
             Kind::Edge => "edge",
+            Kind::Vertex => "vertex",
             Kind::Component => "component",
             Kind::SketchPoint => "point",
             Kind::Line => "line",
@@ -365,7 +368,39 @@ fn feature_json(ids: &mut IdRegistry, f: &proto::FeatureInfo) -> Value {
     if !f.children.is_empty() {
         obj.insert("children".into(), json!(f.children));
     }
+    if let Some(r) = &f.reference {
+        reference_json(&mut obj, &f.type_name, r);
+    }
     Value::Object(obj)
+}
+
+/// Where a reference plane / axis / point / coordinate system is, as keys of
+/// its feature's JSON (the same names faces and edges use).
+pub fn reference_json(obj: &mut Map<String, Value>, type_name: &str, r: &proto::ReferenceGeometry) {
+    let mut put = |key: &str, value: Option<Value>| {
+        if let Some(value) = value {
+            obj.insert(key.into(), value);
+        }
+    };
+    match type_name {
+        "RefPlane" => {
+            put("normal", r.direction.as_ref().map(direction));
+            put("point_on_plane_mm", r.origin.as_ref().map(point_mm));
+        }
+        "RefAxis" => {
+            put("axis", r.direction.as_ref().map(direction));
+            put("axis_point_mm", r.origin.as_ref().map(point_mm));
+            put("length_mm", (r.length > 0.0).then(|| json!(mm(r.length))));
+        }
+        "RefPoint" => put("at_mm", r.origin.as_ref().map(point_mm)),
+        "CoordSys" => {
+            put("origin_mm", r.origin.as_ref().map(point_mm));
+            put("x_axis", r.x_axis.as_ref().map(direction));
+            put("y_axis", r.y_axis.as_ref().map(direction));
+            put("z_axis", r.z_axis.as_ref().map(direction));
+        }
+        _ => {}
+    }
 }
 
 fn body_json(ids: &mut IdRegistry, b: &proto::BodyInfo) -> Value {
@@ -509,6 +544,12 @@ fn edge_json(ids: &mut IdRegistry, e: &proto::EdgeInfo) -> Value {
     }
     if let Some(p) = &e.end {
         obj.insert("end_mm".into(), point_mm(p));
+    }
+    if let Some(id) = ids.id_for(Kind::Vertex, &e.start_vertex_persist_id) {
+        obj.insert("start_vertex".into(), json!(id));
+    }
+    if let Some(id) = ids.id_for(Kind::Vertex, &e.end_vertex_persist_id) {
+        obj.insert("end_vertex".into(), json!(id));
     }
     if curve == proto::CurveType::Circle {
         if let Some(c) = &e.center {

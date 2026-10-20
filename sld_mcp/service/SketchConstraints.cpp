@@ -49,36 +49,6 @@ namespace
 		toggles.Set(swSketchOverdefiningDimsSetDrivenByDefault, true);
 	}
 
-	// The part origin as a sketch point (the Origin feature's sketch has it as
-	// its first point), plus that feature's name for SelectByID2.
-	void FindOrigin(IModelDoc2* doc, ATL::CComPtr<ISketchPoint>& point, std::string& featureName)
-	{
-		ATL::CComPtr<IFeature> feature;
-		if (FAILED(doc->IFirstFeature(&feature)))
-			return;
-		while (feature)
-		{
-			ATL::CComBSTR typeName;
-			if (SUCCEEDED(feature->GetTypeName2(&typeName)) && typeName == L"OriginProfileFeature")
-			{
-				featureName = FeatureName(feature);
-				ATL::CComPtr<ISketch> sketch;
-				ATL::CComVariant points;
-				if (SketchOf(feature, sketch).ok() && SUCCEEDED(sketch->GetSketchPoints2(&points)))
-				{
-					const auto list = comvariant::ToDispatches(points);
-					if (!list.empty())
-						point = ATL::CComQIPtr<ISketchPoint>(list.front().p);
-				}
-				return;
-			}
-			ATL::CComPtr<IFeature> next;
-			if (FAILED(feature->IGetNextFeature(&next)))
-				return;
-			feature = next;
-		}
-	}
-
 	// Where a ref is, in sketch coordinates, for placing dimension text.
 	struct RefShape
 	{

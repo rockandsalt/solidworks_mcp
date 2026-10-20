@@ -235,6 +235,17 @@ service SolidWorks {
   // `opened` false and its error bits (swFileLoadError_e) for the MCP
   // server to name; warnings (missing references, ...) likewise.
   rpc OpenDocument(OpenDocumentRequest) returns (OpenDocumentResponse);
+  // Adds a reference plane, axis, point (or several points along a curve)
+  // or coordinate system to the active part, built like the Reference
+  // Geometry commands from references: model geometry (faces, edges,
+  // vertices, reference features), sketch entities (segments and points of
+  // closed 2D sketches), the origin or the default planes. Rebuilds and
+  // returns the new features with where they ended up. All or nothing: a
+  // feature that fails to rebuild is deleted again. FAILED_PRECONDITION if
+  // the active document isn't a part, a sketch is open, or SolidWorks
+  // can't make the feature from these references; NOT_FOUND if a
+  // reference no longer resolves.
+  rpc CreateReferenceGeometry(CreateReferenceGeometryRequest) returns (CreateReferenceGeometryResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -678,6 +689,9 @@ message FeatureInfo {
   // whose edges are gone), and whether SolidWorks only warns about it.
   int32 error_code = 8;
   bool error_is_warning = 9;
+  // Reference planes, axes, points and coordinate systems of the document
+  // itself (not of components): where they are.
+  ReferenceGeometry reference = 10;
 }
 
 message BodyInfo {
@@ -780,6 +794,10 @@ message EdgeInfo {
   double radius = 10;
   // Assemblies: as FaceInfo.component_persist_id.
   bytes component_persist_id = 11;
+  // The vertices at `start` and `end`; unset for a closed edge (a full
+  // circle has none).
+  bytes start_vertex_persist_id = 12;
+  bytes end_vertex_persist_id = 13;
 }
 
 // ---------------------------------------------------------------------------
@@ -1864,4 +1882,136 @@ message EditMateResponse {
   repeated ComponentInfo components = 4;
   // Other features (mates) whose rebuild error is new or different.
   repeated FeatureProblem new_errors = 5;
+}
+
+// ---------------------------------------------------------------------------
+// CreateReferenceGeometry
+
+// Something reference geometry is built from.
+message GeometryRef {
+  oneof target {
+    // A face, edge or vertex, or a reference plane / axis / point /
+    // coordinate system feature, by persist_id from InspectModel.
+    bytes model_persist_id = 1;
+    // A segment or point of a closed 2D sketch.
+    SketchItemRef sketch_item = 2;
+    // The part origin.
+    bool origin = 3;
+    // One of the default planes (found as in CreateRectangleSketch).
+    Plane standard_plane = 4;
+    // A reference feature by its feature-tree name, e.g. "Plane1".
+    string feature_name = 5;
+  }
+}
+
+// How a reference plane relates to one of its references
+// (swRefPlaneReferenceConstraints_e).
+enum PlaneConstraint {
+  PLANE_CONSTRAINT_UNSPECIFIED = 0;
+  PLANE_CONSTRAINT_COINCIDENT = 1;     // through the point / line / plane
+  PLANE_CONSTRAINT_PARALLEL = 2;
+  PLANE_CONSTRAINT_PERPENDICULAR = 3;
+  PLANE_CONSTRAINT_DISTANCE = 4;       // offset from a plane or planar face
+  PLANE_CONSTRAINT_ANGLE = 5;          // at an angle to a plane, about a line given as another reference
+  PLANE_CONSTRAINT_TANGENT = 6;        // tangent to a curved face
+  PLANE_CONSTRAINT_MID_PLANE = 7;      // halfway between two planes (both references)
+}
+
+message PlaneReference {
+  GeometryRef ref = 1;
+  PlaneConstraint constraint = 2;  // UNSPECIFIED is invalid
+  double distance = 3;             // DISTANCE: meters, > 0
+  double angle = 4;                // ANGLE: radians, > 0
+  // The other side of the reference (swRefPlaneReferenceConstraint_OptionFlip).
+  bool flip = 5;
+}
+
+message ReferencePlaneSpec {
+  // One to three, as SolidWorks' first / second / third reference.
+  repeated PlaneReference references = 1;
+}
+
+message ReferenceAxisSpec {
+  // One (a straight edge or sketch line, a cylindrical or conical face, a
+  // reference axis) or two (two planes / planar faces, two points /
+  // vertices, a point and a plane / face) -- what the Axis command takes.
+  repeated GeometryRef references = 1;
+}
+
+// swRefPointType_e.
+enum ReferencePointKind {
+  REFERENCE_POINT_KIND_UNSPECIFIED = 0;
+  REFERENCE_POINT_KIND_ARC_CENTER = 1;    // center of a circular edge or sketch arc / circle
+  REFERENCE_POINT_KIND_FACE_CENTER = 2;   // center of area of a face
+  REFERENCE_POINT_KIND_PROJECTION = 3;    // a vertex / sketch point projected onto a face or plane
+  REFERENCE_POINT_KIND_INTERSECTION = 4;  // where two edges / lines cross, or an edge meets a face / plane
+  REFERENCE_POINT_KIND_ALONG_CURVE = 5;   // on an edge / sketch segment, see AlongCurve
+  REFERENCE_POINT_KIND_AT_POINT = 6;      // at a vertex or sketch point (swRefPointSketchPoint)
+}
+
+// swRefPointAlongCurveType_e.
+enum AlongCurve {
+  ALONG_CURVE_UNSPECIFIED = 0;
+  // From one end of the curve: SolidWorks' choice, not necessarily the edge's
+  // start as InspectModel reports it.
+  ALONG_CURVE_DISTANCE = 1;  // `distance` from that end (and every `distance` after it)
+  ALONG_CURVE_PERCENT = 2;   // `percent` (0-100) of the length from that end (likewise)
+  ALONG_CURVE_EVENLY = 3;    // `count` points spread evenly over the curve
+}
+
+message ReferencePointSpec {
+  ReferencePointKind kind = 1;  // UNSPECIFIED is invalid
+  repeated GeometryRef references = 2;
+  // ALONG_CURVE only.
+  AlongCurve along = 3;
+  double distance = 4;  // meters, > 0
+  double percent = 5;   // 0 to 100
+  int32 count = 6;      // how many points, >= 1 (0 = 1)
+}
+
+message CoordinateSystemSpec {
+  // A vertex, sketch point or reference point; unset = the part origin.
+  GeometryRef origin = 1;
+  // Each optional (at least one, or a non-origin `origin`): an edge,
+  // sketch line or axis along it, a plane or planar face along its normal,
+  // or a vertex / point the axis points at.
+  GeometryRef x_axis = 2;
+  GeometryRef y_axis = 3;
+  GeometryRef z_axis = 4;
+  bool flip_x = 5;
+  bool flip_y = 6;
+  bool flip_z = 7;
+}
+
+message CreateReferenceGeometryRequest {
+  oneof geometry {
+    ReferencePlaneSpec plane = 1;
+    ReferenceAxisSpec axis = 2;
+    ReferencePointSpec point = 3;
+    CoordinateSystemSpec coordinate_system = 4;
+  }
+  // Rename the new feature (with several points: the first one; the others
+  // get "<name>2", "<name>3", ...). Empty keeps SolidWorks' name.
+  string name = 5;
+}
+
+// Where a reference feature is, model space. Which fields are set depends
+// on the feature's type:
+//   RefPlane:  origin (a point on it), direction (unit normal), x_axis/y_axis (in-plane)
+//   RefAxis:   origin (one end), direction (unit, toward the other end), length
+//   RefPoint:  origin
+//   CoordSys:  origin, x_axis, y_axis, z_axis
+message ReferenceGeometry {
+  Vec3 origin = 1;
+  Vec3 direction = 2;
+  Vec3 x_axis = 3;
+  Vec3 y_axis = 4;
+  Vec3 z_axis = 5;
+  double length = 6;  // meters
+}
+
+message CreateReferenceGeometryResponse {
+  // The new features (one, or several points along a curve), each with
+  // `reference` set.
+  repeated FeatureInfo features = 1;
 }

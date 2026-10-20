@@ -309,6 +309,14 @@ impl AddinClient {
         let mut client = self.client.clone();
         Ok(client.open_document(request).await?.into_inner())
     }
+
+    pub async fn create_reference_geometry(
+        &self,
+        request: proto::CreateReferenceGeometryRequest,
+    ) -> Result<proto::CreateReferenceGeometryResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.create_reference_geometry(request).await?.into_inner())
+    }
 }
 
 /// Largest GetMesh reply accepted: about 5 million triangles with normals.

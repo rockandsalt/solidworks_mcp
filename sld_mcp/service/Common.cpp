@@ -284,6 +284,28 @@ namespace sld_mcp::service
 			}
 		}
 
+		// The end vertices, matched to start/end by position: it isn't
+		// documented that GetStartVertex is where GetCurveParams2 starts.
+		ATL::CComPtr<IVertex> vertices[2];
+		edge->IGetStartVertex(&vertices[0]);
+		edge->IGetEndVertex(&vertices[1]);
+		for (const auto& vertex : vertices)
+		{
+			ATL::CComVariant point;
+			std::vector<double> p;
+			if (!vertex || FAILED(vertex->GetPoint(&point)) || (p = comvariant::ToDoubles(point)).size() < 3)
+				continue;
+			const Eigen::Vector3d at(p[0], p[1], p[2]);
+			const auto distanceTo = [&](const sld_mcp::v1::Vec3& v) {
+				return (Eigen::Vector3d(v.x(), v.y(), v.z()) - at).norm();
+			};
+			const bool atEnd = info->has_start() && info->has_end() && distanceTo(info->end()) < distanceTo(info->start());
+			if (atEnd)
+				info->set_end_vertex_persist_id(ids.Get(vertex));
+			else
+				info->set_start_vertex_persist_id(ids.Get(vertex));
+		}
+
 		ATL::CComPtr<ICurve> curve;
 		if (FAILED(edge->IGetCurve(&curve)) || !curve)
 			return;

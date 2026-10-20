@@ -12,6 +12,20 @@
 
 namespace sld_mcp::service
 {
+	// Finds the `index`-th reference plane (0 = Front, 1 = Top, 2 = Right) by
+	// walking the feature tree. Every part template starts with those three
+	// as its first RefPlane features, so this works even when the planes are
+	// renamed or SolidWorks runs in another language (SelectByID2 with
+	// "Front Plane" would not).
+	grpc::Status FindStandardPlane(IModelDoc2* doc, int index, ATL::CComPtr<IFeature>& plane);
+
+	// PLANE_FRONT/TOP/RIGHT as FindStandardPlane's index.
+	bool StandardPlaneIndex(sld_mcp::v1::Plane plane, int& index);
+
+	// The part origin as a sketch point (the Origin feature's sketch has it as
+	// its first point), plus that feature's name for SelectByID2.
+	void FindOrigin(IModelDoc2* doc, ATL::CComPtr<ISketchPoint>& point, std::string& featureName);
+
 	// A 2D sketch by its feature-tree name.
 	grpc::Status FindSketchByName(IModelDoc2* doc, const std::string& name, ATL::CComPtr<IFeature>& sketch);
 

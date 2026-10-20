@@ -8,53 +8,6 @@ using namespace sld_mcp::service;
 
 namespace
 {
-	// Finds the `index`-th reference plane (0 = Front, 1 = Top, 2 = Right) by
-	// walking the feature tree. Every part template starts with those three
-	// as its first RefPlane features, so this works even when the planes are
-	// renamed or SolidWorks runs in another language (SelectByID2 with
-	// "Front Plane" would not).
-	grpc::Status FindStandardPlane(IModelDoc2* doc, int index, ATL::CComPtr<IFeature>& plane)
-	{
-		ATL::CComPtr<IFeature> feature;
-		HRESULT hr = doc->IFirstFeature(&feature);
-		if (FAILED(hr))
-			return ComError("IModelDoc2::IFirstFeature", hr);
-
-		int planesSeen = 0;
-		while (feature)
-		{
-			ATL::CComBSTR typeName;
-			hr = feature->GetTypeName2(&typeName);
-			if (FAILED(hr))
-				return ComError("IFeature::GetTypeName2", hr);
-			if (typeName == L"RefPlane" && planesSeen++ == index)
-			{
-				plane = feature;
-				return grpc::Status::OK;
-			}
-
-			ATL::CComPtr<IFeature> next;
-			hr = feature->IGetNextFeature(&next);
-			if (FAILED(hr))
-				return ComError("IFeature::IGetNextFeature", hr);
-			feature = next;
-		}
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			"couldn't find the part's default Front/Top/Right planes");
-	}
-
-	// PLANE_FRONT/TOP/RIGHT as FindStandardPlane's index.
-	bool StandardPlaneIndex(sld_mcp::v1::Plane plane, int& index)
-	{
-		switch (plane)
-		{
-		case sld_mcp::v1::PLANE_FRONT: index = 0; return true;
-		case sld_mcp::v1::PLANE_TOP:   index = 1; return true;
-		case sld_mcp::v1::PLANE_RIGHT: index = 2; return true;
-		default:                       return false;
-		}
-	}
-
 	// What a new sketch goes on: a planar face (`face` + `faceEntity`) or a
 	// reference plane feature (`plane`); exactly one is set once resolved.
 	struct SketchTarget

@@ -129,7 +129,7 @@ pub fn feature_targets(
                 }
                 Some(_) => {
                     return Err(invalid(format!(
-                        "{what}: {feature} is a face, edge or body, not a feature -- give the \
+                        "{what}: {feature} is a face, edge, vertex or body, not a feature -- give the \
                          feature that made it (inspect_model what=\"features\"), by id or name"
                     )));
                 }

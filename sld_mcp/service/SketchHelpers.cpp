@@ -5,6 +5,75 @@
 
 namespace sld_mcp::service
 {
+	grpc::Status FindStandardPlane(IModelDoc2* doc, int index, ATL::CComPtr<IFeature>& plane)
+	{
+		ATL::CComPtr<IFeature> feature;
+		HRESULT hr = doc->IFirstFeature(&feature);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::IFirstFeature", hr);
+
+		int planesSeen = 0;
+		while (feature)
+		{
+			ATL::CComBSTR typeName;
+			hr = feature->GetTypeName2(&typeName);
+			if (FAILED(hr))
+				return ComError("IFeature::GetTypeName2", hr);
+			if (typeName == L"RefPlane" && planesSeen++ == index)
+			{
+				plane = feature;
+				return grpc::Status::OK;
+			}
+
+			ATL::CComPtr<IFeature> next;
+			hr = feature->IGetNextFeature(&next);
+			if (FAILED(hr))
+				return ComError("IFeature::IGetNextFeature", hr);
+			feature = next;
+		}
+		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+			"couldn't find the part's default Front/Top/Right planes");
+	}
+
+	bool StandardPlaneIndex(sld_mcp::v1::Plane plane, int& index)
+	{
+		switch (plane)
+		{
+		case sld_mcp::v1::PLANE_FRONT: index = 0; return true;
+		case sld_mcp::v1::PLANE_TOP:   index = 1; return true;
+		case sld_mcp::v1::PLANE_RIGHT: index = 2; return true;
+		default:                       return false;
+		}
+	}
+
+	void FindOrigin(IModelDoc2* doc, ATL::CComPtr<ISketchPoint>& point, std::string& featureName)
+	{
+		ATL::CComPtr<IFeature> feature;
+		if (FAILED(doc->IFirstFeature(&feature)))
+			return;
+		while (feature)
+		{
+			ATL::CComBSTR typeName;
+			if (SUCCEEDED(feature->GetTypeName2(&typeName)) && typeName == L"OriginProfileFeature")
+			{
+				featureName = FeatureName(feature);
+				ATL::CComPtr<ISketch> sketch;
+				ATL::CComVariant points;
+				if (SketchOf(feature, sketch).ok() && SUCCEEDED(sketch->GetSketchPoints2(&points)))
+				{
+					const auto list = comvariant::ToDispatches(points);
+					if (!list.empty())
+						point = ATL::CComQIPtr<ISketchPoint>(list.front().p);
+				}
+				return;
+			}
+			ATL::CComPtr<IFeature> next;
+			if (FAILED(feature->IGetNextFeature(&next)))
+				return;
+			feature = next;
+		}
+	}
+
 	grpc::Status FindSketchByName(IModelDoc2* doc, const std::string& name, ATL::CComPtr<IFeature>& sketch)
 	{
 		ATL::CComQIPtr<IPartDoc> part(doc);
