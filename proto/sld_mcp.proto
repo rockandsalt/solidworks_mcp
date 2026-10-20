@@ -51,6 +51,14 @@ service SolidWorks {
   // have exactly one centerline, or SolidWorks won't make the feature.
   rpc RevolveSketch(RevolveSketchRequest) returns (RevolveSketchResponse);
 
+  // Sweeps a closed profile sketch, or a circle of a given diameter, along
+  // a path (a sketch, 3D sketch or curve feature) into a boss (merging with
+  // any existing body) or a cut (IFeatureManager::InsertProtrusionSwept4 /
+  // InsertCutSwept5). Same preconditions as ExtrudeSketch; INVALID_ARGUMENT
+  // for bad sizes or a path that is the profile, NOT_FOUND for unknown
+  // names, FAILED_PRECONDITION when SolidWorks won't make the feature.
+  rpc SweepSketch(SweepSketchRequest) returns (SweepSketchResponse);
+
   // Read-only look at the active part or assembly: its features, bodies,
   // faces and/or edges with their geometry, and in an assembly its
   // components and mates. Every entity comes with a persist_id that other
@@ -557,6 +565,36 @@ message RevolveSketchResponse {
   // Cuts only, partial turns: the default direction removed nothing, so
   // the cut went the other way, as reverse_direction would have.
   bool direction_flipped = 6;
+}
+
+message SweepSketchRequest {
+  // Feature-tree name of the profile sketch (a closed 2D sketch). Empty
+  // means the most recent 2D sketch not yet used by any feature, other than
+  // the path. Must be empty with circle_diameter.
+  string sketch_name = 1;
+  // Feature-tree name of the path: a 2D or 3D sketch (one open or closed
+  // chain of curves) or a curve feature such as a helix.
+  string path = 2;
+  // Meters. More than 0: sweep a circle of this diameter, centered on the
+  // path, instead of a profile sketch.
+  double circle_diameter = 3;
+  // Radians: the profile turns by this much from the start of the path to
+  // its end. 0 = no twist (the profile follows the path).
+  double twist_angle = 4;
+  // Remove material (cut-sweep) instead of adding it.
+  bool cut = 5;
+}
+
+message SweepSketchResponse {
+  // Feature-tree name of the new feature, e.g. "Sweep1", "Cut-Sweep1".
+  string feature_name = 1;
+  // The profile sketch (useful when the request left it empty); empty for a
+  // circular profile.
+  string sketch_name = 2;
+  // How fully defined the profile sketch was.
+  DefinitionStatus sketch_status = 3;
+  // The path's feature-tree name.
+  string path = 4;
 }
 
 // ---------------------------------------------------------------------------

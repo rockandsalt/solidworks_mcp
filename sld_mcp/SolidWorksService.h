@@ -40,6 +40,10 @@ public:
 		const sld_mcp::v1::RevolveSketchRequest* request,
 		sld_mcp::v1::RevolveSketchResponse* response) override;
 
+	grpc::Status SweepSketch(grpc::ServerContext* context,
+		const sld_mcp::v1::SweepSketchRequest* request,
+		sld_mcp::v1::SweepSketchResponse* response) override;
+
 	grpc::Status InspectModel(grpc::ServerContext* context,
 		const sld_mcp::v1::InspectModelRequest* request,
 		sld_mcp::v1::InspectModelResponse* response) override;

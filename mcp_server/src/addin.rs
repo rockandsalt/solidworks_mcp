@@ -120,6 +120,15 @@ impl AddinClient {
         Ok(client.revolve_sketch(request).await?.into_inner())
     }
 
+    /// Diameter in meters, twist in radians.
+    pub async fn sweep_sketch(
+        &self,
+        request: proto::SweepSketchRequest,
+    ) -> Result<proto::SweepSketchResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.sweep_sketch(request).await?.into_inner())
+    }
+
     /// Lengths in meters.
     pub async fn inspect_model(
         &self,

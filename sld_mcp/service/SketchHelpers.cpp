@@ -149,7 +149,7 @@ namespace sld_mcp::service
 		return grpc::Status::OK;
 	}
 
-	grpc::Status FindLatestUnusedSketch(IModelDoc2* doc, ATL::CComPtr<IFeature>& sketch)
+	grpc::Status FindLatestUnusedSketch(IModelDoc2* doc, ATL::CComPtr<IFeature>& sketch, IFeature* except)
 	{
 		ATL::CComPtr<IFeature> feature;
 		HRESULT hr = doc->IFirstFeature(&feature);
@@ -169,7 +169,7 @@ namespace sld_mcp::service
 				hr = feature->IGetChildCount(&children);
 				if (FAILED(hr))
 					return ComError("IFeature::IGetChildCount", hr);
-				if (children == 0)
+				if (children == 0 && !(except && feature.IsEqualObject(except)))
 					sketch = feature;
 			}
 

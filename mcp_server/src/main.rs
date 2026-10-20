@@ -13,6 +13,7 @@ mod refgeom;
 mod render;
 mod revolve;
 mod sketch;
+mod sweep;
 mod tolerance;
 
 use std::sync::{Arc, Mutex};
@@ -282,7 +283,7 @@ impl PointConverter {
     }
 }
 
-/// Flags an extruded or revolved sketch that isn't fully defined.
+/// Flags an extruded, revolved or swept sketch that isn't fully defined.
 fn sketch_status_note(sketch_name: &str, status: proto::DefinitionStatus) -> String {
     match status {
         proto::DefinitionStatus::Fully | proto::DefinitionStatus::Unspecified => String::new(),
@@ -1309,6 +1310,26 @@ impl SolidWorksTools {
         Parameters(params): Parameters<revolve::RevolveParams>,
     ) -> Result<CallToolResult, McpError> {
         self.revolve(params, true).await
+    }
+
+    #[tool(
+        description = "Sweep a closed profile sketch of the active part along a path into a                        solid (swept boss: a handle, pipe, rail, spring, ...), merging with any                        existing body. Draw the path first (e.g. sketch_line / sketch_arc on                        Front), then the profile in its own sketch on a plane across the path's                        start (e.g. Right, or a create_reference_plane through the path's end                        point), and give path = the path sketch's name. Or skip the profile                        sketch: circle_diameter_mm sweeps a round section (a rod or wire). By                        default the profile is the most recently created sketch that isn't used                        by a feature yet, other than the path. twist_deg turns the profile along                        the path. Requires an open part with no sketch being edited."
+    )]
+    async fn sweep_sketch(
+        &self,
+        Parameters(params): Parameters<sweep::SweepParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.sweep(params, false).await
+    }
+
+    #[tool(
+        description = "Cut by sweeping a closed profile sketch (or a circle, circle_diameter_mm)                        of the active part along a path (cut-sweep), removing material: a groove                        that follows a curve, a channel, a thread-like helical cut. Path, profile                        and twist as for sweep_sketch; the profile must overlap the part where                        it starts or along the way. Requires an open part with no sketch being                        edited."
+    )]
+    async fn cut_sweep_sketch(
+        &self,
+        Parameters(params): Parameters<sweep::SweepParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.sweep(params, true).await
     }
 
     #[tool(
@@ -2386,6 +2407,21 @@ impl SolidWorksTools {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
+    /// Shared by sweep_sketch and cut_sweep_sketch.
+    async fn sweep(&self, params: sweep::SweepParams, cut: bool) -> Result<CallToolResult, McpError> {
+        let request = sweep::request(&params, cut)?;
+        let reply = self
+            .addin
+            .sweep_sketch(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let mut text = sweep::reply_text(&params, &reply, cut);
+        if !reply.sketch_name.is_empty() {
+            text += &sketch_status_note(&reply.sketch_name, reply.sketch_status());
+        }
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
     /// Shared by the reference geometry tools: `from` describes the
     /// references for the reply, `given` numbers them for error messages.
     async fn reference_geometry(
@@ -2746,7 +2782,7 @@ impl ServerHandler for SolidWorksTools {
                  sketch_line, sketch_arc, sketch_circle, sketch_spline and sketch_point \
                  (pass sketch_name to keep adding to one sketch), then extrude_sketch or \
                  cut_extrude_sketch, or for round parts revolve_sketch / cut_revolve_sketch \
-                 about a centerline (sketch_line with construction=true). hole_wizard adds standard clearance, counterbore, \
+                 about a centerline (sketch_line with construction=true), or sweep_sketch /                  cut_sweep_sketch to run a profile (or a circle) along a path sketch. hole_wizard adds standard clearance, counterbore, \
                  countersink or tapped holes at the points of a (dimensioned) sketch, or at \
                  locations on a face. To make a sketch fully defined: the drawing tools \
                  report entity ids (\"line:1\", \"point:2\"; inspect_sketch lists them all), \
