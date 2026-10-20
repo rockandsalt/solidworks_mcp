@@ -59,6 +59,16 @@ service SolidWorks {
   // names, FAILED_PRECONDITION when SolidWorks won't make the feature.
   rpc SweepSketch(SweepSketchRequest) returns (SweepSketchResponse);
 
+  // Rounds edges of the active part with a constant-radius fillet
+  // (IFeatureManager::FeatureFillet3), or bevels them with a chamfer
+  // (IFeatureManager::InsertFeatureChamfer). Edges are given directly or
+  // as faces (all of a face's edges). Same preconditions as ExtrudeSketch;
+  // INVALID_ARGUMENT for bad sizes or references that aren't edges or
+  // faces, NOT_FOUND for stale ids, FAILED_PRECONDITION when SolidWorks
+  // won't make the feature (e.g. a radius too big for the edges).
+  rpc FilletEdges(FilletEdgesRequest) returns (EdgeFeatureResponse);
+  rpc ChamferEdges(ChamferEdgesRequest) returns (EdgeFeatureResponse);
+
   // Read-only look at the active part or assembly: its features, bodies,
   // faces and/or edges with their geometry, and in an assembly its
   // components and mates. Every entity comes with a persist_id that other
@@ -595,6 +605,39 @@ message SweepSketchResponse {
   DefinitionStatus sketch_status = 3;
   // The path's feature-tree name.
   string path = 4;
+}
+
+message FilletEdgesRequest {
+  // Edges to round, or faces (all their edges), by model_persist_id.
+  repeated GeometryRef edges = 1;
+  // Meters, more than 0.
+  double radius = 2;
+  // Also round the edges tangent to the given ones (SolidWorks' default).
+  bool tangent_propagation = 3;
+}
+
+message ChamferEdgesRequest {
+  // Edges to bevel, or faces (all their edges), by model_persist_id.
+  repeated GeometryRef edges = 1;
+  // Meters, more than 0: how far the chamfer reaches into the faces on
+  // both sides (equal distance), or into the first face when `angle` or
+  // `other_distance` is set.
+  double distance = 2;
+  // Radians, in (0, pi/2): angle-distance chamfer. 0 = not set.
+  double angle = 3;
+  // Meters: distance-distance chamfer, how far it reaches into the second
+  // face. 0 = not set. At most one of angle / other_distance.
+  double other_distance = 4;
+  // Swap which face `distance` is measured on (angle-distance and
+  // distance-distance only).
+  bool flip = 5;
+  // Also bevel the edges tangent to the given ones (SolidWorks' default).
+  bool tangent_propagation = 6;
+}
+
+message EdgeFeatureResponse {
+  // Feature-tree name of the new feature, e.g. "Fillet1", "Chamfer1".
+  string feature_name = 1;
 }
 
 // ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ mod drawing;
 mod drawing_image;
 mod edit;
 mod files;
+mod fillet;
 mod hole;
 mod inspect;
 mod pmi;
@@ -1330,6 +1331,56 @@ impl SolidWorksTools {
         Parameters(params): Parameters<sweep::SweepParams>,
     ) -> Result<CallToolResult, McpError> {
         self.sweep(params, true).await
+    }
+
+    #[tool(
+        description = "Round edges of the active part with a constant-radius fillet. edges = \
+                       edge ids (\"edge:7\") or face ids (\"face:3\": all of that face's edges, \
+                       e.g. the top face of a box) from inspect_model (what=\"edges\" / \"faces\"; \
+                       render_views with highlight shows which is which). Edges tangent to the \
+                       given ones are rounded too unless tangent_propagation=false. Usually the \
+                       last step: fillet after the extrudes and cuts that make the edges. \
+                       Requires an open part with no sketch being edited."
+    )]
+    async fn fillet_edges(
+        &self,
+        Parameters(params): Parameters<fillet::FilletParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            fillet::fillet_request(&ids, &params)?
+        };
+        let reply = self
+            .addin
+            .fillet_edges(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(fillet::fillet_text(&params, &reply))]))
+    }
+
+    #[tool(
+        description = "Bevel edges of the active part with a chamfer. edges = edge ids \
+                       (\"edge:7\") or face ids (\"face:3\": all of that face's edges) from \
+                       inspect_model. distance_mm alone makes a 45 degree, equal-distance chamfer; \
+                       add angle_deg (angle-distance) or distance2_mm (distance-distance) for an \
+                       uneven one, and flip to swap which face each is measured on. Edges tangent \
+                       to the given ones are beveled too unless tangent_propagation=false. \
+                       Requires an open part with no sketch being edited."
+    )]
+    async fn chamfer_edges(
+        &self,
+        Parameters(params): Parameters<fillet::ChamferParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            fillet::chamfer_request(&ids, &params)?
+        };
+        let reply = self
+            .addin
+            .chamfer_edges(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(fillet::chamfer_text(&params, &reply))]))
     }
 
     #[tool(
@@ -2782,7 +2833,10 @@ impl ServerHandler for SolidWorksTools {
                  sketch_line, sketch_arc, sketch_circle, sketch_spline and sketch_point \
                  (pass sketch_name to keep adding to one sketch), then extrude_sketch or \
                  cut_extrude_sketch, or for round parts revolve_sketch / cut_revolve_sketch \
-                 about a centerline (sketch_line with construction=true), or sweep_sketch /                  cut_sweep_sketch to run a profile (or a circle) along a path sketch. hole_wizard adds standard clearance, counterbore, \
+                 about a centerline (sketch_line with construction=true), or sweep_sketch / \
+                 cut_sweep_sketch to run a profile (or a circle) along a path sketch; \
+                 fillet_edges / chamfer_edges round or bevel edges (by edge or face id). \
+                 hole_wizard adds standard clearance, counterbore, \
                  countersink or tapped holes at the points of a (dimensioned) sketch, or at \
                  locations on a face. To make a sketch fully defined: the drawing tools \
                  report entity ids (\"line:1\", \"point:2\"; inspect_sketch lists them all), \

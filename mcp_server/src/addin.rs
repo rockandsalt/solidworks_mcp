@@ -129,6 +129,24 @@ impl AddinClient {
         Ok(client.sweep_sketch(request).await?.into_inner())
     }
 
+    /// Radius in meters.
+    pub async fn fillet_edges(
+        &self,
+        request: proto::FilletEdgesRequest,
+    ) -> Result<proto::EdgeFeatureResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.fillet_edges(request).await?.into_inner())
+    }
+
+    /// Distances in meters, angle in radians.
+    pub async fn chamfer_edges(
+        &self,
+        request: proto::ChamferEdgesRequest,
+    ) -> Result<proto::EdgeFeatureResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.chamfer_edges(request).await?.into_inner())
+    }
+
     /// Lengths in meters.
     pub async fn inspect_model(
         &self,
