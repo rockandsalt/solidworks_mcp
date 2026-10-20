@@ -166,6 +166,7 @@ namespace sld_mcp::service
 			bool point;
 			long long id0;
 			long long id1;
+			long type;  // segments: swSketchSegments_e
 		};
 
 		void Load(ISketch* sketch)
@@ -182,7 +183,8 @@ namespace sld_mcp::service
 		ATL::CComPtr<IDispatch> Find(const sld_mcp::v1::SketchItemRef& ref) const
 		{
 			for (const Entry& e : m_entries)
-				if (e.point == ref.point() && e.id0 == ref.id0() && e.id1 == ref.id1())
+				if (e.point == ref.point() && e.id0 == ref.id0() && e.id1 == ref.id1() &&
+					(e.point || e.type == ref.segment_type()))
 					return e.obj;
 			return nullptr;
 		}
@@ -203,7 +205,7 @@ namespace sld_mcp::service
 				return false;
 			for (const Entry& e : m_entries)
 				if (e.point == point && e.id0 == id0 && e.id1 == id1)
-					return point || SegmentType(e.obj) == SegmentType(entity);
+					return point || e.type == SegmentType(entity);
 			return false;
 		}
 
@@ -220,9 +222,13 @@ namespace sld_mcp::service
 		{
 			for (const auto& disp : comvariant::ToDispatches(array))
 			{
-				Entry e{disp, false, 0, 0};
+				Entry e{disp, false, 0, 0, -1};
 				if (SketchEntityId(disp, e.point, e.id0, e.id1))
+				{
+					if (!e.point)
+						e.type = SegmentType(disp);
 					m_entries.push_back(e);
+				}
 			}
 		}
 

@@ -372,6 +372,7 @@
     <ClCompile Include="service\HoleWizard.cpp" />
     <ClCompile Include="service\InspectModel.cpp" />
     <ClCompile Include="service\Mates.cpp" />
+    <ClCompile Include="service\Mirror.cpp" />
     <ClCompile Include="service\Mesh.cpp" />
     <ClCompile Include="service\ReferenceGeometry.cpp" />
     <ClCompile Include="service\ReferenceHelpers.cpp" />

@@ -359,7 +359,7 @@ mod tests {
     use super::*;
 
     fn r(point: bool, id1: i64) -> proto::SketchItemRef {
-        proto::SketchItemRef { sketch_persist_id: b"sk".to_vec(), point, id0: 0, id1 }
+        proto::SketchItemRef { sketch_persist_id: b"sk".to_vec(), point, id0: 0, id1, ..Default::default() }
     }
 
     #[test]

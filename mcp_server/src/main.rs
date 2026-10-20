@@ -9,6 +9,7 @@ mod files;
 mod fillet;
 mod hole;
 mod inspect;
+mod mirror;
 mod pmi;
 mod refgeom;
 mod render;
@@ -1384,6 +1385,34 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "Mirror features or whole bodies of the active part about a plane. plane = \
+                       \"front\" / \"top\" / \"right\", a planar face id (\"face:3\") or a \
+                       reference plane (create_reference_plane). features = feature names \
+                       (\"Boss-Extrude1\") or ids from inspect_model: copies are built on the \
+                       other side of the plane, e.g. a boss, cut or hole drawn on one half of a \
+                       symmetric part. Or bodies = body ids (\"body:1\") to mirror whole bodies, \
+                       e.g. to finish a half-modelled part about its cut face (merged with it \
+                       unless merge=false). To mirror sketch geometry inside a sketch, use \
+                       mirror_sketch_entities. Requires an open part with no sketch being edited."
+    )]
+    async fn mirror_features(
+        &self,
+        Parameters(params): Parameters<mirror::MirrorFeaturesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            mirror::features_request(&ids, &params)?
+        };
+        let noun = if params.features.is_empty() { "body" } else { "feature" };
+        let reply = self
+            .addin
+            .mirror_features(request)
+            .await
+            .map_err(|status| delete::with_legend(self.addin_error(status), noun, &mirror::given(&params)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(mirror::features_text(&params, &reply))]))
+    }
+
+    #[tool(
         description = "Look at the active part or assembly without changing it. \
                        what=\"overview\" (default) lists the feature tree (name, type, \
                        parents/children; type ProfileFeature is a sketch; features that fail to \
@@ -2230,6 +2259,37 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "Mirror entities of a sketch of the active part about a line of the same \
+                       sketch (usually a centerline: sketch_line with construction=true). \
+                       entities = sketch ids from inspect_sketch or the sketch_* tools (\"line:3\", \
+                       \"arc:1\", \"point:7\"); the originals stay and each copy gets a symmetric \
+                       relation to its original, so dimensioning one half defines both. Copies \
+                       share the originals' end points on the axis, and a line that ends on the \
+                       axis at a right angle is extended across it instead of copied, so \
+                       mirroring an open half profile whose ends touch the centerline closes it. \
+                       Reports the new and extended entities' ids, the sketch's contours and \
+                       definition state, and features that now fail to rebuild. Requires no \
+                       sketch open for editing."
+    )]
+    async fn mirror_sketch_entities(
+        &self,
+        Parameters(params): Parameters<mirror::MirrorSketchParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            mirror::sketch_request(&ids, &params)?
+        };
+        let reply = self
+            .addin
+            .mirror_sketch_entities(request)
+            .await
+            .map_err(|status| delete::with_legend(self.addin_error(status), "entity", &mirror::given_entities(&params)))?;
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let text = mirror::sketch_text(&mut ids, &params, &reply);
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
         description = "Find out what's wrong with the active part's or assembly's feature tree, \
                        e.g. after deleting a feature or mate, or when inspect_model shows \
                        features with errors. Rebuilds (unless rebuild=false), then lists every \
@@ -2835,7 +2895,9 @@ impl ServerHandler for SolidWorksTools {
                  cut_extrude_sketch, or for round parts revolve_sketch / cut_revolve_sketch \
                  about a centerline (sketch_line with construction=true), or sweep_sketch / \
                  cut_sweep_sketch to run a profile (or a circle) along a path sketch; \
-                 fillet_edges / chamfer_edges round or bevel edges (by edge or face id). \
+                 fillet_edges / chamfer_edges round or bevel edges (by edge or face id); \
+                 mirror_features copies features or bodies about a plane, and \
+                 mirror_sketch_entities mirrors sketch geometry about a centerline. \
                  hole_wizard adds standard clearance, counterbore, \
                  countersink or tapped holes at the points of a (dimensioned) sketch, or at \
                  locations on a face. To make a sketch fully defined: the drawing tools \

@@ -312,6 +312,9 @@ namespace sld_mcp::service
 		ref->set_point(isPoint);
 		ref->set_id0(id0);
 		ref->set_id1(id1);
+		long type = 0;
+		if (ATL::CComQIPtr<ISketchSegment> segment(entity); segment && SUCCEEDED(segment->GetType(&type)))
+			ref->set_segment_type(static_cast<int32_t>(type));
 		return true;
 	}
 

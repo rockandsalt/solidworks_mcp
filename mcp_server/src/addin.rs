@@ -147,6 +147,22 @@ impl AddinClient {
         Ok(client.chamfer_edges(request).await?.into_inner())
     }
 
+    pub async fn mirror_features(
+        &self,
+        request: proto::MirrorFeaturesRequest,
+    ) -> Result<proto::MirrorFeaturesResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.mirror_features(request).await?.into_inner())
+    }
+
+    pub async fn mirror_sketch_entities(
+        &self,
+        request: proto::MirrorSketchEntitiesRequest,
+    ) -> Result<proto::MirrorSketchEntitiesResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.mirror_sketch_entities(request).await?.into_inner())
+    }
+
     /// Lengths in meters.
     pub async fn inspect_model(
         &self,

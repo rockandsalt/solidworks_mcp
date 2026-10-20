@@ -137,7 +137,7 @@ mod tests {
     }
 
     fn line_ref() -> proto::SketchItemRef {
-        proto::SketchItemRef { sketch_persist_id: vec![1, 2, 3], point: false, id0: 0, id1: 4 }
+        proto::SketchItemRef { sketch_persist_id: vec![1, 2, 3], point: false, id0: 0, id1: 4, ..Default::default() }
     }
 
     #[test]
@@ -163,7 +163,7 @@ mod tests {
         let circle = sketch::ref_id(
             &mut ids,
             Kind::Circle,
-            &proto::SketchItemRef { sketch_persist_id: vec![1, 2, 3], point: false, id0: 0, id1: 5 },
+            &proto::SketchItemRef { sketch_persist_id: vec![1, 2, 3], point: false, id0: 0, id1: 5, ..Default::default() },
         )
         .unwrap();
         let edge = ids.id_for(Kind::Edge, b"edge").unwrap();

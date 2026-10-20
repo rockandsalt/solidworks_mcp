@@ -434,7 +434,7 @@ mod tests {
         let line = sketch::ref_id(
             &mut ids,
             Kind::Line,
-            &proto::SketchItemRef { sketch_persist_id: b"sk".to_vec(), point: false, id0: 3, id1: 4 },
+            &proto::SketchItemRef { sketch_persist_id: b"sk".to_vec(), point: false, id0: 3, id1: 4, ..Default::default() },
         )
         .unwrap();
         (ids, feature, line)
@@ -508,7 +508,7 @@ mod tests {
     #[test]
     fn sketch_text_lists_what_went() {
         let (mut ids, _, line) = registry();
-        let kept_ref = proto::SketchItemRef { sketch_persist_id: b"sk".to_vec(), point: true, id0: 9, id1: 9 };
+        let kept_ref = proto::SketchItemRef { sketch_persist_id: b"sk".to_vec(), point: true, id0: 9, id1: 9, ..Default::default() };
         let point = sketch::ref_id(&mut ids, Kind::SketchPoint, &kept_ref).unwrap();
         let reply = proto::DeleteSketchEntitiesResponse {
             sketch_name: "Sketch1".into(),

@@ -445,6 +445,7 @@ mod tests {
                         point: true,
                         id0: 4,
                         id1: 1,
+                        ..Default::default()
                     }],
                     entity_types: vec![2, 3],
                     missing_count: 1,

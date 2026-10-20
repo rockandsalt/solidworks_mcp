@@ -29,11 +29,12 @@ namespace
 		return names;
 	}
 
-	using PointKey = std::pair<long long, long long>;
+	// Segment type (-1 for points: segments are numbered per type) and ID.
+	using PointKey = std::tuple<long, long long, long long>;
 
 	PointKey KeyOf(const sld_mcp::v1::SketchItemRef& ref)
 	{
-		return {ref.id0(), ref.id1()};
+		return {ref.point() ? -1L : static_cast<long>(ref.segment_type()), ref.id0(), ref.id1()};
 	}
 
 	// Sketch relations that aren't dimensions.
@@ -312,7 +313,7 @@ grpc::Status SolidWorksService::DeleteSketchEntities(grpc::ServerContext* /*cont
 		sld_mcp::v1::SketchItem item;
 		if (!DescribeSketchItem(e.obj, sketchPid, &item))
 			continue;
-		const PointKey segment{e.id0, e.id1};
+		const PointKey segment = KeyOf(item.ref());
 		const std::string name = item.name().empty() ? "a segment" : item.name();
 		for (const sld_mcp::v1::SketchItemRef* p : {&item.start_point(), &item.end_point(), &item.center_point()})
 			if (p->point())

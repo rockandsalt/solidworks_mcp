@@ -69,6 +69,24 @@ service SolidWorks {
   rpc FilletEdges(FilletEdgesRequest) returns (EdgeFeatureResponse);
   rpc ChamferEdges(ChamferEdgesRequest) returns (EdgeFeatureResponse);
 
+  // Mirrors features (by persist_id or name) or bodies of the active part
+  // about a plane: a planar face, a reference plane or a default plane
+  // (IFeatureManager::InsertMirrorFeature2). Same preconditions as
+  // ExtrudeSketch; INVALID_ARGUMENT for a plane that isn't one or features
+  // that can't be mirrored, NOT_FOUND for stale ids or unknown names,
+  // FAILED_PRECONDITION when SolidWorks won't make the feature (nothing is
+  // left behind then).
+  rpc MirrorFeatures(MirrorFeaturesRequest) returns (MirrorFeaturesResponse);
+
+  // Mirrors segments and points of a 2D sketch of the active part about a
+  // line of the same sketch (IModelDoc2::SketchMirror): the copies get
+  // symmetric relations to the originals, which stay; a line that ends on
+  // the axis at a right angle is extended across it instead. Then closes the
+  // sketch, rebuilds and reports the new entities, the contours, the
+  // definition state and features that now have errors. FAILED_PRECONDITION
+  // if a sketch is already open or SolidWorks mirrors nothing.
+  rpc MirrorSketchEntities(MirrorSketchEntitiesRequest) returns (MirrorSketchEntitiesResponse);
+
   // Read-only look at the active part or assembly: its features, bodies,
   // faces and/or edges with their geometry, and in an assembly its
   // components and mates. Every entity comes with a persist_id that other
@@ -640,6 +658,55 @@ message EdgeFeatureResponse {
   string feature_name = 1;
 }
 
+message MirrorFeaturesRequest {
+  // What to mirror about: a planar face or reference plane by
+  // model_persist_id, a reference plane by feature_name, or a default plane.
+  GeometryRef plane = 1;
+  // Features to mirror (copies of them on the other side of the plane).
+  // Not with `bodies`.
+  repeated FeatureTarget features = 2;
+  // Whole bodies to mirror, by persist_id from InspectModel. Not with
+  // `features`.
+  repeated bytes bodies = 3;
+  // Bodies only: merge each mirrored body with what it touches (SolidWorks'
+  // default); off keeps it a separate body.
+  bool merge = 4;
+}
+
+message MirrorFeaturesResponse {
+  // Feature-tree name of the new feature, e.g. "Mirror1".
+  string feature_name = 1;
+  // What was mirrored, e.g. "Boss-Extrude1, Cut-Extrude1" or "2 bodies".
+  string mirrored = 2;
+  // The plane, e.g. "Right Plane", "face".
+  string plane = 3;
+  // Solid bodies in the part afterwards.
+  int32 body_count = 4;
+}
+
+message MirrorSketchEntitiesRequest {
+  // E.g. "Sketch1". Empty: the sketch the items belong to.
+  string sketch_name = 1;
+  // Segments and/or points to mirror, all in that sketch; at least one.
+  repeated SketchItemRef items = 2;
+  // The line (or centerline) of that sketch to mirror about.
+  SketchItemRef axis = 3;
+}
+
+message MirrorSketchEntitiesResponse {
+  string sketch_name = 1;
+  // The new segments, then (when points were mirrored) the new points that
+  // aren't end or center points of segments.
+  repeated SketchItem items = 2;
+  SketchContours contours = 3;
+  SketchState state = 4;
+  // Features whose rebuild error is new or different since the mirror.
+  repeated FeatureProblem new_errors = 5;
+  // Mirrored lines that SolidWorks extended across the axis instead of
+  // copying (a line ending on the axis at a right angle), as they are now.
+  repeated SketchItem extended = 6;
+}
+
 // ---------------------------------------------------------------------------
 // InspectModel
 
@@ -981,12 +1048,14 @@ message EdgePolyline {
 // One entity inside a 2D sketch: SolidWorks' sketch entity ID
 // (ISketchSegment::GetID / ISketchPoint::GetID, two numbers that stay the
 // same for as long as the entity exists) plus the sketch it belongs to.
-// Treat as opaque.
+// Segments are numbered per type (a line and a circle of one sketch can
+// both be [0, 1]), so a segment's ref includes its type. Treat as opaque.
 message SketchItemRef {
   bytes sketch_persist_id = 1;  // the sketch feature's persist_id
   bool point = 2;               // a sketch point rather than a segment
   int64 id0 = 3;
   int64 id1 = 4;
+  int32 segment_type = 5;       // segments: ISketchSegment::GetType (swSketchSegments_e)
 }
 
 enum SketchItemType {
