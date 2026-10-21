@@ -6,6 +6,7 @@
 #include "DimensionHelpers.h"
 #include "FeatureTreeHelpers.h"
 #include "ReferenceHelpers.h"
+#include "SeedHelpers.h"
 #include "SketchHelpers.h"
 
 using namespace sld_mcp::service;
@@ -18,7 +19,6 @@ namespace
 	constexpr long kBodyMark = 256;
 
 	// More than anyone mirrors in one go.
-	constexpr int kMaxMirrorFeatures = 500;
 	constexpr int kMaxMirrorSketchItems = 1000;
 
 	grpc::Status CheckMirrorPlane(const Pick& pick)
@@ -45,36 +45,6 @@ namespace
 			"plane: " + pick.what + " isn't a plane -- mirror about a planar face, a reference plane or a default "
 			"plane");
 	}
-
-	int SolidBodyCount(IModelDoc2* doc)
-	{
-		ATL::CComQIPtr<IPartDoc> part(doc);
-		ATL::CComVariant bodies;
-		if (!part || FAILED(part->GetBodies2(swSolidBody, VARIANT_FALSE, &bodies)))
-			return 0;
-		return static_cast<int>(comvariant::ToDispatches(bodies).size());
-	}
-
-	// Segment type (-1 for points: segments are numbered per type) and ID.
-	using ItemKey = std::tuple<long, long long, long long>;
-
-	ItemKey KeyOf(const SketchItems::Entry& e)
-	{
-		return {e.point ? -1L : e.type, e.id0, e.id1};
-	}
-
-	ItemKey KeyOf(const sld_mcp::v1::SketchItemRef& ref)
-	{
-		return {ref.point() ? -1L : static_cast<long>(ref.segment_type()), ref.id0(), ref.id1()};
-	}
-
-	std::set<ItemKey> ItemKeys(const SketchItems& items)
-	{
-		std::set<ItemKey> keys;
-		for (const auto& e : items.All())
-			keys.insert(KeyOf(e));
-		return keys;
-	}
 }
 
 grpc::Status SolidWorksService::MirrorFeatures(grpc::ServerContext* /*context*/,
@@ -87,9 +57,9 @@ grpc::Status SolidWorksService::MirrorFeatures(grpc::ServerContext* /*context*/,
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give the features or the bodies to mirror");
 	if (featureCount > 0 && bodyCount > 0)
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give features or bodies to mirror, not both");
-	if (featureCount + bodyCount > kMaxMirrorFeatures)
+	if (featureCount + bodyCount > kMaxSeeds)
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-			"at most " + std::to_string(kMaxMirrorFeatures) + " features or bodies per call");
+			"at most " + std::to_string(kMaxSeeds) + " features or bodies per call");
 	if (request->plane().target_case() == sld_mcp::v1::GeometryRef::TARGET_NOT_SET)
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give the plane to mirror about");
 
@@ -114,7 +84,6 @@ grpc::Status SolidWorksService::MirrorFeatures(grpc::ServerContext* /*context*/,
 		return ComError("IModelDoc2::FeatureManager", hr);
 	if (!featureManager)
 		return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no feature manager");
-	PersistIds ids(ext);
 
 	Selection plane;
 	if (grpc::Status status = plane.Add(doc, ext, request->plane(), kPlaneMark, "plane"); !status.ok())
@@ -122,84 +91,24 @@ grpc::Status SolidWorksService::MirrorFeatures(grpc::ServerContext* /*context*/,
 	if (grpc::Status status = CheckMirrorPlane(plane.picks.front()); !status.ok())
 		return status;
 
-	// The features, in request order, once each.
 	std::vector<ATL::CComPtr<IFeature>> features;
-	std::string mirrored;
-	{
-		const std::vector<TreeFeature> tree = featureCount ? FeatureTree(doc) : std::vector<TreeFeature>{};
-		std::set<std::string> seen;
-		for (int i = 0; i < featureCount; ++i)
-		{
-			const std::string label = "feature " + std::to_string(i + 1);
-			size_t index = 0;
-			if (grpc::Status status = ResolveFeatureTarget(ext, tree, ids, request->features(i), index); !status.ok())
-				return grpc::Status(status.error_code(), label + ": " + status.error_message());
-			const TreeFeature& f = tree[index];
-			if (f.fixed)
-				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-					label + ": \"" + f.name + "\" can't be mirrored: it " + f.fixed);
-			if (IsSketchType(f.type))
-				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-					label + ": \"" + f.name + "\" is a sketch -- mirror the feature made from it, or mirror the "
-					"sketch's entities inside it with mirror_sketch_entities");
-			if (!seen.insert(f.name).second)
-				continue;
-			features.push_back(f.feature);
-			mirrored += (mirrored.empty() ? "" : ", ") + f.name;
-		}
-	}
-
-	// The bodies, once each.
 	std::vector<ATL::CComPtr<IBody2>> bodies;
-	for (int i = 0; i < bodyCount; ++i)
-	{
-		const std::string label = "body " + std::to_string(i + 1);
-		ATL::CComPtr<IDispatch> obj;
-		if (grpc::Status status = ResolvePersistId(ext, request->bodies(i), obj); !status.ok())
-			return grpc::Status(status.error_code(), label + " " + status.error_message());
-		ATL::CComQIPtr<IBody2> body(obj.p);
-		if (!body)
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, label + " isn't a body");
-		if (std::none_of(bodies.begin(), bodies.end(), [&](const auto& b) { return SameObject(b, body); }))
-			bodies.push_back(body);
-	}
-	if (!bodies.empty())
-		mirrored = bodies.size() == 1 ? "1 body" : std::to_string(bodies.size()) + " bodies";
+	std::string mirrored;
+	if (grpc::Status status = ResolveSeedFeatures(doc, ext, request->features(), "mirrored",
+			"mirror the feature made from it, or mirror the sketch's entities inside it with "
+			"mirror_sketch_entities",
+			features, mirrored);
+		!status.ok())
+		return status;
+	if (grpc::Status status = ResolveSeedBodies(ext, request->bodies(), bodies, mirrored); !status.ok())
+		return status;
 
 	if (grpc::Status status = plane.Select(doc, ext); !status.ok())
 		return status;
-	for (size_t i = 0; i < features.size(); ++i)
-	{
-		VARIANT_BOOL selected = VARIANT_FALSE;
-		if (FAILED(features[i]->Select2(VARIANT_TRUE, kFeatureMark, &selected)) || !selected)
-		{
-			doc->ClearSelection2(VARIANT_TRUE);
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				"SolidWorks wouldn't select \"" + FeatureName(features[i]) + "\" -- is it suppressed?");
-		}
-	}
-	if (!bodies.empty())
-	{
-		ATL::CComPtr<ISelectionMgr> selectionManager;
-		ATL::CComPtr<ISelectData> data;
-		hr = doc->get_ISelectionManager(&selectionManager);
-		if (FAILED(hr) || !selectionManager || FAILED(selectionManager->CreateSelectData(&data)) || !data)
-		{
-			doc->ClearSelection2(VARIANT_TRUE);
-			return ComError("ISelectionMgr::CreateSelectData", hr);
-		}
-		data->put_Mark(kBodyMark);
-		for (size_t i = 0; i < bodies.size(); ++i)
-		{
-			VARIANT_BOOL selected = VARIANT_FALSE;
-			if (FAILED(bodies[i]->Select2(VARIANT_TRUE, data, &selected)) || !selected)
-			{
-				doc->ClearSelection2(VARIANT_TRUE);
-				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-					"SolidWorks wouldn't select body " + std::to_string(i + 1) + " -- is it hidden?");
-			}
-		}
-	}
+	if (grpc::Status status = SelectSeedFeatures(doc, features, kFeatureMark); !status.ok())
+		return status;
+	if (grpc::Status status = SelectSeedBodies(doc, bodies, kBodyMark); !status.ok())
+		return status;
 
 	ATL::CComPtr<IFeature> mirror;
 	hr = featureManager->InsertMirrorFeature2(
@@ -218,24 +127,13 @@ grpc::Status SolidWorksService::MirrorFeatures(grpc::ServerContext* /*context*/,
 			" -- e.g. a mirrored cut or fillet that finds no material on the other side, or a mirrored boss "
 			"that doesn't touch the body");
 
-	// A mirror that fails to rebuild, or changes nothing (a mirrored cut
-	// beyond the body builds without an error and has no faces, seen
-	// 2026-10-20), is deleted again.
-	VARIANT_BOOL warning = VARIANT_FALSE;
-	long error = swFeatureErrorNone;
-	long faces = 0;
-	const bool failed =
-		SUCCEEDED(mirror->GetErrorCode2(&warning, &error)) && error != swFeatureErrorNone && !warning;
-	if (failed || (SUCCEEDED(mirror->GetFaceCount(&faces)) && faces == 0))
-	{
-		const std::string name = FeatureName(mirror);
-		DeleteFeature(doc, mirror);
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			"SolidWorks made " + name + " but it " +
-			(failed ? "failed to rebuild (swFeatureError_e " + std::to_string(error) + ")" : "changed nothing") +
-			", so it was deleted again -- the mirrored copy of " + mirrored + " about " + plane.Describe() +
-			" probably finds no material there (a cut or fillet beyond the body)");
-	}
+	// A mirrored cut beyond the body builds without an error and has no
+	// faces (seen 2026-10-20).
+	if (grpc::Status status = KeepIfBuilt(doc, mirror,
+			"the mirrored copy of " + mirrored + " about " + plane.Describe() +
+				" probably finds no material there (a cut or fillet beyond the body)");
+		!status.ok())
+		return status;
 
 	response->set_feature_name(FeatureName(mirror));
 	response->set_mirrored(mirrored);
@@ -274,22 +172,10 @@ grpc::Status SolidWorksService::MirrorSketchEntities(grpc::ServerContext* /*cont
 	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
 		return status;
 
-	// The sketch: by name, or the one the first entity is in.
 	ATL::CComPtr<IFeature> sketchFeature;
-	if (!request->sketch_name().empty())
-	{
-		if (grpc::Status status = FindSketchByName(doc, request->sketch_name(), sketchFeature); !status.ok())
-			return status;
-	}
-	else
-	{
-		ATL::CComPtr<IDispatch> obj;
-		if (grpc::Status status = ResolvePersistId(ext, request->items(0).sketch_persist_id(), obj); !status.ok())
-			return grpc::Status(status.error_code(), "the entities' sketch " + status.error_message());
-		sketchFeature = ATL::CComQIPtr<IFeature>(obj.p);
-		if (!sketchFeature)
-			return grpc::Status(grpc::StatusCode::INTERNAL, "a sketch reference didn't resolve to a feature");
-	}
+	if (grpc::Status status = ResolveItemsSketch(doc, ext, request->sketch_name(), request->items(0), sketchFeature);
+		!status.ok())
+		return status;
 	const std::string sketchName = FeatureName(sketchFeature);
 	const std::string sketchPid = PersistIdOf(ext, sketchFeature);
 	response->set_sketch_name(sketchName);
@@ -309,7 +195,7 @@ grpc::Status SolidWorksService::MirrorSketchEntities(grpc::ServerContext* /*cont
 	if (grpc::Status status = SketchOf(sketchFeature, sketch); !status.ok())
 		return status;
 	// The requested segments' lengths, to tell which SolidWorks extended.
-	std::map<ItemKey, double> lengths;
+	std::map<SketchItemKey, double> lengths;
 	bool anyPoints = false;
 	{
 		SketchItems items;
@@ -327,13 +213,13 @@ grpc::Status SolidWorksService::MirrorSketchEntities(grpc::ServerContext* /*cont
 				return grpc::Status(grpc::StatusCode::NOT_FOUND,
 					where(i) + " isn't in sketch \"" + sketchName + "\" any more (deleted or merged?) -- inspect "
 					"the sketch again for current IDs");
-			if (KeyOf(ref) == KeyOf(request->axis()))
+			if (SketchKeyOf(ref) == SketchKeyOf(request->axis()))
 				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
 					where(i) + " is the axis itself -- the line to mirror about isn't mirrored");
 			anyPoints = anyPoints || ref.point();
 			sld_mcp::v1::SketchItem item;
 			if (!ref.point() && DescribeSketchItem(items.Find(ref), sketchPid, &item))
-				lengths[KeyOf(ref)] = item.length();
+				lengths[SketchKeyOf(ref)] = item.length();
 		}
 	}
 
@@ -349,37 +235,28 @@ grpc::Status SolidWorksService::MirrorSketchEntities(grpc::ServerContext* /*cont
 	if (grpc::Status status = OpenExistingSketch(doc, sketchFeature, openSketch); !status.ok())
 		return status;
 
-	std::set<ItemKey> added;
+	std::set<SketchItemKey> added;
 	const grpc::Status failure = [&]() -> grpc::Status {
 		SketchItems open;
 		open.Load(openSketch);
-		const std::set<ItemKey> before = ItemKeys(open);
+		const std::set<SketchItemKey> before = SketchKeys(open);
 		HRESULT hr = doc->ClearSelection2(VARIANT_TRUE);
 		if (FAILED(hr))
 			return ComError("IModelDoc2::ClearSelection2", hr);
 		// The entities first, the line to mirror about last.
-		for (int i = 0; i <= count; ++i)
-		{
-			ATL::CComPtr<IDispatch> obj = open.Find(i < count ? request->items(i) : request->axis());
-			VARIANT_BOOL selected = VARIANT_FALSE;
-			if (ATL::CComQIPtr<ISketchSegment> segment(obj.p); segment)
-				segment->Select4(VARIANT_TRUE, nullptr, &selected);
-			else if (ATL::CComQIPtr<ISketchPoint> point(obj.p); point)
-				point->Select4(VARIANT_TRUE, nullptr, &selected);
-			if (!selected)
-			{
-				doc->ClearSelection2(VARIANT_TRUE);
-				return grpc::Status(grpc::StatusCode::INTERNAL,
-					"SolidWorks wouldn't select " + (i < count ? where(i) : std::string("the axis")) +
-					" in the open sketch -- nothing was mirrored");
-			}
-		}
+		std::vector<sld_mcp::v1::SketchItemRef> refs(request->items().begin(), request->items().end());
+		refs.push_back(request->axis());
+		if (size_t failed = 0; !SelectSketchItems(doc, open, refs, failed))
+			return grpc::Status(grpc::StatusCode::INTERNAL,
+				"SolidWorks wouldn't select " +
+				(failed < static_cast<size_t>(count) ? where(static_cast<int>(failed)) : std::string("the axis")) +
+				" in the open sketch -- nothing was mirrored");
 		hr = doc->SketchMirror();
 		doc->ClearSelection2(VARIANT_TRUE);
 		if (FAILED(hr))
 			return ComError("IModelDoc2::SketchMirror", hr);
 		open.Load(openSketch);
-		for (const ItemKey& key : ItemKeys(open))
+		for (const SketchItemKey& key : SketchKeys(open))
 			if (!before.count(key))
 				added.insert(key);
 		if (added.empty())
@@ -413,32 +290,15 @@ grpc::Status SolidWorksService::MirrorSketchEntities(grpc::ServerContext* /*cont
 		return status;
 	SketchItems after;
 	after.Load(sketch);
-	std::set<ItemKey> segmentPoints;
-	std::vector<sld_mcp::v1::SketchItem> points;
+	DescribeAddedItems(after, added, sketchPid, anyPoints, response->mutable_items());
 	for (const auto& e : after.All())
 	{
 		sld_mcp::v1::SketchItem item;
-		if (!DescribeSketchItem(e.obj, sketchPid, &item))
-			continue;
-		const ItemKey key = KeyOf(e);
-		if (!e.point)
-			for (const sld_mcp::v1::SketchItemRef* p : {&item.start_point(), &item.end_point(), &item.center_point()})
-				if (p->point())
-					segmentPoints.insert(KeyOf(*p));
-		if (auto length = lengths.find(key); length != lengths.end() &&
+		if (auto length = lengths.find(SketchKeyOf(e));
+			length != lengths.end() && DescribeSketchItem(e.obj, sketchPid, &item) &&
 			std::abs(item.length() - length->second) > 1e-9)
 			*response->add_extended() = item;
-		if (!added.count(key))
-			continue;
-		if (e.point)
-			points.push_back(item);
-		else
-			*response->add_items() = item;
 	}
-	if (anyPoints)
-		for (const auto& item : points)
-			if (!segmentPoints.count(KeyOf(item.ref())))
-				*response->add_items() = item;
 
 	sld_mcp::v1::SketchContours contours;
 	if (CountContours(sketch, contours))

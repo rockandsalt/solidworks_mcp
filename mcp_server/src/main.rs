@@ -10,6 +10,7 @@ mod fillet;
 mod hole;
 mod inspect;
 mod mirror;
+mod pattern;
 mod pmi;
 mod refgeom;
 mod render;
@@ -1413,6 +1414,71 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "Copy features or whole bodies of the active part in a row, or a grid with \
+                       direction2, e.g. a row of holes or slots. features = feature names \
+                       (\"Cut-Extrude1\") or ids from inspect_model; or bodies = body ids \
+                       (\"body:1\"). direction = a straight edge (\"edge:7\"), a sketch line, a \
+                       reference axis, or a planar face or plane (\"front\", \"face:3\") to \
+                       pattern along its normal; count = instances including the original; \
+                       spacing_mm = distance from one to the next. Which way an edge points \
+                       isn't obvious: if the copies go the wrong way, delete the pattern and \
+                       repeat with reverse_direction. To copy round an axis, use \
+                       circular_pattern_features; to copy sketch geometry inside a sketch, \
+                       linear_pattern_sketch_entities. Requires an open part with no sketch being \
+                       edited."
+    )]
+    async fn linear_pattern_features(
+        &self,
+        Parameters(params): Parameters<pattern::LinearPatternParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            pattern::linear_request(&ids, &params)?
+        };
+        let noun = if params.features.is_empty() { "body" } else { "feature" };
+        let reply = self
+            .addin
+            .pattern_features(request)
+            .await
+            .map_err(|status| {
+                delete::with_legend(self.addin_error(status), noun, &pattern::given(&params.features, &params.bodies))
+            })?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(pattern::linear_text(&params, &reply))]))
+    }
+
+    #[tool(
+        description = "Copy features or whole bodies of the active part round an axis, e.g. bolt \
+                       holes round a flange or spokes of a wheel. features = feature names \
+                       (\"Cut-Extrude1\") or ids from inspect_model; or bodies = body ids \
+                       (\"body:1\"). axis = a reference axis (\"Axis1\"), a cylindrical face \
+                       (\"face:3\", e.g. the bore or the outside of a round part), a straight or \
+                       circular edge, or a sketch line; count = instances including the \
+                       original, spread evenly all the way round unless angle_deg (the total) or \
+                       spacing_deg (between neighbours) says otherwise. To copy in a row, use \
+                       linear_pattern_features; to copy sketch geometry inside a sketch, \
+                       circular_pattern_sketch_entities. Requires an open part with no sketch \
+                       being edited."
+    )]
+    async fn circular_pattern_features(
+        &self,
+        Parameters(params): Parameters<pattern::CircularPatternParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            pattern::circular_request(&ids, &params)?
+        };
+        let noun = if params.features.is_empty() { "body" } else { "feature" };
+        let reply = self
+            .addin
+            .pattern_features(request)
+            .await
+            .map_err(|status| {
+                delete::with_legend(self.addin_error(status), noun, &pattern::given(&params.features, &params.bodies))
+            })?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(pattern::circular_text(&params, &reply))]))
+    }
+
+    #[tool(
         description = "Look at the active part or assembly without changing it. \
                        what=\"overview\" (default) lists the feature tree (name, type, \
                        parents/children; type ProfileFeature is a sketch; features that fail to \
@@ -2290,6 +2356,72 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "Copy entities of a sketch of the active part in a row or grid inside the \
+                       same sketch, e.g. a row of slots or a grid of hole circles to cut in one \
+                       go. entities = sketch ids from inspect_sketch or the sketch_* tools \
+                       (\"circle:1\", \"line:3\", \"point:7\"); count instances (the originals \
+                       included) spacing_mm apart along angle_deg (degrees counterclockwise from \
+                       the sketch x axis, default 0), and for a grid count2 rows spacing2_mm \
+                       apart along angle2_deg (default 90). Reports the new entities' ids, the \
+                       sketch's contours and definition state, and features that now fail to \
+                       rebuild. To copy features of the part, use linear_pattern_features. \
+                       Requires no sketch open for editing."
+    )]
+    async fn linear_pattern_sketch_entities(
+        &self,
+        Parameters(params): Parameters<pattern::LinearSketchPatternParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            pattern::linear_sketch_request(&ids, &params)?
+        };
+        let reply = self
+            .addin
+            .pattern_sketch_entities(request)
+            .await
+            .map_err(|status| {
+                delete::with_legend(self.addin_error(status), "entity", &pattern::given_entities(&params.entities))
+            })?;
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let how = pattern::linear_sketch_how(&params);
+        let text = pattern::sketch_text(&mut ids, &params.entities, &how, &reply);
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Copy entities of a sketch of the active part round a point inside the \
+                       same sketch, e.g. bolt-hole circles on a pitch circle. entities = sketch \
+                       ids from inspect_sketch or the sketch_* tools (\"circle:1\", \"line:3\", \
+                       \"point:7\"); center = [x, y] in sketch coordinates (mm, default the \
+                       sketch origin); count = instances including the originals, spread evenly \
+                       all the way round unless angle_deg (the total) or spacing_deg (between \
+                       neighbours) says otherwise, counterclockwise unless reverse_direction. \
+                       Reports the new entities' ids, the sketch's contours and definition \
+                       state, and features that now fail to rebuild. To copy features of the \
+                       part, use circular_pattern_features. Requires no sketch open for editing."
+    )]
+    async fn circular_pattern_sketch_entities(
+        &self,
+        Parameters(params): Parameters<pattern::CircularSketchPatternParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            pattern::circular_sketch_request(&ids, &params)?
+        };
+        let reply = self
+            .addin
+            .pattern_sketch_entities(request)
+            .await
+            .map_err(|status| {
+                delete::with_legend(self.addin_error(status), "entity", &pattern::given_entities(&params.entities))
+            })?;
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let how = pattern::circular_sketch_how(&params);
+        let text = pattern::sketch_text(&mut ids, &params.entities, &how, &reply);
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
         description = "Find out what's wrong with the active part's or assembly's feature tree, \
                        e.g. after deleting a feature or mate, or when inspect_model shows \
                        features with errors. Rebuilds (unless rebuild=false), then lists every \
@@ -2897,7 +3029,10 @@ impl ServerHandler for SolidWorksTools {
                  cut_sweep_sketch to run a profile (or a circle) along a path sketch; \
                  fillet_edges / chamfer_edges round or bevel edges (by edge or face id); \
                  mirror_features copies features or bodies about a plane, and \
-                 mirror_sketch_entities mirrors sketch geometry about a centerline. \
+                 mirror_sketch_entities mirrors sketch geometry about a centerline; \
+                 linear_pattern_features / circular_pattern_features copy features or bodies \
+                 in a row, grid or round an axis, and linear_pattern_sketch_entities / \
+                 circular_pattern_sketch_entities do the same inside a sketch. \
                  hole_wizard adds standard clearance, counterbore, \
                  countersink or tapped holes at the points of a (dimensioned) sketch, or at \
                  locations on a face. To make a sketch fully defined: the drawing tools \

@@ -314,6 +314,7 @@
     <ClInclude Include="service\DrawingHelpers.h" />
     <ClInclude Include="service\FeatureTreeHelpers.h" />
     <ClInclude Include="service\ReferenceHelpers.h" />
+    <ClInclude Include="service\SeedHelpers.h" />
     <ClInclude Include="service\SketchHelpers.h" />
   </ItemGroup>
   <ItemGroup>
@@ -374,8 +375,10 @@
     <ClCompile Include="service\Mates.cpp" />
     <ClCompile Include="service\Mirror.cpp" />
     <ClCompile Include="service\Mesh.cpp" />
+    <ClCompile Include="service\Pattern.cpp" />
     <ClCompile Include="service\ReferenceGeometry.cpp" />
     <ClCompile Include="service\ReferenceHelpers.cpp" />
+    <ClCompile Include="service\SeedHelpers.cpp" />
     <ClCompile Include="service\Revolve.cpp" />
     <ClCompile Include="service\Sweep.cpp" />
     <ClCompile Include="service\SketchConstraints.cpp" />

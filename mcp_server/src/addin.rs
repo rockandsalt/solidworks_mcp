@@ -163,6 +163,24 @@ impl AddinClient {
         Ok(client.mirror_sketch_entities(request).await?.into_inner())
     }
 
+    /// Lengths in meters, angles in radians.
+    pub async fn pattern_features(
+        &self,
+        request: proto::PatternFeaturesRequest,
+    ) -> Result<proto::PatternFeaturesResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.pattern_features(request).await?.into_inner())
+    }
+
+    /// Lengths in meters, angles in radians.
+    pub async fn pattern_sketch_entities(
+        &self,
+        request: proto::PatternSketchEntitiesRequest,
+    ) -> Result<proto::PatternSketchEntitiesResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.pattern_sketch_entities(request).await?.into_inner())
+    }
+
     /// Lengths in meters.
     pub async fn inspect_model(
         &self,

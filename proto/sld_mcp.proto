@@ -87,6 +87,22 @@ service SolidWorks {
   // if a sketch is already open or SolidWorks mirrors nothing.
   rpc MirrorSketchEntities(MirrorSketchEntitiesRequest) returns (MirrorSketchEntitiesResponse);
 
+  // Patterns features (by persist_id or name) or bodies of the active part
+  // along one or two directions (IFeatureManager::FeatureLinearPattern5) or
+  // round an axis (FeatureCircularPattern5). Same preconditions as
+  // ExtrudeSketch; INVALID_ARGUMENT for a direction or axis that can't be
+  // one, NOT_FOUND for stale ids or unknown names, FAILED_PRECONDITION when
+  // SolidWorks won't make the pattern (nothing is left behind then).
+  rpc PatternFeatures(PatternFeaturesRequest) returns (PatternFeaturesResponse);
+
+  // Copies segments and points of a 2D sketch of the active part in a row or
+  // grid (ISketchManager::CreateLinearSketchStepAndRepeat) or round a center
+  // point (CreateCircularSketchStepAndRepeat). Then closes the sketch,
+  // rebuilds and reports the new entities, the contours, the definition
+  // state and features that now have errors. FAILED_PRECONDITION if a sketch
+  // is already open or SolidWorks copies nothing.
+  rpc PatternSketchEntities(PatternSketchEntitiesRequest) returns (PatternSketchEntitiesResponse);
+
   // Read-only look at the active part or assembly: its features, bodies,
   // faces and/or edges with their geometry, and in an assembly its
   // components and mates. Every entity comes with a persist_id that other
@@ -705,6 +721,111 @@ message MirrorSketchEntitiesResponse {
   // Mirrored lines that SolidWorks extended across the axis instead of
   // copying (a line ending on the axis at a right angle), as they are now.
   repeated SketchItem extended = 6;
+}
+
+// One direction of a linear feature pattern.
+message PatternDirection {
+  // A straight edge, a sketch line, a reference axis, a planar face (along
+  // its normal) or a plane (along its normal), as in MirrorFeaturesRequest.
+  GeometryRef direction = 1;
+  // Instances along it, the original included; at least 2.
+  int32 count = 2;
+  // From one instance to the next, meters, > 0.
+  double spacing = 3;
+  // The other way along the direction.
+  bool reverse = 4;
+}
+
+message LinearFeaturePattern {
+  PatternDirection direction1 = 1;
+  // Optional: a second direction, for a grid.
+  PatternDirection direction2 = 2;
+}
+
+message CircularFeaturePattern {
+  // An axis, a straight or circular edge, a sketch line, or a cylindrical or
+  // conical face (its axis).
+  GeometryRef axis = 1;
+  // Instances, the original included; at least 2.
+  int32 count = 2;
+  // Radians: the total angle the instances are spread evenly over when
+  // equal_spacing (2π = all the way round), else the angle between
+  // neighbouring instances.
+  double angle = 3;
+  bool equal_spacing = 4;
+  // The other way round the axis.
+  bool reverse = 5;
+}
+
+message PatternFeaturesRequest {
+  // Features to pattern. Not with `bodies`.
+  repeated FeatureTarget features = 1;
+  // Whole bodies to pattern, by persist_id from InspectModel. Not with
+  // `features`.
+  repeated bytes bodies = 2;
+  oneof pattern {
+    LinearFeaturePattern linear = 3;
+    CircularFeaturePattern circular = 4;
+  }
+}
+
+message PatternFeaturesResponse {
+  // Feature-tree name of the new feature, e.g. "LPattern1", "CirPattern1".
+  string feature_name = 1;
+  // What was patterned, e.g. "Cut-Extrude1" or "1 body".
+  string patterned = 2;
+  // The direction(s) or axis, e.g. "edge", "Axis1", "Right Plane".
+  string direction1 = 3;
+  string direction2 = 4;
+  // Solid bodies in the part afterwards.
+  int32 body_count = 5;
+}
+
+message LinearSketchPattern {
+  // Instances along the first direction, the originals included; >= 2
+  // unless count2 is.
+  int32 count = 1;
+  // From one instance to the next, meters, > 0.
+  double spacing = 2;
+  // The first direction, radians counterclockwise from the sketch x axis.
+  double angle = 3;
+  // Rows along the second direction; 1 (or 0) for none.
+  int32 count2 = 4;
+  double spacing2 = 5;
+  // The second direction, radians counterclockwise from the sketch x axis.
+  double angle2 = 6;
+}
+
+message CircularSketchPattern {
+  // The point to pattern round, sketch coordinates, meters (z unused).
+  Vec3 center = 1;
+  // Instances, the originals included; at least 2.
+  int32 count = 2;
+  // Angle between neighbouring instances, radians, counterclockwise in the
+  // sketch (negative: clockwise); not 0.
+  double spacing = 3;
+}
+
+message PatternSketchEntitiesRequest {
+  // E.g. "Sketch1". Empty: the sketch the items belong to.
+  string sketch_name = 1;
+  // Segments and/or points to copy, all in that sketch; at least one.
+  repeated SketchItemRef items = 2;
+  oneof pattern {
+    LinearSketchPattern linear = 3;
+    CircularSketchPattern circular = 4;
+  }
+}
+
+message PatternSketchEntitiesResponse {
+  string sketch_name = 1;
+  // The new segments, then (when points were patterned) the new points that
+  // aren't end or center points of segments.
+  repeated SketchItem items = 2;
+  SketchContours contours = 3;
+  SketchState state = 4;
+  // Features whose rebuild error is new or different since the pattern.
+  repeated FeatureProblem new_errors = 5;
 }
 
 // ---------------------------------------------------------------------------

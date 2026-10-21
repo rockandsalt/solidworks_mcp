@@ -224,6 +224,7 @@ pub fn relation_name(constraint_type: i32) -> String {
         32 => "converted edge",
         42 => "merge",
         47 => "sketch offset",
+        57 => "patterned",
         n => return format!("other (type {n})"),
     }
     .to_string()

@@ -247,4 +247,30 @@ namespace sld_mcp::service
 	// The sketch's relations (dimensions included), or those matching a
 	// swSketchRelationFilterType_e filter.
 	std::vector<ATL::CComPtr<ISketchRelation>> SketchRelations(ISketch* sketch, long filter = swAll);
+
+	// A sketch item's identity within its sketch: segment type (-1 for
+	// points: segments are numbered per type) and ID.
+	using SketchItemKey = std::tuple<long, long long, long long>;
+
+	SketchItemKey SketchKeyOf(const SketchItems::Entry& e);
+	SketchItemKey SketchKeyOf(const sld_mcp::v1::SketchItemRef& ref);
+	std::set<SketchItemKey> SketchKeys(const SketchItems& items);
+
+	// The sketch an entity-editing request works in: `sketchName`, else the
+	// sketch its first item is in.
+	grpc::Status ResolveItemsSketch(IModelDoc2* doc, IModelDocExtension* ext, const std::string& sketchName,
+		const sld_mcp::v1::SketchItemRef& first, ATL::CComPtr<IFeature>& sketchFeature);
+
+	// Adds the items of the open sketch to the selection, in order. False
+	// (selection cleared, `failed` = the item's index) if SolidWorks won't
+	// select one.
+	bool SelectSketchItems(IModelDoc2* doc, const SketchItems& open,
+		const std::vector<sld_mcp::v1::SketchItemRef>& refs, size_t& failed);
+
+	// The `added` items of a (closed) sketch, described into `out`: the
+	// segments, then, with `withPoints`, the points that aren't an end or
+	// center point of any segment.
+	void DescribeAddedItems(const SketchItems& items, const std::set<SketchItemKey>& added,
+		const std::string& sketchPid, bool withPoints,
+		google::protobuf::RepeatedPtrField<sld_mcp::v1::SketchItem>* out);
 }

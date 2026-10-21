@@ -53,7 +53,7 @@ pub struct MirrorSketchParams {
 }
 
 /// The strings, trimmed, without repeats.
-fn unique(list: &[String]) -> Vec<&str> {
+pub(crate) fn unique(list: &[String]) -> Vec<&str> {
     let mut out: Vec<&str> = Vec::new();
     for s in list.iter().map(|s| s.trim()) {
         if !out.contains(&s) {
@@ -75,7 +75,13 @@ fn plane_ref(ids: &IdRegistry, plane: &str) -> Result<proto::GeometryRef, McpErr
     }
 }
 
-fn feature_target(ids: &IdRegistry, feature: &str, what: &str) -> Result<proto::FeatureTarget, McpError> {
+/// A feature name or id -> its wire target. `sketch_tools` names the tools for sketch entities.
+pub(crate) fn feature_target(
+    ids: &IdRegistry,
+    feature: &str,
+    what: &str,
+    sketch_tools: &str,
+) -> Result<proto::FeatureTarget, McpError> {
     use proto::feature_target::Target;
     let target = match Kind::of_id(feature) {
         None => Target::Name(feature.to_string()),
@@ -94,8 +100,7 @@ fn feature_target(ids: &IdRegistry, feature: &str, what: &str) -> Result<proto::
         }
         Some(kind) if SKETCH_KINDS.contains(&kind) => {
             return Err(invalid(format!(
-                "{what}: {feature} is a sketch entity -- use mirror_sketch_entities to mirror inside \
-                 a sketch"
+                "{what}: {feature} is a sketch entity -- use {sketch_tools} for sketch entities"
             )));
         }
         Some(_) => {
@@ -108,7 +113,7 @@ fn feature_target(ids: &IdRegistry, feature: &str, what: &str) -> Result<proto::
     Ok(proto::FeatureTarget { target: Some(target) })
 }
 
-fn body_id(ids: &IdRegistry, body: &str, what: &str) -> Result<Vec<u8>, McpError> {
+pub(crate) fn body_id(ids: &IdRegistry, body: &str, what: &str) -> Result<Vec<u8>, McpError> {
     if Kind::of_id(body) != Some(Kind::Body) {
         return Err(invalid(format!(
             "{what}: {body:?} isn't a body id -- give ids like \"body:1\" from inspect_model \
@@ -150,7 +155,7 @@ pub fn features_request(
     let features = features
         .iter()
         .enumerate()
-        .map(|(i, f)| feature_target(ids, f, &format!("feature {}", i + 1)))
+        .map(|(i, f)| feature_target(ids, f, &format!("feature {}", i + 1), "mirror_sketch_entities"))
         .collect::<Result<_, _>>()?;
     let bodies = bodies
         .iter()
@@ -188,7 +193,13 @@ pub fn features_text(params: &MirrorFeaturesParams, reply: &proto::MirrorFeature
     )
 }
 
-fn sketch_ref(ids: &IdRegistry, entity: &str, what: &str) -> Result<proto::SketchItemRef, McpError> {
+/// A sketch entity id -> its wire ref. `feature_tool` names the tool for features and bodies.
+pub(crate) fn sketch_ref(
+    ids: &IdRegistry,
+    entity: &str,
+    what: &str,
+    feature_tool: &str,
+) -> Result<proto::SketchItemRef, McpError> {
     match Kind::of_id(entity) {
         Some(kind) if SKETCH_KINDS.contains(&kind) => sketch::decode_ref(ids, entity).ok_or_else(|| {
             invalid(format!(
@@ -197,11 +208,11 @@ fn sketch_ref(ids: &IdRegistry, entity: &str, what: &str) -> Result<proto::Sketc
             ))
         }),
         _ if entity.eq_ignore_ascii_case("origin") => {
-            Err(invalid(format!("{what}: the sketch origin can't be mirrored or mirrored about")))
+            Err(invalid(format!("{what}: the sketch origin isn't an entity that can be copied or used here")))
         }
         _ => Err(invalid(format!(
             "{what}: {entity:?} isn't a sketch entity id -- give ids like \"line:3\" or \"point:7\" \
-             from inspect_sketch (to mirror features or bodies, use mirror_features)"
+             from inspect_sketch (for features or bodies, use {feature_tool})"
         ))),
     }
 }
@@ -221,11 +232,11 @@ pub fn sketch_request(
              sketch (\"line:5\")"
         )));
     }
-    let axis = sketch_ref(ids, axis, "axis")?;
+    let axis = sketch_ref(ids, axis, "axis", "mirror_features")?;
     let items = entities
         .iter()
         .enumerate()
-        .map(|(i, e)| sketch_ref(ids, e, &format!("entity {}", i + 1)))
+        .map(|(i, e)| sketch_ref(ids, e, &format!("entity {}", i + 1), "mirror_features"))
         .collect::<Result<Vec<_>, _>>()?;
     if items.contains(&axis) {
         return Err(invalid("entities include the axis -- the line to mirror about isn't mirrored itself"));

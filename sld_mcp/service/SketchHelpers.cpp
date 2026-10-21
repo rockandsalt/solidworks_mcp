@@ -509,4 +509,85 @@ namespace sld_mcp::service
 				out.push_back(relation);
 		return out;
 	}
+
+	SketchItemKey SketchKeyOf(const SketchItems::Entry& e)
+	{
+		return {e.point ? -1L : e.type, e.id0, e.id1};
+	}
+
+	SketchItemKey SketchKeyOf(const sld_mcp::v1::SketchItemRef& ref)
+	{
+		return {ref.point() ? -1L : static_cast<long>(ref.segment_type()), ref.id0(), ref.id1()};
+	}
+
+	std::set<SketchItemKey> SketchKeys(const SketchItems& items)
+	{
+		std::set<SketchItemKey> keys;
+		for (const auto& e : items.All())
+			keys.insert(SketchKeyOf(e));
+		return keys;
+	}
+
+	grpc::Status ResolveItemsSketch(IModelDoc2* doc, IModelDocExtension* ext, const std::string& sketchName,
+		const sld_mcp::v1::SketchItemRef& first, ATL::CComPtr<IFeature>& sketchFeature)
+	{
+		if (!sketchName.empty())
+			return FindSketchByName(doc, sketchName, sketchFeature);
+		ATL::CComPtr<IDispatch> obj;
+		if (grpc::Status status = ResolvePersistId(ext, first.sketch_persist_id(), obj); !status.ok())
+			return grpc::Status(status.error_code(), "the entities' sketch " + status.error_message());
+		sketchFeature = ATL::CComQIPtr<IFeature>(obj.p);
+		if (!sketchFeature)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "a sketch reference didn't resolve to a feature");
+		return grpc::Status::OK;
+	}
+
+	bool SelectSketchItems(IModelDoc2* doc, const SketchItems& open,
+		const std::vector<sld_mcp::v1::SketchItemRef>& refs, size_t& failed)
+	{
+		for (size_t i = 0; i < refs.size(); ++i)
+		{
+			ATL::CComPtr<IDispatch> obj = open.Find(refs[i]);
+			VARIANT_BOOL selected = VARIANT_FALSE;
+			if (ATL::CComQIPtr<ISketchSegment> segment(obj.p); segment)
+				segment->Select4(VARIANT_TRUE, nullptr, &selected);
+			else if (ATL::CComQIPtr<ISketchPoint> point(obj.p); point)
+				point->Select4(VARIANT_TRUE, nullptr, &selected);
+			if (!selected)
+			{
+				doc->ClearSelection2(VARIANT_TRUE);
+				failed = i;
+				return false;
+			}
+		}
+		return true;
+	}
+
+	void DescribeAddedItems(const SketchItems& items, const std::set<SketchItemKey>& added,
+		const std::string& sketchPid, bool withPoints,
+		google::protobuf::RepeatedPtrField<sld_mcp::v1::SketchItem>* out)
+	{
+		std::set<SketchItemKey> segmentPoints;
+		std::vector<sld_mcp::v1::SketchItem> points;
+		for (const auto& e : items.All())
+		{
+			sld_mcp::v1::SketchItem item;
+			if (!DescribeSketchItem(e.obj, sketchPid, &item))
+				continue;
+			if (!e.point)
+				for (const sld_mcp::v1::SketchItemRef* p : {&item.start_point(), &item.end_point(), &item.center_point()})
+					if (p->point())
+						segmentPoints.insert(SketchKeyOf(*p));
+			if (!added.count(SketchKeyOf(e)))
+				continue;
+			if (e.point)
+				points.push_back(item);
+			else
+				*out->Add() = item;
+		}
+		if (withPoints)
+			for (const auto& item : points)
+				if (!segmentPoints.count(SketchKeyOf(item.ref())))
+					*out->Add() = item;
+	}
 }

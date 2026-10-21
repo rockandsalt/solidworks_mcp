@@ -60,6 +60,14 @@ public:
 		const sld_mcp::v1::MirrorSketchEntitiesRequest* request,
 		sld_mcp::v1::MirrorSketchEntitiesResponse* response) override;
 
+	grpc::Status PatternFeatures(grpc::ServerContext* context,
+		const sld_mcp::v1::PatternFeaturesRequest* request,
+		sld_mcp::v1::PatternFeaturesResponse* response) override;
+
+	grpc::Status PatternSketchEntities(grpc::ServerContext* context,
+		const sld_mcp::v1::PatternSketchEntitiesRequest* request,
+		sld_mcp::v1::PatternSketchEntitiesResponse* response) override;
+
 	grpc::Status InspectModel(grpc::ServerContext* context,
 		const sld_mcp::v1::InspectModelRequest* request,
 		sld_mcp::v1::InspectModelResponse* response) override;
