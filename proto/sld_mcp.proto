@@ -21,6 +21,10 @@ service SolidWorks {
   // the active document.
   rpc NewPart(NewPartRequest) returns (NewPartResponse);
 
+  // Creates a new, empty assembly from the user's default assembly template
+  // and makes it the active document.
+  rpc NewAssembly(NewAssemblyRequest) returns (NewAssemblyResponse);
+
   // Creates a new sketch on one of the active part's standard planes
   // containing a single center rectangle, then closes the sketch.
   // Fails with FAILED_PRECONDITION if the active document isn't a part or
@@ -355,6 +359,12 @@ enum DocumentType {
 message NewPartRequest {}
 
 message NewPartResponse {
+  Document document = 1;
+}
+
+message NewAssemblyRequest {}
+
+message NewAssemblyResponse {
   Document document = 1;
 }
 

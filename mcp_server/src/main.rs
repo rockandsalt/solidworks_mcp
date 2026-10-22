@@ -874,6 +874,22 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "Create a new, empty SolidWorks assembly document from the user's default                        assembly template and make it the active document"
+    )]
+    async fn create_assembly(&self) -> Result<CallToolResult, McpError> {
+        let document = self
+            .addin
+            .new_assembly()
+            .await
+            .map_err(|status| self.addin_error(status))?;
+
+        let title = document.map(|doc| doc.title).unwrap_or_default();
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+            "created assembly {title}"
+        ))]))
+    }
+
+    #[tool(
         description = "Create a new sketch containing a square on the Front, Top or Right plane \
                        of the active part document, or `on` a planar face or reference plane \
                        found with inspect_model. The square is centered on the given point \

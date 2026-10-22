@@ -1,8 +1,8 @@
 # save_document / open_document against real SolidWorks: save in place and
 # Save As, exports, copies, refusing to overwrite, opening (and re-activating)
 # parts, an assembly and a drawing, read-only, and an assembly whose part has
-# gone missing (docs/notes/files.md). The assembly and drawing are made
-# through COM as in drawings.py. Run with:
+# gone missing (docs/notes/files.md). The assembly's components and the
+# drawing are made through COM as in drawings.py. Run with:
 #   py devloop/mcp_client.py run devloop/scenarios/files.py
 
 import subprocess
@@ -126,8 +126,12 @@ assert "read-only" in r.text, r.text
 # ---- An assembly --------------------------------------------------------------
 assembly = out / "files-pair.SLDASM"
 mcp.call("open_document", path=str(block))
-com(f"""$template = Com $sw GetUserPreferenceStringValue @(9)  # swDefaultTemplateAssembly
-$a = Com $sw NewDocument @($template, 0, 0, 0); if (-not $a) {{ throw "NewDocument($template) failed" }}
+r = mcp.call("create_assembly")
+assert r.text.startswith("created assembly "), r.text
+assert "assembly" in active() and "never saved" in active(), active()
+assert mcp.call("inspect_model", what="components").json.get("components", []) == [], "new assembly not empty"
+assert not (open_dialogs := sw_dialogs()), open_dialogs
+com(f"""$a = Com $sw ActiveDoc -Get
 foreach ($o in 0.0, 0.06) {{
     if (-not (Com $a AddComponent5 @('{block}', 0, '', $false, '', 0.0, $o, $o))) {{ throw 'AddComponent5 failed' }}
 }}""")

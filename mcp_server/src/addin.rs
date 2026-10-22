@@ -81,6 +81,12 @@ impl AddinClient {
         Ok(response.into_inner().document)
     }
 
+    pub async fn new_assembly(&self) -> Result<Option<proto::Document>, tonic::Status> {
+        let mut client = self.client.clone();
+        let response = client.new_assembly(proto::NewAssemblyRequest {}).await?;
+        Ok(response.into_inner().document)
+    }
+
     /// Lengths in meters.
     pub async fn create_rectangle_sketch(
         &self,

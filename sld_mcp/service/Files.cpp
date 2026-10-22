@@ -1,4 +1,4 @@
-// Files.cpp : Documents: GetActiveDocument, NewPart, SaveDocument, OpenDocument (see docs/notes/files.md).
+// Files.cpp : Documents: GetActiveDocument, NewPart, NewAssembly, SaveDocument, OpenDocument (see docs/notes/files.md).
 #include "pch.h"
 #include "Common.h"
 
@@ -24,6 +24,33 @@ namespace
 		out->set_type(ToDocumentType(type));
 		out->set_path(ToUtf8(path));
 		return grpc::Status::OK;
+	}
+
+	// A new document from the user's default template of a kind (Tools >
+	// Options > System Options > Default Templates), made the active one.
+	grpc::Status NewFromDefaultTemplate(ISldWorks* swApp, swUserPreferenceStringValue_e templatePref,
+		const std::string& kind, sld_mcp::v1::Document* out)
+	{
+		ATL::CComBSTR templatePath;
+		HRESULT hr = swApp->GetUserPreferenceStringValue(templatePref, &templatePath);
+		if (FAILED(hr))
+			return ComError("ISldWorks::GetUserPreferenceStringValue", hr);
+		if (templatePath.Length() == 0)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"SolidWorks has no default " + kind + " template set -- set one under Tools > Options > "
+				"System Options > Default Templates");
+
+		// Paper size and dimensions only apply to drawings.
+		ATL::CComPtr<IDispatch> created;
+		hr = swApp->NewDocument(templatePath, 0, 0.0, 0.0, &created);
+		if (FAILED(hr))
+			return ComError("ISldWorks::NewDocument", hr);
+		ATL::CComQIPtr<IModelDoc2> doc(created.p);
+		if (!doc)
+			return grpc::Status(grpc::StatusCode::INTERNAL,
+				"SolidWorks couldn't create a " + kind + " from the default template " + ToUtf8(templatePath));
+
+		return DescribeDocument(doc, out);
 	}
 
 	// This SolidWorks process: its id and start time (process ids get reused).
@@ -76,33 +103,23 @@ grpc::Status SolidWorksService::NewPart(grpc::ServerContext* /*context*/,
 	if (grpc::Status status = GetSwApp(swApp); !status.ok())
 		return status;
 
-	// Tools > Options > System Options > Default Templates > Parts
-	ATL::CComBSTR templatePath;
-	HRESULT hr = swApp->GetUserPreferenceStringValue(swDefaultTemplatePart, &templatePath);
-	if (FAILED(hr))
-		return ComError("ISldWorks::GetUserPreferenceStringValue", hr);
-	if (templatePath.Length() == 0)
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			"SolidWorks has no default part template set -- set one under Tools > Options > "
-			"System Options > Default Templates");
+	return NewFromDefaultTemplate(swApp, swDefaultTemplatePart, "part", response->mutable_document());
+}
 
-	// Paper size and dimensions only apply to drawings.
-	ATL::CComPtr<IDispatch> created;
-	hr = swApp->NewDocument(templatePath, 0, 0.0, 0.0, &created);
-	if (FAILED(hr))
-		return ComError("ISldWorks::NewDocument", hr);
-	ATL::CComQIPtr<IModelDoc2> doc(created.p);
-	if (!doc)
-		return grpc::Status(grpc::StatusCode::INTERNAL,
-			"SolidWorks couldn't create a part from the default template " + ToUtf8(templatePath));
+grpc::Status SolidWorksService::NewAssembly(grpc::ServerContext* /*context*/,
+	const sld_mcp::v1::NewAssemblyRequest* /*request*/,
+	sld_mcp::v1::NewAssemblyResponse* response)
+{
+	std::lock_guard<std::mutex> lock(m_editMutex);
+	ComApartment com;
+	if (!com.Ok())
+		return ComApartmentError();
 
-	ATL::CComBSTR title;
-	hr = doc->GetTitle(&title);
-	if (FAILED(hr))
-		return ComError("IModelDoc2::GetTitle", hr);
+	ATL::CComPtr<ISldWorks> swApp;
+	if (grpc::Status status = GetSwApp(swApp); !status.ok())
+		return status;
 
-	response->mutable_document()->set_title(ToUtf8(title));
-	return grpc::Status::OK;
+	return NewFromDefaultTemplate(swApp, swDefaultTemplateAssembly, "assembly", response->mutable_document());
 }
 
 grpc::Status SolidWorksService::SaveDocument(grpc::ServerContext* /*context*/,
