@@ -351,7 +351,7 @@ fn view_type_name(t: i32) -> &'static str {
     }
 }
 
-fn paper_name(size: i32) -> Option<&'static str> {
+pub fn paper_name(size: i32) -> Option<&'static str> {
     Some(match size {
         0 => "A (letter) landscape",
         1 => "A (letter) portrait",

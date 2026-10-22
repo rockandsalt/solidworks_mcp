@@ -875,7 +875,7 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Create a new, empty SolidWorks assembly document from the user's default                        assembly template and make it the active document; insert_components                        puts parts and subassemblies into it"
+        description = "Create a new, empty SolidWorks assembly document from the user's default assembly template and make it the active document; insert_components puts parts and subassemblies into it"
     )]
     async fn create_assembly(&self) -> Result<CallToolResult, McpError> {
         let document = self
@@ -888,6 +888,30 @@ impl SolidWorksTools {
         Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "created assembly {title}"
         ))]))
+    }
+
+    #[tool(
+        description = "Create a new SolidWorks drawing document and make it the active document. \
+                       `template` picks the drawing template (.drwdot) and `sheet_format` the \
+                       sheet's border and title block (.slddrt, e.g. \"a3 - iso\"), each an \
+                       absolute path or a name from SolidWorks' template / sheet format folder \
+                       (an unknown name lists the ones there are). `paper_size` or \
+                       `paper_size_mm` sets the sheet size (default: the sheet format's own \
+                       size, else the template's, else A3); `units` the drawing's unit system \
+                       (default: the template's). Reports the sheet as set up. The drawing \
+                       starts with no views."
+    )]
+    async fn create_drawing(
+        &self,
+        Parameters(params): Parameters<files::CreateDrawingParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = files::new_drawing_request(&params)?;
+        let reply = self
+            .addin
+            .new_drawing(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(files::new_drawing_reply_text(&reply))]))
     }
 
     #[tool(
@@ -1333,7 +1357,7 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Sweep a closed profile sketch of the active part along a path into a                        solid (swept boss: a handle, pipe, rail, spring, ...), merging with any                        existing body. Draw the path first (e.g. sketch_line / sketch_arc on                        Front), then the profile in its own sketch on a plane across the path's                        start (e.g. Right, or a create_reference_plane through the path's end                        point), and give path = the path sketch's name. Or skip the profile                        sketch: circle_diameter_mm sweeps a round section (a rod or wire). By                        default the profile is the most recently created sketch that isn't used                        by a feature yet, other than the path. twist_deg turns the profile along                        the path. Requires an open part with no sketch being edited."
+        description = "Sweep a closed profile sketch of the active part along a path into a solid (swept boss: a handle, pipe, rail, spring, ...), merging with any existing body. Draw the path first (e.g. sketch_line / sketch_arc on Front), then the profile in its own sketch on a plane across the path's start (e.g. Right, or a create_reference_plane through the path's end point), and give path = the path sketch's name. Or skip the profile sketch: circle_diameter_mm sweeps a round section (a rod or wire). By default the profile is the most recently created sketch that isn't used by a feature yet, other than the path. twist_deg turns the profile along the path. Requires an open part with no sketch being edited."
     )]
     async fn sweep_sketch(
         &self,
@@ -1343,7 +1367,7 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Cut by sweeping a closed profile sketch (or a circle, circle_diameter_mm)                        of the active part along a path (cut-sweep), removing material: a groove                        that follows a curve, a channel, a thread-like helical cut. Path, profile                        and twist as for sweep_sketch; the profile must overlap the part where                        it starts or along the way. Requires an open part with no sketch being                        edited."
+        description = "Cut by sweeping a closed profile sketch (or a circle, circle_diameter_mm) of the active part along a path (cut-sweep), removing material: a groove that follows a curve, a channel, a thread-like helical cut. Path, profile and twist as for sweep_sketch; the profile must overlap the part where it starts or along the way. Requires an open part with no sketch being edited."
     )]
     async fn cut_sweep_sketch(
         &self,
@@ -2270,7 +2294,7 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Insert a part, or an assembly as a subassembly, into the active                        assembly: `file` = an absolute .SLDPRT / .SLDASM path (save a new part                        with save_document first), or `copy_of` = a component already in it                        (\"component:N\") for another instance with the same file and                        configuration. `at` lists where each new component's own origin goes                        (origin_mm, assembly millimeters) and optionally which way its X / Z                        axes point; one component per entry, so the same part several times =                        several entries. Default: one at the assembly origin. The first                        component of an empty assembly is fixed, the others float until mated                        (`fixed` overrides). Reports the new components' ids and placements;                        mate them with add_mate. Requires an open assembly with no sketch                        being edited; create_assembly makes one."
+        description = "Insert a part, or an assembly as a subassembly, into the active assembly: `file` = an absolute .SLDPRT / .SLDASM path (save a new part with save_document first), or `copy_of` = a component already in it (\"component:N\") for another instance with the same file and configuration. `at` lists where each new component's own origin goes (origin_mm, assembly millimeters) and optionally which way its X / Z axes point; one component per entry, so the same part several times = several entries. Default: one at the assembly origin. The first component of an empty assembly is fixed, the others float until mated (`fixed` overrides). Reports the new components' ids and placements; mate them with add_mate. Requires an open assembly with no sketch being edited; create_assembly makes one."
     )]
     async fn insert_components(
         &self,

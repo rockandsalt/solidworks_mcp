@@ -1,8 +1,9 @@
 # save_document / open_document against real SolidWorks: save in place and
 # Save As, exports, copies, refusing to overwrite, opening (and re-activating)
 # parts, an assembly and a drawing, read-only, and an assembly whose part has
-# gone missing (docs/notes/files.md). The assembly's components and the
-# drawing are made through COM as in drawings.py. Run with:
+# gone missing; new drawings from templates, sheet formats, paper sizes and
+# unit systems (docs/notes/files.md). The assembly's components and the
+# drawing's view are made through COM as in drawings.py. Run with:
 #   py devloop/mcp_client.py run devloop/scenarios/files.py
 
 import subprocess
@@ -146,10 +147,72 @@ assert "opened files-pair" in r.text and "assembly" in r.text, r.text
 components = mcp.call("inspect_model", what="components").json["components"]
 assert len(components) == 2, components
 
+# ---- New drawings -------------------------------------------------------------
+close_all()
+
+
+def sheet():
+    sheets = mcp.call("inspect_drawing").json["sheets"]
+    assert len(sheets) == 1, sheets
+    return sheets[0]
+
+
+def unit_system():
+    return int(com("Com (Com (Com $sw ActiveDoc -Get) Extension -Get) GetUserPreferenceInteger @(263, 0)"))
+
+
+def doc_count():
+    return int(com("Com $sw GetDocumentCount"))
+
+
+# The stock template has no sheet of its own: A3 by default, no sheet format.
+r = mcp.call("create_drawing")
+assert r.text.startswith("created drawing ") and "A3 (420 x 297 mm), no sheet format" in r.text, r.text
+assert "drawing" in active() and "never saved" in active(), active()
+assert (sheet()["paper"], sheet()["size_mm"]) == ("A3", [420.0, 297.0]), sheet()
+assert "MMGS" in r.text and unit_system() == 5, r.text
+
+r = mcp.call("create_drawing", template="Drawing", sheet_format="a3 - iso", units="ips")
+assert "A3 (420 x 297 mm), sheet format a3 - iso" in r.text and "units IPS" in r.text, r.text
+assert sheet()["size_mm"] == [420.0, 297.0] and unit_system() == 3, sheet()
+r = mcp.call("create_drawing", sheet_format="a3 - iso", paper_size="A4_portrait")
+assert "A4 portrait (210 x 297 mm), sheet format a3 - iso" in r.text, r.text
+r = mcp.call("create_drawing", paper_size_mm=[500, 300], units="cgs")
+assert "500 x 300 mm" in r.text and "units CGS" in r.text, r.text
+assert sheet()["size_mm"] == [500.0, 300.0] and unit_system() == 1, sheet()
+
+# A template with a sheet of its own: NewDocument ignores the paper size
+# asked for, so it's set up afterwards; without one the template's stays.
+own_template = out / "files-a2-iso.drwdot"
+com(f"""$d = Com $sw ActiveDoc -Get
+if (-not (Com $d SetupSheet5 @([string]'Sheet1', [int]9, [int]12, 1.0, 1.0, $true, [string](Join-Path (Com $sw GetUserPreferenceStringValue @(7)) 'a2 - iso.slddrt'), [double]0, [double]0, 'Default', $true))) {{ throw 'SetupSheet5 failed' }}
+if ((Com $d SaveAs3 @([string]'{own_template}', [int]0, [int]1)) -ne 0) {{ throw 'SaveAs3 failed' }}""")
+r = mcp.call("create_drawing", template=str(own_template))
+assert "A2 (594 x 420 mm), sheet format a2 - iso" in r.text and "first-angle" in r.text, r.text
+r = mcp.call("create_drawing", template=str(own_template), paper_size="A1")
+assert "A1 (841 x 594 mm), sheet format a2 - iso" in r.text, r.text
+assert sheet()["size_mm"] == [841.0, 594.0], sheet()
+
+# Refusals: unknown names list what there is; a template that makes another
+# kind of document leaves nothing open.
+before = doc_count()
+r = mcp.call("create_drawing", template="no such template", expect_error=True)
+assert "there are: " in r.text and "Drawing" in r.text, r.text
+r = mcp.call("create_drawing", sheet_format="a3 - nope", expect_error=True)
+assert "a3 - iso" in r.text, r.text
+part_template = out / "files-part-as.drwdot"
+part_template.write_bytes(Path(com("Com $sw GetUserPreferenceStringValue @(8)")).read_bytes())
+r = mcp.call("create_drawing", template=str(part_template), expect_error=True)
+assert "couldn't create a drawing" in r.text, r.text
+r = mcp.call("create_drawing", paper_size="A3", paper_size_mm=[100, 100], expect_error=True)
+assert doc_count() == before, f"{doc_count()} documents open, {before} before"
+assert not (open_dialogs := sw_dialogs()), open_dialogs
+
 # ---- A drawing ----------------------------------------------------------------
+close_all()
 drawing = out / "files-block.SLDDRW"
-com(f"""$template = Com $sw GetUserPreferenceStringValue @(10)  # swDefaultTemplateDrawing
-$d = Com $sw NewDocument @($template, 12, 0.42, 0.297); if (-not $d) {{ throw "NewDocument($template) failed" }}
+r = mcp.call("create_drawing", paper_size="A3")
+com(f"""$d = Com $sw ActiveDoc -Get
 if (-not (Com $d CreateDrawViewFromModelView3 @('{block}', '*Front', 0.1, 0.15, 0.0))) {{ throw 'Front view failed' }}""")
 r = mcp.call("save_document", path=str(drawing))
 assert "drawing" in r.text and drawing.is_file(), r.text

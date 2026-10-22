@@ -25,6 +25,13 @@ service SolidWorks {
   // and makes it the active document.
   rpc NewAssembly(NewAssemblyRequest) returns (NewAssemblyResponse);
 
+  // Creates a new drawing, with no views, from a drawing template (the
+  // user's default unless given), sets up its first sheet (paper size,
+  // sheet format) and unit system, and makes it the active document.
+  // NOT_FOUND for a template or sheet format that isn't there; if a step
+  // after creating the document fails, the document is closed again.
+  rpc NewDrawing(NewDrawingRequest) returns (NewDrawingResponse);
+
   // Creates a new sketch on one of the active part's standard planes
   // containing a single center rectangle, then closes the sketch.
   // Fails with FAILED_PRECONDITION if the active document isn't a part or
@@ -375,6 +382,38 @@ message NewAssemblyRequest {}
 
 message NewAssemblyResponse {
   Document document = 1;
+}
+
+message NewDrawingRequest {
+  // Drawing template (.drwdot): an absolute path, or a file name (extension
+  // optional) looked up in the document template folders (Tools > Options >
+  // File Locations > Document Templates). Empty = the user's default
+  // drawing template.
+  string template = 1;
+  // Sheet format (.slddrt: border and title block): an absolute path, or a
+  // file name (extension optional) looked up in the sheet format folder.
+  // Empty = keep the template's.
+  string sheet_format = 2;
+  // swDwgPaperSizes_e (see SheetInfo); 12 = user defined, `width` x
+  // `height`. Unset: the sheet format's own size if one is given, else the
+  // template's sheet size, else (a template without one) A3.
+  optional int32 paper_size = 3;
+  double width = 4;   // meters, paper_size 12 only
+  double height = 5;  // meters
+  // swUnitSystem_e: 1 CGS, 2 MKS, 3 IPS, 5 MMGS. 0 = the template's.
+  int32 unit_system = 6;
+}
+
+message NewDrawingResponse {
+  Document document = 1;
+  // The template file it was made from.
+  string template = 2;
+  // The first sheet as set up (no views yet).
+  SheetInfo sheet = 3;
+  // The sheet format file (ISheet::GetTemplateName); empty = none.
+  string sheet_format_path = 4;
+  // swUnitSystem_e, read back.
+  int32 unit_system = 5;
 }
 
 message SaveDocumentRequest {

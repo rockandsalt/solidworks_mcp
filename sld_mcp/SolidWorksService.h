@@ -26,6 +26,9 @@ public:
 	grpc::Status NewAssembly(grpc::ServerContext* context,
 		const sld_mcp::v1::NewAssemblyRequest* request,
 		sld_mcp::v1::NewAssemblyResponse* response) override;
+	grpc::Status NewDrawing(grpc::ServerContext* context,
+		const sld_mcp::v1::NewDrawingRequest* request,
+		sld_mcp::v1::NewDrawingResponse* response) override;
 
 	grpc::Status CreateRectangleSketch(grpc::ServerContext* context,
 		const sld_mcp::v1::CreateRectangleSketchRequest* request,

@@ -87,6 +87,16 @@ impl AddinClient {
         Ok(response.into_inner().document)
     }
 
+    /// Paper size in meters.
+    pub async fn new_drawing(
+        &self,
+        request: proto::NewDrawingRequest,
+    ) -> Result<proto::NewDrawingResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        let response = client.new_drawing(request).await?;
+        Ok(response.into_inner())
+    }
+
     /// Lengths in meters.
     pub async fn create_rectangle_sketch(
         &self,
