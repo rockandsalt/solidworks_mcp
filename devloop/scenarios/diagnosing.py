@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 SWCOM = Path(__file__).resolve().parent.parent / "swcom.ps1"
-INTEROP = r"C:\Program Files\Dassault Systemes\SOLIDWORKS Apps 2026\SOLIDWORKS\api\redist"
+INTEROP = r"C:\Program Files\Dassault Systemes\SOLIDWORKS Apps 2025\SOLIDWORKS\api\redist"
 
 
 def com(code: str) -> str:

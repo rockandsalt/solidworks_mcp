@@ -67,7 +67,7 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros">
-    <SolidWorksInstallDir>C:\Program Files\Dassault Systemes\SOLIDWORKS Apps 2026\SOLIDWORKS</SolidWorksInstallDir>
+    <SolidWorksInstallDir>C:\Program Files\Dassault Systemes\SOLIDWORKS Apps 2025\SOLIDWORKS</SolidWorksInstallDir>
   </PropertyGroup>
   <!--
     Where pch.h #imports sldworks.tlb, swpublished.tlb and swconst.tlb from.
@@ -360,6 +360,7 @@
     <ClCompile Include="service\Annotations.cpp" />
     <ClCompile Include="service\AssemblyHelpers.cpp" />
     <ClCompile Include="service\Common.cpp" />
+    <ClCompile Include="service\Components.cpp" />
     <ClCompile Include="service\Deleting.cpp" />
     <ClCompile Include="service\Diagnosing.cpp" />
     <ClCompile Include="service\DimensionHelpers.cpp" />

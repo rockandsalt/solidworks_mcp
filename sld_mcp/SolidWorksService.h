@@ -111,6 +111,10 @@ public:
 		const sld_mcp::v1::AddMateRequest* request,
 		sld_mcp::v1::AddMateResponse* response) override;
 
+	grpc::Status InsertComponents(grpc::ServerContext* context,
+		const sld_mcp::v1::InsertComponentsRequest* request,
+		sld_mcp::v1::InsertComponentsResponse* response) override;
+
 	grpc::Status InspectAnnotations(grpc::ServerContext* context,
 		const sld_mcp::v1::InspectAnnotationsRequest* request,
 		sld_mcp::v1::InspectAnnotationsResponse* response) override;

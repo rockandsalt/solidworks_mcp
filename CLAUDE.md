@@ -43,5 +43,5 @@ Bypass -File <absolute path>` (Windows PowerShell 5.1: COM needs it).
 Solidworks can be started with the following command (`devloop\sw.ps1 start` runs it): 
 
 ```powershell
-"C:\Program Files\Dassault Systemes\SOLIDWORKS 3DEXPERIENCE R2026x\win_b64\code\bin\CATSTART.exe" -run "SWXDesktopLauncher.exe" -object "--AppName=\"SWXCSWK_AP\" -tenant=OI000596756 -monoapp -3DRegistryURL=https://eu1-makers-registry.3dexperience.3ds.com -LaunchAppDir=\"C:\Program Files\Dassault Systemes\SOLIDWORKS Apps 2026\SOLIDWORKS\" " -nowindow
+"C:\Program Files\Dassault Systemes\SOLIDWORKS 3DEXPERIENCE R2026x\win_b64\code\bin\CATSTART.exe" -run "SWXDesktopLauncher.exe" -object "--AppName=\"SWXCSWK_AP\" -tenant=OI000596756 -monoapp -3DRegistryURL=https://eu1-makers-registry.3dexperience.3ds.com -LaunchAppDir=\"C:\Program Files\Dassault Systemes\SOLIDWORKS Apps 2025\SOLIDWORKS\" " -nowindow
 ```

@@ -55,7 +55,7 @@ $port = if ($env:SLD_MCP_PORT) { [int]$env:SLD_MCP_PORT } else { 50551 }
 $catstart = 'C:\Program Files\Dassault Systemes\SOLIDWORKS 3DEXPERIENCE R2026x\win_b64\code\bin\CATSTART.exe'
 $catstartArgs = '-run "SWXDesktopLauncher.exe" -object "--AppName=\"SWXCSWK_AP\" -tenant=OI000596756 -monoapp ' +
     '-3DRegistryURL=https://eu1-makers-registry.3dexperience.3ds.com ' +
-    '-LaunchAppDir=\"C:\Program Files\Dassault Systemes\SOLIDWORKS Apps 2026\SOLIDWORKS\" " -nowindow'
+    '-LaunchAppDir=\"C:\Program Files\Dassault Systemes\SOLIDWORKS Apps 2025\SOLIDWORKS\" " -nowindow'
 
 function Write-Step([string]$message) {
     Write-Host ("[{0:HH:mm:ss}] {1}" -f (Get-Date), $message)

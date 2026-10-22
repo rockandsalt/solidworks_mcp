@@ -166,6 +166,19 @@ pub fn open_request(params: &OpenDocumentParams) -> Result<proto::OpenDocumentRe
     })
 }
 
+/// A part or assembly file to insert into an assembly: an absolute path to
+/// an existing .SLDPRT / .SLDASM.
+pub fn component_file(path: &str) -> Result<String, McpError> {
+    let path = checked_path(path)?;
+    format_of(path)
+        .filter(|f| f.native && f.types[0] != DocumentType::Drawing)
+        .ok_or_else(|| invalid(format!("only parts (.SLDPRT) and assemblies (.SLDASM) go into an assembly; {path:?} isn't one")))?;
+    if !Path::new(path).is_file() {
+        return Err(invalid(format!("there's no file {path}")));
+    }
+    Ok(path.to_string())
+}
+
 pub fn type_name(t: DocumentType) -> &'static str {
     match t {
         DocumentType::Part => "part",

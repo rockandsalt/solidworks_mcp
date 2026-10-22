@@ -293,6 +293,21 @@ namespace comvariant
 		return v;
 	}
 
+	// Strings as a VARIANT holding a SAFEARRAY of VT_BSTR (copied into the
+	// array).
+	inline ATL::CComVariant FromBstrs(const std::vector<ATL::CComBSTR>& strings)
+	{
+		ATL::CComVariant v;
+		SAFEARRAY* sa = SafeArrayCreateVector(VT_BSTR, 0, static_cast<ULONG>(strings.size()));
+		if (!sa)
+			return v;
+		for (LONG i = 0; i < static_cast<LONG>(strings.size()); ++i)
+			SafeArrayPutElement(sa, &i, strings[i].m_str ? strings[i].m_str : ATL::CComBSTR(L"").m_str);
+		v.vt = VT_ARRAY | VT_BSTR;
+		v.parray = sa;
+		return v;
+	}
+
 	// Objects as a VARIANT holding a SAFEARRAY of VT_DISPATCH (each AddRef'd
 	// by the array).
 	inline ATL::CComVariant FromDispatches(const std::vector<IDispatch*>& objects)

@@ -183,6 +183,15 @@ service SolidWorks {
   // edited in context.
   rpc AddMate(AddMateRequest) returns (AddMateResponse);
 
+  // Inserts a part or subassembly into the active assembly, once per
+  // placement (IAssemblyDoc::AddComponents3, which loads the file itself):
+  // a .SLDPRT / .SLDASM file, or another instance of a component already
+  // in it (its file and configuration). Each new component's origin and
+  // axes go where its placement says. All or nothing. Fails with
+  // INVALID_ARGUMENT for the assembly itself or a configuration the file
+  // doesn't have, and with FAILED_PRECONDITION as AddMate.
+  rpc InsertComponents(InsertComponentsRequest) returns (InsertComponentsResponse);
+
   // Read-only: the active part's (or assembly's) 3D annotations, i.e. its
   // PMI / MBD data -- what the MBD Dimension (DimXpert) tools and the
   // annotation tools put on the model: dimensions with their tolerances,
@@ -992,6 +1001,36 @@ message AddMateResponse {
   MateInfo mate = 1;
   // The mated components, placed where the solve left them.
   repeated ComponentInfo components = 2;
+}
+
+// Where a new component goes: its own origin and unit axes in assembly
+// space, like ComponentInfo's placement. The axes must be unit length,
+// perpendicular and right-handed (z = x cross y); the MCP server works
+// them out.
+message ComponentPlacement {
+  Vec3 origin = 1;  // meters
+  Vec3 x_axis = 2;
+  Vec3 y_axis = 3;
+  Vec3 z_axis = 4;
+}
+
+message InsertComponentsRequest {
+  oneof source {
+    string path = 1;                // absolute path of a .SLDPRT / .SLDASM
+    bytes copy_of_persist_id = 2;   // a component of this assembly
+  }
+  // Empty: the file's active configuration (copy_of: the component's).
+  string configuration = 3;
+  repeated ComponentPlacement placements = 4;  // one component each; at least one
+  // Fix the new components in place. Unset: fix the first one if the
+  // assembly had no components yet (as the UI's Begin Assembly does), the
+  // others float.
+  optional bool fixed = 5;
+}
+
+message InsertComponentsResponse {
+  // The new components, in placement order.
+  repeated ComponentInfo components = 1;
 }
 
 // A persist_id is SolidWorks' persistent reference for an entity

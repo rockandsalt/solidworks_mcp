@@ -1,5 +1,6 @@
 mod addin;
 mod assembly;
+mod component;
 mod delete;
 mod diagnose;
 mod drawing;
@@ -874,7 +875,7 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Create a new, empty SolidWorks assembly document from the user's default                        assembly template and make it the active document"
+        description = "Create a new, empty SolidWorks assembly document from the user's default                        assembly template and make it the active document; insert_components                        puts parts and subassemblies into it"
     )]
     async fn create_assembly(&self) -> Result<CallToolResult, McpError> {
         let document = self
@@ -2265,6 +2266,24 @@ impl SolidWorksTools {
             .map_err(|status| self.addin_error(status))?;
         let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = assembly::reply_text(&mut ids, &params, &entities, &reply);
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Insert a part, or an assembly as a subassembly, into the active                        assembly: `file` = an absolute .SLDPRT / .SLDASM path (save a new part                        with save_document first), or `copy_of` = a component already in it                        (\"component:N\") for another instance with the same file and                        configuration. `at` lists where each new component's own origin goes                        (origin_mm, assembly millimeters) and optionally which way its X / Z                        axes point; one component per entry, so the same part several times =                        several entries. Default: one at the assembly origin. The first                        component of an empty assembly is fixed, the others float until mated                        (`fixed` overrides). Reports the new components' ids and placements;                        mate them with add_mate. Requires an open assembly with no sketch                        being edited; create_assembly makes one."
+    )]
+    async fn insert_components(
+        &self,
+        Parameters(params): Parameters<component::InsertComponentsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = component::request(&params, |id| self.resolve_id(id))?;
+        let reply = self
+            .addin
+            .insert_components(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let text = component::reply_text(&mut ids, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 

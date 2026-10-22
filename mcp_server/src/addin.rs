@@ -280,6 +280,15 @@ impl AddinClient {
         Ok(client.add_mate(request).await?.into_inner())
     }
 
+    /// Positions in meters.
+    pub async fn insert_components(
+        &self,
+        request: proto::InsertComponentsRequest,
+    ) -> Result<proto::InsertComponentsResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.insert_components(request).await?.into_inner())
+    }
+
     /// The active document's 3D annotations (PMI); meters / radians.
     pub async fn inspect_annotations(&self) -> Result<proto::InspectAnnotationsResponse, tonic::Status> {
         let mut client = self.client.clone();
