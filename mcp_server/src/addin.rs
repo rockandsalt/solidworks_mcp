@@ -339,6 +339,15 @@ impl AddinClient {
         Ok(client.insert_model_items(request).await?.into_inner())
     }
 
+    /// Paper size in meters.
+    pub async fn setup_sheet(
+        &self,
+        request: proto::SetupSheetRequest,
+    ) -> Result<proto::SetupSheetResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.setup_sheet(request).await?.into_inner())
+    }
+
     pub async fn delete_features(
         &self,
         request: proto::DeleteFeaturesRequest,

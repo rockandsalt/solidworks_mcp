@@ -137,6 +137,9 @@ public:
 	grpc::Status RenderDrawing(grpc::ServerContext* context,
 		const sld_mcp::v1::RenderDrawingRequest* request,
 		sld_mcp::v1::RenderDrawingResponse* response) override;
+	grpc::Status SetupSheet(grpc::ServerContext* context,
+		const sld_mcp::v1::SetupSheetRequest* request,
+		sld_mcp::v1::SetupSheetResponse* response) override;
 
 	grpc::Status DeleteFeatures(grpc::ServerContext* context,
 		const sld_mcp::v1::DeleteFeaturesRequest* request,

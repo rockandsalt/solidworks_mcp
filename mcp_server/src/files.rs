@@ -106,7 +106,7 @@ pub enum PaperSize {
 }
 
 impl PaperSize {
-    fn sw(self) -> i32 {
+    pub fn sw(self) -> i32 {
         match self {
             PaperSize::AnsiA => 0,
             PaperSize::AnsiAPortrait => 1,
@@ -125,7 +125,7 @@ impl PaperSize {
 }
 
 /// swDwgPaperSizes_e's user-defined size.
-const PAPER_USER_DEFINED: i32 = 12;
+pub const PAPER_USER_DEFINED: i32 = 12;
 
 /// Document unit systems (swUnitSystem_e).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
@@ -506,7 +506,7 @@ pub fn open_reply_text(
 /// A template or sheet format: an absolute path to an existing file with
 /// `extension` ("drwdot"), or a bare name for the add-in to look up in
 /// SolidWorks' folder for them. None = not given.
-fn template_file(value: Option<&str>, extension: &str, what: &str) -> Result<String, McpError> {
+pub fn template_file(value: Option<&str>, extension: &str, what: &str) -> Result<String, McpError> {
     let value = value.map(str::trim).unwrap_or_default();
     if value.is_empty() {
         return Ok(String::new());
@@ -534,9 +534,14 @@ fn template_file(value: Option<&str>, extension: &str, what: &str) -> Result<Str
     Ok(value.to_string())
 }
 
-/// The NewDrawing request for `params`: sizes in meters, enums as SolidWorks' values.
-pub fn new_drawing_request(params: &CreateDrawingParams) -> Result<proto::NewDrawingRequest, McpError> {
-    let (paper_size, width, height) = match (params.paper_size, params.paper_size_mm) {
+/// A sheet size from `paper_size` / `paper_size_mm` (at most one given):
+/// swDwgPaperSizes_e (None = neither) and, for a custom size, width and
+/// height in meters.
+pub fn paper(
+    paper_size: Option<PaperSize>,
+    paper_size_mm: Option<[f64; 2]>,
+) -> Result<(Option<i32>, f64, f64), McpError> {
+    Ok(match (paper_size, paper_size_mm) {
         (Some(_), Some(_)) => {
             return Err(invalid("give paper_size or paper_size_mm, not both".into()));
         }
@@ -550,7 +555,12 @@ pub fn new_drawing_request(params: &CreateDrawingParams) -> Result<proto::NewDra
             (Some(PAPER_USER_DEFINED), w / MM_PER_M, h / MM_PER_M)
         }
         (None, None) => (None, 0.0, 0.0),
-    };
+    })
+}
+
+/// The NewDrawing request for `params`: sizes in meters, enums as SolidWorks' values.
+pub fn new_drawing_request(params: &CreateDrawingParams) -> Result<proto::NewDrawingRequest, McpError> {
+    let (paper_size, width, height) = paper(params.paper_size, params.paper_size_mm)?;
     Ok(proto::NewDrawingRequest {
         template: template_file(params.template.as_deref(), "drwdot", "drawing template")?,
         sheet_format: template_file(params.sheet_format.as_deref(), "slddrt", "sheet format")?,
@@ -561,32 +571,49 @@ pub fn new_drawing_request(params: &CreateDrawingParams) -> Result<proto::NewDra
     })
 }
 
+fn file_name(path: &str) -> &str {
+    Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or(path)
+}
+
+/// "A3 (420 x 297 mm)", or "500 x 300 mm" for a custom size.
+pub fn sheet_size_text(sheet: &proto::SheetInfo) -> String {
+    let mm = |m: f64| (m * MM_PER_M * 10.0).round() / 10.0;
+    let size = format!("{} x {} mm", mm(sheet.width), mm(sheet.height));
+    match crate::drawing::paper_name(sheet.paper_size) {
+        Some(paper) if sheet.paper_size != PAPER_USER_DEFINED => format!("{paper} ({size})"),
+        _ => size,
+    }
+}
+
+/// "sheet format a3 - iso" (the file's name) or "no sheet format".
+pub fn sheet_format_text(format_path: &str) -> String {
+    if format_path.is_empty() {
+        return "no sheet format".to_string();
+    }
+    let name = file_name(format_path);
+    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+    format!("sheet format {stem}")
+}
+
+/// "Sheet1, A3 (420 x 297 mm), sheet format a3 - iso, scale 1:2, first-angle projection"
+pub fn sheet_text(sheet: &proto::SheetInfo, format_path: &str) -> String {
+    let projection = if sheet.first_angle { "first-angle" } else { "third-angle" };
+    format!(
+        "{}, {}, {}, scale {}:{}, {projection} projection",
+        sheet.name,
+        sheet_size_text(sheet),
+        sheet_format_text(format_path),
+        sheet.scale_numerator,
+        sheet.scale_denominator
+    )
+}
+
 /// "created drawing Draw1 from Drawing.drwdot: Sheet1, A3 (420 x 297 mm), ..."
 pub fn new_drawing_reply_text(reply: &proto::NewDrawingResponse) -> String {
-    let file_name = |path: &str| {
-        Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or(path).to_string()
-    };
     let title = reply.document.as_ref().map(|doc| doc.title.as_str()).unwrap_or_default();
     let mut text = format!("created drawing {title} from {}", file_name(&reply.template));
     if let Some(sheet) = &reply.sheet {
-        let mm = |m: f64| (m * MM_PER_M * 10.0).round() / 10.0;
-        let size = format!("{} x {} mm", mm(sheet.width), mm(sheet.height));
-        let size = match crate::drawing::paper_name(sheet.paper_size) {
-            Some(paper) if sheet.paper_size != PAPER_USER_DEFINED => format!("{paper} ({size})"),
-            _ => size,
-        };
-        let format = if reply.sheet_format_path.is_empty() {
-            "no sheet format".to_string()
-        } else {
-            let name = file_name(&reply.sheet_format_path);
-            let stem = name.rsplit_once('.').map_or(name.as_str(), |(stem, _)| stem);
-            format!("sheet format {stem}")
-        };
-        let projection = if sheet.first_angle { "first-angle" } else { "third-angle" };
-        text += &format!(
-            ": {}, {size}, {format}, scale {}:{}, {projection} projection",
-            sheet.name, sheet.scale_numerator, sheet.scale_denominator
-        );
+        text += &format!(": {}", sheet_text(sheet, &reply.sheet_format_path));
     }
     text += &format!("; units {}. It has no views yet.", unit_system_name(reply.unit_system));
     text

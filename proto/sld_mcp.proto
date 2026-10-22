@@ -240,6 +240,17 @@ service SolidWorks {
   // SolidWorks won't save the image; NOT_FOUND for an unknown sheet.
   rpc RenderDrawing(RenderDrawingRequest) returns (RenderDrawingResponse);
 
+  // Adds a sheet to the active drawing, or changes one of its sheets
+  // (paper size, sheet format, scale, first/third-angle projection, name)
+  // and/or makes it the active sheet. A new sheet starts as a copy of the
+  // active sheet's setup and becomes the active sheet; a changed one stays
+  // in the background unless `activate`. All or nothing: a new sheet is
+  // deleted again, a changed one set back, if a step fails.
+  // FAILED_PRECONDITION if the active document isn't a drawing; NOT_FOUND
+  // for an unknown sheet or sheet format; INVALID_ARGUMENT for a name
+  // another sheet has.
+  rpc SetupSheet(SetupSheetRequest) returns (SetupSheetResponse);
+
   // Deletes features of the active part or assembly the way the Delete key
   // does (IModelDocExtension::DeleteSelection2): sketches, extrudes, cuts,
   // holes, fillets, reference geometry, ..., and in an assembly its mates
@@ -1991,6 +2002,41 @@ message RenderDrawingResponse {
   bytes image = 6;     // the file SolidWorks wrote; covers the whole sheet
   repeated SheetViewOutline views = 7;
   string document_title = 8;
+}
+
+message SetupSheetRequest {
+  // The sheet to change or activate; empty = the active sheet. With `add`,
+  // the new sheet's name (empty = SolidWorks' next "SheetN").
+  string sheet_name = 1;
+  bool add = 2;
+  // Make the sheet the active one (a new sheet always is).
+  bool activate = 3;
+  // swDwgPaperSizes_e (see SheetInfo); 12 = user defined, `width` x
+  // `height`. Unset: keep the sheet's size, or a new sheet format's own.
+  optional int32 paper_size = 4;
+  double width = 5;   // meters, paper_size 12 only
+  double height = 6;  // meters
+  // Sheet format (.slddrt: border and title block): an absolute path, or a
+  // file name (extension optional) looked up in the sheet format folder.
+  // Empty = keep the sheet's.
+  string sheet_format = 7;
+  // Sheet scale numerator : denominator (both > 0), set together.
+  optional double scale_numerator = 8;
+  double scale_denominator = 9;
+  optional bool first_angle = 10;
+  // A new name for the sheet (not with `add`).
+  string new_name = 11;
+}
+
+message SetupSheetResponse {
+  // The sheet as set up, with its views (no entities or annotations).
+  SheetInfo sheet = 1;
+  // The sheet format file (ISheet::GetTemplateName); empty = none.
+  string sheet_format_path = 2;
+  bool added = 3;
+  // Every sheet of the drawing, in order, and the one SolidWorks shows.
+  repeated string sheet_names = 4;
+  string active_sheet = 5;
 }
 
 // ---------------------------------------------------------------------------

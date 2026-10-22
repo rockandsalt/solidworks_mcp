@@ -16,6 +16,7 @@ mod pmi;
 mod refgeom;
 mod render;
 mod revolve;
+mod sheet;
 mod sketch;
 mod sweep;
 mod tolerance;
@@ -1804,6 +1805,55 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "Add a sheet to the active drawing and make it the active sheet (the one \
+                       render_drawing and insert_model_items work on by default). It starts as a \
+                       copy of the active sheet's setup -- paper size, sheet format (border and \
+                       title block), scale, projection -- unless given: `paper_size` or \
+                       `paper_size_mm`, `sheet_format` (an absolute .slddrt path or a name from \
+                       SolidWorks' sheet format folder such as \"a4 - iso\"; without a paper size \
+                       the sheet takes the format's own size), `scale` (\"1:2\"), `projection` \
+                       (first_angle / third_angle). `name` defaults to the next \"SheetN\". The \
+                       new sheet has no views."
+    )]
+    async fn add_sheet(
+        &self,
+        Parameters(params): Parameters<sheet::AddSheetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.setup_sheet(sheet::add_request(&params)?).await
+    }
+
+    #[tool(
+        description = "Show another sheet of the active drawing, making it the active sheet: \
+                       the one render_drawing and insert_model_items work on by default and \
+                       SolidWorks shows. Reports its setup and views."
+    )]
+    async fn activate_sheet(
+        &self,
+        Parameters(params): Parameters<sheet::ActivateSheetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.setup_sheet(sheet::activate_request(&params)?).await
+    }
+
+    #[tool(
+        description = "Change a sheet of the active drawing (default: the active sheet; others \
+                       stay in the background): `paper_size` or `paper_size_mm`, `sheet_format` \
+                       (border and title block, an absolute .slddrt path or a name from \
+                       SolidWorks' sheet format folder such as \"a3 - iso\"; without a paper size \
+                       the sheet takes the format's own size), `scale` (\"1:2\"; views using the \
+                       sheet scale follow it, and views projected from them), `projection` \
+                       (first_angle / third_angle; projected views keep their places and show \
+                       what that projection puts there), `rename`. Views keep their positions on \
+                       the sheet; the reply lists any that now reach past its edges. Changes \
+                       apply together, or not at all."
+    )]
+    async fn edit_sheet(
+        &self,
+        Parameters(params): Parameters<sheet::EditSheetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.setup_sheet(sheet::edit_request(&params)?).await
+    }
+
+    #[tool(
         description = "Draw the active part or assembly as a picture: shaded, with edges, in \
                        orthographic standard views (front/back/left/right/top/bottom/isometric) at \
                        one shared scale, as a grid in one PNG. Use it to check the overall shape \
@@ -3013,6 +3063,22 @@ impl SolidWorksTools {
                 None,
             )
         })
+    }
+
+    /// add_sheet / activate_sheet / edit_sheet: the RPC, then the drawing
+    /// cache brought up to date with the sheet's views.
+    async fn setup_sheet(&self, request: proto::SetupSheetRequest) -> Result<CallToolResult, McpError> {
+        let reply = self
+            .addin
+            .setup_sheet(request.clone())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        if let Some(sheet) = &reply.sheet {
+            let moved = request.scale_numerator.is_some() || request.first_angle.is_some();
+            let mut cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            cache.sheet_changed(&sheet.views, moved);
+        }
+        Ok(CallToolResult::success(vec![ContentBlock::text(sheet::reply_text(&request, &reply))]))
     }
 
     /// Turns a gRPC failure into an MCP error with a message that tells the

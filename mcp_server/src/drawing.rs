@@ -141,6 +141,24 @@ pub struct Cache {
     outlines: HashMap<String, (DVec2, DVec2)>,
 }
 
+impl Cache {
+    /// A sheet was set up again: `views` are its views as they are now.
+    /// With `moved` (a new scale or projection) the entities' sheet
+    /// geometry is stale, so it's forgotten until the next inspect_drawing.
+    pub fn sheet_changed(&mut self, views: &[proto::ViewInfo], moved: bool) {
+        for view in views {
+            if let Some(b) = &view.outline
+                && let (Some(lo), Some(hi)) = (&b.min, &b.max)
+            {
+                self.outlines.insert(view.name.clone(), (DVec2::new(lo.x, lo.y), DVec2::new(hi.x, hi.y)));
+            }
+        }
+        if moved {
+            self.entities.clear();
+        }
+    }
+}
+
 // ---- Ids --------------------------------------------------------------------
 
 fn kind_for(kind: proto::ViewEntityKind) -> Kind {
@@ -388,7 +406,7 @@ fn short_number(x: f64) -> String {
     if r.fract() == 0.0 { format!("{}", r as i64) } else { format!("{r}") }
 }
 
-fn scale_text(numerator: f64, denominator: f64) -> Option<String> {
+pub fn scale_text(numerator: f64, denominator: f64) -> Option<String> {
     (numerator > 0.0 && denominator > 0.0)
         .then(|| format!("{}:{}", short_number(numerator), short_number(denominator)))
 }
