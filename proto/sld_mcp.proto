@@ -251,6 +251,20 @@ service SolidWorks {
   // another sheet has.
   rpc SetupSheet(SetupSheetRequest) returns (SetupSheetResponse);
 
+  // Adds a view of a part or assembly to a sheet of the active drawing,
+  // or changes one of its views: the model and configuration it shows, its
+  // orientation (a named view of the model such as "*Front"), position,
+  // scale, display mode (hidden lines, shaded, ...) and name. A new view
+  // goes on the active sheet unless `sheet_name` says another; the user's
+  // active sheet is put back either way. All or nothing: a new view is
+  // deleted again (and the sheet's scale put back), a changed one set
+  // back, if a step fails. FAILED_PRECONDITION if the active document
+  // isn't a drawing or the model was never saved; NOT_FOUND for an unknown
+  // view, sheet, model, configuration or named view; INVALID_ARGUMENT for
+  // a change the view can't take (an orientation for a projected view, a
+  // name another view has).
+  rpc SetupDrawingView(SetupDrawingViewRequest) returns (SetupDrawingViewResponse);
+
   // Deletes features of the active part or assembly the way the Delete key
   // does (IModelDocExtension::DeleteSelection2): sketches, extrudes, cuts,
   // holes, fillets, reference geometry, ..., and in an assembly its mates
@@ -1872,7 +1886,8 @@ message ViewInfo {
   Vec3 model_y = 15;
   Vec3 model_z = 16;
   // swDisplayMode_e: 0 wireframe, 1 hidden lines visible (greyed),
-  // 2 hidden lines removed, 3 shaded, 7 shaded with edges.
+  // 2 hidden lines removed, 3 shaded, 7 shaded with edges (SolidWorks
+  // reports 3 plus GetDisplayEdgesInShadedMode; the add-in makes it 7).
   int32 display_mode = 17;
   // The view this one is projected / derived from, if any.
   string base_view = 18;
@@ -1888,6 +1903,10 @@ message ViewInfo {
   // With include_annotations: each annotation described. Persist ids of
   // attached entities are the view model's, as in ViewEntity.
   repeated AnnotationInfo annotations = 23;
+  // Derived views (projected, ...) that take their display mode / scale
+  // from base_view.
+  bool uses_parent_display = 24;
+  bool uses_parent_scale = 25;
 }
 
 // One thing visible in a drawing view.
@@ -2036,6 +2055,67 @@ message SetupSheetResponse {
   bool added = 3;
   // Every sheet of the drawing, in order, and the one SolidWorks shows.
   repeated string sheet_names = 4;
+  string active_sheet = 5;
+}
+
+message ViewScale {
+  double numerator = 1;  // both > 0
+  double denominator = 2;
+}
+
+message SetupDrawingViewRequest {
+  // The view to change, e.g. "Drawing View1". With `create`, the new
+  // view's name (empty = SolidWorks' next "Drawing ViewN").
+  string view_name = 1;
+  bool create = 2;
+  // create: the sheet to put the view on; empty = the active sheet.
+  string sheet_name = 3;
+  // The part or assembly to show: an absolute .SLDPRT / .SLDASM path, or
+  // the file name (extension optional) or title of an open document or of
+  // a model the drawing already shows. create: empty = the model the
+  // drawing's views show if they all show one, else the one part or
+  // assembly open in SolidWorks. Otherwise: empty = keep; another model
+  // replaces the view's (IDrawingDoc::ReplaceViewModel).
+  string model = 4;
+  // The model's configuration to show. Empty = keep (create: the model's
+  // active configuration).
+  string configuration = 5;
+  // A named view of the model: "*Front", "*Top", "*Isometric", ..., or a
+  // view saved in the model. Empty = keep (create: "*Front"). Only for
+  // views made from the model (named / standard views); derived views
+  // follow their base view.
+  string orientation = 6;
+  // The view's center on the sheet (sheet meters, z ignored). Unset: keep
+  // (create: the middle of the sheet). Views aligned with another one
+  // only move along the alignment.
+  Vec3 position = 7;
+  oneof scale {
+    ViewScale ratio = 8;
+    // Follow the sheet's scale.
+    bool follow_sheet = 9;
+    // Derived views: follow base_view's scale.
+    bool follow_parent = 10;
+  }
+  // swDisplayMode_e: 0 wireframe, 1 hidden lines visible (greyed),
+  // 2 hidden lines removed, 3 shaded, 7 shaded with edges. Unset: keep.
+  optional int32 display_mode = 11;
+  // Derived views: take the display mode from base_view (not with
+  // display_mode).
+  bool parent_display = 12;
+  // A new name for the view (not with `create`).
+  string new_name = 13;
+}
+
+message SetupDrawingViewResponse {
+  // The view's sheet, with all its views (no entities or annotations).
+  SheetInfo sheet = 1;
+  // The view's name now.
+  string view_name = 2;
+  bool created = 3;
+  // The sheet's scale before the call: on a sheet without views,
+  // SolidWorks may rescale the sheet to fit a new view.
+  ViewScale sheet_scale_before = 4;
+  // The sheet SolidWorks shows.
   string active_sheet = 5;
 }
 

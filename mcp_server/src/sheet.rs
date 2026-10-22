@@ -92,7 +92,7 @@ fn invalid(message: impl Into<String>) -> McpError {
 }
 
 /// "1:2" -> (1, 2).
-fn parse_scale(scale: &str) -> Result<(f64, f64), McpError> {
+pub fn parse_scale(scale: &str) -> Result<(f64, f64), McpError> {
     let bad = || {
         invalid(format!(
             "scale {scale:?}: give it as \"numerator:denominator\", both above 0, e.g. \"1:2\" \

@@ -11,6 +11,11 @@ namespace sld_mcp::service
 
 	long ViewType(IView* view);
 
+	// swDisplayMode_e as the user sees it: SolidWorks reports "shaded with
+	// edges" as swSHADED plus GetDisplayEdgesInShadedMode, this makes it
+	// swSHADED_EDGES. swHIDDEN if SolidWorks doesn't say.
+	long ViewDisplayMode(IView* view);
+
 	std::string SheetName(ISheet* sheet);
 
 	// One sheet of a drawing: its drawing views, and the sheet's own "view"

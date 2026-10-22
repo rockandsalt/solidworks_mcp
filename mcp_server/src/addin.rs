@@ -348,6 +348,15 @@ impl AddinClient {
         Ok(client.setup_sheet(request).await?.into_inner())
     }
 
+    /// Positions in sheet meters.
+    pub async fn setup_drawing_view(
+        &self,
+        request: proto::SetupDrawingViewRequest,
+    ) -> Result<proto::SetupDrawingViewResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.setup_drawing_view(request).await?.into_inner())
+    }
+
     pub async fn delete_features(
         &self,
         request: proto::DeleteFeaturesRequest,

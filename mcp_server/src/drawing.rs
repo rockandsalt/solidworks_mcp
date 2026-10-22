@@ -130,6 +130,8 @@ pub struct EntityGeom {
     pub shape: Shape,
     /// The type word inspect_drawing showed, e.g. "circle_seen_edge_on".
     pub label: String,
+    /// The view it's in.
+    pub view: String,
 }
 
 /// Sheet geometry from the latest inspect_drawing calls, for checking and
@@ -155,6 +157,15 @@ impl Cache {
         }
         if moved {
             self.entities.clear();
+        }
+    }
+
+    /// Views were moved, turned, rescaled or renamed: their entities' sheet
+    /// geometry is stale until the next inspect_drawing.
+    pub fn views_changed(&mut self, names: &[String]) {
+        self.entities.retain(|_, g| !names.contains(&g.view));
+        for name in names {
+            self.outlines.remove(name);
         }
     }
 }
@@ -388,7 +399,7 @@ pub fn paper_name(size: i32) -> Option<&'static str> {
     })
 }
 
-fn display_mode_name(mode: i32) -> Option<&'static str> {
+pub fn display_mode_name(mode: i32) -> Option<&'static str> {
     Some(match mode {
         0 => "wireframe",
         1 => "hidden_lines_visible",
@@ -432,6 +443,24 @@ fn axis_along(xform: &ViewXform, sheet_dir: DVec3) -> Option<String> {
         }
     }
     None
+}
+
+/// "+Y points right, +Z up and +X toward the viewer", or for a view that
+/// isn't axis-aligned, where the model's axes point on the sheet.
+pub fn axes_text(view: &proto::ViewInfo) -> Option<String> {
+    let x = ViewXform::of(view)?;
+    let named: Vec<Option<String>> = [DVec3::X, DVec3::Y, DVec3::Z].iter().map(|d| axis_along(&x, *d)).collect();
+    if let [Some(right), Some(up), Some(toward)] = named.as_slice() {
+        return Some(format!("{right} points right, {up} up and {toward} toward the viewer"));
+    }
+    let scale = x.scale().max(f64::MIN_POSITIVE);
+    let axis = |v: DVec3| format!("[{}, {}]", round(v.x / scale, 3), round(v.y / scale, 3));
+    Some(format!(
+        "the model's X, Y, Z axes point along {}, {}, {} on the sheet",
+        axis(x.axes[0]),
+        axis(x.axes[1]),
+        axis(x.axes[2])
+    ))
 }
 
 fn annotation_counts(types: &[i32]) -> Value {
@@ -546,6 +575,11 @@ fn view_json(
     if let Some(scale) = scale_text(view.scale_numerator, view.scale_denominator) {
         obj.insert("scale".into(), json!(scale));
     }
+    if view.uses_parent_scale {
+        obj.insert("scale_from".into(), json!("parent"));
+    } else if view.uses_sheet_scale {
+        obj.insert("scale_from".into(), json!("sheet"));
+    }
     if let Some(b) = &view.outline
         && let (Some(lo), Some(hi)) = (&b.min, &b.max)
     {
@@ -579,6 +613,9 @@ fn view_json(
     if let Some(mode) = display_mode_name(view.display_mode) {
         obj.insert("display".into(), json!(mode));
     }
+    if view.uses_parent_display {
+        obj.insert("display_from".into(), json!("parent"));
+    }
     if !view.model_loaded && view.model_type() == proto::DocumentType::Unspecified {
         obj.insert(
             "note".into(),
@@ -609,7 +646,7 @@ fn view_json(
                 if let Some(c) = ids.id_for(Kind::Component, &e.component_persist_id) {
                     entry.insert("component".into(), json!(c));
                 }
-                cache.entities.insert(id, EntityGeom { shape, label });
+                cache.entities.insert(id, EntityGeom { shape, label, view: view.name.clone() });
                 entities.push(Value::Object(entry));
             }
         }

@@ -20,6 +20,7 @@ mod sheet;
 mod sketch;
 mod sweep;
 mod tolerance;
+mod view;
 
 use std::sync::{Arc, Mutex};
 
@@ -1854,6 +1855,47 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "Add a view of a part or assembly to a sheet of the active drawing \
+                       (default: the active sheet). `model`: an absolute .SLDPRT / .SLDASM path or \
+                       the name of an open one (default: the model the drawing already shows, else \
+                       the one open part or assembly; it must be saved). `configuration` (default: \
+                       the model's active one). `orientation`: front, back, left, right, top, \
+                       bottom, isometric, dimetric, trimetric or a view saved in the model \
+                       (default: front). `at_mm`: the view's center, [x, y] sheet mm (default: a \
+                       free spot clear of the other views). `scale`: \"1:2\" or \"sheet\" \
+                       (default: the sheet's scale; on an empty sheet SolidWorks may rescale the \
+                       sheet to fit the model, and says so). `display`: hidden_lines_removed, \
+                       hidden_lines_visible, wireframe, shaded, shaded_with_edges. Reports the \
+                       view's outline and which model axes point right / up on the sheet. Then \
+                       inspect_drawing with the view lists its edges for add_drawing_dimensions."
+    )]
+    async fn create_drawing_view(
+        &self,
+        Parameters(params): Parameters<view::CreateDrawingViewParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.setup_drawing_view(view::create_request(&params)?).await
+    }
+
+    #[tool(
+        description = "Change a view of the active drawing (on any sheet; the active sheet stays \
+                       as it is): `model` (show another part or assembly), `configuration`, \
+                       `orientation` (front, top, isometric, ... or a view saved in the model; \
+                       views projected from it turn with it, a projected view's own direction \
+                       follows its parent), `at_mm` (move its center to [x, y] sheet mm; views \
+                       aligned with another one only slide along the alignment), `scale` \
+                       (\"1:2\", \"sheet\", or \"parent\" for projected views), `display` \
+                       (hidden_lines_removed, hidden_lines_visible, wireframe, shaded, \
+                       shaded_with_edges, or \"parent\" for projected views), `rename`. Changes \
+                       apply together, or not at all."
+    )]
+    async fn edit_drawing_view(
+        &self,
+        Parameters(params): Parameters<view::EditDrawingViewParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.setup_drawing_view(view::edit_request(&params)?).await
+    }
+
+    #[tool(
         description = "Draw the active part or assembly as a picture: shaded, with edges, in \
                        orthographic standard views (front/back/left/right/top/bottom/isometric) at \
                        one shared scale, as a grid in one PNG. Use it to check the overall shape \
@@ -3079,6 +3121,59 @@ impl SolidWorksTools {
             cache.sheet_changed(&sheet.views, moved);
         }
         Ok(CallToolResult::success(vec![ContentBlock::text(sheet::reply_text(&request, &reply))]))
+    }
+
+    /// create_drawing_view / edit_drawing_view: the RPC; a new view without
+    /// at_mm, made in the sheet's middle, is then moved clear of the other
+    /// views. The drawing cache forgets the redrawn views' edges.
+    async fn setup_drawing_view(&self, request: proto::SetupDrawingViewRequest) -> Result<CallToolResult, McpError> {
+        let mut reply = self
+            .addin
+            .setup_drawing_view(request.clone())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let asked_at = request.position.as_ref().map(|p| glam::DVec2::new(p.x, p.y));
+        let mut moved_to = None;
+        if request.create
+            && request.position.is_none()
+            && let Some(spot) = reply.sheet.as_ref().and_then(|s| view::free_spot(s, &reply.view_name))
+        {
+            let moved = self
+                .addin
+                .setup_drawing_view(proto::SetupDrawingViewRequest {
+                    view_name: reply.view_name.clone(),
+                    position: Some(proto::Vec3 { x: spot.x, y: spot.y, z: 0.0 }),
+                    ..Default::default()
+                })
+                .await;
+            // The view is made either way; a failed move leaves it in the
+            // middle, and the reply says what it overlaps.
+            match moved {
+                Ok(mut moved) => {
+                    moved.created = true;
+                    // The sheet scale SolidWorks may have changed while making it.
+                    moved.sheet_scale_before = reply.sheet_scale_before.take();
+                    reply = moved;
+                    moved_to = Some(spot);
+                }
+                Err(status) => tracing::warn!("moving the new view {} clear failed: {status}", reply.view_name),
+            }
+        }
+        if let Some(sheet) = &reply.sheet {
+            let mut cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let rescaled = reply.sheet_scale_before.as_ref().is_some_and(|b| {
+                b.numerator != sheet.scale_numerator || b.denominator != sheet.scale_denominator
+            });
+            if view::redraws(&request) {
+                let mut names = view::redrawn_views(&reply);
+                if request.view_name != reply.view_name {
+                    names.push(request.view_name.clone());
+                }
+                cache.views_changed(&names);
+            }
+            cache.sheet_changed(&sheet.views, rescaled);
+        }
+        Ok(CallToolResult::success(vec![ContentBlock::text(view::reply_text(&request, &reply, asked_at, moved_to))]))
     }
 
     /// Turns a gRPC failure into an MCP error with a message that tells the

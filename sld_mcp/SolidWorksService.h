@@ -140,6 +140,9 @@ public:
 	grpc::Status SetupSheet(grpc::ServerContext* context,
 		const sld_mcp::v1::SetupSheetRequest* request,
 		sld_mcp::v1::SetupSheetResponse* response) override;
+	grpc::Status SetupDrawingView(grpc::ServerContext* context,
+		const sld_mcp::v1::SetupDrawingViewRequest* request,
+		sld_mcp::v1::SetupDrawingViewResponse* response) override;
 
 	grpc::Status DeleteFeatures(grpc::ServerContext* context,
 		const sld_mcp::v1::DeleteFeaturesRequest* request,

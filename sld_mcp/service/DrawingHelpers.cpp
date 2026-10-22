@@ -26,6 +26,17 @@ namespace sld_mcp::service
 		return type;
 	}
 
+	long ViewDisplayMode(IView* view)
+	{
+		long mode = swHIDDEN;
+		if (!view || FAILED(view->GetDisplayMode2(&mode)))
+			return swHIDDEN;
+		VARIANT_BOOL edges = VARIANT_FALSE;
+		if (mode == swSHADED && SUCCEEDED(view->GetDisplayEdgesInShadedMode(&edges)) && edges)
+			return swSHADED_EDGES;
+		return mode;
+	}
+
 	std::string SheetName(ISheet* sheet)
 	{
 		ATL::CComBSTR name;
