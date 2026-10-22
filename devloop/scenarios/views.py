@@ -252,7 +252,8 @@ assert {n: {k: v.get(k) for k in keys} for n, v in after.items()} == \
 # ---- Another sheet, in the background: Sheet1 stays active.
 mcp.call("add_sheet")
 mcp.call("activate_sheet", sheet="Sheet1")
-r = mcp.call("create_drawing_view", sheet="Sheet2", orientation="right", scale="1:1")
+# The drawing shows two models now (the plate since the replace): name one.
+r = mcp.call("create_drawing_view", sheet="Sheet2", model="views-block", orientation="right", scale="1:1")
 assert "on Sheet2" in r.text and "(Sheet1 stays the active sheet)" in r.text, r.text
 s = sheets()
 assert s["Sheet1"]["active"] and len(s["Sheet2"]["views"]) == 1, s

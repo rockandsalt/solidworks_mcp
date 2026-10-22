@@ -1731,14 +1731,15 @@ namespace
 		if (!c.modelPath.empty() && !EqualsIgnoringCase(ViewModelPath(view), modelPath))
 		{
 			ATL::CComVariant views = comvariant::FromDispatches({ view });
-			ATL::CComVariant allInstances;
-			VARIANT_BOOL ok = VARIANT_FALSE;
-			HRESULT hr = drawing->ReplaceViewModel(ATL::CComBSTR(c.modelPath.c_str()), views, allInstances, &ok);
-			// An assembly view may want its instances named: the view's root.
+			// The instances to replace are the view's root drawing component:
+			// with none given SolidWorks throws (RPC_E_SERVERFAULT), even for a
+			// part view.
 			ATL::CComPtr<IDrawingComponent> root;
-			if (SUCCEEDED(hr) && !ok && SUCCEEDED(view->get_RootDrawingComponent(&root)) && root)
-				hr = drawing->ReplaceViewModel(ATL::CComBSTR(c.modelPath.c_str()), views,
-					comvariant::FromDispatches({ root.p }), &ok);
+			ATL::CComVariant instances;
+			if (SUCCEEDED(view->get_RootDrawingComponent(&root)) && root)
+				instances = comvariant::FromDispatches({ root.p });
+			VARIANT_BOOL ok = VARIANT_FALSE;
+			HRESULT hr = drawing->ReplaceViewModel(ATL::CComBSTR(c.modelPath.c_str()), views, instances, &ok);
 			if (!step(FAILED(hr) ? ComError("IDrawingDoc::ReplaceViewModel", hr)
 				: !ok || !EqualsIgnoringCase(ViewModelPath(view), modelPath)
 				? grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
