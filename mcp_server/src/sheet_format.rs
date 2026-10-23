@@ -1,6 +1,6 @@
-//! Borders, title blocks and custom properties: draw_sheet_border,
-//! draw_title_block, inspect_title_block, fill_title_block and
-//! custom_properties.
+//! Borders and title blocks: draw_sheet_border, draw_title_block,
+//! inspect_title_block and fill_title_block (custom properties themselves:
+//! properties.rs).
 //!
 //! A border and a title block are lines and notes in a sheet's format (the
 //! layer behind the views, shown on every print), each kind on its own
@@ -213,27 +213,11 @@ pub struct FillTitleBlockParams {
     /// Also set names no title block note shows (on the drawing). Default false: refused.
     #[serde(default)]
     pub allow_unlisted: bool,
-}
-
-#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
-pub struct CustomPropertiesParams {
-    /// An open document by title or full path (e.g. a part a BOM lists, for its Description).
-    /// Default: the active document.
+    /// Overwrite properties linked to a value SolidWorks works out, e.g. Material =
+    /// "SW-Material@part.SLDPRT" (the part's physical material) with the text given. Default
+    /// false: refused.
     #[serde(default)]
-    pub document: Option<String>,
-    /// With a drawing active: the model this sheet takes its properties from (what $PRPSHEET
-    /// in its title block shows); "*" = the active sheet. Not with document.
-    #[serde(default)]
-    pub sheet: Option<String>,
-    /// A configuration's own properties. Default: the file's.
-    #[serde(default)]
-    pub configuration: Option<String>,
-    /// Properties to set (added if missing, as text).
-    #[serde(default)]
-    pub set: BTreeMap<String, String>,
-    /// Properties to delete.
-    #[serde(default)]
-    pub remove: Vec<String>,
+    pub replace_links: bool,
 }
 
 // ---- Border -------------------------------------------------------------------------
@@ -638,7 +622,7 @@ pub fn title_block_request(sheet: &str, block: &TitleBlock) -> proto::DrawSheetF
 
 /// The custom property requests for the values a title block sets: one for
 /// the drawing, one for the sheet's model.
-pub fn property_requests(sheet: &str, values: &[PropertyValue]) -> Vec<proto::CustomPropertiesRequest> {
+pub fn property_requests(sheet: &str, values: &[PropertyValue], replace_links: bool) -> Vec<proto::CustomPropertiesRequest> {
     let mut out = Vec::new();
     for (of, sheet_name) in [(PropertyOf::Drawing, String::new()), (PropertyOf::Model, sheet.to_string())] {
         let set: Vec<proto::CustomProperty> = values
@@ -647,7 +631,7 @@ pub fn property_requests(sheet: &str, values: &[PropertyValue]) -> Vec<proto::Cu
             .map(|v| proto::CustomProperty { name: v.name.clone(), value: v.value.clone(), ..Default::default() })
             .collect();
         if !set.is_empty() {
-            out.push(proto::CustomPropertiesRequest { sheet_name: sheet_name.clone(), set, ..Default::default() });
+            out.push(proto::CustomPropertiesRequest { sheet_name: sheet_name.clone(), set, replace_links, ..Default::default() });
         }
     }
     out
@@ -818,56 +802,6 @@ pub fn route_values(
         }
     }
     Ok((out, unlisted))
-}
-
-// ---- Custom properties ------------------------------------------------------------
-
-pub fn properties_request(params: &CustomPropertiesParams) -> Result<proto::CustomPropertiesRequest, McpError> {
-    let document = text(params.document.as_deref());
-    let sheet = text(params.sheet.as_deref());
-    if !document.is_empty() && !sheet.is_empty() {
-        return Err(invalid("give document or sheet, not both"));
-    }
-    if params.set.keys().any(|k| k.trim().is_empty()) {
-        return Err(invalid("an empty property name"));
-    }
-    if let Some(k) = params.set.keys().find(|k| k.trim().starts_with("SW-")) {
-        return Err(invalid(format!("{k} is SolidWorks' own and can't be set")));
-    }
-    Ok(proto::CustomPropertiesRequest {
-        sheet_name: sheet,
-        configuration: text(params.configuration.as_deref()),
-        set: params
-            .set
-            .iter()
-            .map(|(k, v)| proto::CustomProperty { name: k.trim().to_string(), value: v.clone(), ..Default::default() })
-            .collect(),
-        remove: params.remove.iter().map(|r| r.trim().to_string()).collect(),
-        document,
-    })
-}
-
-pub fn properties_json(reply: &proto::CustomPropertiesResponse) -> Value {
-    let props: Vec<Value> = reply
-        .properties
-        .iter()
-        .map(|p| {
-            let mut e = Map::new();
-            e.insert("name".into(), json!(p.name));
-            e.insert("value".into(), json!(p.value));
-            if p.resolved != p.value {
-                e.insert("resolved".into(), json!(p.resolved));
-            }
-            Value::Object(e)
-        })
-        .collect();
-    let doc = reply.document.as_ref();
-    json!({
-        "document": doc.map(|d| d.title.clone()).unwrap_or_default(),
-        "file": doc.map(|d| d.path.clone()).unwrap_or_default(),
-        "configuration": if reply.configuration.is_empty() { Value::Null } else { json!(reply.configuration) },
-        "properties": props,
-    })
 }
 
 #[cfg(test)]

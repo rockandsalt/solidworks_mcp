@@ -170,6 +170,10 @@ public:
 		const sld_mcp::v1::CustomPropertiesRequest* request,
 		sld_mcp::v1::CustomPropertiesResponse* response) override;
 
+	grpc::Status PartMaterial(grpc::ServerContext* context,
+		const sld_mcp::v1::PartMaterialRequest* request,
+		sld_mcp::v1::PartMaterialResponse* response) override;
+
 	grpc::Status DeleteFeatures(grpc::ServerContext* context,
 		const sld_mcp::v1::DeleteFeaturesRequest* request,
 		sld_mcp::v1::DeleteFeaturesResponse* response) override;

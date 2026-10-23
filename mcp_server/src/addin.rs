@@ -414,6 +414,14 @@ impl AddinClient {
         Ok(client.custom_properties(request).await?.into_inner())
     }
 
+    pub async fn part_material(
+        &self,
+        request: proto::PartMaterialRequest,
+    ) -> Result<proto::PartMaterialResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.part_material(request).await?.into_inner())
+    }
+
     pub async fn delete_features(
         &self,
         request: proto::DeleteFeaturesRequest,

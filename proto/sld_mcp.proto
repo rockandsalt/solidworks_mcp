@@ -330,8 +330,19 @@ service SolidWorks {
   // properties from (the model of its "custom property view", what
   // $PRPSHEET in a title block shows). NOT_FOUND for an unknown sheet or
   // a sheet without views; INVALID_ARGUMENT for a property SolidWorks
-  // won't take.
+  // won't take, or one linked to a value SolidWorks works out (e.g.
+  // "SW-Material@part.SLDPRT") without replace_links.
   rpc CustomProperties(CustomPropertiesRequest) returns (CustomPropertiesResponse);
+
+  // Reads and assigns the physical material of a part
+  // (IPartDoc::SetMaterialPropertyName2): the material database entry its
+  // density, mass and appearance come from. Not a custom property: a
+  // "Material" property is text unless it links "SW-Material". Which part
+  // as in CustomProperties (document / sheet_name / the active document).
+  // FAILED_PRECONDITION for an assembly or a drawing; INVALID_ARGUMENT when
+  // SolidWorks didn't take the material (names are exact; an unknown one
+  // is silently ignored); NOT_FOUND for an unknown configuration.
+  rpc PartMaterial(PartMaterialRequest) returns (PartMaterialResponse);
 
   // Deletes features of the active part or assembly the way the Delete key
   // does (IModelDocExtension::DeleteSelection2): sketches, extrudes, cuts,
@@ -2596,7 +2607,8 @@ message AddBalloonsResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Sheet formats and custom properties: DrawSheetFormat, CustomProperties
+// Sheet formats and document properties: DrawSheetFormat, CustomProperties,
+// PartMaterial
 
 message FormatNote {
   string text = 1;  // may hold property links, e.g. "$PRP:\"DrawnBy\""
@@ -2665,6 +2677,15 @@ message CustomPropertiesRequest {
   // path (e.g. a part a BOM lists, for its Description). Not with
   // sheet_name.
   string document = 5;
+  // Overwrite a property whose value links one SolidWorks works out
+  // ("\"SW-Material@part.SLDPRT\"", "\"SW-Mass@...\"") with the text
+  // given. Otherwise setting or removing it is refused, so a title block
+  // that shows the physical material isn't turned into text by accident.
+  bool replace_links = 6;
+  // Parts and assemblies: the BOM part number of the configuration
+  // (Configuration Properties > "Part number displayed when used in a bill
+  // of materials") becomes this user specified text. Empty: unchanged.
+  string bom_part_number = 7;
 }
 
 message CustomPropertiesResponse {
@@ -2673,6 +2694,52 @@ message CustomPropertiesResponse {
   string configuration = 2;
   // Every property after the change, in SolidWorks' order.
   repeated CustomProperty properties = 3;
+  // Parts and assemblies: the BOM part number of `bom_configuration` (the
+  // request's configuration; else the sheet's view's; else the active
+  // one): where it comes from (swBOMPartNumberSource_e: 1 the document
+  // name, 2 the configuration name, 4 the parent's, 8 user specified) and
+  // the user specified text (IConfiguration::AlternateName).
+  string bom_configuration = 4;
+  int32 bom_part_number_source = 5;
+  string bom_part_number = 6;
+}
+
+message PartMaterialRequest {
+  // Which part, as in CustomPropertiesRequest.
+  string document = 1;
+  string sheet_name = 2;
+  // Empty: the sheet's view's configuration, else the active one.
+  string configuration = 3;
+  // Assign this material: its exact name in the database, e.g.
+  // "AISI 1020", and the database (file name without .sldmat, e.g.
+  // "solidworks materials"; empty: SolidWorks looks it up). Empty: only
+  // read.
+  string material = 4;
+  string database = 5;
+  // Remove the material (SolidWorks then uses 1000 kg/m^3). Not with
+  // material.
+  bool remove = 6;
+}
+
+message PartMaterialResponse {
+  Document document = 1;
+  string configuration = 2;
+  string material = 3;  // empty: none
+  string database = 4;  // as SolidWorks names it, e.g. "SOLIDWORKS Materials"
+  // Mass properties (IMassProperty2), only when `configuration` is the
+  // active one and the part has a body: kg, kg/m^3.
+  bool has_mass = 5;
+  double mass = 6;
+  double density = 7;
+  // Folders holding material databases (*.sldmat): Tools > Options > File
+  // Locations > Material Databases, then
+  // <install>\lang\<language>\sldmaterials.
+  repeated string database_folders = 8;
+  // The part's "Material" custom property, the file's and the
+  // configuration's, when it has one: a link "SW-Material@..." shows the
+  // physical material; text is a designation of its own.
+  CustomProperty material_property = 9;
+  CustomProperty configuration_material_property = 10;
 }
 
 // ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ mod mirror;
 mod note;
 mod pattern;
 mod pmi;
+mod properties;
 mod refgeom;
 mod render;
 mod revolve;
@@ -2220,7 +2221,7 @@ impl SolidWorksTools {
                 None,
             ));
         }
-        for request in sheet_format::property_requests(&sheet.name, &block.properties) {
+        for request in sheet_format::property_requests(&sheet.name, &block.properties, false) {
             self.addin.custom_properties(request).await.map_err(|status| self.addin_error(status))?;
         }
         let reply = self
@@ -2256,7 +2257,9 @@ impl SolidWorksTools {
                        \"Bracket\"}. Each goes where the title block reads it from -- the drawing's \
                        custom properties or the sheet's model's (save the model too) -- and the \
                        notes update. Names the title block doesn't show are refused unless \
-                       allow_unlisted."
+                       allow_unlisted. A property linked to what SolidWorks works out (Material = \
+                       \"SW-Material@part\": the physical material) is refused unless replace_links. \
+                       Part number / revision / material by meaning: drawing_properties."
     )]
     async fn fill_title_block(
         &self,
@@ -2274,7 +2277,7 @@ impl SolidWorksTools {
         let sheet = sheet_format::find_sheet(&info, &sheet_name)?;
         let fields = sheet_format::fields(sheet);
         let (values, unlisted) = sheet_format::route_values(&fields, &params.values, params.allow_unlisted)?;
-        for request in sheet_format::property_requests(&sheet.name, &values) {
+        for request in sheet_format::property_requests(&sheet.name, &values, params.replace_links) {
             self.addin.custom_properties(request).await.map_err(|status| self.addin_error(status))?;
         }
         let set: Vec<String> = values
@@ -2298,19 +2301,156 @@ impl SolidWorksTools {
                        of an open `document` by title or path (e.g. a part a BOM lists: its \
                        Description fills the BOM's DESCRIPTION column), or with `sheet` of the model \
                        a drawing sheet takes $PRPSHEET values from. `set` {name: value}, `remove` \
-                       [names], `configuration` for configuration-specific ones. Lists every \
-                       property after the change."
+                       [names], `configuration` for configuration-specific ones, `bom_part_number` \
+                       for the part number BOMs list. Properties linked to what SolidWorks works out \
+                       (Material = \"SW-Material@part\" shows the physical material) are kept \
+                       unless replace_links. Lists every property and the BOM part number after \
+                       the change. Physical material: part_material."
     )]
     async fn custom_properties(
         &self,
-        Parameters(params): Parameters<sheet_format::CustomPropertiesParams>,
+        Parameters(params): Parameters<properties::CustomPropertiesParams>,
     ) -> Result<CallToolResult, McpError> {
         let reply = self
             .addin
-            .custom_properties(sheet_format::properties_request(&params)?)
+            .custom_properties(properties::properties_request(&params)?)
             .await
             .map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(sheet_format::properties_json(&reply).to_string())]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(properties::properties_json(&reply).to_string())]))
+    }
+
+    #[tool(
+        description = "Set the properties a drawing shows, by meaning: `part_number`, `revision`, \
+                       `description` and `material` (a designation text, e.g. \"EN AW-6061-T6\") \
+                       go where the sheet's title block reads them from -- the drawing ($PRP) or \
+                       the model the sheet shows ($PRPSHEET), under the name its note uses (PartNo, \
+                       Rev, ...) -- else to the usual property (model PartNo / Description / \
+                       Material, drawing Revision). part_number also becomes the model's BOM part \
+                       number (bom: false to skip). `drawing` / `model` {name: value} for any other \
+                       custom properties. `material` is only text: the part's physical material \
+                       (density, mass) is part_material's, and a Material property that shows it \
+                       (a link) is kept unless replace_links. Nothing given: lists both sides' \
+                       properties. Requires a drawing; save the model too."
+    )]
+    async fn drawing_properties(
+        &self,
+        Parameters(params): Parameters<properties::DrawingPropertiesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        // Title block fields are only read (slow: every annotation is
+        // described) when a field is given by meaning.
+        let known = properties::has_known(&params);
+        let info = self
+            .addin
+            .inspect_drawing(if known { sheet_format::fields_request() } else { proto::InspectDrawingRequest::default() })
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let sheet = sheet_format::find_sheet(&info, params.sheet.as_deref().unwrap_or("").trim())?;
+        let fields = if known { sheet_format::fields(sheet) } else { Vec::new() };
+        let plan = properties::plan(&params, &fields)?;
+        if plan.needs_model() && sheet.views.is_empty() {
+            return Err(McpError::invalid_params(
+                format!("{} has no views, so there's no model to set model properties on; add a view first", sheet.name),
+                None,
+            ));
+        }
+        // The model first: a refused link there leaves the drawing untouched.
+        let model = if sheet.views.is_empty() {
+            None
+        } else {
+            Some(
+                self.addin
+                    .custom_properties(properties::plan_request(&plan, sheet_format::PropertyOf::Model, &sheet.name, params.replace_links))
+                    .await
+                    .map_err(|status| self.addin_error(status))?,
+            )
+        };
+        let drawing = self
+            .addin
+            .custom_properties(properties::plan_request(&plan, sheet_format::PropertyOf::Drawing, &sheet.name, params.replace_links))
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let is_part = model.as_ref().and_then(|m| m.document.as_ref()).is_some_and(|d| d.r#type() == proto::DocumentType::Part);
+        let material = if is_part {
+            self.addin
+                .part_material(proto::PartMaterialRequest { sheet_name: sheet.name.clone(), ..Default::default() })
+                .await
+                .ok()
+        } else {
+            None
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(properties::drawing_properties_reply(
+            &sheet.name,
+            &plan,
+            &drawing,
+            model.as_ref(),
+            material.as_ref(),
+        ))]))
+    }
+
+    #[tool(
+        description = "Read or assign a part's physical material -- the material database entry \
+                       (e.g. \"AISI 1020\", \"6061-T6 (SS)\") that sets its density, mass, \
+                       appearance and hatch -- of the active part, an open `document`, or with \
+                       `sheet` the part a drawing sheet shows. `search` lists names (\"*\" the \
+                       classes); `remove` takes it off. Not the \"Material\" text a title block shows: \
+                       the reply says whether that property follows this material (a link) or is \
+                       separate text; link_property makes it follow. Reports density and mass."
+    )]
+    async fn part_material(
+        &self,
+        Parameters(params): Parameters<properties::PartMaterialParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = properties::material_request(&params)?;
+        let before = self.addin.part_material(request.clone()).await.map_err(|status| self.addin_error(status))?;
+        let materials = properties::load_databases(&before.database_folders);
+        if let Some(query) = &params.search {
+            return Ok(CallToolResult::success(vec![ContentBlock::text(properties::search_reply(&before, &materials, query))]));
+        }
+        let name = params.material.as_deref().unwrap_or("").trim();
+        let database = params.database.as_deref().unwrap_or("").trim();
+        let entry = if name.is_empty() { None } else { properties::resolve(&materials, name, database)? };
+        let changed = params.remove || !name.is_empty();
+        let mut after = if changed {
+            let set = proto::PartMaterialRequest {
+                material: entry.map(|m| m.name.clone()).unwrap_or_else(|| name.to_string()),
+                database: entry.map(|m| m.database.clone()).unwrap_or_else(|| database.to_string()),
+                remove: params.remove,
+                ..request.clone()
+            };
+            self.addin.part_material(set).await.map_err(|status| self.addin_error(status))?
+        } else {
+            before.clone()
+        };
+        let entry = entry.or_else(|| materials.iter().find(|m| m.name == after.material));
+        if params.link_property {
+            if after.material.is_empty() {
+                return Err(McpError::invalid_params("the part has no material to link; give material", None));
+            }
+            let part = after.document.as_ref().map(|d| d.title.clone()).unwrap_or_default();
+            self.addin
+                .custom_properties(proto::CustomPropertiesRequest {
+                    document: request.document.clone(),
+                    sheet_name: request.sheet_name.clone(),
+                    set: vec![proto::CustomProperty {
+                        name: "Material".into(),
+                        value: properties::material_link(&part),
+                        ..Default::default()
+                    }],
+                    // Replaces a designation text; an existing link is the same link.
+                    replace_links: true,
+                    ..Default::default()
+                })
+                .await
+                .map_err(|status| self.addin_error(status))?;
+            after = self.addin.part_material(request).await.map_err(|status| self.addin_error(status))?;
+        }
+        Ok(CallToolResult::success(vec![ContentBlock::text(properties::material_reply(
+            &before,
+            &after,
+            entry,
+            changed,
+            params.link_property,
+        ))]))
     }
 
     #[tool(

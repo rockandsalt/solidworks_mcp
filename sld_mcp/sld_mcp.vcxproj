@@ -367,6 +367,7 @@
     <ClCompile Include="service\DrawingAnnotations.cpp" />
     <ClCompile Include="service\DrawingTables.cpp" />
     <ClCompile Include="service\SheetFormats.cpp" />
+    <ClCompile Include="service\Properties.cpp" />
     <ClCompile Include="service\DrawingHelpers.cpp" />
     <ClCompile Include="service\Drawings.cpp" />
     <ClCompile Include="service\Editing.cpp" />

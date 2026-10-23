@@ -1,6 +1,6 @@
-// SheetFormats.cpp : Sheet formats and custom properties: DrawSheetFormat (lines and notes on a layer
-// of a sheet's format: borders, title blocks), CustomProperties (see docs/notes/drawings.md, "Borders
-// and title blocks").
+// SheetFormats.cpp : Sheet formats: DrawSheetFormat (lines and notes on a layer of a sheet's format:
+// borders, title blocks; see docs/notes/drawings.md, "Borders and title blocks"). The properties the
+// title block shows: Properties.cpp.
 #include "pch.h"
 #include "Common.h"
 #include "AnnotationHelpers.h"
@@ -12,7 +12,6 @@ namespace
 {
 	constexpr int kMaxFormatLines = 5000;
 	constexpr int kMaxFormatNotes = 1000;
-	constexpr int kMaxProperties = 500;
 
 	std::string LayerOf(IAnnotation* annotation)
 	{
@@ -345,167 +344,5 @@ grpc::Status SolidWorksService::DrawSheetFormat(grpc::ServerContext* /*context*/
 			DescribeSheetLayout(s, response->mutable_sheet());
 		}
 	response->set_active_sheet(original);
-	return grpc::Status::OK;
-}
-
-namespace
-{
-	// The model whose properties a sheet's $PRPSHEET links show: the
-	// model of the sheet's custom property view ("Default": its first
-	// view). A new sheet's property view is "Same as sheet specified in
-	// Document Properties" (seen 2026-10-22; localized): the sheet whose
-	// number swDrawingSheetCustomPropSheetNo holds (1 = the first) decides.
-	grpc::Status SheetPropertyModel(const DrawingSheet& sheet, const std::vector<DrawingSheet>& sheets,
-		IModelDocExtension* drawingExt, ATL::CComPtr<IModelDoc2>& model, int depth = 0)
-	{
-		ATL::CComBSTR viewName;
-		if (sheet.sheet)
-			sheet.sheet->get_CustomPropertyView(&viewName);
-		ATL::CComPtr<IView> view;
-		if (viewName.Length() == 0 || _wcsicmp(viewName, L"Default") == 0)
-		{
-			if (sheet.views.empty())
-				return grpc::Status(grpc::StatusCode::NOT_FOUND, sheet.name +
-					" has no views, so no model to take properties from");
-			view = sheet.views[0];
-		}
-		else
-		{
-			std::string sheetName;
-			if (!FindDrawingView(sheets, ToUtf8(viewName), view, sheetName).ok())
-			{
-				long number = 1;
-				if (drawingExt)
-					drawingExt->GetUserPreferenceInteger(swDrawingSheetCustomPropSheetNo, swDetailingNoOptionSpecified, &number);
-				const DrawingSheet& from = sheets[std::clamp<long>(number, 1, static_cast<long>(sheets.size())) - 1];
-				if (&from == &sheet || depth > 0)
-				{
-					if (sheet.views.empty())
-						return grpc::Status(grpc::StatusCode::NOT_FOUND, sheet.name +
-							" has no views, so no model to take properties from");
-					view = sheet.views[0];
-				}
-				else
-					return SheetPropertyModel(from, sheets, drawingExt, model, depth + 1);
-			}
-		}
-		if (FAILED(view->get_ReferencedDocument(&model)) || !model)
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, ViewName(view) +
-				"'s model isn't loaded (resolve the view first)");
-		return grpc::Status::OK;
-	}
-}
-
-grpc::Status SolidWorksService::CustomProperties(grpc::ServerContext* /*context*/,
-	const sld_mcp::v1::CustomPropertiesRequest* request,
-	sld_mcp::v1::CustomPropertiesResponse* response)
-{
-	if (request->set_size() + request->remove_size() > kMaxProperties)
-		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "at most " + std::to_string(kMaxProperties) + " properties per call");
-	for (const auto& p : request->set())
-		if (p.name().empty())
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a property needs a name");
-
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDoc2> doc;
-	if (!request->document().empty())
-	{
-		if (!request->sheet_name().empty())
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give a document or a sheet, not both");
-		ATL::CComPtr<IDispatch> found;
-		if (FAILED(swApp->GetOpenDocumentByName(FromUtf8(request->document()), &found)) || !found ||
-			!(doc = ATL::CComQIPtr<IModelDoc2>(found.p)))
-			return grpc::Status(grpc::StatusCode::NOT_FOUND, "no open document is called \"" + request->document() +
-				"\" (open_document opens a file; a drawing's or assembly's models are open while it is)");
-	}
-	ATL::CComPtr<IDispatch> active;
-	if (!doc && (FAILED(swApp->get_ActiveDoc(&active)) || !active || !(doc = ATL::CComQIPtr<IModelDoc2>(active.p))))
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "no document is open in SolidWorks");
-	if (!request->sheet_name().empty())
-	{
-		ATL::CComQIPtr<IDrawingDoc> drawing(doc.p);
-		if (!drawing)
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "a sheet's model needs a drawing as the active document");
-		const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
-		const std::string wanted = request->sheet_name() == "*" ? ActiveSheetName(drawing) : request->sheet_name();
-		const DrawingSheet* sheet = FindSheet(sheets, wanted);
-		if (!sheet)
-			return grpc::Status(grpc::StatusCode::NOT_FOUND,
-				"the drawing has no sheet named \"" + wanted + "\" (its sheets: " + SheetList(sheets) + ")");
-		ATL::CComPtr<IModelDoc2> model;
-		ATL::CComPtr<IModelDocExtension> drawingExt;
-		doc->get_Extension(&drawingExt);
-		if (grpc::Status status = SheetPropertyModel(*sheet, sheets, drawingExt, model); !status.ok())
-			return status;
-		doc = model;
-	}
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	ATL::CComPtr<ICustomPropertyManager> properties;
-	if (FAILED(ext->get_CustomPropertyManager(FromUtf8(request->configuration()), &properties)) || !properties)
-		return grpc::Status(grpc::StatusCode::NOT_FOUND, "no configuration named \"" + request->configuration() + "\"");
-
-	for (const auto& name : request->remove())
-	{
-		long result = 0;
-		properties->Delete2(FromUtf8(name), &result);
-	}
-	for (const auto& p : request->set())
-	{
-		long result = 0;
-		HRESULT hr = properties->Add3(FromUtf8(p.name()), swCustomInfoText, FromUtf8(p.value()),
-			swCustomPropertyReplaceValue, &result);
-		if (FAILED(hr) || result != swCustomInfoAddResult_AddedOrChanged)
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "SolidWorks didn't set property \"" + p.name() +
-				"\" (result " + std::to_string(result) + "; an existing property of another type?)");
-	}
-
-	// Notes linking the properties ($PRP / $PRPSHEET in a title block)
-	// show the old values until a rebuild of the drawing (seen 2026-10-22).
-	if (request->set_size() + request->remove_size() > 0)
-	{
-		VARIANT_BOOL rebuilt = VARIANT_FALSE;
-		doc->EditRebuild3(&rebuilt);
-		ATL::CComPtr<IDispatch> activeDisp;
-		if (SUCCEEDED(swApp->get_ActiveDoc(&activeDisp)) && activeDisp)
-			if (ATL::CComQIPtr<IModelDoc2> activeDoc(activeDisp.p); activeDoc && !SameObject(activeDoc, doc))
-				activeDoc->EditRebuild3(&rebuilt);
-	}
-
-	ATL::CComBSTR title, path;
-	doc->GetTitle(&title);
-	doc->GetPathName(&path);
-	long type = swDocNONE;
-	doc->GetType(&type);
-	response->mutable_document()->set_title(ToUtf8(title));
-	response->mutable_document()->set_path(ToUtf8(path));
-	response->mutable_document()->set_type(ToDocumentType(type));
-	response->set_configuration(request->configuration());
-	ATL::CComVariant names;
-	if (SUCCEEDED(properties->GetNames(&names)))
-		for (const auto& name : comvariant::ToBstrs(names))
-		{
-			auto* p = response->add_properties();
-			p->set_name(ToUtf8(name));
-			ATL::CComBSTR value, resolved;
-			VARIANT_BOOL wasResolved = VARIANT_FALSE, linked = VARIANT_FALSE;
-			long status = 0;
-			if (SUCCEEDED(properties->Get6(name, VARIANT_FALSE, &value, &resolved, &wasResolved, &linked, &status)))
-			{
-				p->set_value(ToUtf8(value));
-				p->set_resolved(ToUtf8(resolved));
-			}
-			long t = 0;
-			if (SUCCEEDED(properties->GetType2(name, &t)))
-				p->set_type(static_cast<int32_t>(t));
-		}
 	return grpc::Status::OK;
 }
