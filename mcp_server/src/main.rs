@@ -11,6 +11,7 @@ mod fillet;
 mod hole;
 mod inspect;
 mod mirror;
+mod note;
 mod pattern;
 mod pmi;
 mod refgeom;
@@ -1896,6 +1897,108 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "List the annotations of the active drawing -- notes, dimensions, balloons, \
+                       ... -- with what each belongs to (`in`): a view (it moves with the view), \
+                       the sheet (stays put on the paper) or the sheet format (the border / title \
+                       block layer; only counted unless asked for). Each has its name (for \
+                       edit_drawing_annotation / delete_drawing_annotations), text, at_mm (the \
+                       text's upper-left corner in sheet mm, as render_drawing's rulers read), for a \
+                       view's annotations at_view_mm (the view's own coordinates: mm at the model's \
+                       size from the model origin), its box on the sheet, style (font, height, \
+                       bold, angle, border), layer and leaders (style, arrow tips in both \
+                       coordinates, the view edges they're attached to). Filters: sheet, view, in, \
+                       kind (note, dimension, ...), contains (text)."
+    )]
+    async fn inspect_drawing_annotations(
+        &self,
+        Parameters(params): Parameters<note::InspectDrawingAnnotationsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let reply = self
+            .addin
+            .inspect_drawing(note::inspect_request(&params))
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let json = {
+            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            note::render_inspect(&mut ids, &reply, &params)?
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+    }
+
+    #[tool(
+        description = "Add a note to the active drawing. Where it belongs (`in`): \"view\" -- in \
+                       `view`, moving with it (the default with `view` or `attach_to`); \"sheet\" -- \
+                       on the paper, staying put when views move (the default otherwise); \
+                       \"sheet_format\" -- the border / title block layer. Position: `at_mm` = the \
+                       text's upper-left corner in sheet mm from the sheet's lower-left corner (the \
+                       sheet format uses the same coordinates), or for a view note `at_view_mm` = \
+                       the view's own coordinates (mm at the model's size from the model origin as \
+                       the view shows it, x to the view's right; for a 1:2 view 10 view mm are 5 on \
+                       the paper). Leaders: `attach_to` view entity ids from inspect_drawing \
+                       (\"view_edge:3\"), one leader each, arrows at `arrow_at_mm` or a line's \
+                       middle / a circle's rim; without a position the text goes next to the first \
+                       arrow outside the view. Look: height_mm, font, bold, italic, underline, \
+                       justification, angle_deg, border (box, circle, ...), layer, leader \
+                       (straight, bent, underlined), arrow (closed, open, dot, ...). The reply says \
+                       where it ended up in both coordinates and flags notes over a view they \
+                       don't belong to, far from their view, or off the sheet."
+    )]
+    async fn add_drawing_note(
+        &self,
+        Parameters(params): Parameters<note::AddDrawingNoteParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let (request, remarks) = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            note::add_request(&ids, &cache, &params)?
+        };
+        self.setup_drawing_annotation(request, remarks).await
+    }
+
+    #[tool(
+        description = "Change an annotation of the active drawing, by the name \
+                       inspect_drawing_annotations lists (e.g. \"DetailItem12\", \"RD1@Drawing \
+                       View1\"). Any annotation: move it (`at_mm` sheet mm, `at_view_mm` in `view`'s \
+                       own coordinates, or `move_by_mm`), `layer`, `attach_to_view` (put it in a view \
+                       so it moves with it; it stays where it is on the paper). Notes also: `text`, \
+                       height_mm, font, bold, italic, underline, document_font (back to the \
+                       document's), justification, angle_deg, border, leaders (`attach_to` replaces \
+                       them with leaders to these view entities, `arrow_at_mm` moves the arrow tips \
+                       in order, `leader` straight / bent / underlined / none, `arrow`). Sheet \
+                       format (title block) notes can be changed too. Changes apply together, or \
+                       not at all."
+    )]
+    async fn edit_drawing_annotation(
+        &self,
+        Parameters(params): Parameters<note::EditDrawingAnnotationParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let (request, remarks) = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            note::edit_request(&ids, &cache, &params)?
+        };
+        self.setup_drawing_annotation(request, remarks).await
+    }
+
+    #[tool(
+        description = "Delete annotations of the active drawing -- notes, dimensions, balloons, \
+                       sheet format (title block) notes, ... -- by the names \
+                       inspect_drawing_annotations lists. Nothing is deleted if a name isn't found; \
+                       `sheet` / `view` narrow the search when a name is on several sheets."
+    )]
+    async fn delete_drawing_annotations(
+        &self,
+        Parameters(params): Parameters<note::DeleteDrawingAnnotationsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let reply = self
+            .addin
+            .delete_drawing_annotations(note::delete_request(&params)?)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(note::delete_reply(&reply))]))
+    }
+
+    #[tool(
         description = "Draw the active part or assembly as a picture: shaded, with edges, in \
                        orthographic standard views (front/back/left/right/top/bottom/isometric) at \
                        one shared scale, as a grid in one PNG. Use it to check the overall shape \
@@ -3174,6 +3277,29 @@ impl SolidWorksTools {
             cache.sheet_changed(&sheet.views, rescaled);
         }
         Ok(CallToolResult::success(vec![ContentBlock::text(view::reply_text(&request, &reply, asked_at, moved_to))]))
+    }
+
+    /// add_drawing_note / edit_drawing_annotation: the RPC; the drawing
+    /// cache takes the sheet's view outlines.
+    async fn setup_drawing_annotation(
+        &self,
+        request: proto::SetupDrawingAnnotationRequest,
+        remarks: Vec<String>,
+    ) -> Result<CallToolResult, McpError> {
+        let reply = self
+            .addin
+            .setup_drawing_annotation(request.clone())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        if let Some(sheet) = &reply.sheet {
+            let mut cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            cache.sheet_changed(&sheet.views, false);
+        }
+        let text = {
+            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            note::setup_reply(&mut ids, &request, &reply, &remarks)
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     /// Turns a gRPC failure into an MCP error with a message that tells the

@@ -2,6 +2,7 @@
 #include "pch.h"
 #include "DrawingHelpers.h"
 #include "Common.h"
+#include "AnnotationHelpers.h"
 
 namespace sld_mcp::service
 {
@@ -286,5 +287,514 @@ namespace sld_mcp::service
 				return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks didn't change the sheet's scale or projection");
 		}
 		return grpc::Status::OK;
+	}
+
+	// The active document, if it's a drawing.
+	grpc::Status GetActiveDrawing(ISldWorks* swApp, ATL::CComPtr<IModelDoc2>& doc,
+		ATL::CComQIPtr<IDrawingDoc>& drawing)
+	{
+		HRESULT hr = swApp->get_IActiveDoc2(&doc);
+		if (FAILED(hr))
+			return ComError("ISldWorks::IActiveDoc2", hr);
+		if (!doc)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"no document is open in SolidWorks -- open a drawing first");
+		long docType = swDocNONE;
+		hr = doc->GetType(&docType);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::GetType", hr);
+		if (docType != swDocDRAWING)
+		{
+			doc.Release();
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"the active document isn't a drawing -- open (or switch to) the drawing first");
+		}
+		drawing = doc.p;
+		if (!drawing)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "active drawing has no IDrawingDoc interface");
+		return grpc::Status::OK;
+	}
+
+	std::string ActiveSheetName(IDrawingDoc* drawing)
+	{
+		ATL::CComPtr<IDispatch> disp;
+		if (FAILED(drawing->GetCurrentSheet(&disp)) || !disp)
+			return {};
+		ATL::CComQIPtr<ISheet> sheet(disp.p);
+		return SheetName(sheet);
+	}
+
+	// Finds a view by name; `sheetName` is the sheet it's on.
+	grpc::Status FindDrawingView(const std::vector<DrawingSheet>& sheets, const std::string& name,
+		ATL::CComPtr<IView>& view, std::string& sheetName)
+	{
+		std::string known;
+		for (const auto& s : sheets)
+			for (const auto& v : s.views)
+			{
+				const std::string viewName = ViewName(v);
+				if (viewName == name)
+				{
+					view = v;
+					sheetName = s.name;
+					return grpc::Status::OK;
+				}
+				known += (known.empty() ? "" : ", ") + viewName;
+			}
+		return grpc::Status(grpc::StatusCode::NOT_FOUND,
+			"the drawing has no view named \"" + name + "\"" +
+			(known.empty() ? std::string(" (it has no views)") : " (its views: " + known + ")"));
+	}
+
+	ViewModel ViewModelOf(IView* view)
+	{
+		ViewModel model;
+		if (FAILED(view->get_ReferencedDocument(&model.doc)) || !model.doc)
+		{
+			model.doc.Release();
+			return model;
+		}
+		if (FAILED(model.doc->GetType(&model.type)))
+			model.type = swDocNONE;
+		if (FAILED(model.doc->get_Extension(&model.ext)))
+			model.ext.Release();
+		return model;
+	}
+
+	namespace
+	{
+		long SwViewEntityType(sld_mcp::v1::ViewEntityKind kind)
+		{
+			switch (kind)
+			{
+			case sld_mcp::v1::VIEW_ENTITY_KIND_VERTEX:
+				return swViewEntityType_Vertex;
+			case sld_mcp::v1::VIEW_ENTITY_KIND_SILHOUETTE:
+				return swViewEntityType_SilhouetteEdge;
+			default:
+				return swViewEntityType_Edge;
+			}
+		}
+	}
+
+	// What GetVisibleEntities2 is asked about: an assembly view's visible
+	// components one by one, or (part views) a null component.
+	std::vector<ATL::CComPtr<IComponent2>> ViewComponents(IView* view, const ViewModel& model)
+	{
+		std::vector<ATL::CComPtr<IComponent2>> out;
+		if (model.type == swDocASSEMBLY)
+		{
+			ATL::CComVariant components;
+			if (SUCCEEDED(view->GetVisibleComponents(&components)))
+				for (const auto& disp : comvariant::ToDispatches(components))
+					if (ATL::CComQIPtr<IComponent2> component(disp.p); component)
+						out.push_back(ATL::CComPtr<IComponent2>(component));
+		}
+		if (out.empty())
+			out.emplace_back();
+		return out;
+	}
+
+	// Appends a view's visible entities of one kind (of one component, known
+	// by `componentPid`) to `out`. `ids` must be the drawing's: the view's
+	// model gives all of a view's entities the same persist id. False if
+	// `budget` ran out first.
+	bool ListViewEntities(IView* view, IComponent2* component, const std::string& componentPid,
+		sld_mcp::v1::ViewEntityKind kind, PersistIds& ids, size_t& budget, std::vector<ViewEntityItem>& out)
+	{
+		ATL::CComVariant entities;
+		// GetVisibleEntities2's silhouettes in a part view can have no face
+		// and no end points (after the view's scale changed, until the next
+		// GetVisibleEntities call); GetVisibleEntities' are whole.
+		const HRESULT hr = kind == sld_mcp::v1::VIEW_ENTITY_KIND_SILHOUETTE
+			? view->GetVisibleEntities(component, SwViewEntityType(kind), &entities)
+			: view->GetVisibleEntities2(component, SwViewEntityType(kind), &entities);
+		if (FAILED(hr))
+			return true;
+		std::map<std::string, int> seen;
+		for (const auto& disp : comvariant::ToDispatches(entities))
+		{
+			if (!disp)
+				continue;
+			if (budget == 0)
+				return false;
+			--budget;
+			ViewEntityItem item;
+			item.kind = kind;
+			item.obj = disp;
+			item.component = component;
+			item.componentPid = componentPid;
+			if (kind == sld_mcp::v1::VIEW_ENTITY_KIND_SILHOUETTE)
+			{
+				ATL::CComQIPtr<ISilhouetteEdge> silhouette(disp.p);
+				ATL::CComPtr<IFace2> face;
+				if (silhouette && SUCCEEDED(silhouette->GetFace(&face)) && face)
+					item.persistId = ids.Get(face);
+			}
+			else
+				item.persistId = ids.Get(disp);
+			item.ordinal = seen[item.persistId]++;
+			out.push_back(std::move(item));
+		}
+		return true;
+	}
+
+	namespace
+	{
+		bool MathPointCoordinates(IMathPoint* point, sld_mcp::v1::Vec3* out)
+		{
+			ATL::CComVariant data;
+			if (!point || FAILED(point->get_ArrayData(&data)))
+				return false;
+			const std::vector<double> p = comvariant::ToDoubles(data);
+			if (p.size() < 3 || !std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2]))
+				return false;
+			SetVec3(out, p.data());
+			return true;
+		}
+
+		// A view vertex's point in its model. IVertex::GetPoint on the vertices
+		// GetVisibleEntities2 hands out comes back shifted by the view's
+		// position on the sheet (model x + view x, model y + view y; SOLIDWORKS
+		// 2026), while the end vertices of its edges are in model space: the
+		// one nearest the unshifted point is this vertex.
+		bool ViewVertexPoint(IVertex* vertex, const Eigen::Vector2d& viewPosition, Eigen::Vector3d& out)
+		{
+			ATL::CComVariant pointVar;
+			if (FAILED(vertex->GetPoint(&pointVar)))
+				return false;
+			const std::vector<double> p = comvariant::ToDoubles(pointVar);
+			if (p.size() < 3)
+				return false;
+			const Eigen::Vector3d unshifted(p[0] - viewPosition.x(), p[1] - viewPosition.y(), p[2]);
+			out = unshifted;
+			double best = std::numeric_limits<double>::infinity();
+			ATL::CComVariant edges;
+			if (SUCCEEDED(vertex->GetEdges(&edges)))
+				for (const auto& disp : comvariant::ToDispatches(edges))
+					if (ATL::CComQIPtr<IEdge> edge(disp.p); edge)
+						for (const bool start : { true, false })
+						{
+							ATL::CComPtr<IDispatch> endDisp;
+							if (FAILED(start ? edge->GetStartVertex(&endDisp) : edge->GetEndVertex(&endDisp)) || !endDisp)
+								continue;
+							ATL::CComQIPtr<IVertex> end(endDisp.p);
+							ATL::CComVariant endVar;
+							if (!end || FAILED(end->GetPoint(&endVar)))
+								continue;
+							const std::vector<double> e = comvariant::ToDoubles(endVar);
+							if (e.size() < 3)
+								continue;
+							const Eigen::Vector3d candidate(e[0], e[1], e[2]);
+							if (const double d = (candidate - unshifted).norm(); d < best)
+							{
+								best = d;
+								out = candidate;
+							}
+						}
+			return out.allFinite();
+		}
+
+		void DescribeViewEntity(const ViewEntityItem& item, const Eigen::Vector2d& viewPosition, PersistIds& ids,
+			sld_mcp::v1::ViewEntity* out)
+		{
+			out->set_kind(item.kind);
+			out->set_persist_id(item.persistId);
+			out->set_component_persist_id(item.componentPid);
+			out->set_ordinal(item.ordinal);
+			switch (item.kind)
+			{
+			case sld_mcp::v1::VIEW_ENTITY_KIND_EDGE:
+				if (ATL::CComQIPtr<IEdge> edge(item.obj.p); edge)
+				{
+					InspectEdge(edge, ids, out->mutable_edge());
+					out->mutable_edge()->set_component_persist_id(item.componentPid);
+				}
+				break;
+			case sld_mcp::v1::VIEW_ENTITY_KIND_VERTEX:
+				if (ATL::CComQIPtr<IVertex> vertex(item.obj.p); vertex)
+				{
+					Eigen::Vector3d point;
+					if (ViewVertexPoint(vertex, viewPosition, point))
+						SetVec3(out->mutable_start(), point);
+				}
+				break;
+			case sld_mcp::v1::VIEW_ENTITY_KIND_SILHOUETTE:
+				if (ATL::CComQIPtr<ISilhouetteEdge> silhouette(item.obj.p); silhouette)
+				{
+					ATL::CComPtr<IMathPoint> start, end;
+					sld_mcp::v1::Vec3 p;
+					if (SUCCEEDED(silhouette->GetStartPoint(&start)) && MathPointCoordinates(start, &p))
+						*out->mutable_start() = p;
+					if (SUCCEEDED(silhouette->GetEndPoint(&end)) && MathPointCoordinates(end, &p))
+						*out->mutable_end() = p;
+				}
+				break;
+			default:
+				break;
+			}
+		}
+
+		// IView::ModelToViewTransform as where the model origin and unit axes
+		// land on the sheet (as DescribePlacement does for components), so its
+		// internal layout never matters.
+		void DescribeViewTransform(IView* view, IMathUtility* math, sld_mcp::v1::ViewInfo* info)
+		{
+			ATL::CComPtr<IMathTransform> xform;
+			if (FAILED(view->get_ModelToViewTransform(&xform)) || !xform)
+				return;
+			const Eigen::Vector3d unit[4] = { Eigen::Vector3d::Zero(), Eigen::Vector3d::UnitX(),
+				Eigen::Vector3d::UnitY(), Eigen::Vector3d::UnitZ() };
+			Eigen::Vector3d placed[4];
+			for (int i = 0; i < 4; ++i)
+				if (!TransformPoint(math, xform, unit[i], placed[i]))
+					return;
+			SetVec3(info->mutable_model_origin(), placed[0]);
+			SetVec3(info->mutable_model_x(), Eigen::Vector3d(placed[1] - placed[0]));
+			SetVec3(info->mutable_model_y(), Eigen::Vector3d(placed[2] - placed[0]));
+			SetVec3(info->mutable_model_z(), Eigen::Vector3d(placed[3] - placed[0]));
+		}
+
+		// Types of all of a view's annotations, and with `describe` each one.
+		template <typename Info>
+		void DescribeViewAnnotations(IView* view, bool describe, PersistIds& ids, ComponentList* components,
+			DrawingBudget& budget, Info* info)
+		{
+			for (const auto& annotation : ViewAnnotationList(view))
+			{
+				long type = 0;
+				annotation->GetType(&type);
+				info->add_annotation_types(static_cast<int32_t>(type));
+				if (!describe)
+					continue;
+				if (budget.annotations == 0)
+				{
+					budget.truncated = true;
+					continue;
+				}
+				--budget.annotations;
+				DescribeAnnotation(annotation, ids, components, info->add_annotations());
+			}
+		}
+
+		void DescribeView(IView* view, IModelDocExtension* drawingExt, IMathUtility* math, bool listEntities,
+			bool includeVertices, bool includeAnnotations, DrawingBudget& budget, sld_mcp::v1::ViewInfo* info)
+		{
+			info->set_name(ViewName(view));
+			info->set_type(static_cast<int32_t>(ViewType(view)));
+			ATL::CComBSTR text;
+			if (SUCCEEDED(view->GetOrientationName(&text)))
+				info->set_orientation(ToUtf8(text));
+			text.Empty();
+			if (SUCCEEDED(view->GetReferencedModelName(&text)))
+				info->set_model_file(ToUtf8(text));
+			text.Empty();
+			if (SUCCEEDED(view->get_ReferencedConfiguration(&text)))
+				info->set_configuration(ToUtf8(text));
+			VARIANT_BOOL loaded = VARIANT_FALSE;
+			if (SUCCEEDED(view->IsModelLoaded(&loaded)))
+				info->set_model_loaded(loaded != VARIANT_FALSE);
+
+			ATL::CComVariant ratio;
+			if (SUCCEEDED(view->get_ScaleRatio(&ratio)))
+				if (const std::vector<double> r = comvariant::ToDoubles(ratio); r.size() >= 2)
+				{
+					info->set_scale_numerator(r[0]);
+					info->set_scale_denominator(r[1]);
+				}
+			long useSheetScale = 0;
+			if (SUCCEEDED(view->get_UseSheetScale(&useSheetScale)))
+				info->set_uses_sheet_scale(useSheetScale != 0);
+			VARIANT_BOOL useParent = VARIANT_FALSE;
+			if (SUCCEEDED(view->get_UseParentScale(&useParent)))
+				info->set_uses_parent_scale(useParent != VARIANT_FALSE);
+			useParent = VARIANT_FALSE;
+			if (SUCCEEDED(view->GetUseParentDisplayMode(&useParent)))
+				info->set_uses_parent_display(useParent != VARIANT_FALSE);
+
+			// [xmin, ymin, xmax, ymax] and [x, y], sheet coordinates.
+			ATL::CComVariant outline;
+			if (SUCCEEDED(view->GetOutline(&outline)))
+				if (const std::vector<double> o = comvariant::ToDoubles(outline); o.size() >= 4)
+				{
+					const double lo[3] = { o[0], o[1], 0.0 }, hi[3] = { o[2], o[3], 0.0 };
+					SetVec3(info->mutable_outline()->mutable_min(), lo);
+					SetVec3(info->mutable_outline()->mutable_max(), hi);
+				}
+			ATL::CComVariant position;
+			Eigen::Vector2d viewPosition = Eigen::Vector2d::Zero();
+			if (SUCCEEDED(view->get_Position(&position)))
+				if (const std::vector<double> p = comvariant::ToDoubles(position); p.size() >= 2)
+				{
+					const double at[3] = { p[0], p[1], 0.0 };
+					SetVec3(info->mutable_position(), at);
+					viewPosition = Eigen::Vector2d(p[0], p[1]);
+				}
+			double angle = 0.0;
+			if (SUCCEEDED(view->get_Angle(&angle)) && std::isfinite(angle))
+				info->set_angle(angle);
+			info->set_display_mode(static_cast<int32_t>(ViewDisplayMode(view)));
+			ATL::CComPtr<IDispatch> baseDisp;
+			if (SUCCEEDED(view->GetBaseView(&baseDisp)) && baseDisp)
+				if (ATL::CComQIPtr<IView> base(baseDisp.p); base)
+					info->set_base_view(ViewName(base));
+			DescribeViewTransform(view, math, info);
+
+			const ViewModel model = ViewModelOf(view);
+			if (model.doc)
+				info->set_model_type(ToDocumentType(model.type));
+			// View entities (and what annotations are attached to) by the
+			// drawing's persist ids, components by the assembly's.
+			PersistIds ids(drawingExt);
+			PersistIds modelIds(model.ext);
+			std::optional<ComponentList> components;
+			if (model.type == swDocASSEMBLY)
+				components.emplace(modelIds, math, info->mutable_components(),
+					ATL::CComQIPtr<IAssemblyDoc>(model.doc.p));
+
+			if (listEntities)
+			{
+				info->set_entities_listed(true);
+				std::vector<sld_mcp::v1::ViewEntityKind> kinds = { sld_mcp::v1::VIEW_ENTITY_KIND_EDGE,
+					sld_mcp::v1::VIEW_ENTITY_KIND_SILHOUETTE };
+				if (includeVertices)
+					kinds.push_back(sld_mcp::v1::VIEW_ENTITY_KIND_VERTEX);
+				std::vector<ViewEntityItem> items;
+				for (const auto& component : ViewComponents(view, model))
+				{
+					const std::string componentPid = components ? components->Add(component) : std::string();
+					for (const auto kind : kinds)
+						if (!ListViewEntities(view, component, componentPid, kind, ids, budget.entities, items))
+							budget.truncated = true;
+				}
+				for (const auto& item : items)
+					DescribeViewEntity(item, viewPosition, ids, info->add_entities());
+			}
+			DescribeViewAnnotations(view, includeAnnotations, ids, components ? &*components : nullptr, budget, info);
+		}
+	}
+
+	void DescribeSheet(const DrawingSheet& sheet, const std::string& activeName, IModelDocExtension* drawingExt,
+		IMathUtility* math, const std::set<std::string>& entityViews, bool includeVertices, bool includeAnnotations,
+		DrawingBudget& budget, sld_mcp::v1::SheetInfo* info, bool describeSheetFormat)
+	{
+		info->set_name(sheet.name);
+		info->set_active(sheet.name == activeName);
+		info->set_paper_size(-1);
+		if (sheet.sheet)
+		{
+			if (SheetSetup setup; ReadSheetSetup(sheet.sheet, setup).ok())
+				SetSheetInfo(setup, info);
+			ATL::CComBSTR format;
+			if (SUCCEEDED(sheet.sheet->GetSheetFormatName(&format)))
+				info->set_sheet_format(ToUtf8(format));
+		}
+		for (const auto& view : sheet.views)
+			DescribeView(view, drawingExt, math, entityViews.count(ViewName(view)) > 0, includeVertices,
+				includeAnnotations, budget, info->add_views());
+		if (!sheet.sheetView)
+			return;
+		// The sheet's own list holds its sheet format's annotations too
+		// (the title block's notes); counted apart.
+		PersistIds ids(drawingExt);
+		for (const auto& annotation : ViewAnnotationList(sheet.sheetView))
+		{
+			long type = 0;
+			annotation->GetType(&type);
+			const bool format = AnnotationOwnerOf(annotation, nullptr) == sld_mcp::v1::ANNOTATION_OWNER_SHEET_FORMAT;
+			if (format)
+				info->add_sheet_format_annotation_types(static_cast<int32_t>(type));
+			else
+				info->add_annotation_types(static_cast<int32_t>(type));
+			if (!includeAnnotations || (format && !describeSheetFormat))
+				continue;
+			if (budget.annotations == 0)
+			{
+				budget.truncated = true;
+				continue;
+			}
+			--budget.annotations;
+			DescribeAnnotation(annotation, ids, nullptr, info->add_annotations());
+		}
+	}
+
+	grpc::Status ResolveDrawingRef(DrawingViewContext& ctx, const sld_mcp::v1::DrawingEntityRef& ref,
+		const std::string& where, ViewEntityItem& out)
+	{
+		ATL::CComPtr<IComponent2> component;
+		if (!ref.component_persist_id().empty())
+		{
+			if (ctx.componentList)
+				for (const auto& c : ctx.components)
+					if (c && ctx.componentList->Add(c) == ref.component_persist_id())
+					{
+						component = c;
+						break;
+					}
+			if (!component)
+				return grpc::Status(grpc::StatusCode::NOT_FOUND, where +
+					": its component isn't visible in " + ViewName(ctx.view) + " any more -- inspect the drawing again");
+		}
+		auto key = std::make_pair(static_cast<int>(ref.kind()), ref.component_persist_id());
+		auto it = ctx.entities.find(key);
+		if (it == ctx.entities.end())
+		{
+			std::vector<ViewEntityItem> items;
+			size_t unlimited = std::numeric_limits<size_t>::max();
+			ListViewEntities(ctx.view, component, ref.component_persist_id(), ref.kind(), *ctx.ids, unlimited, items);
+			it = ctx.entities.emplace(key, std::move(items)).first;
+		}
+		for (const auto& item : it->second)
+			if (item.persistId == ref.persist_id() && item.ordinal == ref.ordinal())
+			{
+				out = item;
+				return grpc::Status::OK;
+			}
+		return grpc::Status(grpc::StatusCode::NOT_FOUND, where + ": that entity isn't visible in " +
+			ViewName(ctx.view) + " any more (was the drawing or the model changed?) -- inspect the drawing again "
+			"for current ids");
+	}
+
+	bool SelectViewEntity(IView* view, const ViewEntityItem& item)
+	{
+		VARIANT_BOOL selected = VARIANT_FALSE;
+		if (SUCCEEDED(view->SelectEntity(item.obj, VARIANT_TRUE, &selected)) && selected)
+			return true;
+		if (ATL::CComQIPtr<ISilhouetteEdge> silhouette(item.obj.p); silhouette)
+		{
+			selected = VARIANT_FALSE;
+			return SUCCEEDED(silhouette->Select2(VARIANT_TRUE, nullptr, &selected)) && selected;
+		}
+		return false;
+	}
+
+	bool EqualsIgnoringCase(const std::string& a, const std::string& b)
+	{
+		return _wcsicmp(FromUtf8(a), FromUtf8(b)) == 0;
+	}
+
+	// SolidWorks refuses a sheet name another sheet has in any case.
+	bool SameSheetName(const std::string& a, const std::string& b)
+	{
+		return EqualsIgnoringCase(a, b);
+	}
+
+	const DrawingSheet* FindSheet(const std::vector<DrawingSheet>& sheets, const std::string& name)
+	{
+		for (const auto& s : sheets)
+			if (s.name == name)
+				return &s;
+		for (const auto& s : sheets)
+			if (SameSheetName(s.name, name))
+				return &s;
+		return nullptr;
+	}
+
+	std::string SheetList(const std::vector<DrawingSheet>& sheets)
+	{
+		std::string list;
+		for (const auto& s : sheets)
+			list += (list.empty() ? "" : ", ") + s.name;
+		return list;
 	}
 }

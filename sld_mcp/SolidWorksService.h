@@ -143,6 +143,12 @@ public:
 	grpc::Status SetupDrawingView(grpc::ServerContext* context,
 		const sld_mcp::v1::SetupDrawingViewRequest* request,
 		sld_mcp::v1::SetupDrawingViewResponse* response) override;
+	grpc::Status SetupDrawingAnnotation(grpc::ServerContext* context,
+		const sld_mcp::v1::SetupDrawingAnnotationRequest* request,
+		sld_mcp::v1::SetupDrawingAnnotationResponse* response) override;
+	grpc::Status DeleteDrawingAnnotations(grpc::ServerContext* context,
+		const sld_mcp::v1::DeleteDrawingAnnotationsRequest* request,
+		sld_mcp::v1::DeleteDrawingAnnotationsResponse* response) override;
 
 	grpc::Status DeleteFeatures(grpc::ServerContext* context,
 		const sld_mcp::v1::DeleteFeaturesRequest* request,

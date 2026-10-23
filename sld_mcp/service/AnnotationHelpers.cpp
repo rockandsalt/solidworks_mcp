@@ -229,9 +229,133 @@ namespace sld_mcp::service
 			out->set_format(static_cast<int32_t>(format));
 	}
 
+	sld_mcp::v1::AnnotationOwner AnnotationOwnerOf(IAnnotation* annotation, std::string* ownerName)
+	{
+		long type = -1;
+		if (FAILED(annotation->get_OwnerType(&type)))
+			return sld_mcp::v1::ANNOTATION_OWNER_UNSPECIFIED;
+		sld_mcp::v1::AnnotationOwner owner = sld_mcp::v1::ANNOTATION_OWNER_UNSPECIFIED;
+		switch (type)
+		{
+		case swAnnotationOwner_DrawingView:
+			owner = sld_mcp::v1::ANNOTATION_OWNER_VIEW;
+			break;
+		case swAnnotationOwner_DrawingSheet:
+			owner = sld_mcp::v1::ANNOTATION_OWNER_SHEET;
+			break;
+		case swAnnotationOwner_DrawingTemplate:
+			owner = sld_mcp::v1::ANNOTATION_OWNER_SHEET_FORMAT;
+			break;
+		default:
+			return sld_mcp::v1::ANNOTATION_OWNER_UNSPECIFIED;
+		}
+		if (ownerName)
+		{
+			ownerName->clear();
+			ATL::CComPtr<IDispatch> disp;
+			if (SUCCEEDED(annotation->get_Owner(&disp)) && disp)
+			{
+				ATL::CComBSTR name;
+				if (ATL::CComQIPtr<IView> view(disp.p); view && SUCCEEDED(view->GetName2(&name)))
+					*ownerName = ToUtf8(name);
+				else if (ATL::CComQIPtr<ISheet> sheet(disp.p); sheet && SUCCEEDED(sheet->GetName(&name)))
+					*ownerName = ToUtf8(name);
+				else
+				{
+					// The sheet format: neither of the above.
+					ATL::CComVariant result;
+					if ((InvokeByName(disp, L"GetName2", result) || InvokeByName(disp, L"GetName", result)) &&
+						result.vt == VT_BSTR)
+						*ownerName = ToUtf8(ATL::CComBSTR(result.bstrVal));
+				}
+			}
+		}
+		return owner;
+	}
+
+	void DescribeLeaders(IAnnotation* annotation, sld_mcp::v1::AnnotationInfo* info)
+	{
+		long style = 0;
+		VARIANT_BOOL hasLeader = VARIANT_FALSE;
+		if (SUCCEEDED(annotation->GetLeader(&hasLeader)) && hasLeader && SUCCEEDED(annotation->GetLeaderStyle(&style)))
+			info->set_leader_style(static_cast<int32_t>(style));
+		long count = 0;
+		if (FAILED(annotation->GetLeaderCount(&count)))
+			return;
+		for (long i = 0; i < count && i < kMaxAnnotationLeaders; ++i)
+		{
+			sld_mcp::v1::AnnotationLeader* leader = info->add_leaders();
+			ATL::CComVariant pointsVar;
+			if (SUCCEEDED(annotation->GetLeaderPointsAtIndex(i, &pointsVar)))
+			{
+				const std::vector<double> p = comvariant::ToDoubles(pointsVar);
+				for (size_t k = 0; k + 2 < p.size(); k += 3)
+					SetVec3(leader->add_points(), &p[k]);
+			}
+			long arrow = -1;
+			if (FAILED(annotation->GetArrowHeadStyleAtIndex(i, &arrow)))
+				arrow = -1;
+			leader->set_arrow(static_cast<int32_t>(arrow));
+		}
+	}
+
+	void DescribeNote(INote* note, IAnnotation* annotation, sld_mcp::v1::NoteInfo* out)
+	{
+		ATL::CComPtr<IDispatch> formatDisp;
+		if (SUCCEEDED(annotation->GetTextFormat(0, &formatDisp)) && formatDisp)
+			if (ATL::CComQIPtr<ITextFormat> format(formatDisp.p); format)
+			{
+				double height = 0.0;
+				if (SUCCEEDED(format->get_CharHeight(&height)))
+					out->set_text_height(height);
+				ATL::CComBSTR font;
+				if (SUCCEEDED(format->get_TypeFaceName(&font)))
+					out->set_font(ToUtf8(font));
+				VARIANT_BOOL flag = VARIANT_FALSE;
+				if (SUCCEEDED(format->get_Bold(&flag)))
+					out->set_bold(flag != VARIANT_FALSE);
+				flag = VARIANT_FALSE;
+				if (SUCCEEDED(format->get_Italic(&flag)))
+					out->set_italic(flag != VARIANT_FALSE);
+				flag = VARIANT_FALSE;
+				if (SUCCEEDED(format->get_Underline(&flag)))
+					out->set_underline(flag != VARIANT_FALSE);
+			}
+		VARIANT_BOOL flag = VARIANT_FALSE;
+		if (SUCCEEDED(annotation->GetUseDocTextFormat(0, &flag)))
+			out->set_document_font(flag != VARIANT_FALSE);
+		flag = VARIANT_FALSE;
+		if (SUCCEEDED(annotation->GetSmartArrowHeadStyle(&flag)))
+			out->set_smart_arrows(flag != VARIANT_FALSE);
+		long value = 0;
+		if (SUCCEEDED(note->GetTextJustification(&value)))
+			out->set_justification(static_cast<int32_t>(value));
+		double angle = 0.0;
+		if (SUCCEEDED(note->get_Angle(&angle)) && std::isfinite(angle))
+			out->set_angle(angle);
+		value = 0;
+		if (SUCCEEDED(note->GetBalloonStyle(&value)))
+			out->set_border(static_cast<int32_t>(value));
+		value = 0;
+		if (SUCCEEDED(note->GetBalloonSize(&value)))
+			out->set_border_size(static_cast<int32_t>(value));
+		ATL::CComVariant extent;
+		if (SUCCEEDED(note->GetExtent(&extent)))
+			if (const std::vector<double> box = comvariant::ToDoubles(extent); box.size() >= 6)
+				SetBox(out->mutable_extent(), box);
+	}
+
 	void DescribeAnnotation(IAnnotation* annotation, PersistIds& ids, ComponentList* components,
 		sld_mcp::v1::AnnotationInfo* info)
 	{
+		std::string ownerName;
+		info->set_owner(AnnotationOwnerOf(annotation, &ownerName));
+		info->set_owner_name(ownerName);
+		ATL::CComBSTR layer;
+		if (SUCCEEDED(annotation->get_Layer(&layer)))
+			info->set_layer(ToUtf8(layer));
+		DescribeLeaders(annotation, info);
+
 		ATL::CComBSTR name;
 		if (SUCCEEDED(annotation->GetName(&name)))
 			info->set_name(ToUtf8(name));
@@ -267,6 +391,10 @@ namespace sld_mcp::service
 		};
 		ATL::CComVariant attachedVar;
 		if (SUCCEEDED(annotation->GetAttachedEntities3(&attachedVar)))
+			for (const auto& disp : comvariant::ToDispatches(attachedVar))
+				attach(disp);
+		attachedVar.Clear();
+		if (info->attached_size() == 0 && SUCCEEDED(annotation->GetAttachedEntities2(&attachedVar)))
 			for (const auto& disp : comvariant::ToDispatches(attachedVar))
 				attach(disp);
 
@@ -334,6 +462,7 @@ namespace sld_mcp::service
 				ATL::CComBSTR text;
 				if (SUCCEEDED(note->GetText(&text)))
 					AddText(text, info);
+				DescribeNote(note, annotation, info->mutable_note());
 			}
 			break;
 		default:

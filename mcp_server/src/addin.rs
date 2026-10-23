@@ -357,6 +357,23 @@ impl AddinClient {
         Ok(client.setup_drawing_view(request).await?.into_inner())
     }
 
+    /// Positions in sheet meters (or a view's own coordinates).
+    pub async fn setup_drawing_annotation(
+        &self,
+        request: proto::SetupDrawingAnnotationRequest,
+    ) -> Result<proto::SetupDrawingAnnotationResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.setup_drawing_annotation(request).await?.into_inner())
+    }
+
+    pub async fn delete_drawing_annotations(
+        &self,
+        request: proto::DeleteDrawingAnnotationsRequest,
+    ) -> Result<proto::DeleteDrawingAnnotationsResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.delete_drawing_annotations(request).await?.into_inner())
+    }
+
     pub async fn delete_features(
         &self,
         request: proto::DeleteFeaturesRequest,

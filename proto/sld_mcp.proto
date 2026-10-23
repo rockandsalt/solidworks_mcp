@@ -265,6 +265,25 @@ service SolidWorks {
   // name another view has).
   rpc SetupDrawingView(SetupDrawingViewRequest) returns (SetupDrawingViewResponse);
 
+  // Adds a note to the active drawing -- in a view (it moves with the
+  // view), on a sheet, or in a sheet's format (the title block layer),
+  // optionally with leaders to view entities -- or changes one of its
+  // annotations: a note's text, look and leaders, any annotation's
+  // position, layer or view. SolidWorks puts a new note in whichever view
+  // is active and in the sheet format while that's being edited; the
+  // add-in sets that up and checks where the note ended up. All or
+  // nothing: a new note is deleted again, a changed one set back, if a
+  // step fails. FAILED_PRECONDITION if the active document isn't a
+  // drawing; NOT_FOUND for an unknown annotation, view, sheet or entity;
+  // INVALID_ARGUMENT for a name several annotations have (narrow it with
+  // sheet / view) or a change the annotation can't take.
+  rpc SetupDrawingAnnotation(SetupDrawingAnnotationRequest) returns (SetupDrawingAnnotationResponse);
+
+  // Deletes annotations (notes, dimensions, ...) of the active drawing by
+  // name, sheet-format ones included. Nothing is deleted if one isn't
+  // found.
+  rpc DeleteDrawingAnnotations(DeleteDrawingAnnotationsRequest) returns (DeleteDrawingAnnotationsResponse);
+
   // Deletes features of the active part or assembly the way the Delete key
   // does (IModelDocExtension::DeleteSelection2): sketches, extrudes, cuts,
   // holes, fillets, reference geometry, ..., and in an assembly its mates
@@ -1723,6 +1742,53 @@ message AnnotationInfo {
   AnnotationDimension dimension = 12;  // type 4
   AnnotationGtol gtol = 13;            // type 5
   string datum_label = 14;             // type 2: the datum letter, e.g. "A"
+
+  // Drawings: what the annotation belongs to, and that owner's name (the
+  // view's, the sheet's, the sheet format's).
+  AnnotationOwner owner = 15;
+  string owner_name = 16;
+  string layer = 17;  // empty: none
+  // IAnnotation::GetLeaderStyle: swLeaderStyle_e (0 none, 1 straight,
+  // 2 bent, 3 underlined, 4 spline) plus attachment flags (256 top,
+  // 512 center, 1024 bottom, 2048 nearest). 0 without leaders.
+  int32 leader_style = 18;
+  repeated AnnotationLeader leaders = 19;
+  NoteInfo note = 20;  // type 6
+}
+
+// What an annotation in a drawing belongs to (swAnnotationOwner_e). Where
+// it is is sheet coordinates either way; a view's annotations move with
+// the view, the sheet format's belong to the border / title block layer.
+enum AnnotationOwner {
+  ANNOTATION_OWNER_UNSPECIFIED = 0;  // parts and assemblies
+  ANNOTATION_OWNER_VIEW = 1;
+  ANNOTATION_OWNER_SHEET = 2;
+  ANNOTATION_OWNER_SHEET_FORMAT = 3;
+}
+
+message AnnotationLeader {
+  // From the text to the arrow tip (the last point). Sheet coordinates in
+  // drawings, model space in parts.
+  repeated Vec3 points = 1;
+  int32 arrow = 2;  // swArrowStyle_e; -1 if SolidWorks didn't say
+}
+
+message NoteInfo {
+  // The text's look (the first text format of the note).
+  double text_height = 1;  // meters
+  string font = 2;
+  bool bold = 3;
+  bool italic = 4;
+  bool underline = 5;
+  bool document_font = 6;  // follows the document's note font
+  int32 justification = 7;  // swTextJustification_e: 1 left, 2 center, 3 right
+  double angle = 8;         // radians, counterclockwise
+  int32 border = 9;         // swBalloonStyle_e: 0 none, 1 circle, 4 box, ...
+  int32 border_size = 10;   // swBalloonFit_e
+  // INote::GetExtent: the box around the text and its leaders, sheet
+  // coordinates.
+  Box3 extent = 11;
+  bool smart_arrows = 12;  // arrows chosen by SolidWorks (per-leader ones ignored)
 }
 
 message AnnotationDimension {
@@ -1813,6 +1879,9 @@ message InspectDrawingRequest {
   // Describe every view's (and sheet's) annotations. Otherwise only their
   // types are reported.
   bool include_annotations = 3;
+  // With include_annotations: the sheet formats' annotations (title
+  // blocks) are only counted, not described.
+  bool skip_sheet_format = 4;
 }
 
 message InspectDrawingResponse {
@@ -1841,9 +1910,12 @@ message SheetInfo {
   repeated ViewInfo views = 10;
   // Annotations on the sheet itself rather than in a view (notes, ...):
   // swAnnotationType_e of each, and with include_annotations, each
-  // described.
+  // described -- the sheet format's too (their owner says so).
   repeated int32 annotation_types = 11;
   repeated AnnotationInfo annotations = 12;
+  // swAnnotationType_e of each of the sheet format's annotations (the
+  // title block's notes, ...); not in annotation_types.
+  repeated int32 sheet_format_annotation_types = 13;
 }
 
 enum ViewEntityKind {
@@ -1907,6 +1979,10 @@ message ViewInfo {
   // from base_view.
   bool uses_parent_display = 24;
   bool uses_parent_scale = 25;
+  // The view's rotation on the sheet (IView::Angle), radians
+  // counterclockwise. The view's own coordinates (DrawingPoint) are at the
+  // model's size from model_origin, along the sheet's x / y turned by this.
+  double angle = 26;
 }
 
 // One thing visible in a drawing view.
@@ -2117,6 +2193,104 @@ message SetupDrawingViewResponse {
   ViewScale sheet_scale_before = 4;
   // The sheet SolidWorks shows.
   string active_sheet = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Drawing annotations: SetupDrawingAnnotation, DeleteDrawingAnnotations
+//
+// An annotation of a drawing belongs to a view (it moves with the view),
+// to a sheet, or to a sheet's format (the border / title block layer). Its
+// position is sheet coordinates whichever it belongs to; the sheet format's
+// coordinates are the sheet's (verified 2026-10-21). A DrawingPoint can
+// also be given in a view's own coordinates.
+
+// A point on a sheet: sheet coordinates (meters from the lower-left corner,
+// which are also the sheet format's), or with view_name that view's own
+// coordinates: meters at the model's size, from the model's origin as the
+// view shows it, x to the view's right and y up (the sheet's axes turned by
+// the view's angle) -- for a 1:2 view, 0.01 is 5 sheet mm.
+message DrawingPoint {
+  double x = 1;
+  double y = 2;
+  string view_name = 3;
+}
+
+message NoteStyle {
+  optional double text_height = 1;  // meters
+  optional string font = 2;
+  optional bool bold = 3;
+  optional bool italic = 4;
+  optional bool underline = 5;
+  // Back to the document's note font (not with the five above).
+  bool document_font = 6;
+  optional int32 justification = 7;  // swTextJustification_e 1..3
+  optional double angle = 8;         // radians
+  optional int32 border = 9;         // swBalloonStyle_e
+  optional int32 border_size = 10;   // swBalloonFit_e; with border
+}
+
+message SetupDrawingAnnotationRequest {
+  // The annotation to change (IAnnotation::GetName, e.g. "DetailItem12",
+  // "RD1@Drawing View1"); empty: add a note.
+  string name = 1;
+  // Add: the sheet a sheet or sheet-format note goes on (empty: the
+  // active sheet). Change: only look for `name` on this sheet.
+  string sheet_name = 2;
+  // Add: the view a view note goes in. Change: only look for `name` in
+  // this view.
+  string view_name = 3;
+  // Add: where the note belongs; UNSPECIFIED = the view given (or the
+  // view of leader_to), else the sheet.
+  AnnotationOwner owner = 4;
+  // Change: attach the annotation to this view (it then moves with it);
+  // its place on the sheet stays.
+  string attach_to_view = 5;
+  // Notes: the text ("\n" between lines).
+  optional string text = 6;
+  // Where the text's upper-left corner goes. Unset: a new view note goes
+  // just above its view's outline, a sheet (format) note in the sheet's
+  // middle; a changed annotation stays.
+  DrawingPoint position = 7;
+  // Change: shift by this much (sheet meters); not with position.
+  Vec3 move_by = 8;
+  // Notes: leaders, one to each entity (all in one view, which the note
+  // then belongs to). Add: the note's leaders; change: replace them (see
+  // SetupDrawingAnnotationResponse.replaced).
+  repeated DrawingEntityRef leader_to = 9;
+  // Where each leader_to entity is picked, so its arrow goes there: empty,
+  // or one per entity, on it. Unset (or a point that picks another
+  // entity): where SolidWorks puts the arrow, an end of the entity.
+  repeated DrawingPoint arrow_points = 10;
+  // swLeaderStyle_e 0 none, 1 straight, 2 bent, 3 underlined.
+  optional int32 leader_style = 11;
+  optional int32 arrow = 12;  // swArrowStyle_e, every leader
+  NoteStyle style = 13;
+  optional string layer = 14;  // "" = none
+}
+
+message SetupDrawingAnnotationResponse {
+  AnnotationInfo annotation = 1;
+  bool created = 2;
+  // The annotation's sheet with its views (no entities or annotations),
+  // for their outlines and own coordinates.
+  SheetInfo sheet = 3;
+  // Assemblies: the components the leaders' entities belong to.
+  repeated ComponentInfo components = 4;
+  string active_sheet = 5;
+  // A note's leaders are made with it: changing them makes a new note (the
+  // old one's text, look and place) and deletes the old one, named here.
+  string replaced = 6;
+}
+
+message DeleteDrawingAnnotationsRequest {
+  repeated string names = 1;  // at least one
+  string sheet_name = 2;      // only look on this sheet
+  string view_name = 3;       // only look in this view
+}
+
+message DeleteDrawingAnnotationsResponse {
+  // Each annotation as it was, in request order.
+  repeated AnnotationInfo deleted = 1;
 }
 
 // ---------------------------------------------------------------------------

@@ -44,7 +44,7 @@ fn dvec3(v: &proto::Vec3) -> DVec3 {
 }
 
 /// Sheet meters -> [x, y] in mm, to 0.01 mm.
-fn sheet_mm(p: DVec2) -> Value {
+pub fn sheet_mm(p: DVec2) -> Value {
     json!([round(p.x * MM_PER_M, 2), round(p.y * MM_PER_M, 2)])
 }
 
@@ -167,6 +167,21 @@ impl Cache {
         for name in names {
             self.outlines.remove(name);
         }
+    }
+
+    /// The sheet geometry inspect_drawing gave for a view entity id.
+    pub fn entity(&self, id: &str) -> Option<&EntityGeom> {
+        self.entities.get(id.trim())
+    }
+
+    /// The other entities of `view` inspect_drawing gave geometry for.
+    pub fn others_in<'a>(&'a self, view: &'a str, id: &'a str) -> impl Iterator<Item = &'a EntityGeom> + 'a {
+        self.entities.iter().filter(move |(k, g)| g.view == view && k.as_str() != id.trim()).map(|(_, g)| g)
+    }
+
+    /// A view's outline (min, max), sheet meters.
+    pub fn outline(&self, view: &str) -> Option<(DVec2, DVec2)> {
+        self.outlines.get(view).copied()
     }
 }
 
@@ -463,7 +478,7 @@ pub fn axes_text(view: &proto::ViewInfo) -> Option<String> {
     ))
 }
 
-fn annotation_counts(types: &[i32]) -> Value {
+pub fn annotation_counts(types: &[i32]) -> Value {
     let mut counts = Map::new();
     for t in types {
         let key = pmi::type_name(*t);
@@ -478,8 +493,13 @@ fn annotation_counts(types: &[i32]) -> Value {
 pub fn annotation_json(ids: &mut IdRegistry, view: Option<&str>, a: &proto::AnnotationInfo) -> Value {
     let mut obj = pmi::annotation_fields(a);
     // Dimensions in a drawing are driven by the model (or are reference
-    // dimensions); saying so on each is noise.
+    // dimensions); saying so on each is noise. Drawing notes all report PMI
+    // type "unknown" (4); none is imported.
     obj.remove("driven");
+    obj.remove("imported");
+    if let Some(owner) = owner_text(a) {
+        obj.insert("in".into(), json!(owner));
+    }
     let mut attached = Vec::new();
     let mut others = 0;
     for e in &a.attached {
@@ -518,6 +538,17 @@ pub fn annotation_json(ids: &mut IdRegistry, view: Option<&str>, a: &proto::Anno
     Value::Object(obj)
 }
 
+/// Where a drawing annotation belongs: "view Drawing View1", "sheet",
+/// "sheet_format"; None outside drawings.
+pub fn owner_text(a: &proto::AnnotationInfo) -> Option<String> {
+    match a.owner() {
+        proto::AnnotationOwner::View => Some(format!("view {}", a.owner_name)),
+        proto::AnnotationOwner::Sheet => Some("sheet".to_string()),
+        proto::AnnotationOwner::SheetFormat => Some("sheet_format".to_string()),
+        proto::AnnotationOwner::Unspecified => None,
+    }
+}
+
 // ---- inspect_drawing ----------------------------------------------------------
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
@@ -548,6 +579,8 @@ pub fn inspect_request(params: &InspectDrawingParams) -> proto::InspectDrawingRe
         entity_views: view.map(|v| vec![v.to_string()]).unwrap_or_default(),
         include_vertices: params.include_vertices,
         include_annotations: view.is_some() || params.list_annotations,
+        // Listed apart from the sheet's own only by inspect_drawing_annotations.
+        skip_sheet_format: true,
     }
 }
 
@@ -751,11 +784,21 @@ pub fn render_inspect(
             .collect();
         view_count += views.len();
         obj.insert("views".into(), Value::Array(views));
+        // The sheet's own list holds its sheet format's (title block)
+        // annotations too; the add-in counts them apart.
         if !sheet.annotation_types.is_empty() {
             obj.insert("sheet_annotation_counts".into(), annotation_counts(&sheet.annotation_types));
         }
-        if params.list_annotations && !sheet.annotations.is_empty() {
-            let list: Vec<Value> = sheet.annotations.iter().map(|a| annotation_json(ids, None, a)).collect();
+        if !sheet.sheet_format_annotation_types.is_empty() {
+            obj.insert(
+                "sheet_format_annotation_counts".into(),
+                annotation_counts(&sheet.sheet_format_annotation_types),
+            );
+        }
+        let own: Vec<&proto::AnnotationInfo> =
+            sheet.annotations.iter().filter(|a| a.owner() != proto::AnnotationOwner::SheetFormat).collect();
+        if params.list_annotations && !own.is_empty() {
+            let list: Vec<Value> = own.iter().map(|a| annotation_json(ids, None, a)).collect();
             obj.insert("sheet_annotations".into(), Value::Array(list));
         }
         sheets.push(Value::Object(obj));
@@ -824,7 +867,7 @@ fn intersection(a1: DVec2, b1: DVec2, a2: DVec2, b2: DVec2) -> Option<DVec2> {
 
 /// How far a ray from `from` along unit `dir` travels before leaving the
 /// box (0 if it starts outside).
-fn exit_distance(from: DVec2, dir: DVec2, lo: DVec2, hi: DVec2) -> f64 {
+pub fn exit_distance(from: DVec2, dir: DVec2, lo: DVec2, hi: DVec2) -> f64 {
     let inside = from.cmpge(lo).all() && from.cmple(hi).all();
     if !inside {
         return 0.0;

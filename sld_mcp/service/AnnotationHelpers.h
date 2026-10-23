@@ -57,6 +57,19 @@ namespace sld_mcp::service
 
 	void DescribeGtol(IGtol* gtol, sld_mcp::v1::AnnotationGtol* out);
 
+	constexpr long kMaxAnnotationLeaders = 50;
+
+	// What a drawing annotation belongs to (UNSPECIFIED outside drawings),
+	// and with `ownerName` that view's, sheet's or sheet format's name.
+	sld_mcp::v1::AnnotationOwner AnnotationOwnerOf(IAnnotation* annotation, std::string* ownerName);
+
+	// Leader style and each leader's points and arrow.
+	void DescribeLeaders(IAnnotation* annotation, sld_mcp::v1::AnnotationInfo* info);
+
+	// A note's look: its first text format, justification, angle, border,
+	// extent.
+	void DescribeNote(INote* note, IAnnotation* annotation, sld_mcp::v1::NoteInfo* out);
+
 	void DescribeAnnotation(IAnnotation* annotation, PersistIds& ids, ComponentList* components,
 		sld_mcp::v1::AnnotationInfo* info);
 }
