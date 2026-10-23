@@ -22,7 +22,8 @@ an area, and update it when you change the design or learn how SolidWorks
 actually behaves.
 
 ## Testing in SolidWorks (dev loop)
-Verify changes against real SolidWorks yourself; details in
+Verify changes against real SolidWorks yourself; starting and closing solidworks
+is slow and computationaly expensive. Consider doing as many test as possible in a single session. details in
 `docs/notes/devloop.md`:
 
 - `devloop\cycle.ps1 -Build all|addin|server|none -Scenario smoke,...`:
