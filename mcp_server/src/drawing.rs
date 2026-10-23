@@ -581,6 +581,7 @@ pub fn inspect_request(params: &InspectDrawingParams) -> proto::InspectDrawingRe
         include_annotations: view.is_some() || params.list_annotations,
         // Listed apart from the sheet's own only by inspect_drawing_annotations.
         skip_sheet_format: true,
+        include_tables: false,
     }
 }
 

@@ -374,6 +374,38 @@ impl AddinClient {
         Ok(client.delete_drawing_annotations(request).await?.into_inner())
     }
 
+    pub async fn setup_drawing_table(
+        &self,
+        request: proto::SetupDrawingTableRequest,
+    ) -> Result<proto::SetupDrawingTableResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.setup_drawing_table(request).await?.into_inner())
+    }
+
+    pub async fn add_balloons(
+        &self,
+        request: proto::AddBalloonsRequest,
+    ) -> Result<proto::AddBalloonsResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.add_balloons(request).await?.into_inner())
+    }
+
+    pub async fn draw_sheet_format(
+        &self,
+        request: proto::DrawSheetFormatRequest,
+    ) -> Result<proto::DrawSheetFormatResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.draw_sheet_format(request).await?.into_inner())
+    }
+
+    pub async fn custom_properties(
+        &self,
+        request: proto::CustomPropertiesRequest,
+    ) -> Result<proto::CustomPropertiesResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.custom_properties(request).await?.into_inner())
+    }
+
     pub async fn delete_features(
         &self,
         request: proto::DeleteFeaturesRequest,

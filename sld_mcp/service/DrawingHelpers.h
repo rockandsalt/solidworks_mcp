@@ -206,6 +206,72 @@ namespace sld_mcp::service
 		IMathUtility* math, const std::set<std::string>& entityViews, bool includeVertices, bool includeAnnotations,
 		DrawingBudget& budget, sld_mcp::v1::SheetInfo* info, bool describeSheetFormat = true);
 
+	// Which of the sheet and its format is being edited; SolidWorks puts a
+	// new note in the format while that's being edited, whatever view is
+	// active. Puts back the format mode the user had, if the sheet showing
+	// at the end is the one they had.
+	class EditModeScope
+	{
+	public:
+		explicit EditModeScope(IDrawingDoc* drawing) : m_drawing(drawing), m_sheet(ActiveSheetName(drawing))
+		{
+			VARIANT_BOOL editingSheet = VARIANT_TRUE;
+			if (SUCCEEDED(drawing->GetEditSheet(&editingSheet)))
+				m_userFormat = m_format = editingSheet == VARIANT_FALSE;
+		}
+		~EditModeScope()
+		{
+			const bool wanted = m_userFormat && ActiveSheetName(m_drawing) == m_sheet;
+			if (wanted != m_format)
+				Set(wanted);
+		}
+		EditModeScope(const EditModeScope&) = delete;
+		EditModeScope& operator=(const EditModeScope&) = delete;
+
+		// EditSheet also deactivates the active view.
+		void Set(bool format)
+		{
+			if (format)
+				m_drawing->EditTemplate();
+			else
+				m_drawing->EditSheet();
+			m_format = format;
+		}
+
+	private:
+		ATL::CComPtr<IDrawingDoc> m_drawing;
+		std::string m_sheet;
+		bool m_userFormat = false;
+		bool m_format = false;
+	};
+
+	// A DrawingPoint on the sheet: as given, or from a view's own
+	// coordinates (the model's size, from where the model origin lands on
+	// the sheet, along the sheet's axes turned by the view's angle).
+	grpc::Status ToSheetPoint(const std::vector<DrawingSheet>& sheets, IMathUtility* math,
+		const sld_mcp::v1::DrawingPoint& point, const std::string& what, Eigen::Vector2d& out);
+
+	// Cells listed per table (rows x columns); the rest is cut off
+	// (TableInfo.truncated).
+	constexpr long kMaxTableCells = 5000;
+
+	ATL::CComPtr<ITableAnnotation> TableOf(IAnnotation* annotation);
+
+	// A shown title is a row of its own above the table (SolidWorks' row 0):
+	// 1 then, else 0. Row indices on the wire leave it out.
+	long TitleRows(ITableAnnotation* table);
+
+	// A table's anchor, sizes, cells and, for a BOM, what it lists and which
+	// components each row counts.
+	void DescribeTable(ITableAnnotation* table, sld_mcp::v1::TableInfo* info);
+
+	// The sheet's tables (whether SolidWorks lists them under the sheet or
+	// a view), each once.
+	std::vector<ATL::CComPtr<ITableAnnotation>> SheetTables(const DrawingSheet& sheet);
+
+	// The sheet's tables and its format's straight sketch lines into `info`.
+	void DescribeSheetLayout(const DrawingSheet& sheet, sld_mcp::v1::SheetInfo* info);
+
 	// What finding and selecting entities of one view needs, built once per
 	// view per call.
 	struct DrawingViewContext
@@ -228,4 +294,9 @@ namespace sld_mcp::service
 
 	// Adds the entity to the selection (silhouettes through their own Select2).
 	bool SelectViewEntity(IView* view, const ViewEntityItem& item);
+
+	// Adds the entity to the selection with `mark`, picked at `at` (sheet
+	// meters) when given, through an ISelectData for the view.
+	bool SelectViewEntityAt(IModelDoc2* doc, IView* view, const ViewEntityItem& item,
+		const std::optional<Eigen::Vector2d>& at, long mark);
 }

@@ -150,6 +150,22 @@ public:
 		const sld_mcp::v1::DeleteDrawingAnnotationsRequest* request,
 		sld_mcp::v1::DeleteDrawingAnnotationsResponse* response) override;
 
+	grpc::Status SetupDrawingTable(grpc::ServerContext* context,
+		const sld_mcp::v1::SetupDrawingTableRequest* request,
+		sld_mcp::v1::SetupDrawingTableResponse* response) override;
+
+	grpc::Status AddBalloons(grpc::ServerContext* context,
+		const sld_mcp::v1::AddBalloonsRequest* request,
+		sld_mcp::v1::AddBalloonsResponse* response) override;
+
+	grpc::Status DrawSheetFormat(grpc::ServerContext* context,
+		const sld_mcp::v1::DrawSheetFormatRequest* request,
+		sld_mcp::v1::DrawSheetFormatResponse* response) override;
+
+	grpc::Status CustomProperties(grpc::ServerContext* context,
+		const sld_mcp::v1::CustomPropertiesRequest* request,
+		sld_mcp::v1::CustomPropertiesResponse* response) override;
+
 	grpc::Status DeleteFeatures(grpc::ServerContext* context,
 		const sld_mcp::v1::DeleteFeaturesRequest* request,
 		sld_mcp::v1::DeleteFeaturesResponse* response) override;

@@ -139,8 +139,11 @@ grpc::Status SolidWorksService::InspectDrawing(grpc::ServerContext* /*context*/,
 			[&](const ATL::CComPtr<IView>& view) { return entityViews.count(ViewName(view)) > 0; });
 		if (wanted)
 			sheetActivation.Show(sheet.name);
+		auto* info = response->add_sheets();
 		DescribeSheet(sheet, sheetActivation.Original(), ext, math, entityViews, request->include_vertices(),
-			request->include_annotations(), budget, response->add_sheets(), !request->skip_sheet_format());
+			request->include_annotations(), budget, info, !request->skip_sheet_format());
+		if (request->include_tables())
+			DescribeSheetLayout(sheet, info);
 	}
 	response->set_truncated(budget.truncated);
 	return grpc::Status::OK;

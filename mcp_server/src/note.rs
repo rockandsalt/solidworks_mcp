@@ -88,11 +88,11 @@ impl ViewFrame {
 }
 
 /// The frames of a sheet's views, by name.
-fn frames(sheet: &proto::SheetInfo) -> HashMap<String, ViewFrame> {
+pub fn frames(sheet: &proto::SheetInfo) -> HashMap<String, ViewFrame> {
     sheet.views.iter().filter_map(|v| Some((v.name.clone(), ViewFrame::of(v)?))).collect()
 }
 
-fn outline(view: &proto::ViewInfo) -> Option<(DVec2, DVec2)> {
+pub fn outline(view: &proto::ViewInfo) -> Option<(DVec2, DVec2)> {
     let b = view.outline.as_ref()?;
     let (lo, hi) = (b.min.as_ref()?, b.max.as_ref()?);
     Some((DVec2::new(lo.x, lo.y), DVec2::new(hi.x, hi.y)))
@@ -431,7 +431,7 @@ pub struct InspectDrawingAnnotationsParams {
     /// Only those that belong to: "view" (any view), "sheet" or "sheet_format".
     #[serde(default, rename = "in")]
     pub place: Option<Place>,
-    /// Only this kind: note, dimension, datum, gtol, surface_finish, center_mark, ...
+    /// Only this kind: note (balloons included), balloon, dimension, table, datum, gtol, surface_finish, center_mark, ...
     #[serde(default)]
     pub kind: Option<String>,
     /// Only those whose text contains this (any case).
@@ -904,6 +904,13 @@ pub fn annotation_entry(ids: &mut IdRegistry, frames: &HashMap<String, ViewFrame
             s.insert("border".into(), json!(b));
         }
         obj.insert("style".into(), Value::Object(s));
+        if !n.linked_text.is_empty() {
+            obj.insert("linked_text".into(), json!(n.linked_text));
+        }
+    }
+    if let Some(b) = &a.balloon {
+        obj.insert("type".into(), json!("balloon"));
+        obj.insert("balloon".into(), crate::table::balloon_json(b, a.note.as_ref().is_some_and(|n| n.border == 7)));
     }
     if !a.layer.is_empty() {
         obj.insert("layer".into(), json!(a.layer));
@@ -1153,7 +1160,9 @@ pub fn render_inspect(
                 _ => Place::Sheet,
             };
             if params.place.is_some_and(|p| p != place)
-                || (!kind.is_empty() && pmi::type_name(a.r#type) != kind)
+                || (!kind.is_empty()
+                    && pmi::type_name(a.r#type) != kind
+                    && !(kind == "balloon" && a.balloon.is_some()))
                 || (!contains.is_empty() && !a.text.iter().any(|t| t.to_lowercase().contains(&contains)))
             {
                 continue;

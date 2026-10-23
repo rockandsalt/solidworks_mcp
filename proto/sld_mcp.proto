@@ -284,6 +284,43 @@ service SolidWorks {
   // found.
   rpc DeleteDrawingAnnotations(DeleteDrawingAnnotationsRequest) returns (DeleteDrawingAnnotationsResponse);
 
+  // Adds a table to the active drawing -- a bill of materials of an
+  // assembly view, a hole table (the holes of a view with their X / Y from
+  // an origin vertex) or a general table -- or changes one of its tables:
+  // cell texts, rows added or deleted, column widths, title, position.
+  // Tables belong to their sheet; a BOM / hole table follows its view's
+  // model. All or nothing: a new table is deleted again, a changed one's
+  // cells put back, if a step fails. FAILED_PRECONDITION if the active
+  // document isn't a drawing; NOT_FOUND for an unknown table, view,
+  // sheet, entity or template; INVALID_ARGUMENT for a change the table
+  // can't take (a cell SolidWorks keeps linked, rows of a BOM).
+  rpc SetupDrawingTable(SetupDrawingTableRequest) returns (SetupDrawingTableResponse);
+
+  // Adds BOM balloons to an assembly view of the active drawing: every
+  // component (SolidWorks' Auto Balloon) or the components given, each
+  // with a leader to one of its edges. A balloon shows its component's
+  // item number in the drawing's BOM (or what `upper_text` asks for).
+  // All or nothing. FAILED_PRECONDITION if the active document isn't a
+  // drawing; NOT_FOUND for an unknown view, component or entity.
+  rpc AddBalloons(AddBalloonsRequest) returns (AddBalloonsResponse);
+
+  // Draws lines and notes into a sheet's format (the border / title block
+  // layer) on one drawing layer, which is made if it's missing; with
+  // `clear`, what that layer already has in the format is deleted first,
+  // so a border or title block can be drawn again. All or nothing: what
+  // was added is deleted again if a step fails (cleared items stay
+  // deleted). FAILED_PRECONDITION if the active document isn't a drawing;
+  // NOT_FOUND for an unknown sheet.
+  rpc DrawSheetFormat(DrawSheetFormatRequest) returns (DrawSheetFormatResponse);
+
+  // Reads and sets the custom properties (File > Properties) of the active
+  // document, or of the model a sheet of the active drawing takes its
+  // properties from (the model of its "custom property view", what
+  // $PRPSHEET in a title block shows). NOT_FOUND for an unknown sheet or
+  // a sheet without views; INVALID_ARGUMENT for a property SolidWorks
+  // won't take.
+  rpc CustomProperties(CustomPropertiesRequest) returns (CustomPropertiesResponse);
+
   // Deletes features of the active part or assembly the way the Delete key
   // does (IModelDocExtension::DeleteSelection2): sketches, extrudes, cuts,
   // holes, fillets, reference geometry, ..., and in an assembly its mates
@@ -1754,6 +1791,21 @@ message AnnotationInfo {
   int32 leader_style = 18;
   repeated AnnotationLeader leaders = 19;
   NoteInfo note = 20;  // type 6
+  BalloonInfo balloon = 21;  // a note that is a BOM balloon
+}
+
+message BalloonInfo {
+  // What the balloon shows above / below the split (a split circle's
+  // lower half), and what that is: swBalloonTextContent_e (0 custom,
+  // 1 item number, 2 quantity, 4 component reference, 6 part number,
+  // 7 file name, ...).
+  string upper_text = 1;
+  int32 upper_content = 2;
+  string lower_text = 3;
+  int32 lower_content = 4;
+  // The component its leader points at (from the annotation's attached
+  // entities; IComponent2::Name2 of the assembly's component).
+  string component = 5;
 }
 
 // What an annotation in a drawing belongs to (swAnnotationOwner_e). Where
@@ -1789,6 +1841,9 @@ message NoteInfo {
   // coordinates.
   Box3 extent = 11;
   bool smart_arrows = 12;  // arrows chosen by SolidWorks (per-leader ones ignored)
+  // The text as typed when it holds property links (INote::
+  // PropertyLinkedText), e.g. "$PRP:\"DrawnBy\""; empty otherwise.
+  string linked_text = 13;
 }
 
 message AnnotationDimension {
@@ -1882,6 +1937,9 @@ message InspectDrawingRequest {
   // With include_annotations: the sheet formats' annotations (title
   // blocks) are only counted, not described.
   bool skip_sheet_format = 4;
+  // Describe every sheet's tables (BOMs, hole tables, general tables) and
+  // list its sheet format's lines (SheetInfo.tables / format_lines).
+  bool include_tables = 5;
 }
 
 message InspectDrawingResponse {
@@ -1916,6 +1974,68 @@ message SheetInfo {
   // swAnnotationType_e of each of the sheet format's annotations (the
   // title block's notes, ...); not in annotation_types.
   repeated int32 sheet_format_annotation_types = 13;
+  // With include_tables: the sheet's tables (also in annotations, as type
+  // 14) and the sheet format's sketch lines (border, title block grid).
+  repeated TableInfo tables = 14;
+  repeated FormatLine format_lines = 15;
+}
+
+// A straight line of a sheet format's sketch, sheet coordinates (z = 0).
+message FormatLine {
+  Vec3 start = 1;
+  Vec3 end = 2;
+  string layer = 3;  // empty: none
+}
+
+// A table of a drawing (ITableAnnotation).
+message TableInfo {
+  // The table's annotation name (IAnnotation::GetName), e.g. "DetailItem7":
+  // what SetupDrawingTable and DeleteDrawingAnnotations take.
+  string name = 1;
+  // swTableAnnotationType_e: 0 general, 1 hole table, 2 bill of materials,
+  // 3 revision table, 4 weldment cut list, 5 title block table, ...
+  int32 type = 2;
+  AnnotationOwner owner = 3;
+  string owner_name = 4;
+  // The anchor corner's position on the sheet (sheet meters) and which
+  // corner it is: swBOMConfigurationAnchorType_e 1 top left, 2 top right,
+  // 3 bottom left, 4 bottom right.
+  Vec3 position = 5;
+  int32 anchor = 6;
+  // Every column / row, hidden ones included (meters; a hidden one's size
+  // is what it'd take when shown).
+  repeated double column_widths = 7;
+  repeated double row_heights = 8;
+  repeated bool column_hidden = 9;
+  // swTableColumnTypes_e per column: 0 user defined, 101 X location,
+  // 102 Y location, 103 tag, 104 quantity, 105 size, 201 part number,
+  // 202 item number, 203 quantity, 204 custom property, ...
+  repeated int32 column_types = 10;
+  // Custom property a BOM column shows (swBomTableColumnType_CustomProperty).
+  repeated string column_properties = 11;
+  repeated TableRow rows = 12;
+  int32 header_rows = 13;  // rows at the top that are the table's header
+  string title = 14;       // empty: no title shown
+  string layer = 15;
+  // BOM: swBomType_e (1 parts only, 2 top level only, 3 indented), the
+  // assembly and configuration it lists.
+  int32 bom_type = 16;
+  string bom_model_file = 17;
+  string bom_configuration = 18;
+  string bom_feature = 19;  // its feature, e.g. "Bill of Materials1"
+  bool truncated = 20;      // rows / cells cut off at the add-in's limit
+  // A shown title is a row of its own above the table's rows (SolidWorks
+  // counts it as row 0); it's left out of `rows` / `row_heights`, and row
+  // indices (TableCell.row, delete_rows) don't count it either.
+  double title_height = 21;
+}
+
+message TableRow {
+  // What each column displays (DisplayedText2: links evaluated).
+  repeated string cells = 1;
+  bool hidden = 2;
+  // BOM: the components the row counts (IComponent2::Name2).
+  repeated string components = 3;
 }
 
 enum ViewEntityKind {
@@ -2291,6 +2411,214 @@ message DeleteDrawingAnnotationsRequest {
 message DeleteDrawingAnnotationsResponse {
   // Each annotation as it was, in request order.
   repeated AnnotationInfo deleted = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Drawing tables and balloons: SetupDrawingTable, AddBalloons
+
+enum TableKind {
+  TABLE_KIND_UNSPECIFIED = 0;
+  // Bill of materials of an assembly view (IView::InsertBomTable6).
+  TABLE_KIND_BOM = 1;
+  // Hole table: the holes picked in a view, tagged, with their X / Y from
+  // an origin vertex and their size (IView::InsertHoleTable3).
+  TABLE_KIND_HOLE = 2;
+  // Rows x columns of text (IDrawingDoc::InsertTableAnnotation2).
+  TABLE_KIND_GENERAL = 3;
+}
+
+message TableCell {
+  int32 row = 1;  // 0 = the top row (a header row counts)
+  int32 column = 2;
+  string text = 3;
+}
+
+message TableRowText {
+  repeated string cells = 1;  // from the first column on
+}
+
+message SetupDrawingTableRequest {
+  // The table to change (TableInfo.name); empty: add one of `kind`.
+  string name = 1;
+  // Add: the sheet a general table goes on (empty: the active sheet; a
+  // BOM / hole table goes on its view's sheet). Change: only look there.
+  string sheet_name = 2;
+  TableKind kind = 3;
+  // Add, BOM / hole table: the view it's of.
+  string view_name = 4;
+  // Where the anchor corner goes, sheet meters (z ignored). Add: unset =
+  // where SolidWorks puts it (the add-in uses the sheet's upper left).
+  // Change: unset = stays.
+  Vec3 position = 5;
+  // swBOMConfigurationAnchorType_e 1..4: which corner `position` is.
+  // 0: add = top left; change = keep.
+  int32 anchor = 6;
+  // Add: the table template (.sldbomtbt / .sldholtbt / .sldtbt), an
+  // absolute path or a file name looked up in Tools > Options > File
+  // Locations. Empty: bom-standard / standard hole table--letters / none.
+  string template_file = 7;
+  // Add, BOM: swBomType_e (1 parts only, 2 top level only, 3 indented;
+  // 0 = top level) and the configuration (empty = the view's).
+  int32 bom_type = 8;
+  string configuration = 9;
+  // Add, hole table: the origin X / Y are measured from (a vertex of the
+  // view), the holes' edges (circles seen face-on, one per hole), the
+  // first tag ("A" or "1"; empty = the template's).
+  DrawingEntityRef hole_origin = 10;
+  repeated DrawingEntityRef hole_edges = 11;
+  string start_tag = 12;
+  // Add, general: rows x columns (both >= 1).
+  int32 rows = 13;
+  int32 columns = 14;
+  // Cell texts to set (after add_rows are added).
+  repeated TableCell cells = 15;
+  // General tables: rows added at the bottom, with their texts.
+  repeated TableRowText add_rows = 16;
+  // Change: rows to delete, as indices before the change.
+  repeated int32 delete_rows = 17;
+  // Column widths, meters; 0 = keep. Fewer than the columns: the rest kept.
+  repeated double column_widths = 18;
+  optional string title = 19;  // "" hides the title
+  optional string layer = 20;  // "" = none
+}
+
+message SetupDrawingTableResponse {
+  TableInfo table = 1;
+  bool created = 2;
+  // The table's sheet with its views and tables (no entities or
+  // annotations), for placement.
+  SheetInfo sheet = 3;
+  string active_sheet = 4;
+  // Add, hole table: the tags SolidWorks put on the holes (notes in the
+  // view), e.g. "A1".
+  repeated AnnotationInfo hole_tags = 5;
+}
+
+message BalloonTarget {
+  // A component of the view's assembly by name (IComponent2::Name2, as
+  // inspect_drawing lists components, e.g. "bracket-1"), or an entity of
+  // the view (its component is ballooned, the leader goes to it).
+  string component = 1;
+  DrawingEntityRef entity = 2;
+  // entity only: where it's picked, so the arrow goes there.
+  DrawingPoint arrow_point = 3;
+  // Where the balloon goes (its center); unset = where SolidWorks puts it.
+  DrawingPoint position = 4;
+}
+
+message AddBalloonsRequest {
+  string view_name = 1;
+  // Empty: every component of the view (Auto Balloon). Otherwise one
+  // balloon per target.
+  repeated BalloonTarget targets = 2;
+  // Auto: swBalloonLayoutType_e (1 square, 2 circle, 3 top, 4 bottom,
+  // 5 right, 6 left); 0 = SolidWorks' default.
+  int32 layout = 3;
+  // Auto: one balloon per instance, not only one per BOM item.
+  bool every_instance = 4;
+  // swBalloonStyle_e (1 circular, 4 box, 7 split circle, ...); swBalloonFit_e
+  // (0 tightest .. 5 five characters); unset = the document's.
+  optional int32 style = 5;
+  optional int32 size = 6;
+  // swBalloonTextContent_e of the text (split styles: of each half), with
+  // the text itself for 0 (custom). Unset = item number (lower: quantity).
+  optional int32 upper_content = 7;
+  string upper_text = 8;
+  optional int32 lower_content = 9;
+  string lower_text = 10;
+  optional string layer = 11;
+}
+
+message AddBalloonsResponse {
+  repeated AnnotationInfo balloons = 1;
+  // The view's sheet with its views and tables (no entities or annotations).
+  SheetInfo sheet = 2;
+  // The components the balloons' leaders go to.
+  repeated ComponentInfo components = 3;
+  string active_sheet = 4;
+  // Bills of materials of the view's assembly on the drawing (their
+  // TableInfo.name); balloons show item numbers from these.
+  repeated string boms = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Sheet formats and custom properties: DrawSheetFormat, CustomProperties
+
+message FormatNote {
+  string text = 1;  // may hold property links, e.g. "$PRP:\"DrawnBy\""
+  // Top of the text: its left end (justification 1), middle (2) or right
+  // end (3). Sheet meters.
+  Vec3 position = 2;
+  double text_height = 3;  // meters; 0 = the document's
+  int32 justification = 4;  // swTextJustification_e; 0 = left
+  bool bold = 5;
+  double angle = 6;  // radians
+  string font = 7;   // empty: the document's
+  // Make it a title block field (Edit Sheet Format > Title Block Fields:
+  // ISheet::InsertTitleBlock), so the user can fill it in on the sheet.
+  bool field = 8;
+}
+
+message DrawSheetFormatRequest {
+  string sheet_name = 1;  // empty: the active sheet
+  // The drawing layer everything goes on (required). Made if missing,
+  // with layer_color (0x00BBGGRR) and layer_weight (swLineWeights_e:
+  // 0 thin, 1 normal, 2 thick, 3..7 thicker).
+  string layer = 2;
+  int32 layer_color = 3;
+  int32 layer_weight = 4;
+  // Delete the layer's sketch lines and notes in the format first.
+  bool clear = 5;
+  repeated FormatLine lines = 6;  // their layer field is ignored
+  repeated FormatNote notes = 7;
+}
+
+message DrawSheetFormatResponse {
+  int32 lines_deleted = 1;
+  int32 notes_deleted = 2;
+  int32 lines_added = 3;
+  repeated AnnotationInfo notes = 4;  // the notes added, in request order
+  // The sheet with its views, tables and format lines (no entities or
+  // annotations).
+  SheetInfo sheet = 5;
+  string active_sheet = 6;
+  // Title block fields defined (notes with `field`); otherwise why not.
+  int32 fields_defined = 7;
+  string fields_problem = 8;
+  bool layer_created = 9;
+}
+
+message CustomProperty {
+  string name = 1;
+  // The value as typed (may be an expression, e.g. "\"SW-Mass@part.SLDPRT\"")
+  // and as evaluated.
+  string value = 2;
+  string resolved = 3;
+  int32 type = 4;  // swCustomInfoType_e: 30 text, 64 date, 3 number, ...
+}
+
+message CustomPropertiesRequest {
+  // Whose properties: empty = the active document's; with a drawing
+  // active, `sheet_name` = the model that sheet's custom property view
+  // shows ("*" = the active sheet's).
+  string sheet_name = 1;
+  // A configuration's own properties; empty = the file's.
+  string configuration = 2;
+  // Set (added if missing, as text); an empty name is refused.
+  repeated CustomProperty set = 3;
+  repeated string remove = 4;
+  // Instead of the active document: an open document by its title or full
+  // path (e.g. a part a BOM lists, for its Description). Not with
+  // sheet_name.
+  string document = 5;
+}
+
+message CustomPropertiesResponse {
+  // The document whose properties these are.
+  Document document = 1;
+  string configuration = 2;
+  // Every property after the change, in SolidWorks' order.
+  repeated CustomProperty properties = 3;
 }
 
 // ---------------------------------------------------------------------------

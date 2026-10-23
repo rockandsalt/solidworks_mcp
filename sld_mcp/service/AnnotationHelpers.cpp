@@ -343,6 +343,49 @@ namespace sld_mcp::service
 		if (SUCCEEDED(note->GetExtent(&extent)))
 			if (const std::vector<double> box = comvariant::ToDoubles(extent); box.size() >= 6)
 				SetBox(out->mutable_extent(), box);
+		ATL::CComBSTR linked;
+		if (SUCCEEDED(note->get_PropertyLinkedText(&linked)) && linked.Length() > 0 && wcsstr(linked, L"$PRP"))
+			out->set_linked_text(ToUtf8(linked));
+	}
+
+	void DescribeBalloon(INote* note, IAnnotation* annotation, sld_mcp::v1::AnnotationInfo* info)
+	{
+		VARIANT_BOOL bom = VARIANT_FALSE;
+		if (FAILED(note->IsBomBalloon(&bom)) || !bom)
+			return;
+		auto* out = info->mutable_balloon();
+		ATL::CComBSTR upper, lower;
+		if (SUCCEEDED(note->GetBomBalloonText(VARIANT_TRUE, &upper)))
+			out->set_upper_text(ToUtf8(upper));
+		if (SUCCEEDED(note->GetBomBalloonText(VARIANT_FALSE, &lower)))
+			out->set_lower_text(ToUtf8(lower));
+		long content = 0;
+		if (SUCCEEDED(note->GetBomBalloonTextStyle(VARIANT_TRUE, &content)))
+			out->set_upper_content(static_cast<int32_t>(content));
+		content = 0;
+		if (SUCCEEDED(note->GetBomBalloonTextStyle(VARIANT_FALSE, &content)))
+			out->set_lower_content(static_cast<int32_t>(content));
+		// The component: the attached entity's (a drawing-side stand-in whose
+		// Name2 has the view's root first, "pair-1/block-2"; the last part is
+		// the assembly's own name at the top level).
+		ATL::CComVariant attached;
+		if (SUCCEEDED(annotation->GetAttachedEntities3(&attached)))
+			for (const auto& disp : comvariant::ToDispatches(attached))
+			{
+				ATL::CComPtr<IComponent2> component;
+				if (ATL::CComQIPtr<IEntity> entity(disp.p); entity)
+				{
+					ATL::CComPtr<IDispatch> c;
+					if (SUCCEEDED(entity->GetComponent(&c)) && c)
+						component = ATL::CComQIPtr<IComponent2>(c.p);
+				}
+				ATL::CComBSTR name;
+				if (component && SUCCEEDED(component->get_Name2(&name)))
+				{
+					out->set_component(ToUtf8(name));
+					break;
+				}
+			}
 	}
 
 	void DescribeAnnotation(IAnnotation* annotation, PersistIds& ids, ComponentList* components,
@@ -463,6 +506,7 @@ namespace sld_mcp::service
 				if (SUCCEEDED(note->GetText(&text)))
 					AddText(text, info);
 				DescribeNote(note, annotation, info->mutable_note());
+				DescribeBalloon(note, annotation, info);
 			}
 			break;
 		default:

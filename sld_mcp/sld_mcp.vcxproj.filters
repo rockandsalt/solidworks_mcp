@@ -135,6 +135,12 @@
     <ClCompile Include="service\DrawingAnnotations.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>
+    <ClCompile Include="service\DrawingTables.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\SheetFormats.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
     <ClCompile Include="service\DrawingHelpers.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>

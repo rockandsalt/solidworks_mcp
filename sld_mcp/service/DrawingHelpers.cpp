@@ -768,6 +768,30 @@ namespace sld_mcp::service
 		return false;
 	}
 
+	bool SelectViewEntityAt(IModelDoc2* doc, IView* view, const ViewEntityItem& item,
+		const std::optional<Eigen::Vector2d>& at, long mark)
+	{
+		ATL::CComPtr<ISelectionMgr> selections;
+		ATL::CComPtr<ISelectData> data;
+		if (FAILED(doc->get_ISelectionManager(&selections)) || !selections ||
+			FAILED(selections->CreateSelectData(&data)) || !data)
+			return false;
+		data->put_Mark(mark);
+		data->put_View(view);
+		if (at)
+		{
+			data->put_X(at->x());
+			data->put_Y(at->y());
+			data->put_Z(0.0);
+		}
+		VARIANT_BOOL selected = VARIANT_FALSE;
+		if (ATL::CComQIPtr<ISilhouetteEdge> silhouette(item.obj.p); silhouette)
+			silhouette->Select2(VARIANT_TRUE, data, &selected);
+		else if (ATL::CComQIPtr<IEntity> entity(item.obj.p); entity)
+			entity->Select4(VARIANT_TRUE, data, &selected);
+		return selected != VARIANT_FALSE;
+	}
+
 	bool EqualsIgnoringCase(const std::string& a, const std::string& b)
 	{
 		return _wcsicmp(FromUtf8(a), FromUtf8(b)) == 0;
@@ -796,5 +820,233 @@ namespace sld_mcp::service
 		for (const auto& s : sheets)
 			list += (list.empty() ? "" : ", ") + s.name;
 		return list;
+	}
+
+	grpc::Status ToSheetPoint(const std::vector<DrawingSheet>& sheets, IMathUtility* math,
+		const sld_mcp::v1::DrawingPoint& point, const std::string& what, Eigen::Vector2d& out)
+	{
+		if (!std::isfinite(point.x()) || !std::isfinite(point.y()))
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, what + " must be finite");
+		if (point.view_name().empty())
+		{
+			out = Eigen::Vector2d(point.x(), point.y());
+			return grpc::Status::OK;
+		}
+		ATL::CComPtr<IView> view;
+		std::string sheetName;
+		if (grpc::Status status = FindDrawingView(sheets, point.view_name(), view, sheetName); !status.ok())
+			return status;
+		ATL::CComPtr<IMathTransform> xform;
+		Eigen::Vector3d origin;
+		if (FAILED(view->get_ModelToViewTransform(&xform)) || !xform ||
+			!TransformPoint(math, xform, Eigen::Vector3d::Zero(), origin))
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"SolidWorks didn't say where " + point.view_name() + "'s model origin is: give sheet coordinates");
+		double scale = 1.0;
+		ATL::CComVariant ratio;
+		if (SUCCEEDED(view->get_ScaleRatio(&ratio)))
+			if (const std::vector<double> r = comvariant::ToDoubles(ratio); r.size() >= 2 && r[1] > 0.0)
+				scale = r[0] / r[1];
+		double angle = 0.0;
+		if (FAILED(view->get_Angle(&angle)) || !std::isfinite(angle))
+			angle = 0.0;
+		out = origin.head<2>() + scale * (Eigen::Rotation2Dd(angle) * Eigen::Vector2d(point.x(), point.y()));
+		return grpc::Status::OK;
+	}
+
+	long TitleRows(ITableAnnotation* table)
+	{
+		VARIANT_BOOL visible = VARIANT_FALSE;
+		return SUCCEEDED(table->get_TitleVisible(&visible)) && visible ? 1 : 0;
+	}
+
+	ATL::CComPtr<ITableAnnotation> TableOf(IAnnotation* annotation)
+	{
+		long type = 0;
+		ATL::CComPtr<IDispatch> specific;
+		if (!annotation || FAILED(annotation->GetType(&type)) || type != swTableAnnotation ||
+			FAILED(annotation->GetSpecificAnnotation(&specific)) || !specific)
+			return {};
+		ATL::CComQIPtr<ITableAnnotation> table(specific.p);
+		return ATL::CComPtr<ITableAnnotation>(table);
+	}
+
+	void DescribeTable(ITableAnnotation* table, sld_mcp::v1::TableInfo* info)
+	{
+		ATL::CComPtr<IAnnotation> annotation;
+		if (SUCCEEDED(table->GetAnnotation(&annotation)) && annotation)
+		{
+			ATL::CComBSTR name;
+			if (SUCCEEDED(annotation->GetName(&name)))
+				info->set_name(ToUtf8(name));
+			std::string ownerName;
+			info->set_owner(AnnotationOwnerOf(annotation, &ownerName));
+			info->set_owner_name(ownerName);
+			ATL::CComVariant positionVar;
+			if (SUCCEEDED(annotation->GetPosition(&positionVar)))
+				if (const std::vector<double> p = comvariant::ToDoubles(positionVar); p.size() >= 3)
+					SetVec3(info->mutable_position(), p.data());
+			ATL::CComBSTR layer;
+			if (SUCCEEDED(annotation->get_Layer(&layer)))
+				info->set_layer(ToUtf8(layer));
+		}
+		long value = 0;
+		if (SUCCEEDED(table->get_Type(&value)))
+			info->set_type(static_cast<int32_t>(value));
+		value = 0;
+		if (SUCCEEDED(table->get_AnchorType(&value)))
+			info->set_anchor(static_cast<int32_t>(value));
+		value = 0;
+		if (SUCCEEDED(table->GetHeaderCount(&value)))
+			info->set_header_rows(static_cast<int32_t>(value));
+		VARIANT_BOOL flag = VARIANT_FALSE;
+		ATL::CComBSTR title;
+		const long titleRows = TitleRows(table);
+		if (titleRows > 0 && SUCCEEDED(table->get_Title(&title)))
+		{
+			info->set_title(ToUtf8(title));
+			double height = 0.0;
+			table->GetRowHeight(0, &height);
+			info->set_title_height(height);
+		}
+
+		long rows = 0, columns = 0;
+		table->get_TotalRowCount(&rows);
+		table->get_TotalColumnCount(&columns);
+		ATL::CComQIPtr<IBomTableAnnotation> bom(table);
+		for (long c = 0; c < columns; ++c)
+		{
+			double width = 0.0;
+			table->GetColumnWidth(c, &width);
+			info->add_column_widths(width);
+			flag = VARIANT_FALSE;
+			table->get_ColumnHidden(c, &flag);
+			info->add_column_hidden(flag != VARIANT_FALSE);
+			ATL::CComVariant propertyData;
+			long status = 0, type = 0;
+			if (FAILED(table->GetColumnType3(c, VARIANT_TRUE, &propertyData, &status, &type)))
+				type = 0;
+			info->add_column_types(static_cast<int32_t>(type));
+			ATL::CComBSTR property;
+			if (bom && type == swBomTableColumnType_CustomProperty)
+				bom->GetColumnCustomProperty(c, &property);
+			info->add_column_properties(ToUtf8(property));
+		}
+
+		ATL::CComBSTR configuration;
+		if (bom)
+		{
+			ATL::CComPtr<IBomFeature> feature;
+			if (SUCCEEDED(bom->get_BomFeature(&feature)) && feature)
+			{
+				long type = 0;
+				if (SUCCEEDED(feature->get_TableType(&type)))
+					info->set_bom_type(static_cast<int32_t>(type));
+				ATL::CComBSTR model, featureName;
+				if (SUCCEEDED(feature->GetReferencedModelName(&model)))
+					info->set_bom_model_file(ToUtf8(model));
+				if (SUCCEEDED(feature->get_Name(&featureName)))
+					info->set_bom_feature(ToUtf8(featureName));
+				// The configuration listed: the first of the BOM's (a BOM can
+				// list several, one quantity column each).
+				ATL::CComVariant visible, names;
+				if (SUCCEEDED(feature->GetConfigurations(VARIANT_TRUE, &visible, &names)))
+					if (const std::vector<ATL::CComBSTR> list = comvariant::ToBstrs(names); !list.empty())
+						configuration = list[0];
+				info->set_bom_configuration(ToUtf8(configuration));
+			}
+		}
+
+		long cells = 0;
+		for (long r = titleRows; r < rows; ++r)
+		{
+			if (cells + columns > kMaxTableCells)
+			{
+				info->set_truncated(true);
+				break;
+			}
+			auto* row = info->add_rows();
+			double height = 0.0;
+			table->GetRowHeight(r, &height);
+			info->add_row_heights(height);
+			flag = VARIANT_FALSE;
+			table->get_RowHidden(r, &flag);
+			row->set_hidden(flag != VARIANT_FALSE);
+			for (long c = 0; c < columns; ++c, ++cells)
+			{
+				ATL::CComBSTR text;
+				table->get_DisplayedText2(r, c, VARIANT_TRUE, &text);
+				row->add_cells(ToUtf8(text));
+			}
+			ATL::CComVariant components;
+			if (bom && r - titleRows >= info->header_rows() && SUCCEEDED(bom->GetComponents2(r, configuration, &components)))
+				for (const auto& disp : comvariant::ToDispatches(components))
+					if (ATL::CComQIPtr<IComponent2> component(disp.p); component)
+					{
+						ATL::CComBSTR name;
+						if (SUCCEEDED(component->get_Name2(&name)))
+							row->add_components(ToUtf8(name));
+					}
+		}
+	}
+
+	std::vector<ATL::CComPtr<ITableAnnotation>> SheetTables(const DrawingSheet& sheet)
+	{
+		std::vector<ATL::CComPtr<ITableAnnotation>> out;
+		std::vector<ATL::CComPtr<IUnknown>> seen;
+		auto consider = [&](IView* view) {
+			for (const auto& annotation : ViewAnnotationList(view))
+				if (ATL::CComPtr<ITableAnnotation> table = TableOf(annotation))
+				{
+					if (std::any_of(seen.begin(), seen.end(), [&](const ATL::CComPtr<IUnknown>& s) {
+						return SameObject(s, table); }))
+						continue;
+					seen.push_back(ATL::CComPtr<IUnknown>(table));
+					out.push_back(table);
+				}
+		};
+		if (sheet.sheetView)
+			consider(sheet.sheetView);
+		for (const auto& view : sheet.views)
+			consider(view);
+		return out;
+	}
+
+	void DescribeSheetLayout(const DrawingSheet& sheet, sld_mcp::v1::SheetInfo* info)
+	{
+		for (const auto& table : SheetTables(sheet))
+			DescribeTable(table, info->add_tables());
+		if (!sheet.sheet)
+			return;
+		// The format's sketch is in sheet coordinates, like its notes.
+		ATL::CComPtr<ISketch> sketch;
+		ATL::CComVariant segments;
+		if (FAILED(sheet.sheet->GetTemplateSketch(&sketch)) || !sketch || FAILED(sketch->GetSketchSegments(&segments)))
+			return;
+		for (const auto& disp : comvariant::ToDispatches(segments))
+		{
+			ATL::CComQIPtr<ISketchSegment> segment(disp.p);
+			long type = -1;
+			ATL::CComQIPtr<ISketchLine> line(disp.p);
+			if (!segment || !line || FAILED(segment->GetType(&type)) || type != swSketchLINE)
+				continue;
+			ATL::CComPtr<IDispatch> startDisp, endDisp;
+			line->GetStartPoint2(&startDisp);
+			line->GetEndPoint2(&endDisp);
+			ATL::CComQIPtr<ISketchPoint> start(startDisp.p), end(endDisp.p);
+			if (!start || !end)
+				continue;
+			double p[6] = {};
+			start->get_X(&p[0]);
+			start->get_Y(&p[1]);
+			end->get_X(&p[3]);
+			end->get_Y(&p[4]);
+			auto* out = info->add_format_lines();
+			SetVec3(out->mutable_start(), p);
+			SetVec3(out->mutable_end(), p + 3);
+			ATL::CComBSTR layer;
+			if (SUCCEEDED(segment->get_Layer(&layer)))
+				out->set_layer(ToUtf8(layer));
+		}
 	}
 }

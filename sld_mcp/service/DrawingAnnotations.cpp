@@ -110,80 +110,6 @@ namespace
 		return ATL::CComPtr<INote>(note);
 	}
 
-	// Which of the sheet and its format is being edited; SolidWorks puts a
-	// new note in the format while that's being edited, whatever view is
-	// active. Puts back the format mode the user had, if the sheet showing
-	// at the end is the one they had.
-	class EditModeScope
-	{
-	public:
-		explicit EditModeScope(IDrawingDoc* drawing) : m_drawing(drawing), m_sheet(ActiveSheetName(drawing))
-		{
-			VARIANT_BOOL editingSheet = VARIANT_TRUE;
-			if (SUCCEEDED(drawing->GetEditSheet(&editingSheet)))
-				m_userFormat = m_format = editingSheet == VARIANT_FALSE;
-		}
-		~EditModeScope()
-		{
-			const bool wanted = m_userFormat && ActiveSheetName(m_drawing) == m_sheet;
-			if (wanted != m_format)
-				Set(wanted);
-		}
-		EditModeScope(const EditModeScope&) = delete;
-		EditModeScope& operator=(const EditModeScope&) = delete;
-
-		// EditSheet also deactivates the active view.
-		void Set(bool format)
-		{
-			if (format)
-				m_drawing->EditTemplate();
-			else
-				m_drawing->EditSheet();
-			m_format = format;
-		}
-
-	private:
-		ATL::CComPtr<IDrawingDoc> m_drawing;
-		std::string m_sheet;
-		bool m_userFormat = false;
-		bool m_format = false;
-	};
-
-	// A view's own coordinates (DrawingPoint with view_name): the model's
-	// size, from where the model origin lands on the sheet, along the
-	// sheet's axes turned by the view's angle.
-	grpc::Status ToSheetPoint(const std::vector<DrawingSheet>& sheets, IMathUtility* math,
-		const sld_mcp::v1::DrawingPoint& point, const std::string& what, Eigen::Vector2d& out)
-	{
-		if (!std::isfinite(point.x()) || !std::isfinite(point.y()))
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, what + " must be finite");
-		if (point.view_name().empty())
-		{
-			out = Eigen::Vector2d(point.x(), point.y());
-			return grpc::Status::OK;
-		}
-		ATL::CComPtr<IView> view;
-		std::string sheetName;
-		if (grpc::Status status = FindDrawingView(sheets, point.view_name(), view, sheetName); !status.ok())
-			return status;
-		ATL::CComPtr<IMathTransform> xform;
-		Eigen::Vector3d origin;
-		if (FAILED(view->get_ModelToViewTransform(&xform)) || !xform ||
-			!TransformPoint(math, xform, Eigen::Vector3d::Zero(), origin))
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				"SolidWorks didn't say where " + point.view_name() + "'s model origin is: give sheet coordinates");
-		double scale = 1.0;
-		ATL::CComVariant ratio;
-		if (SUCCEEDED(view->get_ScaleRatio(&ratio)))
-			if (const std::vector<double> r = comvariant::ToDoubles(ratio); r.size() >= 2 && r[1] > 0.0)
-				scale = r[0] / r[1];
-		double angle = 0.0;
-		if (FAILED(view->get_Angle(&angle)) || !std::isfinite(angle))
-			angle = 0.0;
-		out = origin.head<2>() + scale * (Eigen::Rotation2Dd(angle) * Eigen::Vector2d(point.x(), point.y()));
-		return grpc::Status::OK;
-	}
-
 	bool ReadPosition(IAnnotation* annotation, Eigen::Vector3d& out)
 	{
 		ATL::CComVariant positionVar;
@@ -550,8 +476,12 @@ namespace
 		bool any = false;
 		for (const auto& annotation : annotations)
 		{
+			// Tables don't take Select3 without select data (seen 2026-10-22);
+			// Select2 selects them, and deleting a BOM's table deletes its
+			// feature too.
 			VARIANT_BOOL selected = VARIANT_FALSE;
-			if (SUCCEEDED(annotation->Select3(VARIANT_TRUE, nullptr, &selected)) && selected)
+			if ((SUCCEEDED(annotation->Select3(VARIANT_TRUE, nullptr, &selected)) && selected) ||
+				(SUCCEEDED(annotation->Select2(VARIANT_TRUE, 0, &selected)) && selected))
 				any = true;
 		}
 		VARIANT_BOOL deleted = VARIANT_FALSE;

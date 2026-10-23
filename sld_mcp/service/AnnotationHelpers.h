@@ -70,6 +70,9 @@ namespace sld_mcp::service
 	// extent.
 	void DescribeNote(INote* note, IAnnotation* annotation, sld_mcp::v1::NoteInfo* out);
 
+	// A BOM balloon's texts and component (nothing for other notes).
+	void DescribeBalloon(INote* note, IAnnotation* annotation, sld_mcp::v1::AnnotationInfo* info);
+
 	void DescribeAnnotation(IAnnotation* annotation, PersistIds& ids, ComponentList* components,
 		sld_mcp::v1::AnnotationInfo* info);
 }

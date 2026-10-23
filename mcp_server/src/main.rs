@@ -18,8 +18,10 @@ mod refgeom;
 mod render;
 mod revolve;
 mod sheet;
+mod sheet_format;
 mod sketch;
 mod sweep;
+mod table;
 mod tolerance;
 mod view;
 
@@ -1999,6 +2001,319 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "List the tables of the active drawing -- bills of materials, hole tables, \
+                       general tables, revision tables -- with their name (for edit_drawing_table / \
+                       delete_drawing_annotations), kind, anchor corner and box on the sheet (mm), \
+                       columns (width, what a BOM / hole column shows) and every row's cells (rows[0] \
+                       = the top row); a BOM's rows also name the components they count. Filters: \
+                       sheet, name, kind. include_format_lines adds the sheet format's lines (border, \
+                       title block grid)."
+    )]
+    async fn inspect_drawing_tables(
+        &self,
+        Parameters(params): Parameters<table::InspectDrawingTablesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let reply = self
+            .addin
+            .inspect_drawing(table::inspect_request())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let json = table::render_inspect(&reply, &params)?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+    }
+
+    #[tool(
+        description = "Add a native table to the active drawing. kind=bom: SolidWorks' bill of \
+                       materials of an assembly `view` (item numbers, part numbers, quantities kept \
+                       up to date with the assembly; bom_type top_level / parts_only / indented; \
+                       balloons from add_balloons show its item numbers) -- use it instead of \
+                       composing a parts list from notes. kind=hole: a hole table (a coordinate \
+                       table) of `holes` (edge ids of hole circles in `view`, from inspect_drawing) \
+                       with their X / Y measured from `origin` (a vertex id of that view) and their \
+                       size; SolidWorks tags the holes A1, A2, ... kind=general: a table of `rows` of \
+                       text you give (coordinate lists, notes tables, ...). Position: `at_mm` + \
+                       `anchor` corner, or a free spot clear of the views, other tables and the \
+                       title block. Optional template, column_widths_mm, title, layer."
+    )]
+    async fn add_drawing_table(
+        &self,
+        Parameters(params): Parameters<table::AddDrawingTableParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            table::add_request(&ids, &params)?
+        };
+        let mut reply = self
+            .addin
+            .setup_drawing_table(request.clone())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        // Not placed: move it to a free spot now that its size is known.
+        let mut moved_to = None;
+        if request.position.is_none()
+            && let (Some(sheet), Some(t)) = (&reply.sheet, &reply.table)
+            && let Some(to) = table::relocation(sheet, t, params.kind, Some(request.view_name.as_str()))
+        {
+            let move_request = proto::SetupDrawingTableRequest {
+                name: t.name.clone(),
+                sheet_name: sheet.name.clone(),
+                position: Some(proto::Vec3 { x: to.x, y: to.y, z: 0.0 }),
+                ..Default::default()
+            };
+            match self.addin.setup_drawing_table(move_request).await {
+                Ok(moved) => {
+                    let tags = std::mem::take(&mut reply.hole_tags);
+                    reply = proto::SetupDrawingTableResponse { created: true, hole_tags: tags, ..moved };
+                    moved_to = Some(to);
+                }
+                Err(status) => tracing::warn!("moving the new table clear failed: {status}"),
+            }
+        }
+        let text = {
+            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            table::setup_reply(&mut ids, &request, &reply, moved_to)
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Change a table of the active drawing by the name inspect_drawing_tables \
+                       lists: `cells` [{row, column, text}] (in a BOM, typing over an item number \
+                       renumbers it and its balloons follow; computed cells such as quantities or \
+                       hole locations may be refused), general tables' add_rows / delete_rows, \
+                       column_widths_mm, title (row indices never count it), layer, at_mm / \
+                       move_by_mm (the anchor corner), anchor. All or nothing. \
+                       Delete a table with delete_drawing_annotations."
+    )]
+    async fn edit_drawing_table(
+        &self,
+        Parameters(params): Parameters<table::EditDrawingTableParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let mut request = table::edit_request(&params)?;
+        if let Some(by) = params.move_by_mm {
+            let tables = self
+                .addin
+                .inspect_drawing(table::inspect_request())
+                .await
+                .map_err(|status| self.addin_error(status))?;
+            let found = tables
+                .sheets
+                .iter()
+                .filter(|s| request.sheet_name.is_empty() || s.name.eq_ignore_ascii_case(&request.sheet_name))
+                .flat_map(|s| s.tables.iter())
+                .find(|t| t.name == request.name)
+                .ok_or_else(|| McpError::invalid_params(format!("the drawing has no table named {:?}", request.name), None))?;
+            table::apply_move_by(&mut request, found, by)?;
+        }
+        let reply = self
+            .addin
+            .setup_drawing_table(request.clone())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let text = {
+            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            table::setup_reply(&mut ids, &request, &reply, None)
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Add BOM balloons to an assembly view of the active drawing: each points at \
+                       a component and shows its item number from the drawing's bill of materials \
+                       (add_drawing_table kind=bom first) -- use these instead of notes with \
+                       numbers. Default: every component of the view (Auto Balloon; `layout` square \
+                       / circle / top / bottom / left / right, every_instance). Or `components` by \
+                       name (as inspect_drawing lists them), or `attach_to` view entity ids (the \
+                       leader goes to that edge, arrow at arrow_at_mm), each placed at `at_mm`. \
+                       Look: style (circle, split_circle, box, ...), size_chars, text (item_number, \
+                       quantity, part_number, file_name, custom), lower_text for split circles, \
+                       layer. Balloons are notes: move / delete them with edit_drawing_annotation / \
+                       delete_drawing_annotations."
+    )]
+    async fn add_balloons(
+        &self,
+        Parameters(params): Parameters<table::AddBalloonsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            table::balloons_request(&ids, &params)?
+        };
+        let reply = self
+            .addin
+            .add_balloons(request.clone())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let text = {
+            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            table::balloons_reply(&mut ids, &request, &reply)
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Draw a drawing border into a sheet's format (shown behind the views on \
+                       every print): a frame `margins_mm` [left, right, top, bottom] in from the \
+                       edges (default ISO 5457: 20, 10, 10, 10), zones (default ~50 mm, even counts) \
+                       with tick marks and labels (numbers across, letters down), centering marks. \
+                       On its own layer (BORDER): drawing it again replaces it, leaving the rest of \
+                       the format alone. Then draw_title_block."
+    )]
+    async fn draw_sheet_border(
+        &self,
+        Parameters(params): Parameters<sheet_format::DrawSheetBorderParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let info = self
+            .addin
+            .inspect_drawing(table::inspect_request())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let sheet = sheet_format::find_sheet(&info, params.sheet.as_deref().unwrap_or("").trim())?;
+        let border = sheet_format::border(glam::DVec2::new(sheet.width, sheet.height), &params)?;
+        let reply = self
+            .addin
+            .draw_sheet_format(sheet_format::border_request(&sheet.name, &border, params.weight))
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(sheet_format::border_reply(&sheet.name, &border, &reply))]))
+    }
+
+    #[tool(
+        description = "Draw a title block into a sheet's format: a grid of `rows` of cells, each a \
+                       small `label` plus a value that shows a custom `property` of the drawing (or \
+                       `of`: model -- the sheet's model, e.g. Material) so it updates by itself, or \
+                       fixed text (`value` without property). `value` with property sets it. \
+                       Default rows: TITLE, DWG NO., MATERIAL, FINISH, SCALE, SHEET, DRAWN / CHECKED \
+                       with dates, REV, COMPANY, FILE. Goes in the border's lower-right corner \
+                       (corner_mm otherwise), width_mm (default 180). On its own layer (TITLE \
+                       BLOCK): drawing it again replaces it. Values: fill_title_block."
+    )]
+    async fn draw_title_block(
+        &self,
+        Parameters(params): Parameters<sheet_format::DrawTitleBlockParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let info = self
+            .addin
+            .inspect_drawing(table::inspect_request())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let sheet = sheet_format::find_sheet(&info, params.sheet.as_deref().unwrap_or("").trim())?;
+        let frame = sheet_format::frame_of(sheet);
+        let corner = match params.corner_mm {
+            Some(c) if c.iter().all(|v| v.is_finite()) => glam::DVec2::new(c[0], c[1]) / MM_PER_M,
+            Some(_) => return Err(McpError::invalid_params("corner_mm must be finite", None)),
+            None => frame
+                .map(|(lo, hi)| glam::DVec2::new(hi.x, lo.y))
+                .unwrap_or(glam::DVec2::new(sheet.width - 0.01, 0.01)),
+        };
+        let on_frame = params.corner_mm.is_none() && frame.is_some();
+        let rows = if params.rows.is_empty() { sheet_format::default_rows() } else { params.rows.clone() };
+        let block = sheet_format::title_block(
+            &rows,
+            params.width_mm.unwrap_or(180.0) / MM_PER_M,
+            corner,
+            on_frame,
+            params.fields.unwrap_or(true),
+        )?;
+        if block.properties.iter().any(|p| p.of == sheet_format::PropertyOf::Model) && sheet.views.is_empty() {
+            return Err(McpError::invalid_params(
+                format!("{} has no views, so there's no model to set model properties on; add a view first", sheet.name),
+                None,
+            ));
+        }
+        for request in sheet_format::property_requests(&sheet.name, &block.properties) {
+            self.addin.custom_properties(request).await.map_err(|status| self.addin_error(status))?;
+        }
+        let reply = self
+            .addin
+            .draw_sheet_format(sheet_format::title_block_request(&sheet.name, &block))
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(sheet_format::title_block_reply(
+            sheet,
+            &block,
+            &reply,
+            &block.properties,
+        ))]))
+    }
+
+    #[tool(
+        description = "List a sheet's title block fields: every custom property its sheet format's \
+                       notes show (the stock formats' and draw_title_block's alike) -- name, whether \
+                       it's the drawing's ($PRP) or the sheet model's ($PRPSHEET), its value, the \
+                       note and what it shows. SW-... properties are SolidWorks' own (read-only)."
+    )]
+    async fn inspect_title_block(
+        &self,
+        Parameters(params): Parameters<sheet_format::InspectTitleBlockParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let json = self.title_block_fields(params.sheet.as_deref().unwrap_or("").trim()).await?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+    }
+
+    #[tool(
+        description = "Fill in a sheet's title block: `values` {property: value} for the fields \
+                       inspect_title_block lists, e.g. {\"DrawnBy\": \"MW\", \"Description\": \
+                       \"Bracket\"}. Each goes where the title block reads it from -- the drawing's \
+                       custom properties or the sheet's model's (save the model too) -- and the \
+                       notes update. Names the title block doesn't show are refused unless \
+                       allow_unlisted."
+    )]
+    async fn fill_title_block(
+        &self,
+        Parameters(params): Parameters<sheet_format::FillTitleBlockParams>,
+    ) -> Result<CallToolResult, McpError> {
+        if params.values.is_empty() {
+            return Err(McpError::invalid_params("give `values` to fill in (inspect_title_block lists the fields)", None));
+        }
+        let sheet_name = params.sheet.as_deref().unwrap_or("").trim().to_string();
+        let info = self
+            .addin
+            .inspect_drawing(sheet_format::fields_request())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let sheet = sheet_format::find_sheet(&info, &sheet_name)?;
+        let fields = sheet_format::fields(sheet);
+        let (values, unlisted) = sheet_format::route_values(&fields, &params.values, params.allow_unlisted)?;
+        for request in sheet_format::property_requests(&sheet.name, &values) {
+            self.addin.custom_properties(request).await.map_err(|status| self.addin_error(status))?;
+        }
+        let set: Vec<String> = values
+            .iter()
+            .map(|v| {
+                let of = if v.of == sheet_format::PropertyOf::Model { "model: save it too" } else { "drawing" };
+                format!("{}={:?} ({of})", v.name, v.value)
+            })
+            .collect();
+        let mut lines = vec![format!("set {} for {}'s title block.", set.join(", "), sheet.name)];
+        if !unlisted.is_empty() {
+            lines.push(format!("No title block note shows {} (set on the drawing anyway).", unlisted.join(", ")));
+        }
+        let json = self.title_block_fields(&sheet.name).await?;
+        lines.push(json.to_string());
+        Ok(CallToolResult::success(vec![ContentBlock::text(lines.join("\n"))]))
+    }
+
+    #[tool(
+        description = "Read and set custom properties (File > Properties) of the active document, \
+                       of an open `document` by title or path (e.g. a part a BOM lists: its \
+                       Description fills the BOM's DESCRIPTION column), or with `sheet` of the model \
+                       a drawing sheet takes $PRPSHEET values from. `set` {name: value}, `remove` \
+                       [names], `configuration` for configuration-specific ones. Lists every \
+                       property after the change."
+    )]
+    async fn custom_properties(
+        &self,
+        Parameters(params): Parameters<sheet_format::CustomPropertiesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let reply = self
+            .addin
+            .custom_properties(sheet_format::properties_request(&params)?)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(sheet_format::properties_json(&reply).to_string())]))
+    }
+
+    #[tool(
         description = "Draw the active part or assembly as a picture: shaded, with edges, in \
                        orthographic standard views (front/back/left/right/top/bottom/isometric) at \
                        one shared scale, as a grid in one PNG. Use it to check the overall shape \
@@ -3300,6 +3615,37 @@ impl SolidWorksTools {
             note::setup_reply(&mut ids, &request, &reply, &remarks)
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    /// inspect_title_block / fill_title_block: the sheet's title block
+    /// fields with the drawing's and the sheet model's property values.
+    async fn title_block_fields(&self, sheet_name: &str) -> Result<serde_json::Value, McpError> {
+        let info = self
+            .addin
+            .inspect_drawing(sheet_format::fields_request())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let sheet = sheet_format::find_sheet(&info, sheet_name)?;
+        let fields = sheet_format::fields(sheet);
+        let drawing = self
+            .addin
+            .custom_properties(proto::CustomPropertiesRequest::default())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let model = if fields.iter().any(|f| f.of == sheet_format::PropertyOf::Model) && !sheet.views.is_empty() {
+            self.addin
+                .custom_properties(proto::CustomPropertiesRequest { sheet_name: sheet.name.clone(), ..Default::default() })
+                .await
+                .ok()
+        } else {
+            None
+        };
+        Ok(serde_json::json!({
+            "sheet": sheet.name,
+            "sheet_format": sheet.sheet_format,
+            "model": model.as_ref().and_then(|m| m.document.as_ref()).map(|d| d.title.clone()),
+            "fields": sheet_format::fields_json(&fields, &drawing.properties, model.as_ref()),
+        }))
     }
 
     /// Turns a gRPC failure into an MCP error with a message that tells the
