@@ -384,7 +384,7 @@ pub fn mate_request(
     })
 }
 
-fn mate_text(m: &proto::MateInfo) -> String {
+pub fn mate_text(m: &proto::MateInfo) -> String {
     let kind = m.r#type();
     let mut text = if matches!(kind, proto::MateType::Other | proto::MateType::Unspecified) {
         m.type_name.clone()
@@ -409,7 +409,7 @@ fn mate_text(m: &proto::MateInfo) -> String {
     text
 }
 
-fn entity_text(ids: &mut IdRegistry, e: &proto::MateEntityState) -> String {
+pub fn entity_text(ids: &mut IdRegistry, e: &proto::MateEntityState) -> String {
     let json = diagnose::mate_entity_json(ids, e);
     if e.missing {
         return "(missing)".into();

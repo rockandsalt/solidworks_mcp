@@ -118,6 +118,10 @@ public:
 		const sld_mcp::v1::InsertComponentsRequest* request,
 		sld_mcp::v1::InsertComponentsResponse* response) override;
 
+	grpc::Status ReplaceComponents(grpc::ServerContext* context,
+		const sld_mcp::v1::ReplaceComponentsRequest* request,
+		sld_mcp::v1::ReplaceComponentsResponse* response) override;
+
 	grpc::Status InspectAnnotations(grpc::ServerContext* context,
 		const sld_mcp::v1::InspectAnnotationsRequest* request,
 		sld_mcp::v1::InspectAnnotationsResponse* response) override;

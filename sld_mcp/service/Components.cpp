@@ -1,7 +1,10 @@
-// Components.cpp : InsertComponents (see docs/notes/architecture.md, "Assemblies + mates").
+// Components.cpp : InsertComponents, ReplaceComponents (see docs/notes/architecture.md,
+// "Assemblies + mates").
 #include "pch.h"
 #include "Common.h"
 #include "AssemblyHelpers.h"
+#include "DimensionHelpers.h"
+#include "FeatureTreeHelpers.h"
 
 using namespace sld_mcp::service;
 
@@ -26,6 +29,42 @@ namespace
 	{
 		std::error_code ec;
 		return !a.empty() && !b.empty() && std::filesystem::equivalent(a, b, ec);
+	}
+
+	std::wstring ComponentPath(IComponent2* component)
+	{
+		ATL::CComBSTR path;
+		if (component)
+			component->GetPathName(&path);
+		return path.Length() > 0 ? std::wstring(path.m_str) : std::wstring();
+	}
+
+	ATL::CComPtr<IComponent2> ParentOf(IComponent2* component)
+	{
+		ATL::CComPtr<IComponent2> parent;
+		component->GetParent(&parent);
+		return parent;
+	}
+
+	// INVALID_ARGUMENT unless `path` has the configuration (none given: OK).
+	// GetConfigurationNames works on files that aren't open.
+	grpc::Status CheckConfiguration(ISldWorks* swApp, const ATL::CComBSTR& path, const ATL::CComBSTR& configuration)
+	{
+		if (configuration.Length() == 0)
+			return grpc::Status::OK;
+		ATL::CComVariant namesVariant;
+		HRESULT hr = swApp->GetConfigurationNames(path, &namesVariant);
+		if (FAILED(hr))
+			return ComError("ISldWorks::GetConfigurationNames", hr);
+		const std::vector<ATL::CComBSTR> names = comvariant::ToBstrs(namesVariant);
+		if (std::any_of(names.begin(), names.end(), [&](const ATL::CComBSTR& n) { return n == configuration; }))
+			return grpc::Status::OK;
+		std::string list;
+		for (const auto& n : names)
+			list += (list.empty() ? "" : ", ") + ("\"" + ToUtf8(n) + "\"");
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+			ToUtf8(path) + " has no configuration \"" + ToUtf8(configuration) + "\"" +
+			(list.empty() ? std::string() : " -- it has " + list));
 	}
 
 	// Deletes components again (all or nothing). Best effort.
@@ -117,23 +156,8 @@ grpc::Status SolidWorksService::InsertComponents(grpc::ServerContext* /*context*
 
 	// AddComponents3 has no configuration argument, and SolidWorks silently
 	// ignores a ReferencedConfiguration it doesn't know, so check first.
-	if (configuration.Length() > 0)
-	{
-		ATL::CComVariant namesVariant;
-		hr = swApp->GetConfigurationNames(path, &namesVariant);
-		if (FAILED(hr))
-			return ComError("ISldWorks::GetConfigurationNames", hr);
-		const std::vector<ATL::CComBSTR> names = comvariant::ToBstrs(namesVariant);
-		if (std::none_of(names.begin(), names.end(), [&](const ATL::CComBSTR& n) { return n == configuration; }))
-		{
-			std::string list;
-			for (const auto& n : names)
-				list += (list.empty() ? "" : ", ") + ("\"" + ToUtf8(n) + "\"");
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				ToUtf8(path) + " has no configuration \"" + ToUtf8(configuration) + "\"" +
-				(list.empty() ? std::string() : " -- it has " + list));
-		}
-	}
+	if (grpc::Status status = CheckConfiguration(swApp, path, configuration); !status.ok())
+		return status;
 
 	long before = 0;
 	hr = assembly->GetComponentCount(VARIANT_TRUE, &before);
@@ -197,5 +221,238 @@ grpc::Status SolidWorksService::InsertComponents(grpc::ServerContext* /*context*
 	ComponentList list(ids, math, response->mutable_components());
 	for (const auto& component : components)
 		list.Add(component);
+	return grpc::Status::OK;
+}
+
+grpc::Status SolidWorksService::ReplaceComponents(grpc::ServerContext* /*context*/,
+	const sld_mcp::v1::ReplaceComponentsRequest* request,
+	sld_mcp::v1::ReplaceComponentsResponse* response)
+{
+	if (request->component_persist_ids_size() == 0)
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give at least one component to replace");
+	if (request->path().empty())
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give the file to replace them with");
+
+	std::lock_guard<std::mutex> lock(m_editMutex);
+	ComApartment com;
+	if (!com.Ok())
+		return ComApartmentError();
+
+	ATL::CComPtr<ISldWorks> swApp;
+	if (grpc::Status status = GetSwApp(swApp); !status.ok())
+		return status;
+
+	ATL::CComPtr<IModelDoc2> doc;
+	if (grpc::Status status = GetEditableAssembly(swApp, doc); !status.ok())
+		return status;
+	ATL::CComQIPtr<IAssemblyDoc> assembly(doc.p);
+	if (!assembly)
+		return grpc::Status(grpc::StatusCode::INTERNAL, "active assembly has no IAssemblyDoc interface");
+	ATL::CComPtr<IModelDocExtension> ext;
+	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+		return status;
+	ATL::CComQIPtr<IMathUtility> math;
+	if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
+		return status;
+	PersistIds ids(ext);
+
+	const ATL::CComBSTR path = FromUtf8(request->path());
+	const ATL::CComBSTR configuration = FromUtf8(request->configuration());
+	ATL::CComBSTR assemblyPath;
+	HRESULT hr = doc->GetPathName(&assemblyPath);
+	if (FAILED(hr))
+		return ComError("IModelDoc2::GetPathName", hr);
+	if (SameFile(path.m_str, assemblyPath.m_str))
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+			"that's the assembly itself -- an assembly can't contain itself");
+	if (grpc::Status status = CheckConfiguration(swApp, path, configuration); !status.ok())
+		return status;
+
+	// The components asked for: top-level ones (ReplaceComponents2 on a
+	// nested component would change the subassembly's file), not already
+	// of the new file.
+	std::vector<ATL::CComPtr<IComponent2>> targets;
+	std::set<std::string> targetIds;
+	std::vector<std::wstring> targetFiles;
+	for (const auto& persistId : request->component_persist_ids())
+	{
+		ATL::CComPtr<IDispatch> obj;
+		if (grpc::Status status = ResolvePersistId(ext, persistId, obj); !status.ok())
+			return status;
+		ATL::CComQIPtr<IComponent2> component(obj.p);
+		if (!component)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "that isn't a component");
+		const std::string name = ComponentName(component);
+		if (ATL::CComPtr<IComponent2> parent = ParentOf(component))
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"\"" + name + "\" is inside the subassembly \"" + ComponentName(parent) + "\" -- replace the "
+				"whole subassembly, or open its file (open_document) and replace the component there");
+		const std::wstring file = ComponentPath(component);
+		if (SameFile(file, path.m_str))
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"\"" + name + "\" already is an instance of " + ToUtf8(path));
+		if (!targetIds.insert(ids.Get(component)).second)
+			continue;
+		targets.push_back(ATL::CComPtr<IComponent2>(component));
+		targetFiles.push_back(file);
+	}
+
+	// What the replacement covers (with all_instances, the other top-level
+	// instances of the same files too), in assembly order, and what it was.
+	const std::vector<ATL::CComPtr<IComponent2>> allBefore = AllComponents(assembly);
+	struct Covered
+	{
+		std::string persistId;
+		sld_mcp::v1::ComponentReplacement* out = nullptr;
+	};
+	std::vector<Covered> covered;
+	std::set<std::string> coveredIds;
+	std::set<std::string> newFileBefore;  // components of the new file already there
+	for (const auto& component : allBefore)
+	{
+		const std::wstring file = ComponentPath(component);
+		const std::string pid = ids.Get(component);
+		if (SameFile(file, path.m_str))
+			newFileBefore.insert(pid);
+		if (ParentOf(component))
+			continue;
+		const bool asked = targetIds.count(pid) > 0;
+		const bool sameFile = request->all_instances() &&
+			std::any_of(targetFiles.begin(), targetFiles.end(), [&](const std::wstring& f) { return SameFile(f, file); });
+		if (!asked && !sameFile)
+			continue;
+		Covered c{ pid, response->add_replaced() };
+		DescribeComponent(component, ids, math, c.out->mutable_before());
+		covered.push_back(c);
+		coveredIds.insert(pid);
+	}
+
+	// Mates that touch a covered component or anything inside one: those
+	// are the ones SolidWorks has to re-attach.
+	std::set<std::string> affected = coveredIds;
+	for (const auto& component : allBefore)
+	{
+		for (ATL::CComPtr<IComponent2> c = ParentOf(component); c; c = ParentOf(c))
+			if (coveredIds.count(ids.Get(c)))
+			{
+				affected.insert(ids.Get(component));
+				break;
+			}
+	}
+	std::vector<sld_mcp::v1::MateInfo> matesBefore;
+	for (const auto& mate : MateFeatures(doc))
+	{
+		sld_mcp::v1::MateInfo info;
+		DescribeMate(mate, ids, &info);
+		if (std::any_of(info.component_persist_ids().begin(), info.component_persist_ids().end(),
+				[&](const std::string& pid) { return affected.count(pid) > 0; }))
+			matesBefore.push_back(std::move(info));
+	}
+	const auto errorsBefore = FeatureErrors(FeatureTree(doc));
+
+	// ReplaceComponents2 works on the selection, like the UI's Replace
+	// Components.
+	doc->ClearSelection2(VARIANT_TRUE);
+	for (const auto& component : targets)
+	{
+		VARIANT_BOOL selected = VARIANT_FALSE;
+		if (FAILED(component->Select4(VARIANT_TRUE, nullptr, VARIANT_FALSE, &selected)) || !selected)
+		{
+			doc->ClearSelection2(VARIANT_TRUE);
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"SolidWorks wouldn't select \"" + ComponentName(component) + "\" -- is it suppressed or hidden?");
+		}
+	}
+	PreferenceToggles toggles(swApp);
+	toggles.Set(swShowErrorsEveryRebuild, false);
+	VARIANT_BOOL ok = VARIANT_FALSE;
+	hr = assembly->ReplaceComponents2(path, configuration, request->all_instances() ? VARIANT_TRUE : VARIANT_FALSE,
+		configuration.Length() > 0 ? swReplaceComponentsConfiguration_ManuallySelect
+								   : swReplaceComponentsConfiguration_MatchName,
+		VARIANT_TRUE, &ok);
+	doc->ClearSelection2(VARIANT_TRUE);
+	if (FAILED(hr))
+		return ComError("IAssemblyDoc::ReplaceComponents2", hr);
+	VARIANT_BOOL rebuilt = VARIANT_FALSE;
+	doc->EditRebuild3(&rebuilt);
+
+	// Find the components again. Persist ids are looked up afresh: the
+	// replaced component may be a new object, or the old one with a new
+	// reference. A covered component's persist id that still resolves
+	// answers directly; the rest are paired in assembly order with the new
+	// file's components that weren't there before (the replacement keeps
+	// the tree position), when the counts agree.
+	PersistIds idsAfter(ext);
+	std::set<std::string> paired;
+	std::vector<Covered*> lost;
+	for (auto& c : covered)
+	{
+		ATL::CComPtr<IDispatch> obj;
+		ATL::CComQIPtr<IComponent2> component;
+		if (ResolvePersistId(ext, c.persistId, obj).ok())
+			component = obj.p;
+		if (!component)
+		{
+			lost.push_back(&c);
+			continue;
+		}
+		DescribeComponent(component, idsAfter, math, c.out->mutable_after());
+		paired.insert(c.out->after().persist_id());
+	}
+	std::vector<ATL::CComPtr<IComponent2>> fresh;
+	for (const auto& component : AllComponents(assembly))
+	{
+		if (ParentOf(component) || !SameFile(ComponentPath(component), path.m_str))
+			continue;
+		const std::string pid = idsAfter.Get(component);
+		if (!newFileBefore.count(pid) && !paired.count(pid))
+			fresh.push_back(component);
+	}
+	if (!lost.empty() && fresh.size() == lost.size())
+	{
+		for (size_t i = 0; i < lost.size(); ++i)
+			DescribeComponent(fresh[i], idsAfter, math, lost[i]->out->mutable_after());
+		fresh.clear();
+	}
+	for (const auto& component : fresh)
+		DescribeComponent(component, idsAfter, math, response->add_unpaired());
+
+	const bool anyReplaced = std::any_of(covered.begin(), covered.end(), [&](const Covered& c) {
+		return c.out->has_after() && SameFile(std::wstring(FromUtf8(c.out->after().file()).m_str), path.m_str);
+	}) || response->unpaired_size() > 0;
+	if (!anyReplaced)
+		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+			"SolidWorks didn't replace anything with " + ToUtf8(path) + (ok ? "" : " (ReplaceComponents2 failed)") +
+			" -- is it a part or assembly file of this SolidWorks version, and not an assembly that contains "
+			"this one?");
+
+	// The mates again, by name (a replacement keeps them, re-attached or not).
+	std::map<std::string, ATL::CComPtr<IFeature>> matesAfter;
+	for (const auto& mate : MateFeatures(doc))
+		matesAfter.emplace(FeatureName(mate), mate);
+	std::set<std::string> reported;
+	for (const auto& before : matesBefore)
+	{
+		sld_mcp::v1::ReplacedMate* out = response->add_mates();
+		*out->mutable_before() = before;
+		reported.insert(before.name());
+		auto it = matesAfter.find(before.name());
+		if (it == matesAfter.end())
+		{
+			out->set_broken(true);
+			continue;
+		}
+		DescribeMate(it->second, idsAfter, out->mutable_after());
+		const bool missing = DiagnoseMate(it->second, idsAfter, out->mutable_entities());
+		const auto& after = out->after();
+		out->set_broken(missing || (after.error_code() != swFeatureErrorNone && !after.error_is_warning()));
+	}
+
+	auto* problems = response->mutable_new_errors();
+	AddNewErrors(errorsBefore, FeatureErrors(FeatureTree(doc)), problems);
+	for (int i = problems->size() - 1; i >= 0; --i)
+		if (reported.count(problems->Get(i).name()))
+			problems->DeleteSubrange(i, 1);
+	doc->GraphicsRedraw2();
 	return grpc::Status::OK;
 }

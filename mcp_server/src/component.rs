@@ -1,6 +1,8 @@
 //! Inserting components into an assembly: the insert_components tool's
 //! params, turning each placement (origin + optional axes) into the
 //! orthonormal frame the add-in hands to AddComponents3, and the reply.
+//! Also replace_components: swapping components for another file, and the
+//! report of which mates came through.
 //!
 //! Parts and subassemblies go in the same way (a subassembly is just an
 //! .SLDASM file); several instances of one file are several placements, and
@@ -13,8 +15,8 @@ use serde::Deserialize;
 use glam::{DQuat, DVec3};
 
 use crate::addin::proto;
-use crate::assembly::placement_text;
-use crate::files;
+use crate::assembly::{self, placement_text};
+use crate::{delete, edit, files};
 use crate::inspect::{IdRegistry, Kind, MM_PER_M};
 
 /// More than this in one call is almost certainly a mistake (and slow).
@@ -184,6 +186,200 @@ pub fn reply_text(ids: &mut IdRegistry, reply: &proto::InsertComponentsResponse)
     text
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ReplaceComponentsParams {
+    /// The components to replace, by id ("component:3" from inspect_model what="components").
+    /// Top-level components only (not ones inside a subassembly).
+    pub components: Vec<String>,
+    /// The new file, as an absolute path: a part (.SLDPRT) or an assembly (.SLDASM).
+    pub file: String,
+    /// true: also replace every other instance of the same file(s) in the assembly.
+    /// Default false: only the components listed.
+    #[serde(default)]
+    pub all_instances: Option<bool>,
+    /// The new file's configuration to use. Default: the one with the same name as the old
+    /// component's, if the new file has it, else its active one.
+    #[serde(default)]
+    pub configuration: Option<String>,
+}
+
+/// The ReplaceComponents request, with the component ids resolved by
+/// `resolve` (the id registry: an id to a persist id).
+pub fn replace_request(
+    params: &ReplaceComponentsParams,
+    mut resolve: impl FnMut(&str) -> Result<Vec<u8>, McpError>,
+) -> Result<proto::ReplaceComponentsRequest, McpError> {
+    if params.components.is_empty() {
+        return Err(invalid(
+            "list the components to replace (\"component:N\" ids from inspect_model what=\"components\")",
+        ));
+    }
+    if params.components.len() > MAX_INSTANCES {
+        return Err(invalid(format!(
+            "at most {MAX_INSTANCES} components per call, got {} (all_instances replaces every instance \
+             of a file)",
+            params.components.len()
+        )));
+    }
+    let path = files::component_file(&params.file)?;
+    let mut persist_ids = Vec::new();
+    for id in params.components.iter().map(|id| id.trim()) {
+        if Kind::of_id(id) != Some(Kind::Component) {
+            return Err(invalid(format!(
+                "components takes component ids like \"component:2\" (inspect_model lists them), got {id:?}"
+            )));
+        }
+        persist_ids.push(resolve(id)?);
+    }
+    Ok(proto::ReplaceComponentsRequest {
+        component_persist_ids: persist_ids,
+        all_instances: params.all_instances.unwrap_or(false),
+        path,
+        configuration: params.configuration.as_deref().map(str::trim).unwrap_or_default().to_string(),
+    })
+}
+
+fn file_name(path: &str) -> &str {
+    path.rsplit(['\\', '/']).next().unwrap_or(path)
+}
+
+fn same_file(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
+}
+
+fn mate_failure(m: &proto::MateInfo) -> bool {
+    m.error_code != 0 && !m.error_is_warning
+}
+
+pub fn replace_reply_text(
+    ids: &mut IdRegistry,
+    params: &ReplaceComponentsParams,
+    reply: &proto::ReplaceComponentsResponse,
+) -> String {
+    let new_file = reply
+        .replaced
+        .iter()
+        .filter_map(|r| r.after.as_ref().filter(|a| r.before.as_ref().is_some_and(|b| !same_file(&a.file, &b.file))))
+        .chain(&reply.unpaired)
+        .next()
+        .map(|c| (file_name(&c.file).to_string(), c.configuration.clone()))
+        .unwrap_or_else(|| (file_name(&params.file).to_string(), String::new()));
+
+    // Each covered component: replaced, left alone, or lost track of.
+    let mut done = Vec::new();
+    let mut not_done = Vec::new();
+    for r in &reply.replaced {
+        let Some(before) = &r.before else { continue };
+        let old = format!("{} ({})", before.name, file_name(&before.file));
+        match &r.after {
+            Some(after) if !same_file(&after.file, &before.file) => {
+                let id = ids.id_for(Kind::Component, &after.persist_id).unwrap_or_default();
+                done.push(format!("- {old} -> {id}: {}", placement_text(after)));
+            }
+            Some(_) => not_done.push(format!("{old}: SolidWorks left it as it was")),
+            None => not_done.push(format!("{old}: can't be found any more")),
+        }
+    }
+    let count = done.len() + reply.unpaired.len();
+    let mut text = format!(
+        "replaced {count} component{} with {}",
+        if count == 1 { "" } else { "s" },
+        new_file.0
+    );
+    if !new_file.1.is_empty() {
+        text += &format!(" (configuration \"{}\")", new_file.1);
+    }
+    text += ":";
+    for line in &done {
+        text += &format!("\n{line}");
+    }
+    for c in &reply.unpaired {
+        let id = ids.id_for(Kind::Component, &c.persist_id).unwrap_or_default();
+        text += &format!("\n- {id} (new; which old component it replaced is unclear): {}", placement_text(c));
+    }
+    if !not_done.is_empty() {
+        text += &format!("\nNot replaced: {}.", not_done.join("; "));
+    }
+
+    // Mates: which came through, which didn't.
+    let (broken, kept): (Vec<_>, Vec<_>) = reply.mates.iter().partition(|m| m.broken);
+    if reply.mates.is_empty() {
+        text += "\nNo mates referenced the replaced components.";
+    } else {
+        text += &format!("\nMates: {} of {} re-attached", kept.len(), reply.mates.len());
+        if !kept.is_empty() {
+            let names: Vec<String> = kept
+                .iter()
+                .filter_map(|m| m.after.as_ref())
+                .map(|a| {
+                    let id = ids.id_for(Kind::Feature, &a.persist_id).unwrap_or_default();
+                    format!("{} ({id})", a.name)
+                })
+                .collect();
+            text += &format!(": {}", names.join(", "));
+        }
+        text.push('.');
+    }
+    if !broken.is_empty() {
+        text += "\nUnresolved mates (give them new entities with edit_mate, or delete_features them):";
+        for m in &broken {
+            let Some(before) = &m.before else { continue };
+            let was_broken = mate_failure(before);
+            let Some(after) = &m.after else {
+                text += &format!("\n- {} ({}): gone -- SolidWorks deleted it.", before.name, edit::mate_text(before));
+                continue;
+            };
+            let id = ids.id_for(Kind::Feature, &after.persist_id).unwrap_or_default();
+            text += &format!("\n- {} ({id}, {})", after.name, edit::mate_text(after));
+            let entities: Vec<String> = m.entities.iter().map(|e| edit::entity_text(ids, e)).collect();
+            if !entities.is_empty() {
+                text += &format!(" between {}", entities.join(" and "));
+            }
+            let mut why = Vec::new();
+            let missing = m.entities.iter().filter(|e| e.missing).count();
+            if missing > 0 {
+                let lost: Vec<&str> =
+                    m.entities.iter().filter(|e| e.missing).map(|e| e.component_name.as_str()).filter(|n| !n.is_empty()).collect();
+                let mut w = format!(
+                    "{missing} reference{} not found in the new file",
+                    if missing == 1 { "" } else { "s" }
+                );
+                if !lost.is_empty() {
+                    w += &format!(" (on {})", lost.join(", "));
+                }
+                why.push(w);
+            }
+            if after.error_code != 0 {
+                why.push(assembly::mate_error_name(after.error_code));
+            }
+            if !why.is_empty() {
+                text += &format!(": {}", why.join("; "));
+            }
+            if was_broken {
+                text += " (it already failed before the replacement)";
+            }
+            text.push('.');
+        }
+    }
+    // The Mates folder warns whenever one of its mates fails: nothing new
+    // when the broken mates are listed already.
+    let problems: Vec<proto::FeatureProblem> = reply
+        .new_errors
+        .iter()
+        .filter(|p| broken.is_empty() || p.type_name != "MateGroup")
+        .cloned()
+        .collect();
+    let problems = delete::problems_text(&problems);
+    if !problems.is_empty() {
+        text += &format!("\n{}", problems.trim_start());
+    }
+    if count > 0 {
+        text += "\nThe replaced components' faces, edges and planes have new ids: inspect_model \
+                 within=\"component:N\" lists them.";
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,5 +473,104 @@ mod tests {
         p.at = Some(vec![at([0.0; 3], Some([0.0, 0.0, 0.0]), None)]);
         let e = request(&p, |_| Ok(vec![1])).unwrap_err();
         assert!(e.message.starts_with("at[0]: "), "{}", e.message);
+    }
+
+    fn replace_params(components: &[&str], file: &str) -> ReplaceComponentsParams {
+        ReplaceComponentsParams {
+            components: components.iter().map(|s| s.to_string()).collect(),
+            file: file.into(),
+            all_instances: None,
+            configuration: None,
+        }
+    }
+
+    #[test]
+    fn replace_takes_component_ids_and_a_file() {
+        let file = std::env::current_exe().unwrap().with_file_name("replace-test.SLDPRT");
+        std::fs::write(&file, b"").unwrap();
+        let file = file.to_str().unwrap();
+        let resolve = |id: &str| -> Result<Vec<u8>, McpError> { Ok(id.as_bytes().to_vec()) };
+        assert!(replace_request(&replace_params(&[], file), resolve).is_err());
+        assert!(replace_request(&replace_params(&["face:1"], file), resolve).is_err());
+        assert!(replace_request(&replace_params(&["component:1"], "C:\\nope\\x.SLDPRT"), resolve).is_err());
+        assert!(replace_request(&replace_params(&["component:1"], "x.SLDPRT"), resolve).is_err());
+        let mut p = replace_params(&["component:1", " component:2 "], file);
+        p.configuration = Some(" Long ".into());
+        let r = replace_request(&p, resolve).unwrap();
+        assert_eq!(r.component_persist_ids, vec![b"component:1".to_vec(), b"component:2".to_vec()]);
+        assert_eq!((r.all_instances, r.configuration.as_str()), (false, "Long"));
+        std::fs::remove_file(file).ok();
+    }
+
+    fn component(pid: &[u8], name: &str, file: &str) -> proto::ComponentInfo {
+        proto::ComponentInfo { persist_id: pid.to_vec(), name: name.into(), file: file.into(), ..Default::default() }
+    }
+
+    fn mate(pid: &[u8], name: &str, error: i32) -> proto::MateInfo {
+        proto::MateInfo {
+            persist_id: pid.to_vec(),
+            name: name.into(),
+            r#type: proto::MateType::Coincident.into(),
+            error_code: error,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn replace_text_reports_components_and_unresolved_mates() {
+        let mut ids = IdRegistry::default();
+        let reply = proto::ReplaceComponentsResponse {
+            replaced: vec![
+                proto::ComponentReplacement {
+                    before: Some(component(b"a", "block-1", "C:\\d\\block.SLDPRT")),
+                    after: Some(component(b"a2", "plate-1", "C:\\d\\plate.SLDPRT")),
+                },
+                proto::ComponentReplacement {
+                    before: Some(component(b"b", "block-2", "C:\\d\\block.SLDPRT")),
+                    after: Some(component(b"b", "block-2", "C:\\d\\block.SLDPRT")),
+                },
+            ],
+            unpaired: vec![],
+            mates: vec![
+                proto::ReplacedMate {
+                    before: Some(mate(b"m1", "Coincident1", 0)),
+                    after: Some(mate(b"m1", "Coincident1", 0)),
+                    entities: vec![],
+                    broken: false,
+                },
+                proto::ReplacedMate {
+                    before: Some(mate(b"m2", "Coincident2", 0)),
+                    after: Some(mate(b"m2", "Coincident2", 48)),
+                    entities: vec![
+                        proto::MateEntityState { missing: true, component_name: "plate-1".into(), ..Default::default() },
+                        proto::MateEntityState {
+                            kind: "face".into(),
+                            persist_id: b"f".to_vec(),
+                            component_name: "base-1".into(),
+                            ..Default::default()
+                        },
+                    ],
+                    broken: true,
+                },
+                proto::ReplacedMate { before: Some(mate(b"m3", "Coincident3", 0)), after: None, entities: vec![], broken: true },
+            ],
+            new_errors: vec![
+                proto::FeatureProblem { name: "Mates".into(), type_name: "MateGroup".into(), error_code: 1, warning: true },
+                proto::FeatureProblem { name: "LPattern1".into(), type_name: "LPattern".into(), error_code: 73, warning: false },
+            ],
+        };
+        let params = replace_params(&["component:1", "component:2"], "C:\\d\\plate.SLDPRT");
+        let text = replace_reply_text(&mut ids, &params, &reply);
+        assert!(text.starts_with("replaced 1 component with plate.SLDPRT:"), "{text}");
+        assert!(text.contains("- block-1 (block.SLDPRT) -> component:"), "{text}");
+        assert!(text.contains("Not replaced: block-2 (block.SLDPRT): SolidWorks left it as it was."), "{text}");
+        assert!(text.contains("Mates: 1 of 3 re-attached: Coincident1 (feature:"), "{text}");
+        assert!(text.contains("- Coincident2 (feature:"), "{text}");
+        assert!(text.contains("between (missing) and face:1 on base-1"), "{text}");
+        assert!(text.contains("1 reference not found in the new file (on plate-1); a mated entity is missing"), "{text}");
+        assert!(text.contains("- Coincident3 (coincident): gone -- SolidWorks deleted it.\n"), "{text}");
+        assert!(text.contains("a mated entity is missing.\n"), "{text}");
+        assert!(text.contains("\nNow failing to rebuild: LPattern1"), "{text}");
+        assert!(!text.contains("Mates (") && !text.contains("warnings"), "{text}");
     }
 }

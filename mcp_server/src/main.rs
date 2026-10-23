@@ -2822,6 +2822,24 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "Replace components of the active assembly with another part or assembly file, like SolidWorks' Replace Components: `components` = the \"component:N\" ids to replace (top-level ones), `file` = the new absolute .SLDPRT / .SLDASM path, `all_instances` = true to also replace every other instance of the same file(s). Each replacement keeps the old component's place in the tree and its position. SolidWorks re-attaches each mate to the matching face / edge / plane of the new file where it can find one (same names or geometry, e.g. a revised version of the part); the replacement stays even when it can't. Reports the new component ids, which mates came through, and the unresolved ones with the reference each lost -- fix those with edit_mate (new entities) or delete_features. `configuration` picks the new file's configuration (default: the same name as before if it has one, else its active one). Requires an open assembly with no sketch being edited."
+    )]
+    async fn replace_components(
+        &self,
+        Parameters(params): Parameters<component::ReplaceComponentsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = component::replace_request(&params, |id| self.resolve_id(id))?;
+        let reply = self
+            .addin
+            .replace_components(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let text = component::replace_reply_text(&mut ids, &params, &reply);
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
         description = "Delete features of the active part or assembly, like selecting them in \
                        the FeatureManager tree and pressing Delete: sketches, extrudes, cuts, \
                        holes, fillets, chamfers, patterns, reference planes/axes, ..., and in an \

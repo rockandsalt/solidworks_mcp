@@ -199,6 +199,18 @@ service SolidWorks {
   // doesn't have, and with FAILED_PRECONDITION as AddMate.
   rpc InsertComponents(InsertComponentsRequest) returns (InsertComponentsResponse);
 
+  // Replaces components of the active assembly with another part or
+  // assembly file (IAssemblyDoc::ReplaceComponents2 with the components
+  // selected, mates re-attached): the given components, or with
+  // all_instances every instance of their files. SolidWorks re-attaches
+  // each mate to the matching geometry of the new file where it can; the
+  // replacement stays even when some can't, and the response says which
+  // mates (and other features) now fail. Fails with INVALID_ARGUMENT for
+  // a component inside a subassembly, the assembly itself as the file, a
+  // configuration the file doesn't have, or components already of that
+  // file, and with FAILED_PRECONDITION when SolidWorks replaces nothing.
+  rpc ReplaceComponents(ReplaceComponentsRequest) returns (ReplaceComponentsResponse);
+
   // Read-only: the active part's (or assembly's) 3D annotations, i.e. its
   // PMI / MBD data -- what the MBD Dimension (DimXpert) tools and the
   // annotation tools put on the model: dimensions with their tolerances,
@@ -1151,6 +1163,48 @@ message InsertComponentsRequest {
 message InsertComponentsResponse {
   // The new components, in placement order.
   repeated ComponentInfo components = 1;
+}
+
+message ReplaceComponentsRequest {
+  // Top-level components of the active assembly; at least one.
+  repeated bytes component_persist_ids = 1;
+  // Also every other instance of those components' files.
+  bool all_instances = 2;
+  string path = 3;  // absolute path of the new .SLDPRT / .SLDASM
+  // Empty: the configuration of the same name if the new file has one,
+  // else its active one (swReplaceComponentsConfiguration_MatchName).
+  string configuration = 4;
+}
+
+// One component that was replaced: what it was, what it is now.
+message ComponentReplacement {
+  ComponentInfo before = 1;
+  // As it is now; still the old file if SolidWorks didn't replace it.
+  // Unset if it can't be found again.
+  ComponentInfo after = 2;
+}
+
+// A mate that involved a replaced component (or one inside it).
+message ReplacedMate {
+  MateInfo before = 1;
+  MateInfo after = 2;  // unset: the mate is gone
+  // Its entities after the replacement, as DiagnoseModel reports them.
+  repeated MateEntityState entities = 3;
+  // Lost a reference, or fails to solve (an error that isn't a warning).
+  bool broken = 4;
+}
+
+message ReplaceComponentsResponse {
+  // Every component the request covered (with all_instances, the other
+  // instances too), in assembly order.
+  repeated ComponentReplacement replaced = 1;
+  // Components of the new file that appeared but couldn't be paired with
+  // one in `replaced`.
+  repeated ComponentInfo unpaired = 2;
+  repeated ReplacedMate mates = 3;
+  // Other features (not in `mates`) whose rebuild error is new or
+  // different since the replacement.
+  repeated FeatureProblem new_errors = 4;
 }
 
 // A persist_id is SolidWorks' persistent reference for an entity
