@@ -1,6 +1,7 @@
 // Files.cpp : Documents: GetActiveDocument, NewPart, NewAssembly, NewDrawing, SaveDocument, OpenDocument (see docs/notes/files.md).
 #include "pch.h"
 #include "Common.h"
+#include "DimensionHelpers.h"
 #include "DrawingHelpers.h"
 
 using namespace sld_mcp::service;
@@ -288,6 +289,51 @@ grpc::Status SolidWorksService::SaveDocument(grpc::ServerContext* /*context*/,
 		}
 	}
 
+	// A drawing's PDF: which sheets (all of them unless named, rather than
+	// whatever the user last picked), and color for this export only.
+	ATL::CComPtr<IDispatch> exportData;
+	PreferenceToggles prefs(swApp);
+	if (!inPlace && request->has_pdf())
+	{
+		ATL::CComQIPtr<IDrawingDoc> drawing(doc.p);
+		if (!drawing)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "only a drawing has sheets to export to PDF");
+		const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
+		std::vector<std::string> wanted;
+		for (const std::string& name : request->pdf().sheets())
+		{
+			const DrawingSheet* sheet = FindSheet(sheets, name);
+			if (!sheet)
+				return grpc::Status(grpc::StatusCode::NOT_FOUND,
+					"the drawing has no sheet \"" + name + "\" -- its sheets: " + SheetList(sheets));
+			wanted.push_back(sheet->name);
+		}
+		std::vector<ATL::CComBSTR> names;
+		for (const DrawingSheet& sheet : sheets)
+			if (wanted.empty() || std::find(wanted.begin(), wanted.end(), sheet.name) != wanted.end())
+			{
+				names.emplace_back(FromUtf8(sheet.name));
+				response->add_pdf_sheets(sheet.name);
+			}
+
+		hr = swApp->GetExportFileData(swExportPdfData, &exportData);
+		ATL::CComQIPtr<IExportPdfData> pdf(exportData.p);
+		if (FAILED(hr) || !pdf)
+			return ComError("ISldWorks::GetExportFileData(swExportPdfData)", FAILED(hr) ? hr : E_NOINTERFACE);
+		// Every sheet by name too: SetSheets returns false for
+		// swExportData_ExportAllSheets / ExportCurrentSheet even though it
+		// takes them (GetWhichSheets reads back), true only for a list.
+		VARIANT_BOOL set = VARIANT_FALSE;
+		hr = pdf->SetSheets(swExportData_ExportSpecifiedSheets, comvariant::FromBstrs(names), &set);
+		if (FAILED(hr))
+			return ComError("IExportPdfData::SetSheets", hr);
+		if (!set)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks didn't take the sheets to export to PDF");
+		pdf->put_ViewPdfAfterSaving(VARIANT_FALSE);
+		if (request->pdf().has_color())
+			prefs.Set(swPDFExportInColor, request->pdf().color());
+	}
+
 	// Whether the file was written, whatever SolidWorks says: a part with
 	// rebuild errors is saved but reported as failed (diagnosing.md).
 	const std::filesystem::path file(target.m_str);
@@ -303,7 +349,7 @@ grpc::Status SolidWorksService::SaveDocument(grpc::ServerContext* /*context*/,
 			return status;
 		const long options = swSaveAsOptions_Silent |
 			(request->copy() ? swSaveAsOptions_Copy : swSaveAsOptions_SaveReferenced);
-		hr = ext->SaveAs(target, swSaveAsCurrentVersion, options, nullptr, &errors, &warnings, &ok);
+		hr = ext->SaveAs(target, swSaveAsCurrentVersion, options, exportData, &errors, &warnings, &ok);
 	}
 	if (FAILED(hr))
 		return ComError(inPlace ? "IModelDoc2::Save3" : "IModelDocExtension::SaveAs", hr);

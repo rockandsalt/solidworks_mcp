@@ -1,12 +1,15 @@
 # save_document / open_document against real SolidWorks: save in place and
 # Save As, exports, copies, refusing to overwrite, opening (and re-activating)
 # parts, an assembly and a drawing, read-only, and an assembly whose part has
-# gone missing; new drawings from templates, sheet formats, paper sizes and
-# unit systems (docs/notes/files.md). The assembly's components and the
+# gone missing; a multi-sheet drawing's PDF (all / named sheets, color); new
+# drawings from templates, sheet formats, paper sizes and unit systems
+# (docs/notes/files.md). The assembly's components and the
 # drawing's view are made through COM as in drawings.py. Run with:
 #   py devloop/mcp_client.py run devloop/scenarios/files.py
 
+import re
 import subprocess
+import zlib
 from pathlib import Path
 
 SWCOM = Path(__file__).resolve().parent.parent / "swcom.ps1"
@@ -42,6 +45,20 @@ def active():
 
 def close_all():
     com("Com $sw CloseAllDocuments @($true) | Out-Null")
+
+
+def pdf_pages(path: Path) -> int:
+    """Page objects in a PDF, looking into compressed (object) streams too."""
+    data = path.read_bytes()
+    texts = [data]
+    for stream in re.finditer(rb"stream\r?\n(.*?)endstream", data, re.S):
+        try:
+            texts.append(zlib.decompress(stream.group(1)))
+        except zlib.error:
+            pass
+    pages = sum(len(re.findall(rb"/Type\s*/Page(?![a-zA-Z])", t)) for t in texts)
+    print(f"    {path.name}: {pages} pages")
+    return pages
 
 
 out = mcp.run_dir.resolve()
@@ -220,8 +237,38 @@ for name in ["files-block.pdf", "files-block.dxf"]:
     r = mcp.call("save_document", path=str(out / name))
     assert "exported" in r.text and "reported" not in r.text and (out / name).stat().st_size > 0, r.text
 assert (out / "files-block.pdf").read_bytes().startswith(b"%PDF"), "not a PDF"
+assert pdf_pages(out / "files-block.pdf") == 1
 r = mcp.call("save_document", path=str(out / "files-drawing.STEP"), expect_error=True)
 assert "doesn't hold a drawing" in r.text, r.text
+
+# A drawing's PDF: every sheet by default, or the ones named (in the
+# drawing's order, whatever order they're asked in); color for the export
+# only. Details stays the active sheet.
+mcp.call("add_sheet", name="Details", paper_size="A4")
+mcp.call("add_sheet")
+mcp.call("activate_sheet", sheet="Sheet1")
+mcp.call("activate_sheet", sheet="Details")
+color_before = com("Com $sw GetUserPreferenceToggle @(323)")
+r = mcp.call("save_document", path=str(out / "files-all.pdf"))
+assert "3 pages, one per sheet: Sheet1, Details, Sheet3" in r.text, r.text
+assert pdf_pages(out / "files-all.pdf") == 3
+r = mcp.call("save_document", path=str(out / "files-two.pdf"), pdf_sheets=["sheet3", "Sheet1"], pdf_color=False)
+assert "2 pages, one per sheet: Sheet1, Sheet3; black and white" in r.text, r.text
+assert pdf_pages(out / "files-two.pdf") == 2
+assert com("Com $sw GetUserPreferenceToggle @(323)") == color_before, "PDF color option not put back"
+r = mcp.call("save_document", path=str(out / "files-one.pdf"), pdf_sheets=["Details"], pdf_color=True)
+assert "1 page, one per sheet: Details; in color" in r.text, r.text
+assert pdf_pages(out / "files-one.pdf") == 1
+active_sheets = [s["name"] for s in mcp.call("inspect_drawing").json["sheets"] if s.get("active")]
+assert active_sheets == ["Details"], active_sheets
+r = mcp.call("save_document", path=str(out / "files-none.pdf"), pdf_sheets=["Nope"], expect_error=True)
+assert "no sheet \"Nope\"" in r.text and "Details" in r.text and not (out / "files-none.pdf").exists(), r.text
+r = mcp.call("save_document", path=str(out / "files-sheets.dxf"), pdf_sheets=["Sheet1"], expect_error=True)
+assert "for a PDF export" in r.text, r.text
+# Untested before: a multi-sheet DXF -- one file, or one per sheet?
+r = mcp.call("save_document", path=str(out / "files-sheets.dxf"))
+print(f"    multi-sheet DXF: {r.text!r}; files: {sorted(p.name for p in out.glob('files-sheets*'))}")
+assert not (open_dialogs := sw_dialogs()), open_dialogs
 
 close_all()
 r = mcp.call("open_document", path=str(drawing))

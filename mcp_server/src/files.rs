@@ -17,7 +17,7 @@ use crate::addin::proto;
 use crate::inspect::MM_PER_M;
 use proto::DocumentType;
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub struct SaveDocumentParams {
     /// Where to save, as an absolute path (e.g. "C:\\Users\\me\\Documents\\bracket.SLDPRT").
     /// Leave out to save the document to its own file. The extension picks the format:
@@ -34,6 +34,14 @@ pub struct SaveDocumentParams {
     /// Replace a file that's already there. Default false: an existing file is an error.
     #[serde(default)]
     pub overwrite: bool,
+    /// PDF of a drawing only: the sheets to put in it, by name (as inspect_drawing lists
+    /// them), one page each. Default: every sheet.
+    #[serde(default)]
+    pub pdf_sheets: Option<Vec<String>>,
+    /// PDF of a drawing only: true = in color, false = black and white. Default: SolidWorks'
+    /// own PDF export option.
+    #[serde(default)]
+    pub pdf_color: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -237,7 +245,10 @@ fn checked_path(path: &str) -> Result<&str, McpError> {
 /// format and its folder, and that it won't overwrite a file unasked.
 pub fn save_request(params: &SaveDocumentParams) -> Result<proto::SaveDocumentRequest, McpError> {
     let Some(path) = params.path.as_deref() else {
-        return Ok(proto::SaveDocumentRequest { path: String::new(), copy: false, allowed_types: vec![] });
+        if params.pdf_sheets.is_some() || params.pdf_color.is_some() {
+            return Err(invalid("pdf_sheets / pdf_color are for exporting a PDF: give a .pdf path".into()));
+        }
+        return Ok(proto::SaveDocumentRequest::default());
     };
     let path = checked_path(path)?;
     let format = format_of(path).ok_or_else(|| {
@@ -266,7 +277,34 @@ pub fn save_request(params: &SaveDocumentParams) -> Result<proto::SaveDocumentRe
         path: path.to_string(),
         copy: params.copy || !format.native,
         allowed_types: format.types.iter().map(|&t| t as i32).collect(),
+        pdf: pdf_export(params, format)?,
     })
+}
+
+/// The PDF options, for a .pdf path; pdf_* for any other format is an error.
+fn pdf_export(params: &SaveDocumentParams, format: &Format) -> Result<Option<proto::PdfExport>, McpError> {
+    if format.name != "PDF" {
+        if params.pdf_sheets.is_some() || params.pdf_color.is_some() {
+            return Err(invalid(format!(
+                "pdf_sheets / pdf_color are for a PDF export, not {}",
+                format.name
+            )));
+        }
+        return Ok(None);
+    }
+    let mut sheets: Vec<String> = Vec::new();
+    for name in params.pdf_sheets.iter().flatten().map(|n| n.trim()) {
+        if name.is_empty() {
+            return Err(invalid("pdf_sheets has an empty sheet name".into()));
+        }
+        if !sheets.iter().any(|s| s == name) {
+            sheets.push(name.to_string());
+        }
+    }
+    if params.pdf_sheets.is_some() && sheets.is_empty() {
+        return Err(invalid("pdf_sheets is empty -- name at least one sheet, or leave it out for all".into()));
+    }
+    Ok(Some(proto::PdfExport { sheets, color: params.pdf_color }))
 }
 
 /// The OpenDocument request for `params`: the type comes from the extension.
@@ -449,7 +487,20 @@ pub fn save_reply_text(
     let mut text = if request.path.is_empty() {
         format!("saved {}", describe(&doc))
     } else if format.is_some_and(|f| !f.native) {
-        format!("exported {} as {} to {}", doc.title, format.map_or("", |f| f.name), reply.saved_path)
+        let mut text = format!("exported {} as {} to {}", doc.title, format.map_or("", |f| f.name), reply.saved_path);
+        if let Some(pdf) = &request.pdf {
+            let pages = reply.pdf_sheets.len();
+            text += &format!(
+                "
+{pages} page{}, one per sheet: {}",
+                if pages == 1 { "" } else { "s" },
+                reply.pdf_sheets.join(", ")
+            );
+            if let Some(color) = pdf.color {
+                text += if color { "; in color" } else { "; black and white" };
+            }
+        }
+        text
     } else if request.copy {
         format!("saved a copy of {} to {}; still working on {}", doc.title, reply.saved_path, describe(&doc))
     } else {
@@ -624,7 +675,7 @@ mod tests {
     use super::*;
 
     fn save(path: Option<&str>) -> SaveDocumentParams {
-        SaveDocumentParams { path: path.map(Into::into), copy: false, overwrite: false }
+        SaveDocumentParams { path: path.map(Into::into), ..Default::default() }
     }
 
     #[test]
@@ -672,12 +723,59 @@ mod tests {
             std::fs::write(&existing, b"x").unwrap();
             let p = existing.to_str().unwrap();
             assert!(save_request(&save(Some(p))).is_err(), "exists");
-            let request = save_request(&SaveDocumentParams { path: Some(p.into()), copy: false, overwrite: true })
-                .unwrap();
+            let request =
+                save_request(&SaveDocumentParams { path: Some(p.into()), overwrite: true, ..Default::default() })
+                    .unwrap();
             assert!(request.copy, "exports are copies");
             assert_eq!(request.allowed_types, vec![DocumentType::Part as i32, DocumentType::Assembly as i32]);
             std::fs::remove_file(existing).unwrap();
         }
+    }
+
+    #[test]
+    fn pdf_options_go_with_pdf_paths_only() {
+        let pdf = |sheets: Option<Vec<&str>>, color: Option<bool>, path: Option<&str>| {
+            save_request(&SaveDocumentParams {
+                path: path.map(Into::into),
+                pdf_sheets: sheets.map(|s| s.into_iter().map(Into::into).collect()),
+                pdf_color: color,
+                ..Default::default()
+            })
+        };
+        let file = std::env::temp_dir().join("sld_mcp_files_test.pdf");
+        let path = file.to_str().unwrap();
+        if !is_absolute(path) || file.exists() {
+            return;
+        }
+        let request = pdf(None, None, Some(path)).unwrap();
+        assert_eq!(request.pdf, Some(proto::PdfExport { sheets: vec![], color: None }), "all sheets");
+        let request = pdf(Some(vec![" Sheet2 ", "Sheet1", "Sheet2"]), Some(false), Some(path)).unwrap();
+        assert_eq!(request.pdf, Some(proto::PdfExport { sheets: vec!["Sheet2".into(), "Sheet1".into()], color: Some(false) }));
+        assert!(pdf(Some(vec![]), None, Some(path)).is_err(), "no sheets");
+        assert!(pdf(Some(vec![" "]), None, Some(path)).is_err(), "blank name");
+        let dxf = file.with_extension("dxf");
+        assert!(pdf(Some(vec!["Sheet1"]), None, dxf.to_str()).is_err(), "not a PDF");
+        assert!(pdf(None, Some(true), None).is_err(), "in place");
+        assert_eq!(save_request(&save(dxf.to_str())).unwrap().pdf, None);
+    }
+
+    #[test]
+    fn pdf_reply_lists_the_pages() {
+        let request = proto::SaveDocumentRequest {
+            path: r"C:\d.pdf".into(),
+            copy: true,
+            pdf: Some(proto::PdfExport { sheets: vec![], color: Some(false) }),
+            ..Default::default()
+        };
+        let reply = proto::SaveDocumentResponse {
+            document: Some(proto::Document { title: "d - Sheet1".into(), r#type: 3, path: String::new() }),
+            saved_path: r"C:\d.pdf".into(),
+            saved: true,
+            pdf_sheets: vec!["Sheet1".into(), "Sheet2".into()],
+            ..Default::default()
+        };
+        let text = save_reply_text(&request, &reply).unwrap();
+        assert!(text.contains("as PDF") && text.contains("2 pages, one per sheet: Sheet1, Sheet2; black and white"), "{text}");
     }
 
     #[test]

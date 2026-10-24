@@ -820,7 +820,9 @@ impl SolidWorksTools {
                        happens: .SLDPRT / .SLDASM / .SLDDRW = Save As (the document becomes that \
                        file, unless copy=true); .STEP/.STP, .IGS/.IGES, .X_T/.X_B, .SAT, .STL, \
                        .3MF (parts, assemblies) or .PDF, .DXF, .DWG (drawings) = export a copy \
-                       with SolidWorks' own export options. An existing file is only replaced \
+                       with SolidWorks' own export options. A drawing's PDF has one page per \
+                       sheet, every sheet unless pdf_sheets names some; pdf_color=false makes it \
+                       black and white. An existing file is only replaced \
                        with overwrite=true. Saving an assembly or drawing to its own SolidWorks \
                        file also saves the changed parts it uses. A part with rebuild errors is \
                        still saved, and the reply says so."

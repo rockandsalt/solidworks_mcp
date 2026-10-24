@@ -418,7 +418,8 @@ service SolidWorks {
   // user's export options). Native saves also save modified documents it
   // references (a drawing's part, an assembly's components). Whether it
   // worked comes back in `saved` with SolidWorks' error / warning bits,
-  // which the MCP server names. FAILED_PRECONDITION if no document is open,
+  // which the MCP server names. A drawing's PDF holds every sheet or the
+  // ones `pdf` names. FAILED_PRECONDITION if no document is open,
   // the document was never saved and no path is given,
   // the format doesn't suit the document type, or another open document is
   // that file.
@@ -543,6 +544,17 @@ message SaveDocumentRequest {
   // The document types the path's format holds (the MCP server's table);
   // empty = any.
   repeated DocumentType allowed_types = 3;
+  // Set for a PDF export of a drawing (IExportPdfData).
+  PdfExport pdf = 4;
+}
+
+message PdfExport {
+  // The sheets to put in the PDF, by name (exactly, else ignoring case);
+  // empty = every sheet. NOT_FOUND for a name the drawing has no sheet of.
+  repeated string sheets = 1;
+  // Color (true) or black and white (false) for this export (the PDF
+  // export option swPDFExportInColor, put back after); unset = the user's.
+  optional bool color = 2;
 }
 
 message SaveDocumentResponse {
@@ -556,6 +568,8 @@ message SaveDocumentResponse {
   // swFileSaveError_e / swFileSaveWarning_e bits.
   int32 errors = 4;
   int32 warnings = 5;
+  // A drawing's PDF: the sheets asked for, in the drawing's sheet order.
+  repeated string pdf_sheets = 6;
 }
 
 message OpenDocumentRequest {
