@@ -307,6 +307,16 @@ impl AddinClient {
         Ok(client.replace_components(request).await?.into_inner())
     }
 
+    /// Where the components of the active assembly (or a drawing view's)
+    /// overlap; meters.
+    pub async fn check_interference(
+        &self,
+        request: proto::CheckInterferenceRequest,
+    ) -> Result<proto::CheckInterferenceResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.check_interference(request).await?.into_inner())
+    }
+
     /// The active document's 3D annotations (PMI); meters / radians.
     pub async fn inspect_annotations(&self) -> Result<proto::InspectAnnotationsResponse, tonic::Status> {
         let mut client = self.client.clone();

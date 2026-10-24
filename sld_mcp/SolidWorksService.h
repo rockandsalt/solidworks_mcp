@@ -122,6 +122,10 @@ public:
 		const sld_mcp::v1::ReplaceComponentsRequest* request,
 		sld_mcp::v1::ReplaceComponentsResponse* response) override;
 
+	grpc::Status CheckInterference(grpc::ServerContext* context,
+		const sld_mcp::v1::CheckInterferenceRequest* request,
+		sld_mcp::v1::CheckInterferenceResponse* response) override;
+
 	grpc::Status InspectAnnotations(grpc::ServerContext* context,
 		const sld_mcp::v1::InspectAnnotationsRequest* request,
 		sld_mcp::v1::InspectAnnotationsResponse* response) override;

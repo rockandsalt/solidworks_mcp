@@ -286,7 +286,8 @@ fn mm2(m2: f64) -> f64 {
     round(m2 * MM_PER_M * MM_PER_M, 4)
 }
 
-fn mm3(m3: f64) -> f64 {
+/// Cubic meters -> cubic millimeters.
+pub fn mm3(m3: f64) -> f64 {
     round(m3 * MM_PER_M * MM_PER_M * MM_PER_M, 4)
 }
 

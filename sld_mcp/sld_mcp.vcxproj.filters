@@ -123,6 +123,9 @@
     <ClCompile Include="service\Components.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>
+    <ClCompile Include="service\Interference.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
     <ClCompile Include="service\Deleting.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>

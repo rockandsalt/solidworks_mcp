@@ -361,6 +361,7 @@
     <ClCompile Include="service\AssemblyHelpers.cpp" />
     <ClCompile Include="service\Common.cpp" />
     <ClCompile Include="service\Components.cpp" />
+    <ClCompile Include="service\Interference.cpp" />
     <ClCompile Include="service\Deleting.cpp" />
     <ClCompile Include="service\Diagnosing.cpp" />
     <ClCompile Include="service\DimensionHelpers.cpp" />

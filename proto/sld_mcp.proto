@@ -211,6 +211,17 @@ service SolidWorks {
   // file, and with FAILED_PRECONDITION when SolidWorks replaces nothing.
   rpc ReplaceComponents(ReplaceComponentsRequest) returns (ReplaceComponentsResponse);
 
+  // Read-only: where the solid bodies of an assembly's components overlap,
+  // as SolidWorks' Interference Detection finds them
+  // (IAssemblyDoc::InterferenceDetectionManager), with every component
+  // where it is now (the saved / solved pose, no motion). The assembly is
+  // the active one, or with a drawing active the assembly a view shows (as
+  // loaded: its active configuration, unexploded). Each interference comes
+  // with its components, overlapping volume and the box around it. Changes
+  // nothing. FAILED_PRECONDITION if the active document is neither an
+  // assembly nor a drawing with an assembly view, or a sketch is open.
+  rpc CheckInterference(CheckInterferenceRequest) returns (CheckInterferenceResponse);
+
   // Read-only: the active part's (or assembly's) 3D annotations, i.e. its
   // PMI / MBD data -- what the MBD Dimension (DimXpert) tools and the
   // annotation tools put on the model: dimensions with their tolerances,
@@ -1216,6 +1227,66 @@ message ReplaceComponentsResponse {
   // Other features (not in `mates`) whose rebuild error is new or
   // different since the replacement.
   repeated FeatureProblem new_errors = 4;
+}
+
+message CheckInterferenceRequest {
+  // Drawings: the view whose assembly to check. Empty = the one assembly
+  // the drawing's views show (INVALID_ARGUMENT if they show several).
+  // Must be empty with an assembly active.
+  string view = 1;
+  // Faces that touch count too (TreatCoincidenceAsInterference): reported
+  // with volume 0.
+  bool include_coincident = 2;
+  // A subassembly is one component: what overlaps inside it isn't checked.
+  bool treat_subassemblies_as_components = 3;
+  // Bodies of one multibody part are checked against each other too.
+  bool include_multibody_parts = 4;
+  // Hidden components and bodies are checked too (default: ignored).
+  bool include_hidden = 5;
+}
+
+message Interference {
+  // The components that overlap (usually two), in the checked assembly:
+  // persist ids of its document, and names as ComponentInfo.name.
+  repeated bytes component_persist_ids = 1;
+  repeated string component_names = 2;
+  double volume = 3;  // m^3; 0 for faces that only touch
+  // Assembly space: the box around the overlap (the interference body's).
+  // Unset if SolidWorks gives no body.
+  Box3 box = 4;
+  // IInterference::IsPossibleInterference: SolidWorks isn't sure (e.g.
+  // graphics-only or imported geometry).
+  bool possible = 5;
+  // IInterference::IsFastener: a fastener in its hole, e.g. a screw's
+  // thread in a tapped hole, which is usually intended.
+  bool fastener = 6;
+  // Marked "ignore" in the assembly's Interference Detection. (Ignored
+  // ones are normally left out: showing them would mean changing
+  // ShowIgnoredInterferences, which loses the touching ones.)
+  bool ignored = 7;
+}
+
+message CheckInterferenceResponse {
+  // The assembly checked (with a drawing active: the view's model).
+  Document document = 1;
+  // Drawings: the view whose assembly was checked, and the configuration it
+  // shows. Interference Detection checks the assembly's active
+  // configuration (`configuration`), which may be another one.
+  string view = 2;
+  string view_configuration = 3;
+  string configuration = 4;
+  repeated Interference interferences = 5;
+  // Every component that has an interference, described once (persist ids
+  // of the checked assembly's document).
+  repeated ComponentInfo components = 6;
+  // Unsuppressed part components the assembly has (what was checked).
+  int32 checked_components = 7;
+  // Set when interferences were cut off at the add-in's limit.
+  bool truncated = 8;
+  // The assembly had no unsaved changes before and has now: ending
+  // SolidWorks' interference check (IInterferenceDetectionMgr::Done) marks
+  // it modified although nothing changed.
+  bool marked_modified = 9;
 }
 
 // A persist_id is SolidWorks' persistent reference for an entity

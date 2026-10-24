@@ -10,6 +10,7 @@ mod files;
 mod fillet;
 mod hole;
 mod inspect;
+mod interference;
 mod mirror;
 mod note;
 mod pattern;
@@ -2980,6 +2981,38 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "Check an assembly for interference, like SolidWorks' Interference \
+                       Detection: which components' solids overlap, by how much (volume in \
+                       mm³) and where (the box around each overlap, assembly mm), biggest \
+                       first. Works on the active assembly, or with a drawing active on the \
+                       assembly its views show (`view` picks one if there are several), so a \
+                       drawing can be checked before it's issued. `components` narrows it to \
+                       interferences involving those (ids from inspect_model, or names like \
+                       \"bracket-1\"; a subassembly covers its parts). Components are checked \
+                       where they are now (the saved / solved pose), not swept through their \
+                       motion. include_touching also lists faces that only touch; fasteners in \
+                       their holes are flagged, as SolidWorks recognises them. Changes \
+                       nothing, though SolidWorks marks the assembly modified afterwards. \
+                       Requires no sketch open for editing."
+    )]
+    async fn check_interference(
+        &self,
+        Parameters(params): Parameters<interference::CheckInterferenceParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let wanted = params.wanted(|id| self.resolve_id(id))?;
+        let reply = self
+            .addin
+            .check_interference(params.request())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let json = {
+            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            interference::render(&mut ids, &params, &wanted, &reply)
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+    }
+
+    #[tool(
         description = "Delete features of the active part or assembly, like selecting them in \
                        the FeatureManager tree and pressing Delete: sketches, extrudes, cuts, \
                        holes, fillets, chamfers, patterns, reference planes/axes, ..., and in an \
@@ -3894,7 +3927,8 @@ impl ServerHandler for SolidWorksTools {
                  Assemblies: inspect_model lists the components and mates and, within a \
                  component, its faces, edges and planes (in assembly coordinates); add_mate \
                  mates two components by those ids, and render_views shows where they ended \
-                 up. inspect_annotations reads the model's MBD / PMI (DimXpert dimensions, \
+                 up; check_interference finds components that overlap (also from a drawing \
+                 of the assembly). inspect_annotations reads the model's MBD / PMI (DimXpert dimensions, \
                  tolerances, datums, feature control frames). Drawings: inspect_drawing lists \
                  the sheets and views and, for one view, its visible edges with ids and \
                  sheet positions; add_drawing_dimensions dimensions those edges, \
