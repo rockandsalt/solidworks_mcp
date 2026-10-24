@@ -470,24 +470,64 @@ namespace
 		return SelectViewEntity(ctx.view, item);
 	}
 
-	bool DeleteAnnotations(IModelDoc2* doc, IModelDocExtension* ext, const std::vector<ATL::CComPtr<IAnnotation>>& annotations)
+	// The display dimension called `name` in a view of the drawing (as
+	// inspect_drawing lists it: "RD1@Drawing View1", or a model dimension's
+	// full name), with its view. NOT_FOUND / INVALID_ARGUMENT (several).
+	grpc::Status FindViewDimension(const std::vector<DrawingSheet>& sheets, const std::string& name,
+		ATL::CComPtr<IAnnotation>& annotation, ATL::CComPtr<IView>& view, std::string& sheetName)
 	{
-		doc->ClearSelection2(VARIANT_TRUE);
-		bool any = false;
-		for (const auto& annotation : annotations)
+		std::vector<std::string> where;
+		for (const auto& sheet : sheets)
+			for (const auto& v : sheet.views)
+				for (const auto& a : ViewAnnotationList(v))
+				{
+					long type = 0;
+					ATL::CComPtr<IDispatch> specific;
+					if (FAILED(a->GetType(&type)) || type != swDisplayDimension ||
+						FAILED(a->GetSpecificAnnotation(&specific)) || !specific)
+						continue;
+					ATL::CComQIPtr<IDisplayDimension> display(specific.p);
+					ATL::CComPtr<IDimension> dim;
+					ATL::CComBSTR full;
+					if (!display || FAILED(display->GetDimension2(0, &dim)) || !dim || FAILED(dim->get_FullName(&full)))
+						continue;
+					// "RD1@Drawing View1" names "RD1@Drawing View1@Draw1.Drawing".
+					const std::string fullName = ToUtf8(full);
+					if (fullName != name && fullName.compare(0, name.size() + 1, name + "@") != 0)
+						continue;
+					where.push_back(ViewName(v));
+					annotation = a;
+					view = v;
+					sheetName = sheet.name;
+				}
+		if (where.empty())
+			return grpc::Status(grpc::StatusCode::NOT_FOUND, "no view of the drawing shows a dimension named \"" + name +
+				"\" -- inspect_drawing with the view lists them (e.g. RD1@Drawing View1)");
+		if (where.size() > 1)
 		{
-			// Tables don't take Select3 without select data (seen 2026-10-22);
-			// Select2 selects them, and deleting a BOM's table deletes its
-			// feature too.
-			VARIANT_BOOL selected = VARIANT_FALSE;
-			if ((SUCCEEDED(annotation->Select3(VARIANT_TRUE, nullptr, &selected)) && selected) ||
-				(SUCCEEDED(annotation->Select2(VARIANT_TRUE, 0, &selected)) && selected))
-				any = true;
+			std::string list;
+			for (const auto& w : where)
+				list += (list.empty() ? "" : ", ") + w;
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "\"" + name + "\" is shown in several views (" + list +
+				") -- give the drawing's own name of the one you mean");
 		}
-		VARIANT_BOOL deleted = VARIANT_FALSE;
-		const bool ok = any && SUCCEEDED(ext->DeleteSelection2(0, &deleted)) && deleted;
-		doc->ClearSelection2(VARIANT_TRUE);
-		return ok;
+		return grpc::Status::OK;
+	}
+
+	// Every annotation in the drawing's views and on its sheets.
+	std::vector<ATL::CComPtr<IAnnotation>> DrawingAnnotationList(const std::vector<DrawingSheet>& sheets)
+	{
+		std::vector<ATL::CComPtr<IAnnotation>> all;
+		for (const auto& sheet : sheets)
+		{
+			for (const auto& view : sheet.views)
+				for (const auto& a : ViewAnnotationList(view))
+					all.push_back(a);
+			if (sheet.sheetView)
+				for (const auto& a : ViewAnnotationList(sheet.sheetView))
+					all.push_back(a);
+		}
+		return all;
 	}
 
 	// Gives a note made to replace another the old one's look: text format,
@@ -524,7 +564,32 @@ namespace
 	{
 		const bool create = r.name().empty();
 		const auto& s = r.style();
-		if (create && !r.has_text())
+		if (r.has_gdt())
+		{
+			if (!create)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a feature control frame or datum symbol can only be added");
+			const bool styled = s.has_text_height() || s.has_font() || s.has_bold() || s.has_italic() ||
+				s.has_underline() || s.document_font() || s.has_justification() || s.has_angle() || s.has_border();
+			if (r.has_text() || r.has_leader_style() || r.has_arrow() || styled)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"text, style and leader settings are for notes, not feature control frames or datum symbols");
+			if (r.leader_to_size() > 1)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a feature control frame or datum symbol goes on one entity");
+			if (r.leader_to_size() > 0 && !r.attach_to_dimension().empty())
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "attach it to an entity or a dimension, not both");
+			// InsertDatumTag2 with a dimension selected makes a datum symbol
+			// attached to nothing, off the view (seen 2026-10-24).
+			if (r.gdt().has_datum() && (r.leader_to_size() == 0 || !r.attach_to_dimension().empty()))
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a datum symbol goes on a view entity");
+			if (!r.attach_to_dimension().empty() && r.owner() != sld_mcp::v1::ANNOTATION_OWNER_UNSPECIFIED &&
+				r.owner() != sld_mcp::v1::ANNOTATION_OWNER_VIEW)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "on a dimension it belongs to the dimension's view");
+			if (grpc::Status status = ValidateGdtSymbol(r.gdt()); !status.ok())
+				return status;
+		}
+		else if (!r.attach_to_dimension().empty())
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "only feature control frames go on dimensions");
+		if (create && !r.has_text() && !r.has_gdt())
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a new note needs its text");
 		if (create && !r.attach_to_view().empty())
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a new note goes in a view by view_name");
@@ -602,9 +667,27 @@ grpc::Status SolidWorksService::SetupDrawingAnnotation(grpc::ServerContext* /*co
 	ATL::CComPtr<IView> ownerView;
 	FoundAnnotation found;
 	ATL::CComPtr<INote> note;
+	ATL::CComPtr<IAnnotation> onDimension;  // gdt on a dimension
 	if (create)
 	{
 		std::string viewName = request->view_name();
+		if (!request->attach_to_dimension().empty())
+		{
+			ATL::CComPtr<IView> dimensionView;
+			std::string dimensionSheet;
+			if (grpc::Status status = FindViewDimension(sheets, request->attach_to_dimension(), onDimension, dimensionView,
+				dimensionSheet); !status.ok())
+				return status;
+			const std::string dimensionViewName = ViewName(dimensionView);
+			if (!viewName.empty() && viewName != dimensionViewName)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, request->attach_to_dimension() + " is in " +
+					dimensionViewName + ", so what goes on it belongs to " + dimensionViewName + ", not " + viewName);
+			viewName = dimensionViewName;
+		}
+		if (request->has_gdt())
+			if (grpc::Status status = CheckDatumLabelFree(request->gdt(), DatumLabels(DrawingAnnotationList(sheets)));
+				!status.ok())
+				return status;
 		if (request->leader_to_size() > 0)
 		{
 			const std::string& leaderView = request->leader_to(0).view_name();
@@ -811,20 +894,42 @@ grpc::Status SolidWorksService::SetupDrawingAnnotation(grpc::ServerContext* /*co
 						std::to_string(i + 1) + "'s entity in " + ViewName(leaderCtx->view));
 				}
 			}
-			const ATL::CComBSTR text = change.text ? FromUtf8(*change.text) : before.text;
-			ATL::CComPtr<IDispatch> noteDisp;
-			HRESULT hr = doc->InsertNote(text, &noteDisp);
-			doc->ClearSelection2(VARIANT_TRUE);
-			if (FAILED(hr))
-				return ComError("IModelDoc2::InsertNote", hr);
-			ATL::CComQIPtr<INote> made(noteDisp.p);
-			ATL::CComPtr<IDispatch> annotationDisp;
-			if (made && SUCCEEDED(made->GetAnnotation(&annotationDisp)) && annotationDisp)
-				annotation = ATL::CComQIPtr<IAnnotation>(annotationDisp.p);
-			if (!annotation)
-				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't add the note");
-			note = made;
-			change.text.reset();
+			if (onDimension)
+			{
+				VARIANT_BOOL selected = VARIANT_FALSE;
+				if (FAILED(onDimension->Select3(VARIANT_TRUE, nullptr, &selected)) || !selected)
+				{
+					doc->ClearSelection2(VARIANT_TRUE);
+					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+						"SolidWorks wouldn't select " + request->attach_to_dimension());
+				}
+			}
+			if (request->has_gdt())
+			{
+				// A frame / datum symbol goes on what's selected, like a note's
+				// leaders.
+				grpc::Status status = InsertGdtSymbol(doc, ext, request->gdt(), annotation);
+				doc->ClearSelection2(VARIANT_TRUE);
+				if (!status.ok())
+					return status;
+			}
+			else
+			{
+				const ATL::CComBSTR text = change.text ? FromUtf8(*change.text) : before.text;
+				ATL::CComPtr<IDispatch> noteDisp;
+				HRESULT hr = doc->InsertNote(text, &noteDisp);
+				doc->ClearSelection2(VARIANT_TRUE);
+				if (FAILED(hr))
+					return ComError("IModelDoc2::InsertNote", hr);
+				ATL::CComQIPtr<INote> made(noteDisp.p);
+				ATL::CComPtr<IDispatch> annotationDisp;
+				if (made && SUCCEEDED(made->GetAnnotation(&annotationDisp)) && annotationDisp)
+					annotation = ATL::CComQIPtr<IAnnotation>(annotationDisp.p);
+				if (!annotation)
+					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't add the note");
+				note = made;
+				change.text.reset();
+			}
 
 			// Where did it go?
 			std::string ownerName;
@@ -838,16 +943,32 @@ grpc::Status SolidWorksService::SetupDrawingAnnotation(grpc::ServerContext* /*co
 					return std::string("the ") + OwnerWord(o) +
 						(o == sld_mcp::v1::ANNOTATION_OWNER_SHEET_FORMAT ? std::string() : " " + name);
 				};
-				return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks put the note in " + place(actual, ownerName) +
-					" instead of " + place(owner, expectedName) + " (on " + sheetName + "); it was deleted again");
+				return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks put the " + std::string(request->has_gdt()
+					? "symbol" : "note") + " in " + place(actual, ownerName) + " instead of " + place(owner, expectedName) +
+					" (on " + sheetName + "); it was deleted again");
 			}
-			long leaders = 0;
-			annotation->GetLeaderCount(&leaders);
-			if (leaders != static_cast<long>(items.size()))
+			const bool gdtAttaches = request->has_gdt() && (!items.empty() || onDimension);
+			if (request->has_gdt())
 			{
-				DeleteAnnotations(doc, ext, { annotation });
-				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks gave the note " +
-					std::to_string(leaders) + " leader(s) for " + std::to_string(items.size()) + " entities; it was deleted again");
+				// A datum symbol has no leader of its own (its triangle sits on
+				// the entity); a frame on a dimension none either.
+				if (gdtAttaches && !GdtAttached(annotation))
+				{
+					DeleteAnnotations(doc, ext, { annotation });
+					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't attach the symbol to " +
+						(onDimension ? request->attach_to_dimension() : std::string("the entity")) + "; it was deleted again");
+				}
+			}
+			else
+			{
+				long leaders = 0;
+				annotation->GetLeaderCount(&leaders);
+				if (leaders != static_cast<long>(items.size()))
+				{
+					DeleteAnnotations(doc, ext, { annotation });
+					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks gave the note " +
+						std::to_string(leaders) + " leader(s) for " + std::to_string(items.size()) + " entities; it was deleted again");
+				}
 			}
 
 			if (remake)
@@ -856,7 +977,7 @@ grpc::Status SolidWorksService::SetupDrawingAnnotation(grpc::ServerContext* /*co
 				if (!change.position && before.hasPosition)
 					change.position = before.position.head<2>();
 			}
-			else if (!change.position)
+			else if (!change.position && !gdtAttaches)
 			{
 				// Unplaced: above its view, or the sheet's middle.
 				ATL::CComVariant outline;
@@ -943,11 +1064,55 @@ grpc::Status SolidWorksService::DeleteDrawingAnnotations(grpc::ServerContext* /*
 		return status;
 	ATL::CComPtr<IModelDoc2> doc;
 	ATL::CComQIPtr<IDrawingDoc> drawing;
+	long modelType = swDocNONE;
 	if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
-		return status;
+	{
+		// A part's or assembly's annotations (PMI).
+		doc.Release();
+		if (!GetActiveModel(swApp, doc, modelType).ok())
+			return status;
+	}
 	ATL::CComPtr<IModelDocExtension> ext;
 	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
 		return status;
+
+	if (!drawing)
+	{
+		if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
+			return status;
+		auto byName = [&](const std::string& name) {
+			bool truncated = false;
+			std::vector<ATL::CComPtr<IAnnotation>> hits;
+			for (const auto& annotation : AllAnnotations(doc, ext, truncated))
+				if (AnnotationName(annotation) == name)
+					hits.push_back(annotation);
+			return hits;
+		};
+		std::vector<ATL::CComPtr<IAnnotation>> list;
+		std::vector<std::string> names;
+		PersistIds ids(ext);
+		for (const auto& name : request->names())
+		{
+			const auto hits = byName(name);
+			if (hits.empty())
+				return grpc::Status(grpc::StatusCode::NOT_FOUND, "the active " + std::string(modelType == swDocPART
+					? "part" : "assembly") + " has no annotation named \"" + name + "\" -- inspect_annotations lists them");
+			if (std::find(names.begin(), names.end(), name) != names.end())
+				continue;
+			names.push_back(name);
+			for (const auto& hit : hits)
+			{
+				list.push_back(hit);
+				DescribeAnnotation(hit, ids, nullptr, response->add_deleted());
+			}
+		}
+		DeleteAnnotations(doc, ext, list);
+		for (const auto& name : names)
+			if (!byName(name).empty())
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't delete " + name);
+		doc->GraphicsRedraw2();
+		return grpc::Status::OK;
+	}
 
 	// All found first, then deleted sheet by sheet (annotations are only
 	// selected on the sheet showing).

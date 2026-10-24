@@ -513,4 +513,298 @@ namespace sld_mcp::service
 			break;
 		}
 	}
+
+	bool DeleteAnnotations(IModelDoc2* doc, IModelDocExtension* ext,
+		const std::vector<ATL::CComPtr<IAnnotation>>& annotations)
+	{
+		doc->ClearSelection2(VARIANT_TRUE);
+		bool any = false;
+		for (const auto& annotation : annotations)
+		{
+			// Tables don't take Select3 without select data (seen 2026-10-22);
+			// Select2 selects them, and deleting a BOM's table deletes its
+			// feature too.
+			VARIANT_BOOL selected = VARIANT_FALSE;
+			if ((SUCCEEDED(annotation->Select3(VARIANT_TRUE, nullptr, &selected)) && selected) ||
+				(SUCCEEDED(annotation->Select2(VARIANT_TRUE, 0, &selected)) && selected))
+				any = true;
+		}
+		VARIANT_BOOL deleted = VARIANT_FALSE;
+		const bool ok = any && SUCCEEDED(ext->DeleteSelection2(0, &deleted)) && deleted;
+		doc->ClearSelection2(VARIANT_TRUE);
+		return ok;
+	}
+
+	namespace
+	{
+		bool IsGtolSymbol(int32_t symbol)
+		{
+			return (symbol >= swGcsSYMMETRY && symbol <= swGcsTOTALOPENRUNOUT) || symbol == swGcsSQUARE;
+		}
+
+		// The material conditions a frame's tolerance or datum can have.
+		bool IsCondition(int32_t condition)
+		{
+			return condition == swMcNONE || condition == swMcMMC || condition == swMcRFS || condition == swMcLMC;
+		}
+
+		// A frame value as compared: without SolidWorks' symbol codes (a
+		// datum's material condition shows up in its value as
+		// "B<MOD-MMC>", seen 2026-10-24) and surrounding blanks.
+		std::string PlainValue(const std::string& value)
+		{
+			std::string out;
+			bool code = false;
+			for (char c : value)
+			{
+				if (c == '<')
+					code = true;
+				else if (c == '>' && code)
+					code = false;
+				else if (!code)
+					out += c;
+			}
+			const auto first = out.find_first_not_of(" \t");
+			if (first == std::string::npos)
+				return std::string();
+			return out.substr(first, out.find_last_not_of(" \t") - first + 1);
+		}
+
+		std::string Datum(const sld_mcp::v1::GtolFrame& f, int i)
+		{
+			return i < f.datums_size() ? f.datums(i) : std::string();
+		}
+
+		int32_t DatumCondition(const sld_mcp::v1::GtolFrame& f, int i)
+		{
+			return i < f.datum_conditions_size() ? f.datum_conditions(i) : swMcNONE;
+		}
+
+		// Whether row `number` of the frame reads back as `f`.
+		bool FrameReadsBack(IGtol* gtol, short number, const sld_mcp::v1::GtolFrame& f, std::string& why)
+		{
+			ATL::CComVariant symbolsVar, valuesVar;
+			gtol->GetFrameSymbols(number, &symbolsVar);
+			gtol->GetFrameValues(number, &valuesVar);
+			const std::vector<long long> s = comvariant::ToInt64s(symbolsVar);
+			const std::vector<ATL::CComBSTR> v = comvariant::ToBstrs(valuesVar);
+			if (s.size() < 8 || v.size() < 5)
+			{
+				why = "SolidWorks didn't read the frame back";
+				return false;
+			}
+			const long long wantedSymbols[8] = { f.symbol(), f.tolerance1_diameter() ? 1 : 0, f.tolerance1_condition(),
+				f.tolerance2_diameter() ? 1 : 0, f.tolerance2_condition(), DatumCondition(f, 0), DatumCondition(f, 1),
+				DatumCondition(f, 2) };
+			for (size_t i = 0; i < 8; ++i)
+				// Diameter flags come back as 0 / 1 or 0 / -1 (VARIANT_BOOL).
+				if ((i == 1 || i == 3) ? ((s[i] != 0) != (wantedSymbols[i] != 0)) : s[i] != wantedSymbols[i])
+				{
+					why = "its symbols read back as [" + std::to_string(s[0]);
+					for (size_t k = 1; k < 8; ++k)
+						why += ", " + std::to_string(s[k]);
+					why += "]";
+					return false;
+				}
+			const std::string wantedValues[5] = { f.tolerance1(), f.tolerance2(), Datum(f, 0), Datum(f, 1), Datum(f, 2) };
+			for (size_t i = 0; i < 5; ++i)
+				if (PlainValue(ToUtf8(v[i])) != PlainValue(wantedValues[i]))
+				{
+					why = "its values read back as \"" + ToUtf8(v[0]) + "\", \"" + ToUtf8(v[1]) + "\", \"" + ToUtf8(v[2]) +
+						"\", \"" + ToUtf8(v[3]) + "\", \"" + ToUtf8(v[4]) + "\"";
+					return false;
+				}
+			return true;
+		}
+
+		// Frames, then composite / datum letter / projected zone, each read
+		// back. Symbols go first: SolidWorks folds a datum's condition into
+		// the datum's value text.
+		grpc::Status SetUpGtol(IGtol* gtol, const sld_mcp::v1::AnnotationGtol& spec)
+		{
+			for (int i = 0; i < spec.frames_size(); ++i)
+			{
+				const sld_mcp::v1::GtolFrame& f = spec.frames(i);
+				const short number = static_cast<short>(i + 1);
+				// SetFrameSymbols takes swGtolGeomCharSymbol_e / swGtolMatCondition_e;
+				// SetFrameSymbols2 the symbol library's codes ("<GTOL-POSI>"), and
+				// echoes unknown ones back while the frame shows nothing (probed
+				// 2026-10-24).
+				gtol->SetFrameSymbols(number, static_cast<short>(f.symbol()), f.tolerance1_diameter() ? VARIANT_TRUE : VARIANT_FALSE,
+					static_cast<short>(f.tolerance1_condition()), f.tolerance2_diameter() ? VARIANT_TRUE : VARIANT_FALSE,
+					static_cast<short>(f.tolerance2_condition()), static_cast<short>(DatumCondition(f, 0)),
+					static_cast<short>(DatumCondition(f, 1)), static_cast<short>(DatumCondition(f, 2)));
+				// SetFrameValues2 returned false and changed nothing on a new frame
+				// (probed 2026-10-24); SetFrameValues works. 2 is the fallback.
+				const ATL::CComBSTR tol1 = FromUtf8(f.tolerance1()), tol2 = FromUtf8(f.tolerance2()),
+					d1 = FromUtf8(Datum(f, 0)), d2 = FromUtf8(Datum(f, 1)), d3 = FromUtf8(Datum(f, 2));
+				gtol->SetFrameValues(number, tol1, tol2, d1, d2, d3);
+				std::string why;
+				if (!FrameReadsBack(gtol, number, f, why))
+				{
+					VARIANT_BOOL ok = VARIANT_FALSE;
+					gtol->SetFrameValues2(number, tol1, tol2, d1, d2, d3, &ok);
+					if (!FrameReadsBack(gtol, number, f, why))
+						return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+							"SolidWorks didn't take frame " + std::to_string(i + 1) + " as asked: " + why);
+				}
+			}
+			if (spec.composite())
+			{
+				gtol->SetCompositeFrame(VARIANT_TRUE);
+				VARIANT_BOOL now = VARIANT_FALSE;
+				if (FAILED(gtol->GetCompositeFrame(&now)) || !now)
+					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't make the frame composite");
+			}
+			if (!spec.datum_label().empty())
+			{
+				gtol->SetDatumIdentifier(FromUtf8(spec.datum_label()));
+				ATL::CComBSTR now;
+				if (FAILED(gtol->GetDatumIdentifier(&now)) || ToUtf8(now) != spec.datum_label())
+					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+						"SolidWorks didn't put datum " + spec.datum_label() + " on the frame");
+			}
+			if (!spec.projected_zone_height().empty())
+			{
+				gtol->SetPTZHeight(FromUtf8(spec.projected_zone_height()), VARIANT_TRUE);
+				ATL::CComBSTR now;
+				if (FAILED(gtol->GetPTZHeight(&now)) || PlainValue(ToUtf8(now)) != PlainValue(spec.projected_zone_height()))
+					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+						"SolidWorks didn't take the projected tolerance zone height");
+			}
+			return grpc::Status::OK;
+		}
+	}
+
+	grpc::Status ValidateGdtSymbol(const sld_mcp::v1::GdtSymbol& symbol)
+	{
+		if (symbol.has_datum())
+		{
+			const std::string& label = symbol.datum().label();
+			if (label.size() > 8 || label.find_first_of("<>") != std::string::npos)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a datum letter is a short text such as \"A\"");
+			return grpc::Status::OK;
+		}
+		if (!symbol.has_gtol())
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "say what to add: a feature control frame or a datum symbol");
+		const sld_mcp::v1::AnnotationGtol& g = symbol.gtol();
+		if (g.frames_size() < 1 || g.frames_size() > 2)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a feature control frame has 1 or 2 frames (rows)");
+		if (g.composite() && g.frames_size() != 2)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a composite frame needs 2 frames");
+		if (g.all_around())
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "all-around isn't supported");
+		for (int i = 0; i < g.frames_size(); ++i)
+		{
+			const sld_mcp::v1::GtolFrame& f = g.frames(i);
+			const std::string which = "frame " + std::to_string(i + 1);
+			if (!IsGtolSymbol(f.symbol()))
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, which + ": unknown symbol " + std::to_string(f.symbol()));
+			if (PlainValue(f.tolerance1()).empty())
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, which + " needs a tolerance value");
+			if (!IsCondition(f.tolerance1_condition()) || !IsCondition(f.tolerance2_condition()))
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, which + ": a tolerance's condition is none, MMC, RFS or LMC");
+			if (f.datums_size() > 3 || f.datum_conditions_size() > f.datums_size())
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, which + ": at most 3 datums, a condition for each at most");
+			for (int k = 0; k < f.datum_conditions_size(); ++k)
+				if (!IsCondition(f.datum_conditions(k)))
+					return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, which + ": a datum's condition is none, MMC, RFS or LMC");
+			for (const auto& text : { f.tolerance1(), f.tolerance2() })
+				if (text.size() > 64)
+					return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, which + ": tolerance text too long");
+			for (const auto& datum : f.datums())
+				if (datum.size() > 16)
+					return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, which + ": datum reference too long");
+		}
+		return grpc::Status::OK;
+	}
+
+	std::vector<std::string> DatumLabels(const std::vector<ATL::CComPtr<IAnnotation>>& annotations)
+	{
+		std::vector<std::string> labels;
+		for (const auto& annotation : annotations)
+		{
+			long type = 0;
+			ATL::CComPtr<IDispatch> specific;
+			if (FAILED(annotation->GetType(&type)) || type != swDatumTag ||
+				FAILED(annotation->GetSpecificAnnotation(&specific)) || !specific)
+				continue;
+			ATL::CComBSTR label;
+			if (ATL::CComQIPtr<IDatumTag> datum(specific.p); datum && SUCCEEDED(datum->GetLabel(&label)))
+				labels.push_back(ToUtf8(label));
+		}
+		return labels;
+	}
+
+	grpc::Status CheckDatumLabelFree(const sld_mcp::v1::GdtSymbol& symbol, const std::vector<std::string>& taken)
+	{
+		// SolidWorks gives a second symbol the same letter without a word
+		// (seen 2026-10-24).
+		if (!symbol.has_datum() || symbol.datum().label().empty())
+			return grpc::Status::OK;
+		if (std::find(taken.begin(), taken.end(), symbol.datum().label()) != taken.end())
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"there already is a datum " + symbol.datum().label() + " -- each datum feature gets its own letter");
+		return grpc::Status::OK;
+	}
+
+	grpc::Status InsertGdtSymbol(IModelDoc2* doc, IModelDocExtension* ext, const sld_mcp::v1::GdtSymbol& symbol,
+		ATL::CComPtr<IAnnotation>& out)
+	{
+		ATL::CComPtr<IDispatch> made;
+		HRESULT hr = symbol.has_datum() ? doc->InsertDatumTag2(&made) : doc->InsertGtol(&made);
+		if (FAILED(hr))
+			return ComError(symbol.has_datum() ? "IModelDoc2::InsertDatumTag2" : "IModelDoc2::InsertGtol", hr);
+		ATL::CComPtr<IDispatch> annotationDisp;
+		ATL::CComQIPtr<IGtol> gtol(made.p);
+		ATL::CComQIPtr<IDatumTag> datum(made.p);
+		if (gtol)
+			gtol->GetAnnotation(&annotationDisp);
+		else if (datum)
+			datum->GetAnnotation(&annotationDisp);
+		ATL::CComQIPtr<IAnnotation> annotation(annotationDisp.p);
+		if (!annotation)
+			// A datum symbol needs something selected to go on (null without).
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, symbol.has_datum()
+				? "SolidWorks didn't add the datum symbol (it needs a face, edge or dimension to go on)"
+				: "SolidWorks didn't add the feature control frame");
+
+		grpc::Status status = grpc::Status::OK;
+		if (gtol)
+			status = SetUpGtol(gtol, symbol.gtol());
+		else if (!symbol.datum().label().empty())
+		{
+			// SolidWorks gives a new symbol the next free letter.
+			VARIANT_BOOL ok = VARIANT_FALSE;
+			datum->SetLabel(FromUtf8(symbol.datum().label()), &ok);
+			ATL::CComBSTR now;
+			if (FAILED(datum->GetLabel(&now)) || ToUtf8(now) != symbol.datum().label())
+				status = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+					"SolidWorks didn't take the datum letter \"" + symbol.datum().label() + "\"");
+		}
+		if (!status.ok())
+		{
+			DeleteAnnotations(doc, ext, { ATL::CComPtr<IAnnotation>(annotation) });
+			return status;
+		}
+		out = annotation;
+		return grpc::Status::OK;
+	}
+
+	bool GdtAttached(IAnnotation* annotation)
+	{
+		ATL::CComPtr<IDispatch> specific;
+		if (FAILED(annotation->GetSpecificAnnotation(&specific)) || !specific)
+			return false;
+		// A frame on a drawing dimension reports IsAttached false and one
+		// attached entity (seen 2026-10-24).
+		if (ATL::CComQIPtr<IGtol> gtol(specific.p); gtol)
+		{
+			VARIANT_BOOL attached = VARIANT_FALSE;
+			if (SUCCEEDED(gtol->IsAttached(&attached)) && attached)
+				return true;
+		}
+		long count = 0;
+		return SUCCEEDED(annotation->GetAttachedEntityCount3(&count)) && count > 0;
+	}
 }

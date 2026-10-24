@@ -493,10 +493,8 @@ pub fn annotation_counts(types: &[i32]) -> Value {
 pub fn annotation_json(ids: &mut IdRegistry, view: Option<&str>, a: &proto::AnnotationInfo) -> Value {
     let mut obj = pmi::annotation_fields(a);
     // Dimensions in a drawing are driven by the model (or are reference
-    // dimensions); saying so on each is noise. Drawing notes all report PMI
-    // type "unknown" (4); none is imported.
+    // dimensions); saying so on each is noise.
     obj.remove("driven");
-    obj.remove("imported");
     if let Some(owner) = owner_text(a) {
         obj.insert("in".into(), json!(owner));
     }

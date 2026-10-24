@@ -341,9 +341,26 @@ fn dimension_json(d: &proto::AnnotationDimension, obj: &mut Map<String, Value>) 
     obj.insert("tolerance".into(), Value::Object(tol));
 }
 
+/// A datum reference as shown: SolidWorks folds a datum's material
+/// condition into its text as a symbol code ("B<MOD-MMC>"), which the
+/// condition already says.
+fn datum_text(datum: &str) -> String {
+    let mut out = String::new();
+    let mut code = false;
+    for c in datum.chars() {
+        match c {
+            '<' => code = true,
+            '>' if code => code = false,
+            _ if !code => out.push(c),
+            _ => {}
+        }
+    }
+    out.trim().to_string()
+}
+
 /// One row of a feature control frame as a readable callout, e.g.
 /// "position | dia 0.1 (M) | A | B | C".
-fn frame_callout(f: &proto::GtolFrame) -> String {
+pub fn frame_callout(f: &proto::GtolFrame) -> String {
     let mut parts = vec![characteristic_name(f.symbol).unwrap_or("?").to_string()];
     for (value, diameter, condition) in [
         (&f.tolerance1, f.tolerance1_diameter, f.tolerance1_condition),
@@ -366,10 +383,10 @@ fn frame_callout(f: &proto::GtolFrame) -> String {
         parts.push(cell);
     }
     for (i, datum) in f.datums.iter().enumerate() {
-        if datum.trim().is_empty() {
+        let mut cell = datum_text(datum);
+        if cell.is_empty() {
             continue;
         }
-        let mut cell = datum.trim().to_string();
         if let Some(mark) = f.datum_conditions.get(i).and_then(|c| condition_mark(*c)) {
             cell += " ";
             cell += mark;
@@ -405,10 +422,11 @@ fn frame_json(f: &proto::GtolFrame) -> Value {
         .datums
         .iter()
         .enumerate()
-        .filter(|(_, d)| !d.trim().is_empty())
+        .map(|(i, d)| (i, datum_text(d)))
+        .filter(|(_, d)| !d.is_empty())
         .map(|(i, d)| match f.datum_conditions.get(i).and_then(|c| condition_name(*c)) {
-            Some(m) => json!({ "datum": d.trim(), "modifier": m }),
-            None => json!(d.trim()),
+            Some(m) => json!({ "datum": d, "modifier": m }),
+            None => json!(d),
         })
         .collect();
     if !datums.is_empty() {
@@ -458,9 +476,6 @@ pub fn annotation_fields(a: &proto::AnnotationInfo) -> Map<String, Value> {
         if !a.dimxpert_feature.is_empty() {
             obj.insert("dimxpert_feature".into(), json!(a.dimxpert_feature));
         }
-    }
-    if a.pmi_type != 0 {
-        obj.insert("imported".into(), json!(true));
     }
     match a.r#type {
         sw::DIMENSION => {
@@ -680,6 +695,9 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(frame_callout(&frame), "position | dia 0.1 (M) | A | B (M)");
+        // SolidWorks folds a datum's condition into its text.
+        let folded = proto::GtolFrame { datums: vec!["A".into(), "B<MOD-MMC>".into(), "".into()], ..frame.clone() };
+        assert_eq!(frame_callout(&folded), "position | dia 0.1 (M) | A | B (M)");
         let v = frame_json(&frame);
         assert_eq!(v["characteristic"], "position");
         assert_eq!(v["tolerance"]["diameter_zone"], true);

@@ -232,6 +232,18 @@ service SolidWorks {
   // document is neither a part nor an assembly.
   rpc InspectAnnotations(InspectAnnotationsRequest) returns (InspectAnnotationsResponse);
 
+  // Adds a feature control frame (geometric tolerance) or a datum feature
+  // symbol to the active part or assembly: attached to a face or edge (a
+  // leader to it) or (frames only) free. Not on a dimension: SolidWorks
+  // makes a frame with nothing attached and nowhere to show for that in a
+  // part (seen 2026-10-24). The frame's symbols and values are read back;
+  // all or nothing. Drawings use SetupDrawingAnnotation's `gdt`.
+  // FAILED_PRECONDITION if the active document is neither a part nor an
+  // assembly, or SolidWorks doesn't take the symbol; NOT_FOUND for an
+  // unknown entity; INVALID_ARGUMENT for a datum letter another datum
+  // symbol already has.
+  rpc AddModelAnnotation(AddModelAnnotationRequest) returns (AddModelAnnotationResponse);
+
   // Read-only look at the active drawing: its sheets (size, scale,
   // projection), the drawing views on each (type, orientation, scale, the
   // model it shows, where it sits on the sheet and how model space maps
@@ -288,7 +300,8 @@ service SolidWorks {
   // name another view has).
   rpc SetupDrawingView(SetupDrawingViewRequest) returns (SetupDrawingViewResponse);
 
-  // Adds a note to the active drawing -- in a view (it moves with the
+  // Adds a note, feature control frame or datum feature symbol (`gdt`) to
+  // the active drawing -- in a view (it moves with the
   // view), on a sheet, or in a sheet's format (the title block layer),
   // optionally with leaders to view entities -- or changes one of its
   // annotations: a note's text, look and leaders, any annotation's
@@ -303,8 +316,9 @@ service SolidWorks {
   rpc SetupDrawingAnnotation(SetupDrawingAnnotationRequest) returns (SetupDrawingAnnotationResponse);
 
   // Deletes annotations (notes, dimensions, ...) of the active drawing by
-  // name, sheet-format ones included. Nothing is deleted if one isn't
-  // found.
+  // name, sheet-format ones included -- or of the active part or assembly
+  // (feature control frames, datum symbols, ...; sheet and view are
+  // ignored there). Nothing is deleted if one isn't found.
   rpc DeleteDrawingAnnotations(DeleteDrawingAnnotationsRequest) returns (DeleteDrawingAnnotationsResponse);
 
   // Adds a table to the active drawing -- a bill of materials of an
@@ -1912,8 +1926,10 @@ message AnnotationInfo {
   int32 visibility = 6;
   // Lost its references (the geometry it pointed at is gone).
   bool dangling = 7;
-  // swPMIType_e, for PMI imported from a neutral file (STEP AP242):
-  // 1 dimension, 2 datum, 3 geometric tolerance, 4 unknown. 0 otherwise.
+  // IAnnotation::GetPMIType (swPMIType_e): the annotation's PMI category,
+  // 1 dimension, 2 datum, 3 geometric tolerance, 4 unknown (notes) -- for
+  // annotations made in SolidWorks too, so it doesn't mean imported (seen
+  // 2026-10-24); imported PMI is annotation type 19.
   int32 pmi_type = 8;
   // Where the annotation's text sits, model (or assembly) space.
   Vec3 position = 9;
@@ -2062,6 +2078,56 @@ message AnnotationGtol {
   string projected_zone_height = 5;
   // swGtolFormatType_e: 1 = before SOLIDWORKS 2022, 2 = 2022 and later.
   int32 format = 6;
+}
+
+// A geometric tolerancing symbol to add (AddModelAnnotation,
+// SetupDrawingAnnotation).
+message GdtSymbol {
+  oneof kind {
+    // A feature control frame: 1 or 2 frames (rows) with a symbol each;
+    // symbol and conditions as GtolFrame reads them (only 0 none, 1 MMC,
+    // 2 RFS, 3 LMC as conditions), datums at most 3 per frame. `composite`
+    // needs 2 frames; `datum_label` puts a datum feature symbol on the
+    // frame; `projected_zone_height` as shown (e.g. "12"). all_around and
+    // format aren't supported (INVALID_ARGUMENT / ignored).
+    AnnotationGtol gtol = 1;
+    DatumSymbol datum = 2;
+  }
+}
+
+message DatumSymbol {
+  // The datum letter, e.g. "A"; empty: the next one SolidWorks picks.
+  string label = 1;
+}
+
+message AddModelAnnotationRequest {
+  GdtSymbol symbol = 1;
+  // What it's attached to: a face or edge (persist id from InspectModel;
+  // component faces in assemblies) -- a leader to it, the arrow at
+  // `arrow_at` or SolidWorks' choice (a face's middle). Empty: a free frame
+  // (datum symbols need one).
+  bytes attach_to = 2;
+  // Where the leader's arrow touches the face or edge, model meters.
+  Vec3 arrow_at = 4;
+  // Where the text goes, model meters. SolidWorks keeps it in its
+  // annotation view's plane, so the depth along that view may differ (the
+  // reply has where it ended up). Unset: a frame on a face or edge goes
+  // 10 mm out from the arrow (along a planar face's normal, else away from
+  // the body's middle); the rest where SolidWorks puts it.
+  Vec3 position = 5;
+}
+
+message AddModelAnnotationResponse {
+  AnnotationInfo annotation = 1;
+  // Assemblies: the components the attached entities belong to.
+  repeated ComponentInfo components = 2;
+  // The annotation view SolidWorks put it in (e.g. "*Front"): it's drawn in
+  // that view's plane and shown when that view faces the screen.
+  string annotation_view = 3;
+  // That view's normal (toward the viewer), model space. The annotation's
+  // position and leader points are in its plane: a leader's last point is
+  // where the arrow is drawn, the face / edge point projected into it.
+  Vec3 annotation_view_normal = 4;
 }
 
 // ---------------------------------------------------------------------------
@@ -2536,6 +2602,14 @@ message SetupDrawingAnnotationRequest {
   optional int32 arrow = 12;  // swArrowStyle_e, every leader
   NoteStyle style = 13;
   optional string layer = 14;  // "" = none
+  // Add only: a feature control frame or datum feature symbol instead of a
+  // note (no text, style or leader settings). At most one leader_to entity;
+  // a datum symbol needs one.
+  GdtSymbol gdt = 15;
+  // Add, with a gdt frame: put it on this dimension (a name inspect_drawing
+  // lists, e.g. "RD1@Drawing View1"); it belongs to the dimension's view.
+  // Not for datum symbols (SolidWorks leaves one attached to nothing).
+  string attach_to_dimension = 16;
 }
 
 message SetupDrawingAnnotationResponse {

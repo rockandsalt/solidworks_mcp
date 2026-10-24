@@ -380,6 +380,7 @@
     <ClCompile Include="service\InspectModel.cpp" />
     <ClCompile Include="service\Mates.cpp" />
     <ClCompile Include="service\Mirror.cpp" />
+    <ClCompile Include="service\ModelAnnotations.cpp" />
     <ClCompile Include="service\Mesh.cpp" />
     <ClCompile Include="service\Pattern.cpp" />
     <ClCompile Include="service\ReferenceGeometry.cpp" />

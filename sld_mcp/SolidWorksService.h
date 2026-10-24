@@ -130,6 +130,10 @@ public:
 		const sld_mcp::v1::InspectAnnotationsRequest* request,
 		sld_mcp::v1::InspectAnnotationsResponse* response) override;
 
+	grpc::Status AddModelAnnotation(grpc::ServerContext* context,
+		const sld_mcp::v1::AddModelAnnotationRequest* request,
+		sld_mcp::v1::AddModelAnnotationResponse* response) override;
+
 	grpc::Status InspectDrawing(grpc::ServerContext* context,
 		const sld_mcp::v1::InspectDrawingRequest* request,
 		sld_mcp::v1::InspectDrawingResponse* response) override;

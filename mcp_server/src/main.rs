@@ -8,6 +8,7 @@ mod drawing_image;
 mod edit;
 mod files;
 mod fillet;
+mod gdt;
 mod hole;
 mod inspect;
 mod interference;
@@ -1655,6 +1656,52 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "Add a geometric tolerance -- a feature control frame -- to the active part \
+                       or assembly (3D PMI / MBD) or drawing. `characteristic`: flatness, \
+                       straightness, circularity, cylindricity (form: no datums), \
+                       profile_of_a_surface / profile_of_a_line, perpendicularity, parallelism, \
+                       angularity (need a datum), position, concentricity, symmetry, \
+                       circular_runout / total_runout (need a datum). `tolerance` in mm, \
+                       `diameter_zone` (the diameter sign, e.g. a hole's position), `modifier` \
+                       (MMC / LMC / RFS), `datums` in order of precedence (\"A\", \"B(M)\", \"C\"; \
+                       \"A-B\" for a common datum). Attach with `on` -- in a part a face or edge id \
+                       from inspect_model (\"face:7\"), in a drawing a view entity from \
+                       inspect_drawing (\"view_edge:4\") -- for a leader to it (arrow at \
+                       `arrow_at_mm`; a hole's cylindrical face for its position), in a drawing \
+                       also `dimension` to put it on a size dimension (\"RD1@Drawing View1\"), or \
+                       neither for a free frame. `at_mm` places it ([x, y, z] model mm in a part, [x, y] \
+                       sheet mm in a drawing; default: 10 mm out from the arrow). Also \
+                       `second_frame` (+ `composite`), `datum_feature` (a datum symbol on the \
+                       frame), `projected_zone_mm`. The frame is read back from SolidWorks; the \
+                       reply gives its callout (\"position | dia 0.1 (M) | A | B | C\"), name \
+                       (delete_drawing_annotations removes it, in parts too) and where it went."
+    )]
+    async fn add_geometric_tolerance(
+        &self,
+        Parameters(params): Parameters<gdt::AddGeometricToleranceParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.add_gdt(gdt::gtol(&params)?, &params.place).await
+    }
+
+    #[tool(
+        description = "Add a datum feature symbol -- the boxed letter on a triangle that makes a \
+                       face, edge or feature of size datum A, B, ... -- to the active part, assembly \
+                       or drawing, for add_geometric_tolerance's frames to reference. `on`: a face \
+                       or edge id from inspect_model in a part (\"face:7\"), a view entity from \
+                       inspect_drawing in a drawing (\"view_edge:4\"; a hole's circle) -- a \
+                       hole's or shaft's cylindrical face makes its axis the datum. `label`: the letter (default: SolidWorks' next one; refused if \
+                       another datum symbol has it). SolidWorks stands it just off the entity; \
+                       `at_mm` moves it ([x, y, z] model mm in a part, [x, y] sheet mm in a \
+                       drawing)."
+    )]
+    async fn add_datum_symbol(
+        &self,
+        Parameters(params): Parameters<gdt::AddDatumSymbolParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.add_gdt(gdt::datum(&params)?, &params.place).await
+    }
+
+    #[tool(
         description = "Look at the active drawing (.SLDDRW) without changing it: its sheets \
                        (paper size, scale, first/third-angle projection) and their drawing views \
                        (type, orientation such as *Front, scale, the part or assembly shown, the \
@@ -1988,9 +2035,11 @@ impl SolidWorksTools {
 
     #[tool(
         description = "Delete annotations of the active drawing -- notes, dimensions, balloons, \
-                       sheet format (title block) notes, ... -- by the names \
-                       inspect_drawing_annotations lists. Nothing is deleted if a name isn't found; \
-                       `sheet` / `view` narrow the search when a name is on several sheets."
+                       feature control frames, datum symbols, sheet format (title block) notes, ... \
+                       -- by the names inspect_drawing_annotations lists; or of the active part or \
+                       assembly (frames, datum symbols, ... by the names inspect_annotations \
+                       lists). Nothing is deleted if a name isn't found; `sheet` / `view` narrow \
+                       the search when a name is on several sheets of a drawing."
     )]
     async fn delete_drawing_annotations(
         &self,
@@ -3810,6 +3859,44 @@ impl SolidWorksTools {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
+    /// add_geometric_tolerance / add_datum_symbol: SetupDrawingAnnotation in
+    /// a drawing, AddModelAnnotation in a part or assembly.
+    async fn add_gdt(&self, symbol: proto::GdtSymbol, place: &gdt::PlaceParams) -> Result<CallToolResult, McpError> {
+        let active = self
+            .addin
+            .get_active_document(Some(DOCUMENT_CHECK_TIMEOUT))
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let Some(document) = active.document else {
+            return Err(McpError::invalid_params(
+                "no document is open in SolidWorks -- open the part, assembly or drawing first",
+                None,
+            ));
+        };
+        if document.r#type() == proto::DocumentType::Drawing {
+            let (request, remarks) = {
+                let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                gdt::drawing_request(&ids, &cache, symbol, place)?
+            };
+            return self.setup_drawing_annotation(request, remarks).await;
+        }
+        let (request, remarks) = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            gdt::model_request(&ids, symbol, place)?
+        };
+        let reply = self
+            .addin
+            .add_model_annotation(request.clone())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let text = {
+            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            gdt::model_reply(&mut ids, &request, &reply, &remarks)
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
     /// inspect_title_block / fill_title_block: the sheet's title block
     /// fields with the drawing's and the sheet model's property values.
     async fn title_block_fields(&self, sheet_name: &str) -> Result<serde_json::Value, McpError> {
@@ -3931,7 +4018,9 @@ impl ServerHandler for SolidWorksTools {
                  mates two components by those ids, and render_views shows where they ended \
                  up; check_interference finds components that overlap (also from a drawing \
                  of the assembly). inspect_annotations reads the model's MBD / PMI (DimXpert dimensions, \
-                 tolerances, datums, feature control frames). Drawings: inspect_drawing lists \
+                 tolerances, datums, feature control frames); add_datum_symbol and \
+                 add_geometric_tolerance add datums and feature control frames, to a part, \
+                 assembly or drawing. Drawings: inspect_drawing lists \
                  the sheets and views and, for one view, its visible edges with ids and \
                  sheet positions; add_drawing_dimensions dimensions those edges, \
                  insert_model_items brings in the model's own dimensions, \

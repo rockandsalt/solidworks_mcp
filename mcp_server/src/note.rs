@@ -40,7 +40,7 @@ const TIP_SLACK: f64 = 5e-4;
 const FAR_FROM_VIEW: f64 = 0.050;
 /// SolidWorks' usual note height, for guessing a text's size before it's
 /// made.
-const DEFAULT_TEXT_HEIGHT: f64 = 0.0035;
+pub(crate) const DEFAULT_TEXT_HEIGHT: f64 = 0.0035;
 
 fn invalid(message: impl Into<String>) -> McpError {
     McpError::invalid_params(message.into(), None)
@@ -98,12 +98,12 @@ pub fn outline(view: &proto::ViewInfo) -> Option<(DVec2, DVec2)> {
     Some((DVec2::new(lo.x, lo.y), DVec2::new(hi.x, hi.y)))
 }
 
-fn point(at_mm: [f64; 2], what: &str) -> Result<DVec2, McpError> {
+pub(crate) fn point(at_mm: [f64; 2], what: &str) -> Result<DVec2, McpError> {
     let p = DVec2::new(at_mm[0], at_mm[1]) / MM_PER_M;
     if p.is_finite() { Ok(p) } else { Err(invalid(format!("{what}: give [x, y] in mm"))) }
 }
 
-fn sheet_point(p: DVec2) -> proto::DrawingPoint {
+pub(crate) fn sheet_point(p: DVec2) -> proto::DrawingPoint {
     proto::DrawingPoint { x: p.x, y: p.y, view_name: String::new() }
 }
 
@@ -498,7 +498,7 @@ fn default_tip(shape: &Shape, others: &[&Shape]) -> Option<DVec2> {
 }
 
 /// A rough size of the text on the paper: [width, height], sheet meters.
-fn text_size(text: &str, height: f64) -> DVec2 {
+pub(crate) fn text_size(text: &str, height: f64) -> DVec2 {
     let lines: Vec<&str> = text.split('\n').collect();
     let longest = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f64;
     DVec2::new(longest * height * 0.75, lines.len() as f64 * height * 1.5)
@@ -507,7 +507,7 @@ fn text_size(text: &str, height: f64) -> DVec2 {
 /// Where to put the upper-left corner of a note's text whose first leader
 /// points at `tip`: out of the view's outline along the direction from the
 /// outline's middle to the tip, the text on the far side of that point.
-fn text_spot(tip: DVec2, outline: Option<(DVec2, DVec2)>, size: DVec2) -> DVec2 {
+pub(crate) fn text_spot(tip: DVec2, outline: Option<(DVec2, DVec2)>, size: DVec2) -> DVec2 {
     let (dir, past) = match outline {
         Some((lo, hi)) => {
             let middle = (lo + hi) / 2.0;
@@ -525,14 +525,14 @@ fn text_spot(tip: DVec2, outline: Option<(DVec2, DVec2)>, size: DVec2) -> DVec2 
 
 /// What the leaders of a note will be: entity refs, arrow tips (all or
 /// none), the view, and remarks for the reply.
-struct Leaders {
-    refs: Vec<proto::DrawingEntityRef>,
-    tips: Vec<DVec2>,
-    view: Option<String>,
-    remarks: Vec<String>,
+pub(crate) struct Leaders {
+    pub refs: Vec<proto::DrawingEntityRef>,
+    pub tips: Vec<DVec2>,
+    pub view: Option<String>,
+    pub remarks: Vec<String>,
 }
 
-fn leaders(ids: &IdRegistry, cache: &Cache, attach_to: &[String], arrows: &[[f64; 2]]) -> Result<Leaders, McpError> {
+pub(crate) fn leaders(ids: &IdRegistry, cache: &Cache, attach_to: &[String], arrows: &[[f64; 2]]) -> Result<Leaders, McpError> {
     if attach_to.len() > MAX_LEADERS {
         return Err(invalid(format!("at most {MAX_LEADERS} leaders per note")));
     }
@@ -998,6 +998,13 @@ fn placement_warnings(sheet: &proto::SheetInfo, a: &proto::AnnotationInfo) -> Ve
 }
 
 fn first_text(a: &proto::AnnotationInfo) -> String {
+    // A frame's or datum symbol's raw texts are SolidWorks' symbol codes.
+    if let Some(g) = a.gtol.as_ref().filter(|g| !g.frames.is_empty()) {
+        return g.frames.iter().map(pmi::frame_callout).collect::<Vec<_>>().join(" / ");
+    }
+    if !a.datum_label.trim().is_empty() {
+        return format!("datum {}", a.datum_label.trim());
+    }
     let t = a.text.first().map(|t| t.replace("\r\n", " / ").replace('\n', " / ")).unwrap_or_default();
     if t.chars().count() > 40 { format!("{}...", t.chars().take(40).collect::<String>()) } else { t }
 }
@@ -1076,9 +1083,11 @@ pub fn setup_reply(
         notes.push(format!("it's at {} sheet mm, not {} sheet mm", mm2(DVec2::new(p.x, p.y)), mm2(asked)));
     }
     // Arrows go where their entity was picked (SolidWorks numbers the
-    // leaders in its own order, so they're matched by place).
+    // leaders in its own order, so they're matched by place). A datum
+    // symbol has no leader: its triangle sits where it was picked.
     let tips: Vec<DVec2> = a.leaders.iter().filter_map(|l| l.points.last()).map(|p| DVec2::new(p.x, p.y)).collect();
-    for (i, asked) in request.arrow_points.iter().enumerate() {
+    let datum = a.r#type == 2;
+    for (i, asked) in request.arrow_points.iter().enumerate().filter(|_| !datum) {
         let asked = DVec2::new(asked.x, asked.y);
         if !tips.iter().any(|t| t.distance(asked) <= TIP_SLACK) {
             notes.push(format!(

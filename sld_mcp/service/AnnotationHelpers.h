@@ -75,4 +75,33 @@ namespace sld_mcp::service
 
 	void DescribeAnnotation(IAnnotation* annotation, PersistIds& ids, ComponentList* components,
 		sld_mcp::v1::AnnotationInfo* info);
+
+	// Selects the annotations and deletes them; false if none could be
+	// selected or SolidWorks refused.
+	bool DeleteAnnotations(IModelDoc2* doc, IModelDocExtension* ext,
+		const std::vector<ATL::CComPtr<IAnnotation>>& annotations);
+
+	// A feature control frame or datum feature symbol to add: what can be
+	// checked without SolidWorks.
+	grpc::Status ValidateGdtSymbol(const sld_mcp::v1::GdtSymbol& symbol);
+
+	// The letters of the datum feature symbols among `annotations`.
+	std::vector<std::string> DatumLabels(const std::vector<ATL::CComPtr<IAnnotation>>& annotations);
+
+	// INVALID_ARGUMENT if `symbol` is a datum symbol whose letter one of
+	// `taken` already has.
+	grpc::Status CheckDatumLabelFree(const sld_mcp::v1::GdtSymbol& symbol, const std::vector<std::string>& taken);
+
+	// Inserts the symbol for what's selected -- IModelDoc2::InsertGtol /
+	// InsertDatumTag2 give it a leader to a selected entity, or put it on a
+	// selected dimension -- in the active (drawing) view, and gives it the
+	// frames / letter `symbol` asks for, each read back. On failure the
+	// new annotation is deleted again.
+	grpc::Status InsertGdtSymbol(IModelDoc2* doc, IModelDocExtension* ext, const sld_mcp::v1::GdtSymbol& symbol,
+		ATL::CComPtr<IAnnotation>& out);
+
+	// Whether a feature control frame or datum symbol is attached to an
+	// entity (a leader to it) or a drawing dimension (it sits on it):
+	// IGtol::IsAttached, or SolidWorks reports what it's attached to.
+	bool GdtAttached(IAnnotation* annotation);
 }

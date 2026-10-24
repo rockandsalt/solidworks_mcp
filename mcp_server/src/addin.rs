@@ -384,6 +384,16 @@ impl AddinClient {
         Ok(client.setup_drawing_annotation(request).await?.into_inner())
     }
 
+    /// A feature control frame or datum symbol on the active part or
+    /// assembly.
+    pub async fn add_model_annotation(
+        &self,
+        request: proto::AddModelAnnotationRequest,
+    ) -> Result<proto::AddModelAnnotationResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.add_model_annotation(request).await?.into_inner())
+    }
+
     pub async fn delete_drawing_annotations(
         &self,
         request: proto::DeleteDrawingAnnotationsRequest,
