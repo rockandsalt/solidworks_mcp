@@ -75,16 +75,24 @@ impl AddinClient {
         Ok(client.get_active_document(request).await?.into_inner())
     }
 
-    pub async fn new_part(&self) -> Result<Option<proto::Document>, tonic::Status> {
+    pub async fn new_part(&self, units: proto::UnitsChange) -> Result<Option<proto::Document>, tonic::Status> {
         let mut client = self.client.clone();
-        let response = client.new_part(proto::NewPartRequest {}).await?;
+        let response = client.new_part(proto::NewPartRequest { units: Some(units) }).await?;
         Ok(response.into_inner().document)
     }
 
-    pub async fn new_assembly(&self) -> Result<Option<proto::Document>, tonic::Status> {
+    pub async fn new_assembly(&self, units: proto::UnitsChange) -> Result<Option<proto::Document>, tonic::Status> {
         let mut client = self.client.clone();
-        let response = client.new_assembly(proto::NewAssemblyRequest {}).await?;
+        let response = client.new_assembly(proto::NewAssemblyRequest { units: Some(units) }).await?;
         Ok(response.into_inner().document)
+    }
+
+    pub async fn set_document_units(
+        &self,
+        request: proto::SetDocumentUnitsRequest,
+    ) -> Result<proto::SetDocumentUnitsResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.set_document_units(request).await?.into_inner())
     }
 
     /// Paper size in meters.

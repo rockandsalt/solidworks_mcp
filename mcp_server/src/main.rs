@@ -26,6 +26,7 @@ mod sketch;
 mod sweep;
 mod table;
 mod tolerance;
+mod units;
 mod view;
 
 use std::sync::{Arc, Mutex};
@@ -782,6 +783,9 @@ struct SolidWorksTools {
     /// Sheet geometry of the drawing view entities inspect_drawing listed,
     /// for checking and placing drawing dimensions.
     drawings: Arc<Mutex<drawing::Cache>>,
+    /// The active document's units, as of the tool call's start (None:
+    /// nothing open, or the add-in didn't answer).
+    units: Arc<Mutex<Option<proto::DocumentUnits>>>,
 }
 
 #[tool_router]
@@ -793,6 +797,7 @@ impl SolidWorksTools {
             ids: Arc::default(),
             renderer: Arc::default(),
             drawings: Arc::default(),
+            units: Arc::default(),
         }
     }
 
@@ -809,9 +814,46 @@ impl SolidWorksTools {
 
         let name = reply
             .document
-            .map(|doc| files::describe(&doc))
+            .map(|doc| match &doc.units {
+                Some(units) => format!("{}; units {}", files::describe(&doc), units::describe(units)),
+                None => files::describe(&doc),
+            })
             .unwrap_or_else(|| "(no active document)".to_string());
         Ok(CallToolResult::success(vec![ContentBlock::text(name)]))
+    }
+
+    #[tool(
+        description = "Read or change the active document's units: `units` the unit system \
+                       (mmgs, ips = inch, cgs, mks), `decimals` the decimal places lengths show, \
+                       `drafting_standard` how dimensions, datums and frames are drawn (ansi, \
+                       iso, ...). Nothing given: just report them. This is how SolidWorks shows \
+                       the document -- its dimensions, tolerances, sheet sizes, what a drawing \
+                       prints -- not the tools: they always take and report mm and degrees. Inch \
+                       documents also get inch defaults: ANSI Inch holes, ANSI B sheets, ASME \
+                       borders and title blocks."
+    )]
+    async fn document_units(
+        &self,
+        Parameters(params): Parameters<units::UnitsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        if params.is_empty() {
+            let reply = self
+                .addin
+                .get_active_document(None)
+                .await
+                .map_err(|status| self.addin_error(status))?;
+            let Some(document) = reply.document else {
+                return Err(McpError::invalid_params("no document is open in SolidWorks", None));
+            };
+            return Ok(CallToolResult::success(vec![ContentBlock::text(units::reply_text(&document, None))]));
+        }
+        let reply = self
+            .addin
+            .set_document_units(proto::SetDocumentUnitsRequest { units: Some(units::change(&params)?) })
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let document = reply.document.unwrap_or_default();
+        Ok(CallToolResult::success(vec![ContentBlock::text(units::reply_text(&document, reply.before.as_ref()))]))
     }
 
     #[tool(
@@ -869,35 +911,39 @@ impl SolidWorksTools {
 
     #[tool(
         description = "Create a new, empty SolidWorks part document from the user's default \
-                       part template and make it the active document"
+                       part template and make it the active document. `units` (mmgs, ips = \
+                       inch, ...), `decimals` and `drafting_standard` set how SolidWorks shows it \
+                       (default: the template's); tools still take mm."
     )]
-    async fn create_part(&self) -> Result<CallToolResult, McpError> {
+    async fn create_part(
+        &self,
+        Parameters(params): Parameters<units::UnitsParams>,
+    ) -> Result<CallToolResult, McpError> {
         let document = self
             .addin
-            .new_part()
+            .new_part(units::change(&params)?)
             .await
             .map_err(|status| self.addin_error(status))?;
-
-        let title = document.map(|doc| doc.title).unwrap_or_default();
-        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-            "created part {title}"
-        ))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(files::new_document_reply_text("part", document.as_ref()))]))
     }
 
     #[tool(
-        description = "Create a new, empty SolidWorks assembly document from the user's default assembly template and make it the active document; insert_components puts parts and subassemblies into it"
+        description = "Create a new, empty SolidWorks assembly document from the user's default \
+                       assembly template and make it the active document; insert_components puts \
+                       parts and subassemblies into it. `units` (mmgs, ips = inch, ...), \
+                       `decimals` and `drafting_standard` set how SolidWorks shows it (default: \
+                       the template's); tools still take mm."
     )]
-    async fn create_assembly(&self) -> Result<CallToolResult, McpError> {
+    async fn create_assembly(
+        &self,
+        Parameters(params): Parameters<units::UnitsParams>,
+    ) -> Result<CallToolResult, McpError> {
         let document = self
             .addin
-            .new_assembly()
+            .new_assembly(units::change(&params)?)
             .await
             .map_err(|status| self.addin_error(status))?;
-
-        let title = document.map(|doc| doc.title).unwrap_or_default();
-        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-            "created assembly {title}"
-        ))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(files::new_document_reply_text("assembly", document.as_ref()))]))
     }
 
     #[tool(
@@ -907,9 +953,11 @@ impl SolidWorksTools {
                        absolute path or a name from SolidWorks' template / sheet format folder \
                        (an unknown name lists the ones there are). `paper_size` or \
                        `paper_size_mm` sets the sheet size (default: the sheet format's own \
-                       size, else the template's, else A3); `units` the drawing's unit system \
-                       (default: the template's). Reports the sheet as set up. The drawing \
-                       starts with no views."
+                       size, else the template's, else A3 -- ANSI B for units=ips); `units` the \
+                       drawing's unit system (mmgs, ips = inch, ...), `decimals` and \
+                       `drafting_standard` (ansi, iso, ...) how it shows dimensions (default: \
+                       the template's; tools still take mm). Reports the sheet as set up. The \
+                       drawing starts with no views."
     )]
     async fn create_drawing(
         &self,
@@ -1652,6 +1700,7 @@ impl SolidWorksTools {
             let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             pmi::render(&mut ids, &reply, &params, on.as_deref())
         };
+        let json = units::note_text_units(json, self.active_units().as_ref());
         Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
     }
 
@@ -1661,7 +1710,8 @@ impl SolidWorksTools {
                        straightness, circularity, cylindricity (form: no datums), \
                        profile_of_a_surface / profile_of_a_line, perpendicularity, parallelism, \
                        angularity (need a datum), position, concentricity, symmetry, \
-                       circular_runout / total_runout (need a datum). `tolerance` in mm, \
+                       circular_runout / total_runout (need a datum). `tolerance` in mm (written \
+                       in the document's unit: 0.002 in an inch document; a text goes as is), \
                        `diameter_zone` (the diameter sign, e.g. a hole's position), `modifier` \
                        (MMC / LMC / RFS), `datums` in order of precedence (\"A\", \"B(M)\", \"C\"; \
                        \"A-B\" for a common datum). Attach with `on` -- in a part a face or edge id \
@@ -1680,7 +1730,9 @@ impl SolidWorksTools {
         &self,
         Parameters(params): Parameters<gdt::AddGeometricToleranceParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.add_gdt(gdt::gtol(&params)?, &params.place).await
+        let units = self.active_units();
+        let (symbol, remarks) = gdt::gtol(&params, units.as_ref())?;
+        self.add_gdt(symbol, &params.place, remarks).await
     }
 
     #[tool(
@@ -1698,7 +1750,7 @@ impl SolidWorksTools {
         &self,
         Parameters(params): Parameters<gdt::AddDatumSymbolParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.add_gdt(gdt::datum(&params)?, &params.place).await
+        self.add_gdt(gdt::datum(&params)?, &params.place, Vec::new()).await
     }
 
     #[tool(
@@ -1731,6 +1783,7 @@ impl SolidWorksTools {
             let mut cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             drawing::render_inspect(&mut ids, &mut cache, &reply, &params)
         };
+        let json = units::note_text_units(json, self.active_units().as_ref());
         Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
     }
 
@@ -1975,6 +2028,7 @@ impl SolidWorksTools {
             let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             note::render_inspect(&mut ids, &reply, &params)?
         };
+        let json = units::note_text_units(json, self.active_units().as_ref());
         Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
     }
 
@@ -2206,8 +2260,11 @@ impl SolidWorksTools {
     #[tool(
         description = "Draw a drawing border into a sheet's format (shown behind the views on \
                        every print): a frame `margins_mm` [left, right, top, bottom] in from the \
-                       edges (default ISO 5457: 20, 10, 10, 10), zones (default ~50 mm, even counts) \
-                       with tick marks and labels (numbers across, letters down), centering marks. \
+                       edges, zones (even counts) with tick marks and labels, centering marks. \
+                       Defaults follow `standard`: iso (ISO 5457: margins 20, 10, 10, 10, zones \
+                       ~50 mm numbered from the left, lettered from the top) or asme (ASME Y14.1: \
+                       0.5 in margins, ~4.25 in zones from the lower right); asme for an inch \
+                       drawing. \
                        On its own layer (BORDER): drawing it again replaces it, leaving the rest of \
                        the format alone. Then draw_title_block."
     )]
@@ -2221,7 +2278,10 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         let sheet = sheet_format::find_sheet(&info, params.sheet.as_deref().unwrap_or("").trim())?;
-        let border = sheet_format::border(glam::DVec2::new(sheet.width, sheet.height), &params)?;
+        let standard = params
+            .standard
+            .unwrap_or(sheet_format::SheetStandard::for_document(units::is_inch(self.active_units().as_ref())));
+        let border = sheet_format::border(glam::DVec2::new(sheet.width, sheet.height), &params, standard)?;
         let reply = self
             .addin
             .draw_sheet_format(sheet_format::border_request(&sheet.name, &border, params.weight))
@@ -2237,7 +2297,8 @@ impl SolidWorksTools {
                        fixed text (`value` without property). `value` with property sets it. \
                        Default rows: TITLE, DWG NO., MATERIAL, FINISH, SCALE, SHEET, DRAWN / CHECKED \
                        with dates, REV, COMPANY, FILE. Goes in the border's lower-right corner \
-                       (corner_mm otherwise), width_mm (default 180). On its own layer (TITLE \
+                       (corner_mm otherwise), width_mm (default 180; 7 in for `standard` asme, \
+                       the default for an inch drawing). On its own layer (TITLE \
                        BLOCK): drawing it again replaces it. Values: fill_title_block."
     )]
     async fn draw_title_block(
@@ -2259,13 +2320,18 @@ impl SolidWorksTools {
                 .unwrap_or(glam::DVec2::new(sheet.width - 0.01, 0.01)),
         };
         let on_frame = params.corner_mm.is_none() && frame.is_some();
-        let rows = if params.rows.is_empty() { sheet_format::default_rows() } else { params.rows.clone() };
+        let standard = params
+            .standard
+            .unwrap_or(sheet_format::SheetStandard::for_document(units::is_inch(self.active_units().as_ref())));
+        let width_mm = params.width_mm.unwrap_or(standard.title_block_width_mm());
+        let rows = if params.rows.is_empty() { sheet_format::default_rows(width_mm, standard) } else { params.rows.clone() };
         let block = sheet_format::title_block(
             &rows,
-            params.width_mm.unwrap_or(180.0) / MM_PER_M,
+            width_mm / MM_PER_M,
             corner,
             on_frame,
             params.fields.unwrap_or(true),
+            standard,
         )?;
         if block.properties.iter().any(|p| p.of == sheet_format::PropertyOf::Model) && sheet.views.is_empty() {
             return Err(McpError::invalid_params(
@@ -2946,6 +3012,9 @@ impl SolidWorksTools {
                 ));
             }
         };
+        let mut params = params;
+        let inch = units::is_inch(self.active_units().as_ref());
+        params.standard.get_or_insert_with(|| hole::default_standard(&params.size, inch));
         let request = hole::request(&params, face_persist_id)?;
         let reply = self
             .addin
@@ -3741,7 +3810,10 @@ impl SolidWorksTools {
     /// the active document is the one the registry has, under a new file
     /// (Save As), so its ids carry over.
     async fn track_document(&self, rename: bool) {
-        match self.addin.get_active_document(Some(DOCUMENT_CHECK_TIMEOUT)).await {
+        let active = self.addin.get_active_document(Some(DOCUMENT_CHECK_TIMEOUT)).await;
+        *self.units.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            active.as_ref().ok().and_then(|reply| reply.document.as_ref()).and_then(|doc| doc.units.clone());
+        match active {
             Ok(reply) => {
                 let (key, name) = files::document_key(&reply);
                 let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -3754,6 +3826,11 @@ impl SolidWorksTools {
             // The tool call itself then says what's wrong with the add-in.
             Err(status) => tracing::debug!("couldn't check the active document: {status}"),
         }
+    }
+
+    /// The active document's units as of this tool call's start.
+    fn active_units(&self) -> Option<proto::DocumentUnits> {
+        self.units.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
     }
 
     /// The persist ID behind an id handed out by inspect_model.
@@ -3860,8 +3937,14 @@ impl SolidWorksTools {
     }
 
     /// add_geometric_tolerance / add_datum_symbol: SetupDrawingAnnotation in
-    /// a drawing, AddModelAnnotation in a part or assembly.
-    async fn add_gdt(&self, symbol: proto::GdtSymbol, place: &gdt::PlaceParams) -> Result<CallToolResult, McpError> {
+    /// a drawing, AddModelAnnotation in a part or assembly; `remarks` go in
+    /// the reply.
+    async fn add_gdt(
+        &self,
+        symbol: proto::GdtSymbol,
+        place: &gdt::PlaceParams,
+        remarks: Vec<String>,
+    ) -> Result<CallToolResult, McpError> {
         let active = self
             .addin
             .get_active_document(Some(DOCUMENT_CHECK_TIMEOUT))
@@ -3874,17 +3957,20 @@ impl SolidWorksTools {
             ));
         };
         if document.r#type() == proto::DocumentType::Drawing {
-            let (request, remarks) = {
+            let (request, mut placed) = {
                 let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 let cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                 gdt::drawing_request(&ids, &cache, symbol, place)?
             };
-            return self.setup_drawing_annotation(request, remarks).await;
+            placed.extend(remarks);
+            return self.setup_drawing_annotation(request, placed).await;
         }
-        let (request, remarks) = {
+        let (request, mut placed) = {
             let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             gdt::model_request(&ids, symbol, place)?
         };
+        placed.extend(remarks);
+        let remarks = placed;
         let reply = self
             .addin
             .add_model_annotation(request.clone())
@@ -4034,7 +4120,10 @@ impl ServerHandler for SolidWorksTools {
                  planes, axes, points and coordinate systems from faces, edges, vertices, sketch \
                  entities, the origin or the default planes; sketch on a new plane with \
                  on=\"feature:N\". Lengths are in millimeters, angles in \
-                 degrees."
+                 degrees, whatever the document's units: for an inch (imperial) part, \
+                 assembly or drawing give create_part / create_assembly / create_drawing \
+                 units=\"ips\" (or change an open one with document_units) and keep passing \
+                 mm -- SolidWorks then shows dimensions, tolerances and sheets in inches."
                     .to_string(),
             )
     }

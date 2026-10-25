@@ -15,6 +15,7 @@ use serde::Deserialize;
 
 use crate::addin::proto;
 use crate::inspect::MM_PER_M;
+use crate::units::{self, UnitsParams};
 use proto::DocumentType;
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
@@ -71,10 +72,8 @@ pub struct CreateDrawingParams {
     /// A custom sheet size instead of paper_size: [width, height] in mm.
     #[serde(default)]
     pub paper_size_mm: Option<[f64; 2]>,
-    /// The drawing's unit system (Tools > Options > Document Properties > Units). Default: the
-    /// template's.
-    #[serde(default)]
-    pub units: Option<UnitSystem>,
+    #[serde(flatten)]
+    pub units: UnitsParams,
 }
 
 /// Standard sheet sizes (swDwgPaperSizes_e).
@@ -134,42 +133,6 @@ impl PaperSize {
 
 /// swDwgPaperSizes_e's user-defined size.
 pub const PAPER_USER_DEFINED: i32 = 12;
-
-/// Document unit systems (swUnitSystem_e).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum UnitSystem {
-    /// Millimeter, gram, second.
-    Mmgs,
-    /// Centimeter, gram, second.
-    Cgs,
-    /// Meter, kilogram, second.
-    Mks,
-    /// Inch, pound, second.
-    Ips,
-}
-
-impl UnitSystem {
-    fn sw(self) -> i32 {
-        match self {
-            UnitSystem::Cgs => 1,
-            UnitSystem::Mks => 2,
-            UnitSystem::Ips => 3,
-            UnitSystem::Mmgs => 5,
-        }
-    }
-}
-
-fn unit_system_name(sw: i32) -> String {
-    match sw {
-        1 => "CGS (centimeter, gram, second)".into(),
-        2 => "MKS (meter, kilogram, second)".into(),
-        3 => "IPS (inch, pound, second)".into(),
-        4 => "custom".into(),
-        5 => "MMGS (millimeter, gram, second)".into(),
-        other => format!("unit system {other}"),
-    }
-}
 
 /// Largest sheet side paper_size_mm takes.
 const MAX_SHEET_MM: f64 = 10_000.0;
@@ -609,17 +572,29 @@ pub fn paper(
     })
 }
 
-/// The NewDrawing request for `params`: sizes in meters, enums as SolidWorks' values.
+/// The NewDrawing request for `params`: sizes in meters, enums as SolidWorks' values. An inch
+/// drawing from a template without a sheet gets ANSI B paper, the inch counterpart of A3.
 pub fn new_drawing_request(params: &CreateDrawingParams) -> Result<proto::NewDrawingRequest, McpError> {
     let (paper_size, width, height) = paper(params.paper_size, params.paper_size_mm)?;
+    let inch = params.units.units == Some(units::UnitSystem::Ips);
     Ok(proto::NewDrawingRequest {
         template: template_file(params.template.as_deref(), "drwdot", "drawing template")?,
         sheet_format: template_file(params.sheet_format.as_deref(), "slddrt", "sheet format")?,
         paper_size,
         width,
         height,
-        unit_system: params.units.map_or(0, UnitSystem::sw),
+        units: Some(units::change(&params.units)?),
+        fallback_paper_size: inch.then(|| PaperSize::AnsiB.sw()),
     })
+}
+
+/// "created part Part1; units MMGS (...): lengths in millimeters, 2 decimals; drafting standard ISO"
+pub fn new_document_reply_text(kind: &str, document: Option<&proto::Document>) -> String {
+    let title = document.map(|doc| doc.title.as_str()).unwrap_or_default();
+    match document.and_then(|doc| doc.units.as_ref()) {
+        Some(units) => format!("created {kind} {title}; units {}", units::describe(units)),
+        None => format!("created {kind} {title}"),
+    }
 }
 
 fn file_name(path: &str) -> &str {
@@ -666,7 +641,10 @@ pub fn new_drawing_reply_text(reply: &proto::NewDrawingResponse) -> String {
     if let Some(sheet) = &reply.sheet {
         text += &format!(": {}", sheet_text(sheet, &reply.sheet_format_path));
     }
-    text += &format!("; units {}. It has no views yet.", unit_system_name(reply.unit_system));
+    if let Some(units) = reply.document.as_ref().and_then(|doc| doc.units.as_ref()) {
+        text += &format!("; units {}", units::describe(units));
+    }
+    text += ". It has no views yet.";
     text
 }
 
@@ -681,7 +659,7 @@ mod tests {
     #[test]
     fn documents_are_keyed_by_file_else_session_and_title() {
         let reply = |title: &str, path: &str, session: &str| proto::GetActiveDocumentResponse {
-            document: Some(proto::Document { title: title.into(), r#type: 1, path: path.into() }),
+            document: Some(proto::Document { title: title.into(), r#type: 1, path: path.into(), ..Default::default() }),
             session: session.into(),
         };
         let saved = document_key(&reply("block.SLDPRT", r"C:\Dir\Block.SLDPRT", "s1"));
@@ -768,7 +746,7 @@ mod tests {
             ..Default::default()
         };
         let reply = proto::SaveDocumentResponse {
-            document: Some(proto::Document { title: "d - Sheet1".into(), r#type: 3, path: String::new() }),
+            document: Some(proto::Document { title: "d - Sheet1".into(), r#type: 3, path: String::new(), ..Default::default() }),
             saved_path: r"C:\d.pdf".into(),
             saved: true,
             pdf_sheets: vec!["Sheet1".into(), "Sheet2".into()],
@@ -807,7 +785,7 @@ mod tests {
     #[test]
     fn missing_references_are_explained() {
         let request = proto::OpenDocumentRequest { path: "C:\\a.SLDASM".into(), r#type: 2, read_only: false };
-        let doc = proto::Document { title: "a.SLDASM".into(), r#type: 2, path: request.path.clone() };
+        let doc = proto::Document { title: "a.SLDASM".into(), r#type: 2, path: request.path.clone(), ..Default::default() };
         let reply = proto::OpenDocumentResponse { document: Some(doc), opened: true, errors: 2, ..Default::default() };
         let text = open_reply_text(&request, &reply).unwrap();
         assert!(text.contains("suppressed") && !text.contains("file wasn't found"), "{text}");
@@ -818,14 +796,21 @@ mod tests {
     #[test]
     fn drawing_requests_map_sizes_and_units() {
         let request = new_drawing_request(&CreateDrawingParams::default()).unwrap();
-        assert_eq!(request, proto::NewDrawingRequest::default());
+        assert_eq!(request, proto::NewDrawingRequest { units: Some(proto::UnitsChange::default()), ..Default::default() });
 
         let params: CreateDrawingParams = serde_json::from_value(serde_json::json!({
             "sheet_format": " a3 - iso ", "paper_size": "A4_portrait", "units": "ips"
         }))
         .unwrap();
         let request = new_drawing_request(&params).unwrap();
-        assert_eq!((request.sheet_format.as_str(), request.paper_size, request.unit_system), ("a3 - iso", Some(7), 3));
+        assert_eq!(request.fallback_paper_size, Some(2)); // ANSI B for an inch drawing
+        let units = request.units.unwrap();
+        assert_eq!((request.sheet_format.as_str(), request.paper_size, units.unit_system), ("a3 - iso", Some(7), 3));
+        let params: CreateDrawingParams =
+            serde_json::from_value(serde_json::json!({"units": "mmgs", "decimals": 1, "drafting_standard": "iso"})).unwrap();
+        let request = new_drawing_request(&params).unwrap();
+        assert_eq!(request.units, Some(proto::UnitsChange { unit_system: 5, length_decimals: Some(1), drafting_standard: 2 }));
+        assert_eq!(request.fallback_paper_size, None);
 
         let params = CreateDrawingParams { paper_size_mm: Some([500.0, 300.0]), ..Default::default() };
         let request = new_drawing_request(&params).unwrap();
@@ -845,7 +830,12 @@ mod tests {
     #[test]
     fn drawing_reply_names_sheet_and_units() {
         let reply = proto::NewDrawingResponse {
-            document: Some(proto::Document { title: "Draw1".into(), r#type: 3, path: String::new() }),
+            document: Some(proto::Document {
+                title: "Draw1".into(),
+                r#type: 3,
+                units: Some(proto::DocumentUnits { unit_system: 5, length_unit: 0, length_decimals: 2, drafting_standard: 2 }),
+                ..Default::default()
+            }),
             template: r"C:\templates\Drawing.drwdot".into(),
             sheet: Some(proto::SheetInfo {
                 name: "Sheet1".into(),
@@ -858,12 +848,12 @@ mod tests {
                 ..Default::default()
             }),
             sheet_format_path: r"C:\formats\a3 - iso.slddrt".into(),
-            unit_system: 5,
         };
         assert_eq!(
             new_drawing_reply_text(&reply),
             "created drawing Draw1 from Drawing.drwdot: Sheet1, A3 (420 x 297 mm), sheet format a3 - iso, \
-             scale 1:2, first-angle projection; units MMGS (millimeter, gram, second). It has no views yet."
+             scale 1:2, first-angle projection; units MMGS (millimeter, gram, second): lengths in millimeters, 2 \
+             decimals; drafting standard ISO. It has no views yet."
         );
     }
 }

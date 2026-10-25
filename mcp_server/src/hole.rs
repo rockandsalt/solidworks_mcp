@@ -271,6 +271,21 @@ impl Fastener {
     }
 }
 
+/// The standard for a hole of `size` when none is given: metric sizes ("M5")
+/// are ISO, numbered and fractional ones ("#10", "1/4") ANSI Inch; anything
+/// else (drill sizes) follows the part's units.
+pub fn default_standard(size: &str, inch_document: bool) -> HoleStandard {
+    let size = size.trim();
+    let metric = size.strip_prefix(['M', 'm']).is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()));
+    if metric {
+        HoleStandard::Iso
+    } else if size.starts_with('#') || size.contains('/') || inch_document {
+        HoleStandard::AnsiInch
+    } else {
+        HoleStandard::Iso
+    }
+}
+
 /// Clearance between screw and hole.
 #[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -314,9 +329,10 @@ pub struct HoleWizardParams {
     /// the face's bounding box.
     #[serde(default)]
     pub locations: Option<Vec<[f64; 3]>>,
-    /// Hole standard: "iso" (default), "ansi_metric", "ansi_inch", "din" or "jis".
+    /// Hole standard: "iso", "ansi_metric", "ansi_inch", "din" or "jis". Default: by the size
+    /// ("M5" iso, "#10" or "1/4" ansi_inch), else ansi_inch in an inch part and iso otherwise.
     #[serde(default)]
-    pub standard: HoleStandard,
+    pub standard: Option<HoleStandard>,
     /// The fastener the hole is for. kind=hole: "screw_clearance" (default), "drill",
     /// "tap_drill", "dowel". counterbore: "socket_head_cap_screw" (default), "hex_bolt",
     /// "hex_cap_screw", "pan_head", "cheese_head" (ISO/DIN/JIS), "button_head" and
@@ -419,15 +435,16 @@ pub fn request(params: &HoleWizardParams, face_persist_id: Vec<u8>) -> Result<pr
             kind.name()
         )));
     }
-    let fastener_type = fastener.sw(params.standard).ok_or_else(|| {
+    let standard = params.standard.unwrap_or_default();
+    let fastener_type = fastener.sw(standard).ok_or_else(|| {
         let available: Vec<&str> = ALL_FASTENERS
             .into_iter()
-            .filter(|f| f.kind() == kind && f.sw(params.standard).is_some())
+            .filter(|f| f.kind() == kind && f.sw(standard).is_some())
             .map(Fastener::name)
             .collect();
         invalid(format!(
             "the {} standard has no \"{}\" {}; it has: {}",
-            params.standard.name(),
+            standard.name(),
             fastener.name(),
             kind.name(),
             available.join(", ")
@@ -487,7 +504,7 @@ pub fn request(params: &HoleWizardParams, face_persist_id: Vec<u8>) -> Result<pr
         face_persist_id,
         locations,
         kind: proto::HoleKind::from(kind).into(),
-        standard: params.standard.sw(),
+        standard: standard.sw(),
         fastener_type,
         size: size.to_string(),
         through_all: params.through_all,
@@ -557,7 +574,7 @@ pub fn reply_text(ids: &mut IdRegistry, params: &HoleWizardParams, reply: &proto
     let fastener = match Fastener::from_sw(spec.fastener_type) {
         Some((standard, f)) => format!("{} {}", standard.name(), f.name().replace('_', " ")),
         None => HoleStandard::from_sw(spec.standard)
-            .unwrap_or(params.standard)
+            .unwrap_or(params.standard.unwrap_or_default())
             .name()
             .to_string(),
     };
@@ -621,7 +638,7 @@ mod tests {
             sketch_name: None,
             on: Some("face:1".into()),
             locations: None,
-            standard: HoleStandard::Iso,
+            standard: Some(HoleStandard::Iso),
             fastener: None,
             depth_mm: None,
             through_all: true,
@@ -635,6 +652,18 @@ mod tests {
             thread_depth_mm: None,
             cosmetic_thread: false,
         }
+    }
+
+    #[test]
+    fn standards_follow_the_size_then_the_part() {
+        assert_eq!(default_standard("M5", true), HoleStandard::Iso);
+        assert_eq!(default_standard(" #10", false), HoleStandard::AnsiInch);
+        assert_eq!(default_standard("1/4", false), HoleStandard::AnsiInch);
+        assert_eq!(default_standard("Ø5.0", false), HoleStandard::Iso);
+        assert_eq!(default_standard("Letter F", true), HoleStandard::AnsiInch);
+        // Unset in the request: ISO.
+        let p = HoleWizardParams { standard: None, ..params(HoleKind::Counterbore) };
+        assert_eq!(request(&p, vec![1]).unwrap().standard, 8);
     }
 
     #[test]

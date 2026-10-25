@@ -27,16 +27,94 @@ use crate::table::Obstacles;
 pub const BORDER_LAYER: &str = "BORDER";
 pub const TITLE_BLOCK_LAYER: &str = "TITLE BLOCK";
 
-/// ISO 5457: zones about 50 mm, an even number of them along each side.
-const ZONE_SIZE: f64 = 0.050;
-const ZONE_TEXT: f64 = 0.0035;
 /// Text boxes are about this much taller than the text height.
 const TEXT_BOX: f64 = 1.3;
-const LABEL_TEXT: f64 = 0.002;
-const VALUE_TEXT: f64 = 0.0035;
 const CELL_PAD: f64 = 0.0012;
-/// Letters for zone rows (ISO 5457 leaves out I and O).
+/// Letters for zone rows (ISO 5457 and ASME Y14.1 leave out I and O).
 const ZONE_LETTERS: &str = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+/// The width default_rows' cell widths add up to.
+const DEFAULT_ROWS_WIDTH_MM: f64 = 180.0;
+
+/// The drawing standard a border's and title block's defaults follow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SheetStandard {
+    /// ISO 5457 / ISO 7200: metric sheets.
+    Iso,
+    /// ASME Y14.1: inch sheets.
+    Asme,
+}
+
+impl SheetStandard {
+    /// ASME for inch documents, ISO otherwise.
+    pub fn for_document(inch: bool) -> Self {
+        if inch { SheetStandard::Asme } else { SheetStandard::Iso }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            SheetStandard::Iso => "ISO 5457",
+            SheetStandard::Asme => "ASME Y14.1",
+        }
+    }
+
+    /// [left, right, top, bottom]: ISO's wider left edge is for filing;
+    /// ASME's 0.5 in all round.
+    fn margins_mm(self) -> [f64; 4] {
+        match self {
+            SheetStandard::Iso => [20.0, 10.0, 10.0, 10.0],
+            SheetStandard::Asme => [12.7; 4],
+        }
+    }
+
+    /// Zones along a frame side `length` long: ISO about 50 mm each, ASME
+    /// about 4.25 in (B size 4 x 2, C 4 x 4, D 8 x 4); an even number, at
+    /// least 2.
+    fn zone_count(self, length: f64) -> u32 {
+        let n = match self {
+            SheetStandard::Iso => (length / 0.050).round() as u32,
+            SheetStandard::Asme => (length / 0.10795).floor() as u32,
+        };
+        (n + n % 2).max(2)
+    }
+
+    /// ASME numbers zones from the right and letters them from the bottom.
+    fn from_lower_right(self) -> bool {
+        self == SheetStandard::Asme
+    }
+
+    /// Zone label and title block value text height (ASME: 0.12 in).
+    fn text(self) -> f64 {
+        match self {
+            SheetStandard::Iso => 0.0035,
+            SheetStandard::Asme => 0.003048,
+        }
+    }
+
+    /// Title block cell caption height (ASME: 0.08 in).
+    fn label_text(self) -> f64 {
+        match self {
+            SheetStandard::Iso => 0.002,
+            SheetStandard::Asme => 0.002032,
+        }
+    }
+
+    /// Title block row height (ASME: 0.375 in).
+    fn row_height_mm(self) -> f64 {
+        match self {
+            SheetStandard::Iso => 9.0,
+            SheetStandard::Asme => 9.525,
+        }
+    }
+
+    /// Default title block width (ASME: 7 in).
+    pub fn title_block_width_mm(self) -> f64 {
+        match self {
+            SheetStandard::Iso => 180.0,
+            SheetStandard::Asme => 177.8,
+        }
+    }
+}
 
 fn invalid(message: impl Into<String>) -> McpError {
     McpError::invalid_params(message.into(), None)
@@ -88,16 +166,21 @@ pub struct DrawSheetBorderParams {
     /// The sheet. Default: the active sheet.
     #[serde(default)]
     pub sheet: Option<String>,
+    /// The standard the defaults follow: "iso" (ISO 5457) or "asme" (ASME Y14.1). Default: asme
+    /// for a drawing in inches, else iso.
+    #[serde(default)]
+    pub standard: Option<SheetStandard>,
     /// Distance from the sheet's edges to the frame, mm: [left, right, top, bottom]. Default
-    /// [20, 10, 10, 10] (ISO 5457: a wider left edge for filing).
+    /// iso [20, 10, 10, 10] (a wider left edge for filing), asme 12.7 (0.5 in) all round.
     #[serde(default)]
     pub margins_mm: Option<[f64; 4]>,
-    /// Number of zones [across, up]. Default: about 50 mm each, an even number (ISO 5457);
-    /// [0, 0] for none.
+    /// Number of zones [across, up]. Default: an even number, iso about 50 mm each, asme about
+    /// 4.25 in; [0, 0] for none.
     #[serde(default)]
     pub zones: Option<[u32; 2]>,
-    /// Zone labels in the margin: numbers along the top and bottom (from the left), letters
-    /// down the sides (from the top). Default true.
+    /// Zone labels in the margin: numbers along the top and bottom, letters up and down the
+    /// sides (iso: numbered from the left, lettered from the top; asme: from the right, from
+    /// the bottom). Default true.
     #[serde(default)]
     pub zone_labels: Option<bool>,
     /// Marks at the middle of each side for centering the print. Default true.
@@ -158,7 +241,7 @@ pub struct TitleBlockCell {
     /// Width in mm. Default: the row's width left over, shared by the cells without one.
     #[serde(default)]
     pub width_mm: Option<f64>,
-    /// The value's text height in mm. Default 3.5 (less in low rows).
+    /// The value's text height in mm. Default 3.5 (asme 3.05, 0.12 in; less in low rows).
     #[serde(default)]
     pub height_mm: Option<f64>,
     #[serde(default)]
@@ -168,7 +251,7 @@ pub struct TitleBlockCell {
 #[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
 pub struct TitleBlockRow {
     pub cells: Vec<TitleBlockCell>,
-    /// Row height in mm. Default 9.
+    /// Row height in mm. Default 9 (asme 9.525, 0.375 in).
     #[serde(default)]
     pub height_mm: Option<f64>,
 }
@@ -182,7 +265,11 @@ pub struct DrawTitleBlockParams {
     /// DRAWN / DATE / CHECKED / DATE / REV; COMPANY / FILE, linked to the usual properties.
     #[serde(default)]
     pub rows: Vec<TitleBlockRow>,
-    /// Width in mm. Default 180 (ISO 7200).
+    /// The standard the defaults follow: "iso" or "asme". Default: asme for a drawing in
+    /// inches, else iso.
+    #[serde(default)]
+    pub standard: Option<SheetStandard>,
+    /// Width in mm. Default iso 180 (ISO 7200), asme 177.8 (7 in).
     #[serde(default)]
     pub width_mm: Option<f64>,
     /// The title block's lower-right corner, [x, y] sheet mm. Default: the border frame's
@@ -227,11 +314,7 @@ pub struct Border {
     pub notes: Vec<proto::FormatNote>,
     pub frame: (DVec2, DVec2),
     pub zones: [u32; 2],
-}
-
-fn zone_count(length: f64) -> u32 {
-    let n = (length / ZONE_SIZE).round() as u32;
-    (n + n % 2).max(2)
+    pub standard: SheetStandard,
 }
 
 fn zone_letter(i: u32) -> String {
@@ -240,8 +323,8 @@ fn zone_letter(i: u32) -> String {
     if i < n { letters[i as usize].to_string() } else { format!("{}{}", letters[(i / n - 1) as usize], letters[(i % n) as usize]) }
 }
 
-pub fn border(size: DVec2, params: &DrawSheetBorderParams) -> Result<Border, McpError> {
-    let [l, r, t, b] = params.margins_mm.unwrap_or([20.0, 10.0, 10.0, 10.0]);
+pub fn border(size: DVec2, params: &DrawSheetBorderParams, standard: SheetStandard) -> Result<Border, McpError> {
+    let [l, r, t, b] = params.margins_mm.unwrap_or(standard.margins_mm());
     if ![l, r, t, b].iter().all(|m| m.is_finite() && *m >= 0.0) {
         return Err(invalid("margins are mm, 0 or more"));
     }
@@ -256,7 +339,8 @@ pub fn border(size: DVec2, params: &DrawSheetBorderParams) -> Result<Border, Mcp
         )));
     }
     let frame = hi - lo;
-    let zones = params.zones.unwrap_or([zone_count(frame.x), zone_count(frame.y)]);
+    let zones = params.zones.unwrap_or([standard.zone_count(frame.x), standard.zone_count(frame.y)]);
+    let zone_text = standard.text();
     if zones[0] > 50 || zones[1] > 50 {
         return Err(invalid("at most 50 zones a side"));
     }
@@ -283,13 +367,13 @@ pub fn border(size: DVec2, params: &DrawSheetBorderParams) -> Result<Border, Mcp
                 }
             }
             if labels {
-                let label = (i + 1).to_string();
+                let label = if standard.from_lower_right() { zones[0] - i } else { i + 1 }.to_string();
                 let cx = x + w / 2.0;
-                if t >= ZONE_TEXT * 1.5 {
-                    notes.push(centered(&label, DVec2::new(cx, size.y - t / 2.0), ZONE_TEXT));
+                if t >= zone_text * 1.5 {
+                    notes.push(centered(&label, DVec2::new(cx, size.y - t / 2.0), zone_text));
                 }
-                if b >= ZONE_TEXT * 1.5 {
-                    notes.push(centered(&label, DVec2::new(cx, b / 2.0), ZONE_TEXT));
+                if b >= zone_text * 1.5 {
+                    notes.push(centered(&label, DVec2::new(cx, b / 2.0), zone_text));
                 }
             }
         }
@@ -297,7 +381,7 @@ pub fn border(size: DVec2, params: &DrawSheetBorderParams) -> Result<Border, Mcp
     if zones[1] > 0 {
         let h = frame.y / zones[1] as f64;
         for i in 0..zones[1] {
-            // Lettered from the top.
+            // From the top.
             let y = hi.y - h * i as f64;
             if i > 0 {
                 if l > 0.0 {
@@ -308,13 +392,13 @@ pub fn border(size: DVec2, params: &DrawSheetBorderParams) -> Result<Border, Mcp
                 }
             }
             if labels {
-                let label = zone_letter(i);
+                let label = zone_letter(if standard.from_lower_right() { zones[1] - 1 - i } else { i });
                 let cy = y - h / 2.0;
-                if l >= ZONE_TEXT * 1.5 {
-                    notes.push(centered(&label, DVec2::new(l / 2.0, cy), ZONE_TEXT));
+                if l >= zone_text * 1.5 {
+                    notes.push(centered(&label, DVec2::new(l / 2.0, cy), zone_text));
                 }
-                if r >= ZONE_TEXT * 1.5 {
-                    notes.push(centered(&label, DVec2::new(size.x - r / 2.0, cy), ZONE_TEXT));
+                if r >= zone_text * 1.5 {
+                    notes.push(centered(&label, DVec2::new(size.x - r / 2.0, cy), zone_text));
                 }
             }
         }
@@ -329,7 +413,7 @@ pub fn border(size: DVec2, params: &DrawSheetBorderParams) -> Result<Border, Mcp
         lines.push(line(DVec2::new(0.0, mid.y), DVec2::new(lo.x + inside, mid.y)));
         lines.push(line(DVec2::new(size.x, mid.y), DVec2::new(hi.x - inside, mid.y)));
     }
-    Ok(Border { lines, notes, frame: (lo, hi), zones })
+    Ok(Border { lines, notes, frame: (lo, hi), zones, standard })
 }
 
 pub fn border_request(sheet: &str, border: &Border, weight: Option<LineWeight>) -> proto::DrawSheetFormatRequest {
@@ -365,7 +449,8 @@ pub fn frame_of(sheet: &proto::SheetInfo) -> Option<(DVec2, DVec2)> {
 pub fn border_reply(sheet_name: &str, border: &Border, reply: &proto::DrawSheetFormatResponse) -> String {
     let (lo, hi) = border.frame;
     let mut lines = vec![format!(
-        "drew the border on {sheet_name}'s sheet format (layer {BORDER_LAYER}): frame [{}, {}]..[{}, {}] mm, {} x {} zones, {} lines and {} labels.",
+        "drew the {} border on {sheet_name}'s sheet format (layer {BORDER_LAYER}): frame [{}, {}]..[{}, {}] mm, {} x {} zones, {} lines and {} labels.",
+        border.standard.name(),
         mm(lo.x),
         mm(lo.y),
         mm(hi.x),
@@ -451,15 +536,23 @@ fn fixed(label: &str, value: &str, width: f64) -> TitleBlockCell {
     TitleBlockCell { label: Some(label.into()), value: Some(value.into()), width_mm: Some(width), ..Default::default() }
 }
 
-pub fn default_rows() -> Vec<TitleBlockRow> {
+/// The default title block, its cells scaled to `width_mm`.
+pub fn default_rows(width_mm: f64, standard: SheetStandard) -> Vec<TitleBlockRow> {
     use PropertyOf::{Drawing, Model};
+    let k = width_mm / DEFAULT_ROWS_WIDTH_MM;
+    let cell = |label, property, of, width: f64| cell(label, property, of, width * k);
+    let fixed = |label, value, width: f64| fixed(label, value, width * k);
+    let title_row = match standard {
+        SheetStandard::Iso => 14.0,
+        SheetStandard::Asme => 12.7,
+    };
     vec![
         TitleBlockRow {
             cells: vec![
                 TitleBlockCell { height_mm: Some(5.0), bold: true, ..cell("TITLE", "Title", Drawing, 110.0) },
                 TitleBlockCell { height_mm: Some(5.0), ..cell("DWG NO.", "DrawingNo", Drawing, 70.0) },
             ],
-            height_mm: Some(14.0),
+            height_mm: Some(title_row),
         },
         TitleBlockRow {
             cells: vec![
@@ -507,7 +600,14 @@ pub struct TitleBlock {
 /// The title block's lines and notes with its lower-right corner at
 /// `corner`; `skip_edges` leaves out its right and bottom edges (they're
 /// the border frame's).
-pub fn title_block(rows: &[TitleBlockRow], width: f64, corner: DVec2, skip_edges: bool, fields: bool) -> Result<TitleBlock, McpError> {
+pub fn title_block(
+    rows: &[TitleBlockRow],
+    width: f64,
+    corner: DVec2,
+    skip_edges: bool,
+    fields: bool,
+    standard: SheetStandard,
+) -> Result<TitleBlock, McpError> {
     if rows.is_empty() || rows.len() > 30 {
         return Err(invalid("a title block has 1..30 rows"));
     }
@@ -516,7 +616,7 @@ pub fn title_block(rows: &[TitleBlockRow], width: f64, corner: DVec2, skip_edges
     }
     let heights: Vec<f64> = rows
         .iter()
-        .map(|r| r.height_mm.unwrap_or(9.0) / MM_PER_M)
+        .map(|r| r.height_mm.unwrap_or(standard.row_height_mm()) / MM_PER_M)
         .collect();
     if heights.iter().any(|h| !(h.is_finite() && *h >= 0.004 && *h <= 0.1)) {
         return Err(invalid("row heights are 4..100 mm"));
@@ -578,16 +678,16 @@ pub fn title_block(rows: &[TitleBlockRow], width: f64, corner: DVec2, skip_edges
             } else {
                 value
             };
-            let label_band = if label.is_empty() { 0.0 } else { 0.0008 + LABEL_TEXT * TEXT_BOX + 0.0004 };
+            let label_band = if label.is_empty() { 0.0 } else { 0.0008 + standard.label_text() * TEXT_BOX + 0.0004 };
             if !label.is_empty() {
-                notes.push(left(&label, DVec2::new(x + CELL_PAD, top - 0.0008), LABEL_TEXT));
+                notes.push(left(&label, DVec2::new(x + CELL_PAD, top - 0.0008), standard.label_text()));
             }
             if !shown.is_empty() {
                 let room = h - label_band - 0.001;
                 let height = c
                     .height_mm
                     .map(|v| v / MM_PER_M)
-                    .unwrap_or(VALUE_TEXT)
+                    .unwrap_or(standard.text())
                     .min(room / TEXT_BOX)
                     .max(0.0015);
                 if c.height_mm.is_some_and(|v| !(v.is_finite() && v > 0.0)) {
@@ -820,7 +920,7 @@ mod tests {
 
     #[test]
     fn an_a3_border_has_even_zones_and_ticks() {
-        let b = border(DVec2::new(0.42, 0.297), &DrawSheetBorderParams::default()).unwrap();
+        let b = border(DVec2::new(0.42, 0.297), &DrawSheetBorderParams::default(), SheetStandard::Iso).unwrap();
         assert_eq!(b.zones, [8, 6]);
         assert!((b.frame.0 - DVec2::new(0.02, 0.01)).length() < 1e-12);
         assert!((b.frame.1 - DVec2::new(0.41, 0.287)).length() < 1e-12);
@@ -833,7 +933,7 @@ mod tests {
 
     #[test]
     fn title_block_cells_fill_their_rows() {
-        let tb = title_block(&default_rows(), 0.18, DVec2::new(0.41, 0.01), true, true).unwrap();
+        let tb = title_block(&default_rows(180.0, SheetStandard::Iso), 0.18, DVec2::new(0.41, 0.01), true, true, SheetStandard::Iso).unwrap();
         assert!((tb.bounds.0 - DVec2::new(0.23, 0.01)).length() < 1e-12);
         assert!((tb.bounds.1.y - (0.01 + 0.041)).abs() < 1e-12);
         // Every note inside the block.
@@ -843,7 +943,36 @@ mod tests {
         }
         assert!(tb.notes.iter().any(|n| n.text == "$PRPSHEET:\"Material\"" && n.field));
         let bad = vec![TitleBlockRow { cells: vec![TitleBlockCell { width_mm: Some(200.0), ..Default::default() }], height_mm: None }];
-        assert!(title_block(&bad, 0.18, DVec2::new(0.41, 0.01), false, true).is_err());
+        assert!(title_block(&bad, 0.18, DVec2::new(0.41, 0.01), false, true, SheetStandard::Iso).is_err());
+    }
+
+    #[test]
+    fn an_asme_b_border_counts_zones_from_the_lower_right() {
+        // ANSI B, 17 x 11 in.
+        let b = border(DVec2::new(0.4318, 0.2794), &DrawSheetBorderParams::default(), SheetStandard::Asme).unwrap();
+        assert_eq!(b.zones, [4, 2]);
+        assert!((b.frame.0 - DVec2::new(0.0127, 0.0127)).length() < 1e-12);
+        // Zone 1 at the right, A at the bottom (labels' centers, top and left margins).
+        let at = |text: &str| -> Vec<DVec2> {
+            b.notes.iter().filter(|n| n.text == text).map(|n| DVec2::new(n.position.as_ref().unwrap().x, n.position.as_ref().unwrap().y)).collect()
+        };
+        assert!(at("1").iter().all(|p| p.x > 0.3) && at("4").iter().all(|p| p.x < 0.13));
+        assert!(at("A").iter().all(|p| p.y < 0.14) && at("B").iter().all(|p| p.y > 0.14));
+        // C size: 4 x 4; D size: 8 x 4.
+        assert_eq!(border(DVec2::new(0.5588, 0.4318), &DrawSheetBorderParams::default(), SheetStandard::Asme).unwrap().zones, [4, 4]);
+        assert_eq!(border(DVec2::new(0.8636, 0.5588), &DrawSheetBorderParams::default(), SheetStandard::Asme).unwrap().zones, [8, 4]);
+    }
+
+    #[test]
+    fn default_title_blocks_fit_their_width() {
+        for (width, standard) in [(150.0, SheetStandard::Iso), (177.8, SheetStandard::Asme)] {
+            let rows = default_rows(width, standard);
+            let tb = title_block(&rows, width / MM_PER_M, DVec2::new(0.42, 0.0127), true, true, standard).unwrap();
+            assert!((tb.bounds.1.x - tb.bounds.0.x - width / MM_PER_M).abs() < 1e-12);
+        }
+        let asme = title_block(&default_rows(177.8, SheetStandard::Asme), 0.1778, DVec2::new(0.42, 0.0127), true, true, SheetStandard::Asme).unwrap();
+        // Title row 0.5 in + 3 rows of 0.375 in.
+        assert!((asme.bounds.1.y - asme.bounds.0.y - 0.0127 - 3.0 * 0.009525).abs() < 1e-9);
     }
 
     #[test]

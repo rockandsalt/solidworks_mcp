@@ -29,6 +29,9 @@ public:
 	grpc::Status NewDrawing(grpc::ServerContext* context,
 		const sld_mcp::v1::NewDrawingRequest* request,
 		sld_mcp::v1::NewDrawingResponse* response) override;
+	grpc::Status SetDocumentUnits(grpc::ServerContext* context,
+		const sld_mcp::v1::SetDocumentUnitsRequest* request,
+		sld_mcp::v1::SetDocumentUnitsResponse* response) override;
 
 	grpc::Status CreateRectangleSketch(grpc::ServerContext* context,
 		const sld_mcp::v1::CreateRectangleSketchRequest* request,

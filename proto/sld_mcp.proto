@@ -32,6 +32,11 @@ service SolidWorks {
   // after creating the document fails, the document is closed again.
   rpc NewDrawing(NewDrawingRequest) returns (NewDrawingResponse);
 
+  // Changes the active document's units (unit system, length decimals,
+  // drafting standard) and reads them back. FAILED_PRECONDITION with no
+  // document open; INTERNAL when SolidWorks doesn't take a value.
+  rpc SetDocumentUnits(SetDocumentUnitsRequest) returns (SetDocumentUnitsResponse);
+
   // Creates a new sketch on one of the active part's standard planes
   // containing a single center rectangle, then closes the sketch.
   // Fails with FAILED_PRECONDITION if the active document isn't a part or
@@ -493,6 +498,35 @@ message Document {
   // The file (IModelDoc2::GetPathName); empty for a document never saved.
   // Set by GetActiveDocument, SaveDocument and OpenDocument.
   string path = 3;
+  // Set where `path` is, and by NewPart, NewAssembly, NewDrawing and
+  // SetDocumentUnits.
+  DocumentUnits units = 4;
+}
+
+// A document's units (Tools > Options > Document Properties > Units,
+// Drafting Standard): only how SolidWorks shows the document. Geometry on
+// the wire is meters whatever these say.
+message DocumentUnits {
+  // swUnitSystem_e: 1 CGS, 2 MKS, 3 IPS, 4 custom, 5 MMGS.
+  int32 unit_system = 1;
+  // swLengthUnit_e (swUnitsLinear): 0 mm, 1 cm, 2 m, 3 in, 4 ft, 5 ft-in,
+  // 6 angstrom, 7 nm, 8 micron, 9 mil, 10 microinch.
+  int32 length_unit = 2;
+  // Decimal places lengths show (swUnitsLinearDecimalPlaces).
+  int32 length_decimals = 3;
+  // swDetailingStandard_e (swDetailingDimensionStandard): 1 ANSI, 2 ISO,
+  // 3 DIN, 4 JIS, 5 BS, 6 GOST, 7 GB, 8 user defined.
+  int32 drafting_standard = 4;
+}
+
+// Changes to a document's units; 0 / unset fields stay as they are.
+message UnitsChange {
+  // swUnitSystem_e, not 4 (custom).
+  int32 unit_system = 1;
+  // 0..8.
+  optional int32 length_decimals = 2;
+  // swDetailingStandard_e, 1..7.
+  int32 drafting_standard = 3;
 }
 
 enum DocumentType {
@@ -502,13 +536,17 @@ enum DocumentType {
   DOCUMENT_TYPE_DRAWING = 3;
 }
 
-message NewPartRequest {}
+message NewPartRequest {
+  UnitsChange units = 1;
+}
 
 message NewPartResponse {
   Document document = 1;
 }
 
-message NewAssemblyRequest {}
+message NewAssemblyRequest {
+  UnitsChange units = 1;
+}
 
 message NewAssemblyResponse {
   Document document = 1;
@@ -526,12 +564,16 @@ message NewDrawingRequest {
   string sheet_format = 2;
   // swDwgPaperSizes_e (see SheetInfo); 12 = user defined, `width` x
   // `height`. Unset: the sheet format's own size if one is given, else the
-  // template's sheet size, else (a template without one) A3.
+  // template's sheet size, else (a template without one)
+  // `fallback_paper_size`.
   optional int32 paper_size = 3;
   double width = 4;   // meters, paper_size 12 only
   double height = 5;  // meters
-  // swUnitSystem_e: 1 CGS, 2 MKS, 3 IPS, 5 MMGS. 0 = the template's.
-  int32 unit_system = 6;
+  reserved 6;  // was unit_system, now in `units`
+  UnitsChange units = 7;
+  // swDwgPaperSizes_e for a template without a sheet when no paper_size is
+  // asked for; unset = A3.
+  optional int32 fallback_paper_size = 8;
 }
 
 message NewDrawingResponse {
@@ -542,8 +584,18 @@ message NewDrawingResponse {
   SheetInfo sheet = 3;
   // The sheet format file (ISheet::GetTemplateName); empty = none.
   string sheet_format_path = 4;
-  // swUnitSystem_e, read back.
-  int32 unit_system = 5;
+  reserved 5;  // was unit_system, now document.units
+}
+
+message SetDocumentUnitsRequest {
+  UnitsChange units = 1;
+}
+
+message SetDocumentUnitsResponse {
+  // With the units read back after the change.
+  Document document = 1;
+  // The units before it.
+  DocumentUnits before = 2;
 }
 
 message SaveDocumentRequest {

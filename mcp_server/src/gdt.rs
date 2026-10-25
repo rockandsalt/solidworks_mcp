@@ -8,6 +8,8 @@
 //! enum values (swGtolGeomCharSymbol_e, swGtolMatCondition_e) here, and the
 //! basic rules of GD&T (form tolerances take no datums, orientation and
 //! runout need one, ...) are checked before anything reaches SolidWorks.
+//! A frame's values are text SolidWorks shows as typed, so a tolerance in
+//! mm is written in the document's length unit (units.rs).
 
 use glam::{DVec2, DVec3};
 use rmcp::{ErrorData as McpError, schemars};
@@ -19,6 +21,7 @@ use crate::drawing::Cache;
 use crate::inspect::{IdRegistry, Kind, MM_PER_M, round};
 use crate::note;
 use crate::pmi;
+use crate::units;
 
 /// The longest tolerance text SolidWorks is sent (the add-in's limit).
 const MAX_TOLERANCE_TEXT: usize = 64;
@@ -160,7 +163,7 @@ impl Modifier {
     }
 }
 
-/// A tolerance value: a number of mm, or the text to show ("0.05", "0.1/25").
+/// A tolerance value: a number of mm, or the text to show ("0.05", "0.1/25") as is.
 #[derive(Debug, Clone, PartialEq, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum ToleranceValue {
@@ -178,7 +181,8 @@ pub struct FrameParams {
     /// perpendicularity, parallelism -- need a datum), location (position, concentricity,
     /// symmetry), runout (circular_runout, total_runout -- need a datum).
     pub characteristic: Characteristic,
-    /// The tolerance zone's size in mm, e.g. 0.05 (or a text such as "0.1/25").
+    /// The tolerance zone's size in mm, e.g. 0.05, written in the document's unit (0.002 in an
+    /// inch document); or a text shown as is, in the document's unit, e.g. "0.1/25".
     pub tolerance: ToleranceValue,
     /// A cylindrical zone: shows the diameter sign before the value (position of a hole,
     /// straightness of an axis).
@@ -245,7 +249,8 @@ pub struct AddGeometricToleranceParams {
     /// also datum D.
     #[serde(default)]
     pub datum_feature: Option<String>,
-    /// A projected tolerance zone of this height in mm (shown as (P) and the height).
+    /// A projected tolerance zone of this height in mm (shown as (P) and the height, in the
+    /// document's unit).
     #[serde(default)]
     pub projected_zone_mm: Option<f64>,
     #[serde(flatten)]
@@ -264,14 +269,40 @@ pub struct AddDatumSymbolParams {
 
 // ---- Symbols ----------------------------------------------------------------------
 
-fn tolerance_text(value: &ToleranceValue, what: &str) -> Result<String, McpError> {
+/// The document's units for the values a frame writes as text, and what was
+/// converted.
+struct FrameText<'a> {
+    units: Option<&'a proto::DocumentUnits>,
+    /// What was converted out of mm, for the reply.
+    remarks: Vec<String>,
+}
+
+impl FrameText<'_> {
+    /// `mm` as the document reads it; a remark when that isn't mm.
+    fn length(&mut self, mm: f64, what: &str) -> String {
+        let text = units::length_text(mm, self.units);
+        if let Some(u) = self.units.filter(|_| !units::is_mm(self.units)) {
+            self.remarks.push(format!(
+                "{what}: {} mm is written as {text} ({}, the document's unit)",
+                round(mm, 6),
+                units::length_name(u)
+            ));
+        }
+        text
+    }
+}
+
+fn tolerance_text(value: &ToleranceValue, what: &str, out: &mut FrameText) -> Result<String, McpError> {
     let t = match value {
         ToleranceValue::Mm(v) => {
             if !(v.is_finite() && *v > 0.0) {
                 return Err(invalid(format!("{what}: the tolerance must be above 0 mm")));
             }
-            // Shortest form that reads back the same: 0.05, not 0.05000000000000000277.
-            format!("{}", round(*v, 6))
+            let t = out.length(*v, &format!("{what} tolerance"));
+            if t.parse::<f64>().is_ok_and(|v| v <= 0.0) {
+                return Err(invalid(format!("{what}: {v} mm rounds to 0 in the document's unit -- give it as text")));
+            }
+            t
         }
         ToleranceValue::Text(t) => t.trim().to_string(),
     };
@@ -302,7 +333,7 @@ fn datum_ref(text: &str, what: &str) -> Result<(String, i32), McpError> {
     Ok((label.to_string(), condition))
 }
 
-fn frame(p: &FrameParams, what: &str) -> Result<proto::GtolFrame, McpError> {
+fn frame(p: &FrameParams, what: &str, out: &mut FrameText) -> Result<proto::GtolFrame, McpError> {
     let c = p.characteristic;
     if p.datums.len() > 3 {
         return Err(invalid(format!("{what}: at most 3 datums (primary, secondary, tertiary)")));
@@ -318,7 +349,7 @@ fn frame(p: &FrameParams, what: &str) -> Result<proto::GtolFrame, McpError> {
     }
     let mut out = proto::GtolFrame {
         symbol: c.sw(),
-        tolerance1: tolerance_text(&p.tolerance, what)?,
+        tolerance1: tolerance_text(&p.tolerance, what, out)?,
         tolerance1_diameter: p.diameter_zone,
         tolerance1_condition: p.modifier.map_or(0, Modifier::sw),
         ..Default::default()
@@ -334,12 +365,17 @@ fn frame(p: &FrameParams, what: &str) -> Result<proto::GtolFrame, McpError> {
     Ok(out)
 }
 
-/// The frame add_geometric_tolerance asks for.
-pub fn gtol(params: &AddGeometricToleranceParams) -> Result<proto::GdtSymbol, McpError> {
+/// The frame add_geometric_tolerance asks for, in a document with `units`
+/// (None = mm), and remarks on values written in another unit.
+pub fn gtol(
+    params: &AddGeometricToleranceParams,
+    units: Option<&proto::DocumentUnits>,
+) -> Result<(proto::GdtSymbol, Vec<String>), McpError> {
+    let mut out = FrameText { units, remarks: Vec::new() };
     let mut g = proto::AnnotationGtol { composite: params.composite, ..Default::default() };
-    g.frames.push(frame(&params.frame, "frame")?);
+    g.frames.push(frame(&params.frame, "frame", &mut out)?);
     if let Some(second) = &params.second_frame {
-        g.frames.push(frame(second, "second_frame")?);
+        g.frames.push(frame(second, "second_frame", &mut out)?);
         if params.composite && second.characteristic != params.frame.characteristic {
             return Err(invalid(
                 "a composite frame has one characteristic for both rows: give second_frame the same one (or composite=false \
@@ -365,9 +401,9 @@ pub fn gtol(params: &AddGeometricToleranceParams) -> Result<proto::GdtSymbol, Mc
         if !(h.is_finite() && h > 0.0) {
             return Err(invalid("projected_zone_mm: the zone's height in mm, above 0"));
         }
-        g.projected_zone_height = format!("{}", round(h, 6));
+        g.projected_zone_height = out.length(h, "projected_zone_mm");
     }
-    Ok(proto::GdtSymbol { kind: Some(proto::gdt_symbol::Kind::Gtol(g)) })
+    Ok((proto::GdtSymbol { kind: Some(proto::gdt_symbol::Kind::Gtol(g)) }, out.remarks))
 }
 
 /// The symbol add_datum_symbol asks for.
@@ -636,6 +672,35 @@ pub fn drawing_request(
 mod tests {
     use super::*;
 
+    fn mm_gtol(p: &AddGeometricToleranceParams) -> Result<proto::GdtSymbol, McpError> {
+        gtol(p, None).map(|(symbol, _)| symbol)
+    }
+
+    #[test]
+    fn inch_documents_get_inch_values() {
+        let inch = proto::DocumentUnits { unit_system: 3, length_unit: 3, length_decimals: 3, drafting_standard: 1 };
+        let mut f = frame_params(Characteristic::Position, &["A"]);
+        f.tolerance = ToleranceValue::Mm(0.127);
+        let mut p = params(f.clone());
+        p.projected_zone_mm = Some(25.4);
+        let (symbol, remarks) = gtol(&p, Some(&inch)).unwrap();
+        let g = gtol_of(&symbol);
+        assert_eq!((g.frames[0].tolerance1.as_str(), g.projected_zone_height.as_str()), ("0.005", "1"));
+        assert_eq!(remarks.len(), 2);
+        assert!(remarks[0].contains("0.127 mm is written as 0.005 (inches"), "{remarks:?}");
+        // Text goes as typed; a mm document is left alone.
+        f.tolerance = ToleranceValue::Text("0.005".into());
+        let (symbol, remarks) = gtol(&params(f.clone()), Some(&inch)).unwrap();
+        assert_eq!((gtol_of(&symbol).frames[0].tolerance1.as_str(), remarks.len()), ("0.005", 0));
+        f.tolerance = ToleranceValue::Mm(0.05);
+        let mm = proto::DocumentUnits { unit_system: 5, ..Default::default() };
+        let (symbol, remarks) = gtol(&params(f.clone()), Some(&mm)).unwrap();
+        assert_eq!((gtol_of(&symbol).frames[0].tolerance1.as_str(), remarks.len()), ("0.05", 0));
+        // Too small to show.
+        f.tolerance = ToleranceValue::Mm(0.0001);
+        assert!(gtol(&params(f), Some(&inch)).is_err());
+    }
+
     fn frame_params(c: Characteristic, datums: &[&str]) -> FrameParams {
         FrameParams {
             characteristic: c,
@@ -670,7 +735,7 @@ mod tests {
         f.diameter_zone = true;
         f.modifier = Some(Modifier::Mmc);
         f.tolerance = ToleranceValue::Mm(0.1);
-        let s = gtol(&params(f)).unwrap();
+        let s = mm_gtol(&params(f)).unwrap();
         let g = gtol_of(&s);
         let row = &g.frames[0];
         assert_eq!((row.symbol, row.tolerance1.as_str(), row.tolerance1_diameter, row.tolerance1_condition), (23, "0.1", true, 1));
@@ -682,34 +747,34 @@ mod tests {
     #[test]
     fn gdt_rules() {
         // Form tolerances never take datums; orientation needs one.
-        assert!(gtol(&params(frame_params(Characteristic::Flatness, &["A"]))).is_err());
-        assert!(gtol(&params(frame_params(Characteristic::Perpendicularity, &[]))).is_err());
-        assert!(gtol(&params(frame_params(Characteristic::Flatness, &[]))).is_ok());
-        assert!(gtol(&params(frame_params(Characteristic::Position, &[]))).is_ok());
+        assert!(mm_gtol(&params(frame_params(Characteristic::Flatness, &["A"]))).is_err());
+        assert!(mm_gtol(&params(frame_params(Characteristic::Perpendicularity, &[]))).is_err());
+        assert!(mm_gtol(&params(frame_params(Characteristic::Flatness, &[]))).is_ok());
+        assert!(mm_gtol(&params(frame_params(Characteristic::Position, &[]))).is_ok());
         // At most 3 datums, no repeats, sane letters.
-        assert!(gtol(&params(frame_params(Characteristic::Position, &["A", "B", "C", "D"]))).is_err());
-        assert!(gtol(&params(frame_params(Characteristic::Position, &["A", "A"]))).is_err());
-        assert!(gtol(&params(frame_params(Characteristic::Position, &["A(X)"]))).is_err());
-        assert!(gtol(&params(frame_params(Characteristic::Position, &["<MOD-MMC>"]))).is_err());
-        let common = gtol(&params(frame_params(Characteristic::CircularRunout, &["A-B"]))).unwrap();
+        assert!(mm_gtol(&params(frame_params(Characteristic::Position, &["A", "B", "C", "D"]))).is_err());
+        assert!(mm_gtol(&params(frame_params(Characteristic::Position, &["A", "A"]))).is_err());
+        assert!(mm_gtol(&params(frame_params(Characteristic::Position, &["A(X)"]))).is_err());
+        assert!(mm_gtol(&params(frame_params(Characteristic::Position, &["<MOD-MMC>"]))).is_err());
+        let common = mm_gtol(&params(frame_params(Characteristic::CircularRunout, &["A-B"]))).unwrap();
         assert_eq!(gtol_of(&common).frames[0].datums, vec!["A-B"]);
         // Tolerances: positive mm or a plain text.
         let mut f = frame_params(Characteristic::Flatness, &[]);
         f.tolerance = ToleranceValue::Mm(-0.1);
-        assert!(gtol(&params(f.clone())).is_err());
+        assert!(mm_gtol(&params(f.clone())).is_err());
         f.tolerance = ToleranceValue::Text("0.1/25".into());
-        assert_eq!(gtol_of(&gtol(&params(f)).unwrap()).frames[0].tolerance1, "0.1/25");
+        assert_eq!(gtol_of(&mm_gtol(&params(f)).unwrap()).frames[0].tolerance1, "0.1/25");
     }
 
     #[test]
     fn composite_frames() {
         let mut p = params(frame_params(Characteristic::Position, &["A", "B", "C"]));
         p.composite = true;
-        assert!(gtol(&p).is_err(), "composite without a second frame");
+        assert!(mm_gtol(&p).is_err(), "composite without a second frame");
         p.second_frame = Some(frame_params(Characteristic::Flatness, &[]));
-        assert!(gtol(&p).is_err(), "composite rows share a characteristic");
+        assert!(mm_gtol(&p).is_err(), "composite rows share a characteristic");
         p.second_frame = Some(frame_params(Characteristic::Position, &["A"]));
-        let s = gtol(&p).unwrap();
+        let s = mm_gtol(&p).unwrap();
         assert!(gtol_of(&s).composite);
         assert_eq!(gtol_of(&s).frames.len(), 2);
     }

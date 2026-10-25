@@ -486,7 +486,7 @@ mod tests {
             ..Default::default()
         };
         proto::DiagnoseModelResponse {
-            document: Some(proto::Document { title: "Part1".into(), r#type: 0, path: String::new() }),
+            document: Some(proto::Document { title: "Part1".into(), r#type: 0, path: String::new(), ..Default::default() }),
             rebuilt: true,
             problems: vec![cut, sketch, mate],
             checked_features: 12,

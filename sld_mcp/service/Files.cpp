@@ -1,4 +1,4 @@
-// Files.cpp : Documents: GetActiveDocument, NewPart, NewAssembly, NewDrawing, SaveDocument, OpenDocument (see docs/notes/files.md).
+// Files.cpp : Documents: GetActiveDocument, NewPart, NewAssembly, NewDrawing, SetDocumentUnits, SaveDocument, OpenDocument (see docs/notes/files.md, units.md).
 #include "pch.h"
 #include "Common.h"
 #include "DimensionHelpers.h"
@@ -8,7 +8,54 @@ using namespace sld_mcp::service;
 
 namespace
 {
-	// Title, type and file of a document.
+	// The units a document shows its lengths in, and its drafting standard.
+	void ReadUnits(IModelDocExtension* ext, sld_mcp::v1::DocumentUnits* out)
+	{
+		auto read = [&](long pref) {
+			long value = 0;
+			ext->GetUserPreferenceInteger(pref, swDetailingNoOptionSpecified, &value);
+			return static_cast<int32_t>(value);
+		};
+		out->set_unit_system(read(swUnitSystem));
+		out->set_length_unit(read(swUnitsLinear));
+		out->set_length_decimals(read(swUnitsLinearDecimalPlaces));
+		out->set_drafting_standard(read(swDetailingDimensionStandard));
+	}
+
+	// Sets what `change` asks for, each value read back.
+	grpc::Status ApplyUnits(IModelDoc2* doc, const sld_mcp::v1::UnitsChange& change)
+	{
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		auto set = [&](long pref, long value, const char* what) {
+			VARIANT_BOOL ok = VARIANT_FALSE;
+			HRESULT hr = ext->SetUserPreferenceInteger(pref, swDetailingNoOptionSpecified, value, &ok);
+			if (FAILED(hr))
+				return ComError("IModelDocExtension::SetUserPreferenceInteger", hr);
+			long now = -1;
+			ext->GetUserPreferenceInteger(pref, swDetailingNoOptionSpecified, &now);
+			if (!ok || now != value)
+				return grpc::Status(grpc::StatusCode::INTERNAL, std::string("SolidWorks didn't take the ") + what +
+					" " + std::to_string(value) + " (it reads " + std::to_string(now) + ")");
+			return grpc::Status::OK;
+		};
+		// The drafting standard first: switching it may reset other options.
+		if (change.drafting_standard() != 0)
+			if (grpc::Status status = set(swDetailingDimensionStandard, change.drafting_standard(), "drafting standard"); !status.ok())
+				return status;
+		// The unit system sets the length unit; decimals stay as they were.
+		if (change.unit_system() != 0)
+			if (grpc::Status status = set(swUnitSystem, change.unit_system(), "unit system"); !status.ok())
+				return status;
+		if (change.has_length_decimals())
+			if (grpc::Status status = set(swUnitsLinearDecimalPlaces, change.length_decimals(), "length decimal places"); !status.ok())
+				return status;
+		doc->GraphicsRedraw2();
+		return grpc::Status::OK;
+	}
+
+	// Title, type, file and units of a document.
 	grpc::Status DescribeDocument(IModelDoc2* doc, sld_mcp::v1::Document* out)
 	{
 		ATL::CComBSTR title, path;
@@ -25,13 +72,18 @@ namespace
 		out->set_title(ToUtf8(title));
 		out->set_type(ToDocumentType(type));
 		out->set_path(ToUtf8(path));
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		ReadUnits(ext, out->mutable_units());
 		return grpc::Status::OK;
 	}
 
 	// A new document from the user's default template of a kind (Tools >
-	// Options > System Options > Default Templates), made the active one.
+	// Options > System Options > Default Templates), made the active one,
+	// with `units` applied (a failure closes it again).
 	grpc::Status NewFromDefaultTemplate(ISldWorks* swApp, swUserPreferenceStringValue_e templatePref,
-		const std::string& kind, sld_mcp::v1::Document* out)
+		const std::string& kind, const sld_mcp::v1::UnitsChange& units, sld_mcp::v1::Document* out)
 	{
 		ATL::CComBSTR templatePath;
 		HRESULT hr = swApp->GetUserPreferenceStringValue(templatePref, &templatePath);
@@ -52,6 +104,13 @@ namespace
 			return grpc::Status(grpc::StatusCode::INTERNAL,
 				"SolidWorks couldn't create a " + kind + " from the default template " + ToUtf8(templatePath));
 
+		if (grpc::Status status = ApplyUnits(doc, units); !status.ok())
+		{
+			ATL::CComBSTR title;
+			doc->GetTitle(&title);
+			swApp->CloseDoc(title);
+			return status;
+		}
 		return DescribeDocument(doc, out);
 	}
 
@@ -93,7 +152,7 @@ grpc::Status SolidWorksService::GetActiveDocument(grpc::ServerContext* /*context
 }
 
 grpc::Status SolidWorksService::NewPart(grpc::ServerContext* /*context*/,
-	const sld_mcp::v1::NewPartRequest* /*request*/,
+	const sld_mcp::v1::NewPartRequest* request,
 	sld_mcp::v1::NewPartResponse* response)
 {
 	std::lock_guard<std::mutex> lock(m_editMutex);
@@ -105,11 +164,11 @@ grpc::Status SolidWorksService::NewPart(grpc::ServerContext* /*context*/,
 	if (grpc::Status status = GetSwApp(swApp); !status.ok())
 		return status;
 
-	return NewFromDefaultTemplate(swApp, swDefaultTemplatePart, "part", response->mutable_document());
+	return NewFromDefaultTemplate(swApp, swDefaultTemplatePart, "part", request->units(), response->mutable_document());
 }
 
 grpc::Status SolidWorksService::NewAssembly(grpc::ServerContext* /*context*/,
-	const sld_mcp::v1::NewAssemblyRequest* /*request*/,
+	const sld_mcp::v1::NewAssemblyRequest* request,
 	sld_mcp::v1::NewAssemblyResponse* response)
 {
 	std::lock_guard<std::mutex> lock(m_editMutex);
@@ -121,7 +180,7 @@ grpc::Status SolidWorksService::NewAssembly(grpc::ServerContext* /*context*/,
 	if (grpc::Status status = GetSwApp(swApp); !status.ok())
 		return status;
 
-	return NewFromDefaultTemplate(swApp, swDefaultTemplateAssembly, "assembly", response->mutable_document());
+	return NewFromDefaultTemplate(swApp, swDefaultTemplateAssembly, "assembly", request->units(), response->mutable_document());
 }
 
 grpc::Status SolidWorksService::NewDrawing(grpc::ServerContext* /*context*/,
@@ -162,8 +221,9 @@ grpc::Status SolidWorksService::NewDrawing(grpc::ServerContext* /*context*/,
 
 	// A template that has a sheet of its own ignores these; one without
 	// makes its sheet this size (user defined 0 x 0 = an empty sheet, hence
-	// A3 by default).
-	const long paperSize = request->has_paper_size() ? request->paper_size() : swDwgPaperA3size;
+	// a fallback: A3 unless the request names one).
+	const long paperSize = request->has_paper_size() ? request->paper_size()
+		: request->has_fallback_paper_size() ? request->fallback_paper_size() : swDwgPaperA3size;
 	ATL::CComPtr<IDispatch> created;
 	HRESULT hr = swApp->NewDocument(ATL::CComBSTR(templatePath.c_str()), paperSize, request->width(), request->height(), &created);
 	if (FAILED(hr))
@@ -206,22 +266,8 @@ grpc::Status SolidWorksService::NewDrawing(grpc::ServerContext* /*context*/,
 	if (grpc::Status status = ActiveSheet(drawing, sheet); !status.ok())
 		return fail(status);
 
-	ATL::CComPtr<IModelDocExtension> ext;
-	hr = doc->get_Extension(&ext);
-	if (FAILED(hr))
-		return fail(ComError("IModelDoc2::Extension", hr));
-	if (request->unit_system() != 0)
-	{
-		VARIANT_BOOL ok = VARIANT_FALSE;
-		hr = ext->SetUserPreferenceInteger(swUnitSystem, swDetailingNoOptionSpecified, request->unit_system(), &ok);
-		if (FAILED(hr))
-			return fail(ComError("IModelDocExtension::SetUserPreferenceInteger", hr));
-		if (!ok)
-			return fail(grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks didn't take the unit system"));
-	}
-	long unitSystem = 0;
-	ext->GetUserPreferenceInteger(swUnitSystem, swDetailingNoOptionSpecified, &unitSystem);
-	response->set_unit_system(static_cast<int32_t>(unitSystem));
+	if (grpc::Status status = ApplyUnits(doc, request->units()); !status.ok())
+		return fail(status);
 
 	sld_mcp::v1::SheetInfo* info = response->mutable_sheet();
 	info->set_name(SheetName(sheet));
@@ -237,6 +283,35 @@ grpc::Status SolidWorksService::NewDrawing(grpc::ServerContext* /*context*/,
 	if (grpc::Status status = DescribeDocument(doc, response->mutable_document()); !status.ok())
 		return fail(status);
 	return grpc::Status::OK;
+}
+
+grpc::Status SolidWorksService::SetDocumentUnits(grpc::ServerContext* /*context*/,
+	const sld_mcp::v1::SetDocumentUnitsRequest* request,
+	sld_mcp::v1::SetDocumentUnitsResponse* response)
+{
+	std::lock_guard<std::mutex> lock(m_editMutex);
+	ComApartment com;
+	if (!com.Ok())
+		return ComApartmentError();
+
+	ATL::CComPtr<ISldWorks> swApp;
+	if (grpc::Status status = GetSwApp(swApp); !status.ok())
+		return status;
+
+	ATL::CComPtr<IModelDoc2> doc;
+	HRESULT hr = swApp->get_IActiveDoc2(&doc);
+	if (FAILED(hr))
+		return ComError("ISldWorks::IActiveDoc2", hr);
+	if (!doc)
+		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "no document is open in SolidWorks");
+
+	ATL::CComPtr<IModelDocExtension> ext;
+	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+		return status;
+	ReadUnits(ext, response->mutable_before());
+	if (grpc::Status status = ApplyUnits(doc, request->units()); !status.ok())
+		return status;
+	return DescribeDocument(doc, response->mutable_document());
 }
 
 grpc::Status SolidWorksService::SaveDocument(grpc::ServerContext* /*context*/,
