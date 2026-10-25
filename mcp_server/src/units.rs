@@ -81,7 +81,7 @@ impl DraftingStandard {
     }
 }
 
-fn drafting_standard_name(sw: i32) -> String {
+pub fn drafting_standard_name(sw: i32) -> String {
     match sw {
         1 => "ANSI".into(),
         2 => "ISO".into(),

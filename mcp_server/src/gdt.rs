@@ -7,9 +7,12 @@
 //! so a frame read can be written back; they're turned into SolidWorks'
 //! enum values (swGtolGeomCharSymbol_e, swGtolMatCondition_e) here, and the
 //! basic rules of GD&T (form tolerances take no datums, orientation and
-//! runout need one, ...) are checked before anything reaches SolidWorks.
-//! A frame's values are text SolidWorks shows as typed, so a tolerance in
-//! mm is written in the document's length unit (units.rs).
+//! runout need one, ...) are checked before anything reaches SolidWorks,
+//! against ISO 1101 or ASME Y14.5 (`standard`, default by the document's
+//! drafting standard); SolidWorks itself draws the symbols the document's
+//! drafting standard's way. A frame's values are text SolidWorks shows as
+//! typed, so a tolerance in mm is written in the document's length unit
+//! (units.rs).
 
 use glam::{DVec2, DVec3};
 use rmcp::{ErrorData as McpError, schemars};
@@ -147,7 +150,8 @@ pub enum Modifier {
     /// Least material condition, (L).
     #[serde(rename = "LMC", alias = "lmc", alias = "L")]
     Lmc,
-    /// Regardless of feature size, (S) (ASME Y14.5-1982 style; the default without a modifier).
+    /// Regardless of feature size, (S): the default without a modifier in ISO and ASME
+    /// Y14.5-1994 and later, neither of which shows (S), so it's left off.
     #[serde(rename = "RFS", alias = "rfs", alias = "S")]
     Rfs,
 }
@@ -161,6 +165,69 @@ impl Modifier {
             Modifier::Lmc => 3,
         }
     }
+}
+
+/// The GD&T standard a frame or datum symbol is checked against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum GdtStandard {
+    /// ISO GPS (ISO 1101, 5459, 2692): the ISO, DIN, JIS, BSI, GOST and GB drafting standards.
+    Iso,
+    /// ASME Y14.5 (2009 / 2018): the ANSI drafting standard.
+    #[serde(alias = "ansi")]
+    Asme,
+}
+
+impl GdtStandard {
+    fn name(self) -> &'static str {
+        match self {
+            GdtStandard::Iso => "ISO 1101",
+            GdtStandard::Asme => "ASME Y14.5",
+        }
+    }
+
+    /// The document's: ANSI follows ASME, the other drafting standards ISO;
+    /// without a known one, inch documents ASME.
+    fn of_document(units: Option<&proto::DocumentUnits>) -> Self {
+        match units.map(|u| u.drafting_standard) {
+            Some(1) => GdtStandard::Asme,
+            Some(2..=7) => GdtStandard::Iso,
+            _ if units::is_inch(units) => GdtStandard::Asme,
+            _ => GdtStandard::Iso,
+        }
+    }
+}
+
+/// The standard to check against, and a remark when it isn't the one the
+/// document's drafting standard draws the symbols by.
+fn standard(asked: Option<GdtStandard>, units: Option<&proto::DocumentUnits>) -> (GdtStandard, Vec<String>) {
+    let document = GdtStandard::of_document(units);
+    let Some(asked) = asked else { return (document, Vec::new()) };
+    let remarks = units
+        .filter(|u| (1..=7).contains(&u.drafting_standard) && asked != document)
+        .map(|u| {
+            format!(
+                "checked against {}, but the document's drafting standard is {}, which SolidWorks draws the symbols by; \
+                 document_units drafting_standard={} switches the document (all its dimensions and annotations)",
+                asked.name(),
+                units::drafting_standard_name(u.drafting_standard),
+                if asked == GdtStandard::Asme { "ansi" } else { "iso" }
+            )
+        })
+        .into_iter()
+        .collect();
+    (asked, remarks)
+}
+
+/// A remark on a datum letter that reads as a digit.
+fn letter_remark(label: &str, standard: GdtStandard) -> Option<String> {
+    if !["I", "O", "Q"].contains(&label) {
+        return None;
+    }
+    Some(match standard {
+        GdtStandard::Asme => format!("datum letter {label}: ASME Y14.5 doesn't use I, O and Q (they read as 1 and 0) -- pick another"),
+        GdtStandard::Iso => format!("datum letter {label} is easily misread as 1 or 0"),
+    })
 }
 
 /// A tolerance value: a number of mm, or the text to show ("0.05", "0.1/25") as is.
@@ -188,11 +255,12 @@ pub struct FrameParams {
     /// straightness of an axis).
     #[serde(default)]
     pub diameter_zone: bool,
-    /// The tolerance's material condition: "MMC" (M), "LMC" (L) or "RFS" (S).
+    /// The tolerance's material condition: "MMC" (M) or "LMC" (L); none = regardless of feature
+    /// size ("RFS" is accepted and left off: neither ISO nor ASME Y14.5 shows (S)).
     #[serde(default)]
     pub modifier: Option<Modifier>,
     /// Datum references in order of precedence, at most 3: "A", "B", "C"; a material condition
-    /// in parentheses, "B(M)" / "B(L)" / "B(S)"; a common datum as "A-B".
+    /// in parentheses, "B(M)" / "B(L)"; a common datum as "A-B".
     #[serde(default)]
     pub datums: Vec<String>,
 }
@@ -253,6 +321,12 @@ pub struct AddGeometricToleranceParams {
     /// document's unit).
     #[serde(default)]
     pub projected_zone_mm: Option<f64>,
+    /// The GD&T standard the frame is checked against: "iso" (ISO 1101: no composite frames) or
+    /// "asme" (ASME Y14.5: concentricity and symmetry are gone since 2018). Default: the
+    /// document's drafting standard's (ANSI: asme, ISO / DIN / JIS / ...: iso). SolidWorks draws
+    /// the frame by the document's drafting standard (document_units changes it).
+    #[serde(default)]
+    pub standard: Option<GdtStandard>,
     #[serde(flatten)]
     pub place: PlaceParams,
 }
@@ -260,24 +334,45 @@ pub struct AddGeometricToleranceParams {
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub struct AddDatumSymbolParams {
     /// The datum letter, e.g. "A". Default: the next letter SolidWorks picks. Each datum feature
-    /// gets its own letter; I, O and Q are best avoided (they look like 1, 0).
+    /// gets its own letter; I, O and Q are best avoided (they look like 1, 0; ASME Y14.5 leaves
+    /// them out).
     #[serde(default)]
     pub label: Option<String>,
+    /// "iso" or "asme", as for add_geometric_tolerance (default: the document's drafting
+    /// standard's). SolidWorks draws the symbol by the document's drafting standard.
+    #[serde(default)]
+    pub standard: Option<GdtStandard>,
     #[serde(flatten)]
     pub place: PlaceParams,
 }
 
 // ---- Symbols ----------------------------------------------------------------------
 
-/// The document's units for the values a frame writes as text, and what was
-/// converted.
+/// The document's units for the values a frame writes as text, the
+/// standard it's checked against, and what was converted or left off.
 struct FrameText<'a> {
     units: Option<&'a proto::DocumentUnits>,
-    /// What was converted out of mm, for the reply.
+    standard: GdtStandard,
+    /// What was converted out of mm or left off, for the reply.
     remarks: Vec<String>,
 }
 
 impl FrameText<'_> {
+    fn remark(&mut self, remark: String) {
+        if !self.remarks.contains(&remark) {
+            self.remarks.push(remark);
+        }
+    }
+
+    /// RFS asked for: nothing to show in either standard.
+    fn rfs_left_off(&mut self) {
+        let why = match self.standard {
+            GdtStandard::Asme => "RFS is the default since ASME Y14.5-1994, which dropped the (S) symbol",
+            GdtStandard::Iso => "ISO has no (S): a tolerance applies regardless of feature size unless (M) or (L) is given",
+        };
+        self.remark(format!("{why}, so RFS was left off"));
+    }
+
     /// `mm` as the document reads it; a remark when that isn't mm.
     fn length(&mut self, mm: f64, what: &str) -> String {
         let text = units::length_text(mm, self.units);
@@ -333,7 +428,7 @@ fn datum_ref(text: &str, what: &str) -> Result<(String, i32), McpError> {
     Ok((label.to_string(), condition))
 }
 
-fn frame(p: &FrameParams, what: &str, out: &mut FrameText) -> Result<proto::GtolFrame, McpError> {
+fn frame(p: &FrameParams, what: &str, text: &mut FrameText) -> Result<proto::GtolFrame, McpError> {
     let c = p.characteristic;
     if p.datums.len() > 3 {
         return Err(invalid(format!("{what}: at most 3 datums (primary, secondary, tertiary)")));
@@ -347,17 +442,35 @@ fn frame(p: &FrameParams, what: &str, out: &mut FrameText) -> Result<proto::Gtol
     if c.needs_datum() && p.datums.is_empty() {
         return Err(invalid(format!("{what}: {} needs a datum reference (datums: [\"A\"])", c.name())));
     }
+    if text.standard == GdtStandard::Asme && matches!(c, Characteristic::Concentricity | Characteristic::Symmetry) {
+        text.remark(format!(
+            "ASME Y14.5-2018 dropped {} (fine on a Y14.5-2009 drawing): position with a diameter zone controls \
+             coaxial features, position or profile symmetric ones",
+            c.name()
+        ));
+    }
+    let condition = match p.modifier {
+        Some(Modifier::Rfs) => {
+            text.rfs_left_off();
+            0
+        }
+        m => m.map_or(0, Modifier::sw),
+    };
     let mut out = proto::GtolFrame {
         symbol: c.sw(),
-        tolerance1: tolerance_text(&p.tolerance, what, out)?,
+        tolerance1: tolerance_text(&p.tolerance, what, text)?,
         tolerance1_diameter: p.diameter_zone,
-        tolerance1_condition: p.modifier.map_or(0, Modifier::sw),
+        tolerance1_condition: condition,
         ..Default::default()
     };
     for (i, d) in p.datums.iter().enumerate() {
-        let (label, condition) = datum_ref(d, &format!("{what}, datum {}", i + 1))?;
+        let (label, mut condition) = datum_ref(d, &format!("{what}, datum {}", i + 1))?;
         if out.datums.contains(&label) {
             return Err(invalid(format!("{what}: datum {label} is referenced twice")));
+        }
+        if condition == Modifier::Rfs.sw() {
+            text.rfs_left_off();
+            condition = 0;
         }
         out.datums.push(label);
         out.datum_conditions.push(condition);
@@ -371,7 +484,8 @@ pub fn gtol(
     params: &AddGeometricToleranceParams,
     units: Option<&proto::DocumentUnits>,
 ) -> Result<(proto::GdtSymbol, Vec<String>), McpError> {
-    let mut out = FrameText { units, remarks: Vec::new() };
+    let (standard, remarks) = standard(params.standard, units);
+    let mut out = FrameText { units, standard, remarks };
     let mut g = proto::AnnotationGtol { composite: params.composite, ..Default::default() };
     g.frames.push(frame(&params.frame, "frame", &mut out)?);
     if let Some(second) = &params.second_frame {
@@ -390,11 +504,18 @@ pub fn gtol(
         if !matches!(params.frame.characteristic, Characteristic::Position | Characteristic::ProfileOfASurface | Characteristic::ProfileOfALine) {
             return Err(invalid("composite frames are for position and profile"));
         }
+        if standard == GdtStandard::Iso {
+            return Err(invalid(
+                "ISO 1101 has no composite frames (ASME Y14.5 does): composite=false gives two separate frames, each \
+                 row applying on its own, or standard=asme for an ASME composite frame",
+            ));
+        }
     }
     if let Some(d) = params.datum_feature.as_deref().map(str::trim) {
         if d.is_empty() || d.len() > 8 || !d.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err(invalid("datum_feature: a datum letter such as \"D\""));
         }
+        out.remarks.extend(letter_remark(d, standard));
         g.datum_label = d.to_string();
     }
     if let Some(h) = params.projected_zone_mm {
@@ -406,23 +527,19 @@ pub fn gtol(
     Ok((proto::GdtSymbol { kind: Some(proto::gdt_symbol::Kind::Gtol(g)) }, out.remarks))
 }
 
-/// The symbol add_datum_symbol asks for.
-pub fn datum(params: &AddDatumSymbolParams) -> Result<proto::GdtSymbol, McpError> {
+/// The symbol add_datum_symbol asks for, in a document with `units`, and
+/// remarks on it.
+pub fn datum(
+    params: &AddDatumSymbolParams,
+    units: Option<&proto::DocumentUnits>,
+) -> Result<(proto::GdtSymbol, Vec<String>), McpError> {
     let label = text(params.label.as_deref());
     if !label.is_empty() && (label.len() > 8 || !label.chars().all(|c| c.is_ascii_alphanumeric())) {
         return Err(invalid("label: a datum letter such as \"A\""));
     }
-    Ok(proto::GdtSymbol { kind: Some(proto::gdt_symbol::Kind::Datum(proto::DatumSymbol { label })) })
-}
-
-/// Remarks on a datum letter that is legal but unwise.
-fn label_remarks(symbol: &proto::GdtSymbol) -> Vec<String> {
-    match &symbol.kind {
-        Some(proto::gdt_symbol::Kind::Datum(d)) if ["I", "O", "Q"].contains(&d.label.as_str()) => {
-            vec![format!("datum letter {} is easily misread (ASME Y14.5 leaves out I, O and Q)", d.label)]
-        }
-        _ => Vec::new(),
-    }
+    let (standard, mut remarks) = standard(params.standard, units);
+    remarks.extend(letter_remark(&label, standard));
+    Ok((proto::GdtSymbol { kind: Some(proto::gdt_symbol::Kind::Datum(proto::DatumSymbol { label })) }, remarks))
 }
 
 /// The callout of a frame row as asked, for the reply text.
@@ -457,7 +574,6 @@ pub fn model_request(
     if place.view.is_some() || place.sheet.is_some() || place.at_view_mm.is_some() {
         return Err(invalid("view, sheet and at_view_mm are for drawings; the active document is a part or assembly"));
     }
-    let remarks = label_remarks(&symbol);
     let mut request = proto::AddModelAnnotationRequest { symbol: Some(symbol), ..Default::default() };
     let on = text(place.on.as_deref());
     if !text(place.dimension.as_deref()).is_empty() {
@@ -488,7 +604,7 @@ pub fn model_request(
     if let Some(a) = &place.at_mm {
         request.position = Some(model_point(a, "at_mm")?);
     }
-    Ok((request, remarks))
+    Ok((request, Vec::new()))
 }
 
 fn vec3(v: &proto::Vec3) -> DVec3 {
@@ -610,8 +726,7 @@ pub fn drawing_request(
         },
     };
     let leaders = note::leaders(ids, cache, &attach, &arrows)?;
-    let mut remarks = label_remarks(&symbol);
-    remarks.extend(leaders.remarks.iter().cloned());
+    let mut remarks = leaders.remarks.clone();
     if let Some(lv) = &leaders.view
         && !view.is_empty()
         && *lv != view
@@ -718,6 +833,7 @@ mod tests {
             composite: false,
             datum_feature: None,
             projected_zone_mm: None,
+            standard: None,
             place: PlaceParams::default(),
         }
     }
@@ -774,18 +890,85 @@ mod tests {
         p.second_frame = Some(frame_params(Characteristic::Flatness, &[]));
         assert!(mm_gtol(&p).is_err(), "composite rows share a characteristic");
         p.second_frame = Some(frame_params(Characteristic::Position, &["A"]));
+        p.standard = Some(GdtStandard::Asme);
         let s = mm_gtol(&p).unwrap();
         assert!(gtol_of(&s).composite);
         assert_eq!(gtol_of(&s).frames.len(), 2);
+        // ISO has none: refused, but two separate frames are fine.
+        p.standard = Some(GdtStandard::Iso);
+        assert!(mm_gtol(&p).unwrap_err().message.contains("ISO 1101 has no composite frames"));
+        p.composite = false;
+        assert!(!gtol_of(&mm_gtol(&p).unwrap()).composite);
+    }
+
+    fn units(drafting_standard: i32, unit_system: i32) -> proto::DocumentUnits {
+        let length_unit = if unit_system == 3 { 3 } else { 0 };
+        proto::DocumentUnits { unit_system, length_unit, length_decimals: 2, drafting_standard }
+    }
+
+    #[test]
+    fn standard_follows_the_document() {
+        let of = |u: Option<&proto::DocumentUnits>| GdtStandard::of_document(u);
+        assert_eq!(of(Some(&units(1, 5))), GdtStandard::Asme);
+        assert_eq!(of(Some(&units(2, 3))), GdtStandard::Iso);
+        assert_eq!(of(Some(&units(3, 5))), GdtStandard::Iso, "DIN");
+        assert_eq!(of(Some(&units(8, 3))), GdtStandard::Asme, "user defined, inch");
+        assert_eq!(of(Some(&units(0, 5))), GdtStandard::Iso);
+        assert_eq!(of(None), GdtStandard::Iso);
+        // Asked for one the document doesn't draw by: a remark, no refusal.
+        let (s, remarks) = standard(Some(GdtStandard::Asme), Some(&units(2, 5)));
+        assert_eq!(s, GdtStandard::Asme);
+        assert!(remarks[0].contains("drafting standard is ISO") && remarks[0].contains("drafting_standard=ansi"), "{remarks:?}");
+        assert!(standard(Some(GdtStandard::Iso), Some(&units(2, 5))).1.is_empty());
+        assert!(standard(Some(GdtStandard::Iso), None).1.is_empty());
+        // The document's standard picks the rules: composite frames in an ANSI part only.
+        let mut p = params(frame_params(Characteristic::Position, &["A", "B"]));
+        p.composite = true;
+        p.second_frame = Some(frame_params(Characteristic::Position, &["A"]));
+        assert!(gtol(&p, Some(&units(1, 3))).is_ok());
+        assert!(gtol(&p, Some(&units(2, 5))).is_err());
+    }
+
+    #[test]
+    fn rfs_is_left_off() {
+        for standard in [GdtStandard::Iso, GdtStandard::Asme] {
+            let mut f = frame_params(Characteristic::Position, &["A", "B(S)", "C(M)"]);
+            f.modifier = Some(Modifier::Rfs);
+            let mut p = params(f);
+            p.standard = Some(standard);
+            let (s, remarks) = gtol(&p, None).unwrap();
+            let row = &gtol_of(&s).frames[0];
+            assert_eq!((row.tolerance1_condition, row.datum_conditions.clone()), (0, vec![0, 0, 1]));
+            assert_eq!(remarks.len(), 1, "one remark for both: {remarks:?}");
+            assert!(remarks[0].contains("RFS was left off"));
+        }
+    }
+
+    #[test]
+    fn asme_2018_characteristics_and_letters() {
+        let mut p = params(frame_params(Characteristic::Concentricity, &["A"]));
+        p.standard = Some(GdtStandard::Asme);
+        let (_, remarks) = gtol(&p, None).unwrap();
+        assert!(remarks[0].contains("Y14.5-2018 dropped concentricity"), "{remarks:?}");
+        p.standard = Some(GdtStandard::Iso);
+        assert!(gtol(&p, None).unwrap().1.is_empty());
+        let d = |label: &str, standard| {
+            let params = AddDatumSymbolParams { label: Some(label.into()), standard: Some(standard), ..Default::default() };
+            datum(&params, None).unwrap().1
+        };
+        assert!(d("I", GdtStandard::Asme)[0].contains("ASME Y14.5 doesn't use I, O and Q"));
+        assert!(d("O", GdtStandard::Iso)[0].contains("misread"));
+        assert!(d("B", GdtStandard::Asme).is_empty());
     }
 
     #[test]
     fn names_parse_from_json() {
         let p: AddGeometricToleranceParams = serde_json::from_value(serde_json::json!({
             "characteristic": "true_position", "tolerance": "0.2", "modifier": "M",
-            "datums": ["A"], "on": "face:3", "arrow_at_mm": [1, 2, 3]
+            "datums": ["A"], "on": "face:3", "arrow_at_mm": [1, 2, 3], "standard": "ansi"
         }))
         .unwrap();
+        assert_eq!(p.standard, Some(GdtStandard::Asme));
         assert_eq!(p.frame.characteristic, Characteristic::Position);
         assert_eq!(p.frame.modifier, Some(Modifier::Mmc));
         assert_eq!(p.frame.tolerance, ToleranceValue::Text("0.2".into()));

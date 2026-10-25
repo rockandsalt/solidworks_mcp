@@ -1713,7 +1713,7 @@ impl SolidWorksTools {
                        circular_runout / total_runout (need a datum). `tolerance` in mm (written \
                        in the document's unit: 0.002 in an inch document; a text goes as is), \
                        `diameter_zone` (the diameter sign, e.g. a hole's position), `modifier` \
-                       (MMC / LMC / RFS), `datums` in order of precedence (\"A\", \"B(M)\", \"C\"; \
+                       (MMC / LMC; none = RFS), `datums` in order of precedence (\"A\", \"B(M)\", \"C\"; \
                        \"A-B\" for a common datum). Attach with `on` -- in a part a face or edge id \
                        from inspect_model (\"face:7\"), in a drawing a view entity from \
                        inspect_drawing (\"view_edge:4\") -- for a leader to it (arrow at \
@@ -1722,7 +1722,10 @@ impl SolidWorksTools {
                        neither for a free frame. `at_mm` places it ([x, y, z] model mm in a part, [x, y] \
                        sheet mm in a drawing; default: 10 mm out from the arrow). Also \
                        `second_frame` (+ `composite`), `datum_feature` (a datum symbol on the \
-                       frame), `projected_zone_mm`. The frame is read back from SolidWorks; the \
+                       frame), `projected_zone_mm`. `standard`: iso (ISO 1101) or asme (ASME \
+                       Y14.5), the GD&T rules it's checked against (default: the document's \
+                       drafting standard's -- ANSI is asme); SolidWorks draws it by the \
+                       document's drafting standard (document_units). The frame is read back from SolidWorks; the \
                        reply gives its callout (\"position | dia 0.1 (M) | A | B | C\"), name \
                        (delete_drawing_annotations removes it, in parts too) and where it went."
     )]
@@ -1742,7 +1745,8 @@ impl SolidWorksTools {
                        or edge id from inspect_model in a part (\"face:7\"), a view entity from \
                        inspect_drawing in a drawing (\"view_edge:4\"; a hole's circle) -- a \
                        hole's or shaft's cylindrical face makes its axis the datum. `label`: the letter (default: SolidWorks' next one; refused if \
-                       another datum symbol has it). SolidWorks stands it just off the entity; \
+                       another datum symbol has it), `standard` (iso / asme, as for \
+                       add_geometric_tolerance). SolidWorks stands it just off the entity; \
                        `at_mm` moves it ([x, y, z] model mm in a part, [x, y] sheet mm in a \
                        drawing)."
     )]
@@ -1750,7 +1754,9 @@ impl SolidWorksTools {
         &self,
         Parameters(params): Parameters<gdt::AddDatumSymbolParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.add_gdt(gdt::datum(&params)?, &params.place, Vec::new()).await
+        let units = self.active_units();
+        let (symbol, remarks) = gdt::datum(&params, units.as_ref())?;
+        self.add_gdt(symbol, &params.place, remarks).await
     }
 
     #[tool(

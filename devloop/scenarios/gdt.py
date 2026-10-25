@@ -6,7 +6,9 @@
 # refused with nothing added; read back by inspect_annotations; deleted
 # from the part. Then a drawing of the part: a datum on a view edge, a
 # frame with a leader to the hole's circle (placed outside the view), on a
-# drawing dimension, free on the sheet; render; delete. Run with:
+# drawing dimension, free on the sheet; render; the drawing switched to
+# ANSI (symbols redrawn, ASME rules by default); delete. ISO vs ASME rules
+# in the (ISO) part: composite refused, standard=asme, RFS left off. Run with:
 #   py devloop/mcp_client.py run devloop/scenarios/gdt.py
 
 import json
@@ -117,14 +119,37 @@ e = entry(r.text)
 position = e["name"]
 assert callouts(e) == ["position | dia 0.2 (M) | A | B (M)"] and e["attached"] == [hole], r.text
 
-# A composite position frame, a datum feature on a frame, a projected zone.
-r = mcp.call("add_geometric_tolerance", characteristic="position", tolerance=0.3, diameter_zone=True, datums=["A", "B"],
-             second_frame={"characteristic": "position", "tolerance": 0.1, "diameter_zone": True, "datums": ["A"]},
-             composite=True, on=hole, at_mm=[25, 5, 15])
+# A composite position frame: not in ISO, the template's drafting standard
+# (refused, nothing added); standard=asme makes one, with a remark that the
+# document draws by ISO.
+composite = dict(characteristic="position", tolerance=0.3, diameter_zone=True, datums=["A", "B"],
+                 second_frame={"characteristic": "position", "tolerance": 0.1, "diameter_zone": True, "datums": ["A"]},
+                 composite=True, on=hole, at_mm=[25, 5, 15])
+count = len(pmi())
+r = mcp.call("add_geometric_tolerance", **composite, expect_error=True)
+assert "ISO 1101 has no composite frames" in r.text, r.text
+assert len(pmi()) == count
+r = mcp.call("add_geometric_tolerance", **composite, standard="asme")
 print("   ", r.text.splitlines()[0])
 e = entry(r.text)
 assert e.get("composite") is True and callouts(e) == ["position | dia 0.3 | A | B", "position | dia 0.1 | A"], r.text
 assert "only its depth differs" in r.text, r.text
+assert "checked against ASME Y14.5, but the document's drafting standard is ISO" in r.text, r.text
+# RFS: no (S) in either standard, so it's left off, tolerance and datum.
+r = mcp.call("add_geometric_tolerance", characteristic="position", tolerance=0.25, diameter_zone=True, modifier="RFS",
+             datums=["A", "B(S)"], on=hole)
+e = entry(r.text)
+rfs_frame = e["name"]
+assert callouts(e) == ["position | dia 0.25 | A | B"] and "ISO has no (S)" in r.text, r.text
+# Concentricity: fine in ISO; ASME 2018 dropped it (a remark, still added).
+r = mcp.call("add_geometric_tolerance", characteristic="concentricity", tolerance=0.05, diameter_zone=True,
+             datums=["A"], on=hole, standard="asme")
+e = entry(r.text)
+concentricity = e["name"]
+assert callouts(e) == ["concentricity | dia 0.05 | A"] and "Y14.5-2018 dropped concentricity" in r.text, r.text
+r = mcp.call("delete_drawing_annotations", names=[rfs_frame, concentricity])
+assert "deleted 2 annotation(s)" in r.text, r.text
+# A datum feature on a frame, a projected zone.
 r = mcp.call("add_geometric_tolerance", characteristic="flatness", tolerance=0.02, datum_feature="C", on=front)
 e = entry(r.text)
 assert e.get("datum_label") == "C" and callouts(e) == ["flatness | 0.02"], r.text
@@ -243,10 +268,37 @@ r = mcp.call("add_geometric_tolerance", characteristic="flatness", tolerance=0.0
 assert "model id" in r.text, r.text
 
 r = mcp.call("render_drawing", view="Drawing View1")
-print("    render:", r.images)
+print("    render (ISO):", r.images)
 
-r = mcp.call("delete_drawing_annotations", names=[sheet_frame])
-assert "deleted 1 annotation(s)" in r.text, r.text
+# ---- The drawing switched to ANSI: the frames and datum stay (read back
+# the same), drawn the ANSI way (compare the renders); the rules now ASME's,
+# so a composite frame is fine without standard, and a datum I is warned of.
+def drawing_gdt():
+    return {a["name"]: a for s in mcp.call("inspect_drawing_annotations").json["sheets"] for a in s["annotations"]
+            if a["type"] in ("gtol", "datum")}
+
+before = drawing_gdt()
+r = mcp.call("document_units", drafting_standard="ansi")
+assert "drafting standard ANSI" in r.text, r.text
+after = drawing_gdt()
+assert sorted(after) == sorted(before), (sorted(before), sorted(after))
+for name, a in before.items():
+    assert callouts(after[name]) == callouts(a) and after[name].get("label") == a.get("label"), (a, after[name])
+r = mcp.call("render_drawing", view="Drawing View1")
+print("    render (ANSI):", r.images)
+r = mcp.call("add_geometric_tolerance", characteristic="position", tolerance=0.3, diameter_zone=True, datums=["D"],
+             second_frame={"characteristic": "position", "tolerance": 0.1, "diameter_zone": True, "datums": ["D"]},
+             composite=True, at_mm=[60, 40])
+e = entry(r.text)
+ansi_frame = e["name"]
+assert e.get("composite") is True and "checked against" not in r.text, r.text
+side_edge = [e for e in lines if abs(e["start"][0] - e["end"][0]) < 0.01][0]
+r = mcp.call("add_datum_symbol", label="I", on=side_edge["id"])
+ansi_datum = entry(r.text)["name"]
+assert "ASME Y14.5 doesn't use I, O and Q" in r.text, r.text
+
+r = mcp.call("delete_drawing_annotations", names=[sheet_frame, ansi_frame, ansi_datum])
+assert "deleted 3 annotation(s)" in r.text, r.text
 
 assert not sw_dialogs(), sw_dialogs()
 # The next scenario of the run starts from nothing open.
