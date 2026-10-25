@@ -315,6 +315,14 @@ impl AddinClient {
         Ok(client.replace_components(request).await?.into_inner())
     }
 
+    pub async fn fix_components(
+        &self,
+        request: proto::FixComponentsRequest,
+    ) -> Result<proto::FixComponentsResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.fix_components(request).await?.into_inner())
+    }
+
     /// Where the components of the active assembly (or a drawing view's)
     /// overlap; meters.
     pub async fn check_interference(

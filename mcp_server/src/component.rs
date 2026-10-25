@@ -2,7 +2,8 @@
 //! params, turning each placement (origin + optional axes) into the
 //! orthonormal frame the add-in hands to AddComponents3, and the reply.
 //! Also replace_components: swapping components for another file, and the
-//! report of which mates came through.
+//! report of which mates came through; and fix_components: fixing or
+//! floating components.
 //!
 //! Parts and subassemblies go in the same way (a subassembly is just an
 //! .SLDASM file); several instances of one file are several placements, and
@@ -17,7 +18,7 @@ use glam::{DQuat, DVec3};
 use crate::addin::proto;
 use crate::assembly::{self, placement_text};
 use crate::{delete, edit, files};
-use crate::inspect::{IdRegistry, Kind, MM_PER_M};
+use crate::inspect::{IdRegistry, Kind, MM_PER_M, point_mm};
 
 /// More than this in one call is almost certainly a mistake (and slow).
 const MAX_INSTANCES: usize = 100;
@@ -380,6 +381,112 @@ pub fn replace_reply_text(
     text
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct FixComponentsParams {
+    /// The components to fix or float, by id ("component:3" from inspect_model
+    /// what="components"). Top-level components only (not ones inside a subassembly).
+    pub components: Vec<String>,
+    /// true: fix them in place (they can't move, mates move the others); false: float them,
+    /// free to be moved by mates.
+    pub fixed: bool,
+}
+
+/// The FixComponents request, with the component ids resolved by
+/// `resolve` (the id registry: an id to a persist id).
+pub fn fix_request(
+    params: &FixComponentsParams,
+    mut resolve: impl FnMut(&str) -> Result<Vec<u8>, McpError>,
+) -> Result<proto::FixComponentsRequest, McpError> {
+    if params.components.is_empty() {
+        return Err(invalid(
+            "list the components to fix or float (\"component:N\" ids from inspect_model what=\"components\")",
+        ));
+    }
+    if params.components.len() > MAX_INSTANCES {
+        return Err(invalid(format!(
+            "at most {MAX_INSTANCES} components per call, got {}",
+            params.components.len()
+        )));
+    }
+    let mut persist_ids = Vec::new();
+    for id in params.components.iter().map(|id| id.trim()) {
+        if Kind::of_id(id) != Some(Kind::Component) {
+            return Err(invalid(format!(
+                "components takes component ids like \"component:2\" (inspect_model lists them), got {id:?}"
+            )));
+        }
+        persist_ids.push(resolve(id)?);
+    }
+    Ok(proto::FixComponentsRequest { component_persist_ids: persist_ids, fixed: params.fixed })
+}
+
+/// Whether the rebuild moved the component (more than a micrometer, or
+/// turned it).
+fn moved(before: &proto::ComponentInfo, after: &proto::ComponentInfo) -> bool {
+    let v = |v: &Option<proto::Vec3>| v.as_ref().map(|v| DVec3::new(v.x, v.y, v.z)).unwrap_or_default();
+    [
+        (&before.origin, &after.origin),
+        (&before.x_axis, &after.x_axis),
+        (&before.y_axis, &after.y_axis),
+        (&before.z_axis, &after.z_axis),
+    ]
+    .iter()
+    .any(|(a, b)| (v(a) - v(b)).length() > 1e-6)
+}
+
+pub fn fix_reply_text(ids: &mut IdRegistry, params: &FixComponentsParams, reply: &proto::FixComponentsResponse) -> String {
+    let (verb, state) = if params.fixed { ("fixed", "fixed") } else { ("floated", "floating") };
+    let mut changed = Vec::new();
+    let mut already = Vec::new();
+    let mut refused = Vec::new();
+    let mut moved_any = false;
+    for c in &reply.components {
+        let (Some(before), Some(after)) = (&c.before, &c.after) else { continue };
+        let id = ids.id_for(Kind::Component, &after.persist_id).unwrap_or_default();
+        if before.fixed == params.fixed {
+            already.push(format!("{} ({id})", after.name));
+        } else if after.fixed != params.fixed {
+            refused.push(format!("{} ({id})", after.name));
+        } else {
+            let mut line = format!("- {id}: {}", placement_text(after));
+            if moved(before, after) {
+                let was = before.origin.clone().unwrap_or_default();
+                line += &format!(" (moved by the rebuild; its origin was at {} mm)", point_mm(&was));
+                moved_any = true;
+            }
+            changed.push(line);
+        }
+    }
+    let mut text = format!(
+        "{verb} {} component{}",
+        changed.len(),
+        if changed.len() == 1 { "" } else { "s" }
+    );
+    text += if changed.is_empty() { "." } else { ":" };
+    for line in &changed {
+        text += &format!("\n{line}");
+    }
+    if !already.is_empty() {
+        text += &format!("\nAlready {state}, left alone: {}.", already.join(", "));
+    }
+    if !refused.is_empty() {
+        text += &format!("\nSolidWorks left these as they were: {}.", refused.join(", "));
+    }
+    if moved_any {
+        text += "\nThe rebuild moved floated components to satisfy their mates: earlier inspect_model \
+                 coordinates of them are out of date (their ids still work).";
+    }
+    let problems = delete::problems_text(&reply.new_errors);
+    if !problems.is_empty() {
+        text += &format!("\n{}", problems.trim_start());
+        if params.fixed {
+            text += "\nFixing can leave mates unsolvable (they'd have to move a fixed component): \
+                     float it again, or edit_mate / delete_features the failing mates.";
+        }
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -572,5 +679,67 @@ mod tests {
         assert!(text.contains("a mated entity is missing.\n"), "{text}");
         assert!(text.contains("\nNow failing to rebuild: LPattern1"), "{text}");
         assert!(!text.contains("Mates (") && !text.contains("warnings"), "{text}");
+    }
+
+    #[test]
+    fn fix_takes_component_ids() {
+        let resolve = |id: &str| -> Result<Vec<u8>, McpError> { Ok(id.as_bytes().to_vec()) };
+        let p = |components: &[&str], fixed| FixComponentsParams {
+            components: components.iter().map(|s| s.to_string()).collect(),
+            fixed,
+        };
+        assert!(fix_request(&p(&[], true), resolve).is_err());
+        assert!(fix_request(&p(&["face:1"], true), resolve).is_err());
+        let r = fix_request(&p(&[" component:1 ", "component:2"], false), resolve).unwrap();
+        assert_eq!(r.component_persist_ids, vec![b"component:1".to_vec(), b"component:2".to_vec()]);
+        assert!(!r.fixed);
+    }
+
+    fn placed(pid: &[u8], name: &str, fixed: bool, origin: [f64; 3]) -> proto::ComponentInfo {
+        proto::ComponentInfo {
+            persist_id: pid.to_vec(),
+            name: name.into(),
+            fixed,
+            origin: Some(proto::Vec3 { x: origin[0], y: origin[1], z: origin[2] }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn fix_text_reports_changed_moved_and_untouched() {
+        let mut ids = IdRegistry::default();
+        let state = |before, after| proto::ComponentFixState { before: Some(before), after: Some(after) };
+        let reply = proto::FixComponentsResponse {
+            components: vec![
+                state(placed(b"a", "block-1", true, [0.0; 3]), placed(b"a", "block-1", false, [0.0; 3])),
+                state(placed(b"b", "block-2", true, [0.0; 3]), placed(b"b", "block-2", false, [0.01, 0.0, 0.0])),
+                state(placed(b"c", "block-3", false, [0.0; 3]), placed(b"c", "block-3", false, [0.0; 3])),
+                state(placed(b"d", "block-4", true, [0.0; 3]), placed(b"d", "block-4", true, [0.0; 3])),
+            ],
+            new_errors: vec![],
+        };
+        let params = FixComponentsParams { components: vec![], fixed: false };
+        let text = fix_reply_text(&mut ids, &params, &reply);
+        assert!(text.starts_with("floated 2 components:\n- component:1: block-1 has its origin"), "{text}");
+        assert!(!text.lines().nth(1).unwrap().contains("moved"), "{text}");
+        assert!(text.contains("block-2 has its origin at [10.0,0.0,0.0] mm (moved by the rebuild; its origin was at [0.0,0.0,0.0] mm)"), "{text}");
+        assert!(text.contains("\nAlready floating, left alone: block-3 (component:3)."), "{text}");
+        assert!(text.contains("\nSolidWorks left these as they were: block-4 (component:4)."), "{text}");
+        assert!(text.contains("out of date"), "{text}");
+
+        let reply = proto::FixComponentsResponse {
+            components: vec![state(placed(b"a", "block-1", false, [0.0; 3]), placed(b"a", "block-1", true, [0.0; 3]))],
+            new_errors: vec![proto::FeatureProblem {
+                name: "Distance1".into(),
+                type_name: "MateDistanceDim".into(),
+                error_code: 46,
+                warning: false,
+            }],
+        };
+        let params = FixComponentsParams { components: vec![], fixed: true };
+        let text = fix_reply_text(&mut ids, &params, &reply);
+        assert!(text.starts_with("fixed 1 component:\n- component:1: block-1 (fixed)"), "{text}");
+        assert!(text.contains("Now failing to rebuild: Distance1"), "{text}");
+        assert!(text.contains("float it again"), "{text}");
     }
 }

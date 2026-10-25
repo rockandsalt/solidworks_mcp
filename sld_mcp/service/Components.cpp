@@ -1,5 +1,5 @@
-// Components.cpp : InsertComponents, ReplaceComponents (see docs/notes/architecture.md,
-// "Assemblies + mates").
+// Components.cpp : InsertComponents, ReplaceComponents, FixComponents (see
+// docs/notes/architecture.md, "Assemblies + mates").
 #include "pch.h"
 #include "Common.h"
 #include "AssemblyHelpers.h"
@@ -454,5 +454,97 @@ grpc::Status SolidWorksService::ReplaceComponents(grpc::ServerContext* /*context
 		if (reported.count(problems->Get(i).name()))
 			problems->DeleteSubrange(i, 1);
 	doc->GraphicsRedraw2();
+	return grpc::Status::OK;
+}
+
+grpc::Status SolidWorksService::FixComponents(grpc::ServerContext* /*context*/,
+	const sld_mcp::v1::FixComponentsRequest* request,
+	sld_mcp::v1::FixComponentsResponse* response)
+{
+	if (request->component_persist_ids_size() == 0)
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give at least one component to fix or float");
+
+	std::lock_guard<std::mutex> lock(m_editMutex);
+	ComApartment com;
+	if (!com.Ok())
+		return ComApartmentError();
+
+	ATL::CComPtr<ISldWorks> swApp;
+	if (grpc::Status status = GetSwApp(swApp); !status.ok())
+		return status;
+
+	ATL::CComPtr<IModelDoc2> doc;
+	if (grpc::Status status = GetEditableAssembly(swApp, doc); !status.ok())
+		return status;
+	ATL::CComQIPtr<IAssemblyDoc> assembly(doc.p);
+	if (!assembly)
+		return grpc::Status(grpc::StatusCode::INTERNAL, "active assembly has no IAssemblyDoc interface");
+	ATL::CComPtr<IModelDocExtension> ext;
+	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+		return status;
+	ATL::CComQIPtr<IMathUtility> math;
+	if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
+		return status;
+	PersistIds ids(ext);
+
+	// The components, each once. A nested one is fixed or floating in its
+	// subassembly's file: FixComponent / UnfixComponent leave it alone, even
+	// in a flexible subassembly (seen 2026-10-25).
+	const bool fix = request->fixed();
+	std::vector<ATL::CComPtr<IComponent2>> components;
+	std::vector<ATL::CComPtr<IComponent2>> toChange;
+	std::set<std::string> seen;
+	for (const auto& persistId : request->component_persist_ids())
+	{
+		ATL::CComPtr<IDispatch> obj;
+		if (grpc::Status status = ResolvePersistId(ext, persistId, obj); !status.ok())
+			return status;
+		ATL::CComQIPtr<IComponent2> component(obj.p);
+		if (!component)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "that isn't a component");
+		if (ATL::CComPtr<IComponent2> parent = ParentOf(component))
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"\"" + ComponentName(component) + "\" is inside the subassembly \"" + ComponentName(parent) +
+				"\" -- fix or float the whole subassembly, or open its file (open_document) and do it there");
+		if (!seen.insert(ids.Get(component)).second)
+			continue;
+		components.push_back(ATL::CComPtr<IComponent2>(component));
+		DescribeComponent(component, ids, math, response->add_components()->mutable_before());
+		VARIANT_BOOL fixed = VARIANT_FALSE;
+		component->IsFixed(&fixed);
+		if ((fixed != VARIANT_FALSE) != fix)
+			toChange.push_back(ATL::CComPtr<IComponent2>(component));
+	}
+
+	if (!toChange.empty())
+	{
+		const auto errorsBefore = FeatureErrors(FeatureTree(doc));
+		// FixComponent / UnfixComponent work on the selection, like the UI's
+		// Fix / Float.
+		doc->ClearSelection2(VARIANT_TRUE);
+		for (const auto& component : toChange)
+		{
+			VARIANT_BOOL selected = VARIANT_FALSE;
+			if (FAILED(component->Select4(VARIANT_TRUE, nullptr, VARIANT_FALSE, &selected)) || !selected)
+			{
+				doc->ClearSelection2(VARIANT_TRUE);
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+					"SolidWorks wouldn't select \"" + ComponentName(component) + "\" -- is it suppressed?");
+			}
+		}
+		PreferenceToggles toggles(swApp);
+		toggles.Set(swShowErrorsEveryRebuild, false);
+		HRESULT hr = fix ? assembly->FixComponent() : assembly->UnfixComponent();
+		doc->ClearSelection2(VARIANT_TRUE);
+		if (FAILED(hr))
+			return ComError(fix ? "IAssemblyDoc::FixComponent" : "IAssemblyDoc::UnfixComponent", hr);
+		VARIANT_BOOL rebuilt = VARIANT_FALSE;
+		doc->EditRebuild3(&rebuilt);
+		AddNewErrors(errorsBefore, FeatureErrors(FeatureTree(doc)), response->mutable_new_errors());
+		doc->GraphicsRedraw2();
+	}
+
+	for (size_t i = 0; i < components.size(); ++i)
+		DescribeComponent(components[i], ids, math, response->mutable_components(static_cast<int>(i))->mutable_after());
 	return grpc::Status::OK;
 }

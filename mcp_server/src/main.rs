@@ -3107,6 +3107,24 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "Fix or float components of the active assembly, like SolidWorks' Fix / Float: `components` = the \"component:N\" ids (inspect_model what=\"components\" lists them and whether each is fixed), `fixed` = true to fix them in place (they can't move; mates move the others to them), false to float them (free to be moved by mates and other tools). Components already in that state are left alone. After the change SolidWorks re-solves the mates: a floated component may move to satisfy its mates, and fixing one can make mates fail (they'd have to move it) -- both reported, the change is kept. Top-level components only: for a part inside a subassembly, fix / float the whole subassembly, or open its file (open_document) and do it there. A rigid subassembly's parts show as fixed exactly when the subassembly is. Requires an open assembly with no sketch being edited."
+    )]
+    async fn fix_components(
+        &self,
+        Parameters(params): Parameters<component::FixComponentsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = component::fix_request(&params, |id| self.resolve_id(id))?;
+        let reply = self
+            .addin
+            .fix_components(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let text = component::fix_reply_text(&mut ids, &params, &reply);
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
         description = "Check an assembly for interference, like SolidWorks' Interference \
                        Detection: which components' solids overlap, by how much (volume in \
                        mm³) and where (the box around each overlap, assembly mm), biggest \

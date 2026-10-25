@@ -125,6 +125,10 @@ public:
 		const sld_mcp::v1::ReplaceComponentsRequest* request,
 		sld_mcp::v1::ReplaceComponentsResponse* response) override;
 
+	grpc::Status FixComponents(grpc::ServerContext* context,
+		const sld_mcp::v1::FixComponentsRequest* request,
+		sld_mcp::v1::FixComponentsResponse* response) override;
+
 	grpc::Status CheckInterference(grpc::ServerContext* context,
 		const sld_mcp::v1::CheckInterferenceRequest* request,
 		sld_mcp::v1::CheckInterferenceResponse* response) override;

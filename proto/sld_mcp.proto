@@ -216,6 +216,18 @@ service SolidWorks {
   // file, and with FAILED_PRECONDITION when SolidWorks replaces nothing.
   rpc ReplaceComponents(ReplaceComponentsRequest) returns (ReplaceComponentsResponse);
 
+  // Fixes components of the active assembly in place, or floats them
+  // (IAssemblyDoc::FixComponent / UnfixComponent on the selection, as the
+  // UI's Fix / Float), then rebuilds: a floated component may move to
+  // satisfy its mates, and fixing one can leave mates unsolvable (both
+  // reported; the change is kept). Components already in that state are
+  // left alone. Fails with INVALID_ARGUMENT for a component inside a
+  // subassembly (its state belongs to that subassembly's file; SolidWorks
+  // ignores the call even for a flexible one), and with
+  // FAILED_PRECONDITION as AddMate or for a component SolidWorks won't
+  // select (suppressed).
+  rpc FixComponents(FixComponentsRequest) returns (FixComponentsResponse);
+
   // Read-only: where the solid bodies of an assembly's components overlap,
   // as SolidWorks' Interference Detection finds them
   // (IAssemblyDoc::InterferenceDetectionManager), with every component
@@ -1307,6 +1319,26 @@ message ReplaceComponentsResponse {
   // Other features (not in `mates`) whose rebuild error is new or
   // different since the replacement.
   repeated FeatureProblem new_errors = 4;
+}
+
+message FixComponentsRequest {
+  // Components of the active assembly; at least one.
+  repeated bytes component_persist_ids = 1;
+  bool fixed = 2;  // true: fix in place; false: float
+}
+
+// A component the request named, before and after the change.
+message ComponentFixState {
+  ComponentInfo before = 1;
+  ComponentInfo after = 2;
+}
+
+message FixComponentsResponse {
+  // In request order, each once.
+  repeated ComponentFixState components = 1;
+  // Features (mates, mostly) whose rebuild error is new or different
+  // since the change.
+  repeated FeatureProblem new_errors = 2;
 }
 
 message CheckInterferenceRequest {
