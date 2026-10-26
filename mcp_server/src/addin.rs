@@ -366,6 +366,16 @@ impl AddinClient {
         Ok(client.move_component(request).await?.into_inner())
     }
 
+    /// Drives a distance / angle mate of the active assembly through a range
+    /// of values, checking interference at each; meters / radians.
+    pub async fn sweep_mate(
+        &self,
+        request: proto::SweepMateRequest,
+    ) -> Result<proto::SweepMateResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.sweep_mate(request).await?.into_inner())
+    }
+
     /// Nudges components of the active assembly to see how they can move;
     /// meters / radians, everything put back.
     pub async fn inspect_mobility(

@@ -4,7 +4,8 @@
 //! Also replace_components: swapping components for another file, and the
 //! report of which mates came through; fix_components: fixing or floating
 //! components; and move_component: moving one while SolidWorks solves its
-//! mates, with how far it got.
+//! mates, with how far it got (and, checked for collisions, what it hit on
+//! the way: the report is motion.rs's).
 //!
 //! Parts and subassemblies go in the same way (a subassembly is just an
 //! .SLDASM file); several instances of one file are several placements, and
@@ -18,7 +19,7 @@ use glam::{DMat3, DQuat, DVec3};
 
 use crate::addin::proto;
 use crate::assembly::{self, placement_text};
-use crate::{delete, edit, files};
+use crate::{delete, edit, files, motion};
 use crate::inspect::{IdRegistry, Kind, MM_PER_M, direction as unit_text, mm, point_mm, round};
 
 /// More than this in one call is almost certainly a mistake (and slow).
@@ -526,6 +527,17 @@ pub struct MoveComponentParams {
     /// Default false: the move is kept.
     #[serde(default)]
     pub restore: bool,
+    /// true: run an interference check before the move and after every step, and report
+    /// the components that come to overlap on the way (first contact, how long, the biggest
+    /// overlap). Use enough steps to see the contact closely (each check takes about half a
+    /// second; the call stops after 45 s). Default false.
+    #[serde(default)]
+    pub check_collisions: bool,
+    /// true (implies check_collisions): stop at the first step where components come to
+    /// overlap and go back to the step before -- "move it until it hits something". Default
+    /// false.
+    #[serde(default)]
+    pub stop_at_collision: bool,
 }
 
 /// The MoveComponent request, with the component id resolved by `resolve`.
@@ -578,6 +590,9 @@ pub fn move_request(
         rotation_center: center.map(|c| to_proto(c / MM_PER_M)),
         steps: steps as i32,
         restore: params.restore,
+        check_collisions: params.check_collisions || params.stop_at_collision,
+        stop_at_collision: params.stop_at_collision,
+        time_budget: motion::TIME_BUDGET_S,
     })
 }
 
@@ -689,6 +704,39 @@ pub fn move_reply_text(ids: &mut IdRegistry, params: &MoveComponentParams, reque
         for (b, a) in &others {
             let other_id = ids.id_for(Kind::Component, &a.persist_id).unwrap_or_default();
             text += &format!("\n- {} ({other_id}): {}", a.name, motion_text(info_frame(b), info_frame(a)));
+        }
+    }
+
+    if request.check_collisions {
+        text += &motion::collisions_text(
+            ids,
+            &reply.start_interferences,
+            &reply.collision_steps,
+            |s| motion::move_step_label(request, s),
+            "before the move",
+        );
+        if reply.backed_off {
+            text += &if reply.collision_step <= 1 {
+                "\nStopped at the first collision (step 1) and went back to where everything started: \
+                 it can't move that way at all without hitting something (a smaller step would get closer)."
+                    .to_string()
+            } else {
+                format!(
+                    "\nStopped at the first collision (step {} of {}) and went back to step {}'s pose: \
+                     \"Got\" above is that pose.",
+                    reply.collision_step,
+                    request.steps,
+                    reply.collision_step - 1
+                )
+            };
+        }
+        if reply.out_of_time {
+            text += &format!(
+                "\nOut of time after step {} of {}: the move stopped there (fewer steps, or check a \
+                 shorter motion).",
+                reply.collision_steps.last().map_or(0, |s| s.step),
+                request.steps
+            );
         }
     }
 
@@ -982,6 +1030,8 @@ mod tests {
             center_mm: None,
             steps: None,
             restore: false,
+            check_collisions: false,
+            stop_at_collision: false,
         }
     }
 

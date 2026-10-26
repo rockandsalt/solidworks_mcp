@@ -21,7 +21,7 @@ fn invalid(message: impl Into<String>) -> McpError {
 
 /// The wire target for one feature: a "feature:N" id this server handed out,
 /// or else a feature-tree name.
-fn feature_target(ids: &IdRegistry, feature: &str, noun: &str) -> Result<proto::FeatureTarget, McpError> {
+pub fn feature_target(ids: &IdRegistry, feature: &str, noun: &str) -> Result<proto::FeatureTarget, McpError> {
     use proto::feature_target::Target;
     let feature = feature.trim();
     if feature.is_empty() {
@@ -309,6 +309,22 @@ pub struct EditMateParams {
     /// Concentric mates: stop (true) or allow (false) spinning about the shared axis.
     #[serde(default)]
     pub lock_rotation: Option<bool>,
+    /// Distance mates: the smallest gap of a limit mate, in millimeters. Making a plain
+    /// distance mate a limit mate takes min_mm and max_mm; a limit mate takes either.
+    #[serde(default)]
+    pub min_mm: Option<f64>,
+    /// Distance mates: the largest gap of a limit mate, in millimeters.
+    #[serde(default)]
+    pub max_mm: Option<f64>,
+    /// Angle mates: the smallest angle of a limit mate, 0 to 180 degrees (as min_mm).
+    #[serde(default)]
+    pub min_deg: Option<f64>,
+    /// Angle mates: the largest angle of a limit mate, 0 to 180 degrees.
+    #[serde(default)]
+    pub max_deg: Option<f64>,
+    /// true: make a limit mate a plain distance / angle mate, at its current value.
+    #[serde(default)]
+    pub remove_limits: bool,
 }
 
 /// Checks what doesn't need SolidWorks and returns the new entities' ids,
@@ -351,6 +367,47 @@ pub fn check_mate(p: &EditMateParams) -> Result<Vec<String>, McpError> {
     {
         return Err(invalid(format!("angle_deg must be 0 to 180, got {a}")));
     }
+    let mm_limits = p.min_mm.is_some() || p.max_mm.is_some();
+    let deg_limits = p.min_deg.is_some() || p.max_deg.is_some();
+    if mm_limits && deg_limits {
+        return Err(invalid("give min_mm / max_mm (distance mates) or min_deg / max_deg (angle mates), not both"));
+    }
+    for (name, v, top) in [
+        ("min_mm", p.min_mm, f64::INFINITY),
+        ("max_mm", p.max_mm, f64::INFINITY),
+        ("min_deg", p.min_deg, 180.0),
+        ("max_deg", p.max_deg, 180.0),
+    ] {
+        if let Some(v) = v
+            && !(v.is_finite() && 0.0 <= v && v <= top)
+        {
+            return Err(invalid(format!("{name} must be 0 to {top}, got {v}")));
+        }
+    }
+    if let (Some(lo), Some(hi)) = (p.min_mm.or(p.min_deg), p.max_mm.or(p.max_deg))
+        && lo > hi
+    {
+        return Err(invalid(format!("the minimum ({lo}) is above the maximum ({hi})")));
+    }
+    if p.remove_limits && (mm_limits || deg_limits) {
+        return Err(invalid("give new limits or remove_limits, not both"));
+    }
+    let limits_kind = if mm_limits {
+        Some(MateKind::Distance)
+    } else if deg_limits {
+        Some(MateKind::Angle)
+    } else {
+        None
+    };
+    if let (Some(kind), Some(limits_kind)) = (p.kind, limits_kind)
+        && kind != limits_kind
+    {
+        return Err(invalid(match kind {
+            MateKind::Distance => "a distance mate's limits are min_mm / max_mm",
+            MateKind::Angle => "an angle mate's limits are min_deg / max_deg",
+            _ => "only distance and angle mates have limits",
+        }));
+    }
     if p.kind.is_none()
         && p.entities.is_none()
         && p.alignment.is_none()
@@ -358,10 +415,14 @@ pub fn check_mate(p: &EditMateParams) -> Result<Vec<String>, McpError> {
         && p.distance_mm.is_none()
         && p.angle_deg.is_none()
         && p.lock_rotation.is_none()
+        && !mm_limits
+        && !deg_limits
+        && !p.remove_limits
     {
         return Err(invalid(
-            "nothing to change -- give kind, entities, alignment, flip, distance_mm, angle_deg or \
-             lock_rotation (inspect_model what=\"mates\" shows the mates as they are)",
+            "nothing to change -- give kind, entities, alignment, flip, distance_mm, angle_deg, \
+             min_mm / max_mm, min_deg / max_deg, remove_limits or lock_rotation (inspect_model \
+             what=\"mates\" shows the mates as they are)",
         ));
     }
     Ok(entities)
@@ -381,6 +442,9 @@ pub fn mate_request(
         distance: p.distance_mm.map(|d| d / MM_PER_M),
         angle: p.angle_deg.map(f64::to_radians),
         lock_rotation: p.lock_rotation,
+        min_limit: p.min_mm.map(|d| d / MM_PER_M).or(p.min_deg.map(f64::to_radians)),
+        max_limit: p.max_mm.map(|d| d / MM_PER_M).or(p.max_deg.map(f64::to_radians)),
+        remove_limits: p.remove_limits,
     })
 }
 
@@ -406,7 +470,7 @@ pub fn mate_text(m: &proto::MateInfo) -> String {
             text += &format!(", {} mm", mm(dim.value));
         }
     }
-    text
+    text + &assembly::limits_text(m)
 }
 
 pub fn entity_text(ids: &mut IdRegistry, e: &proto::MateEntityState) -> String {
@@ -558,6 +622,32 @@ mod tests {
         assert!(check_mate(&lock).is_err());
         let angle = EditMateParams { mate: "x".into(), angle_deg: Some(190.0), ..Default::default() };
         assert!(check_mate(&angle).is_err());
+    }
+
+    #[test]
+    fn checks_mate_limits() {
+        let ids = IdRegistry::default();
+        let p = EditMateParams { mate: "Distance1".into(), min_mm: Some(5.0), max_mm: Some(40.0), ..Default::default() };
+        assert!(check_mate(&p).is_ok());
+        let r = mate_request(&ids, &p, vec![]).unwrap();
+        assert_eq!((r.min_limit, r.max_limit), (Some(0.005), Some(0.04)));
+        let p = EditMateParams { mate: "LimitAngle1".into(), max_deg: Some(90.0), ..Default::default() };
+        let r = mate_request(&ids, &p, vec![]).unwrap();
+        assert!(r.min_limit.is_none() && (r.max_limit.unwrap() - std::f64::consts::FRAC_PI_2).abs() < 1e-15);
+        let p = EditMateParams { mate: "x".into(), remove_limits: true, ..Default::default() };
+        assert!(check_mate(&p).is_ok() && mate_request(&ids, &p, vec![]).unwrap().remove_limits);
+
+        for bad in [
+            EditMateParams { mate: "x".into(), min_mm: Some(5.0), max_deg: Some(9.0), ..Default::default() },
+            EditMateParams { mate: "x".into(), min_mm: Some(50.0), max_mm: Some(40.0), ..Default::default() },
+            EditMateParams { mate: "x".into(), max_deg: Some(270.0), ..Default::default() },
+            EditMateParams { mate: "x".into(), min_mm: Some(-1.0), ..Default::default() },
+            EditMateParams { mate: "x".into(), min_mm: Some(1.0), remove_limits: true, ..Default::default() },
+            EditMateParams { mate: "x".into(), kind: Some(MateKind::Angle), min_mm: Some(1.0), ..Default::default() },
+            EditMateParams { mate: "x".into(), kind: Some(MateKind::Coincident), min_deg: Some(1.0), ..Default::default() },
+        ] {
+            assert!(check_mate(&bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

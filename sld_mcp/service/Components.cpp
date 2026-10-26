@@ -41,13 +41,6 @@ namespace
 		return path.Length() > 0 ? std::wstring(path.m_str) : std::wstring();
 	}
 
-	ATL::CComPtr<IComponent2> ParentOf(IComponent2* component)
-	{
-		ATL::CComPtr<IComponent2> parent;
-		component->GetParent(&parent);
-		return parent;
-	}
-
 	// INVALID_ARGUMENT unless `path` has the configuration (none given: OK).
 	// GetConfigurationNames works on files that aren't open.
 	grpc::Status CheckConfiguration(ISldWorks* swApp, const ATL::CComBSTR& path, const ATL::CComBSTR& configuration)
@@ -96,37 +89,6 @@ namespace
 		SetVec3(out->mutable_z_axis(), Eigen::Vector3d(placement.linear().col(2)));
 	}
 
-	// A component's transform and its raw numbers, to tell whether it moved
-	// and to put it back.
-	struct SavedPose
-	{
-		ATL::CComPtr<IComponent2> component;
-		ATL::CComPtr<IMathTransform> xform;
-		std::vector<double> data;
-	};
-
-	bool ReadPose(IComponent2* component, SavedPose& out)
-	{
-		out.component = component;
-		out.xform.Release();
-		ATL::CComVariant data;
-		if (FAILED(component->get_Transform2(&out.xform)) || !out.xform || FAILED(out.xform->get_ArrayData(&data)))
-			return false;
-		out.data = comvariant::ToDoubles(data);
-		return true;
-	}
-
-	// Same place to within `tolerance` (meters; the axes' numbers are unit).
-	bool SamePose(const std::vector<double>& a, const std::vector<double>& b, double tolerance)
-	{
-		if (a.size() != b.size())
-			return false;
-		for (size_t i = 0; i < a.size(); ++i)
-			if (std::abs(a[i] - b[i]) > tolerance)
-				return false;
-		return true;
-	}
-
 	// Deletes components again (all or nothing). Best effort.
 	void DeleteComponents(IModelDoc2* doc, const std::vector<ATL::CComPtr<IComponent2>>& components)
 	{
@@ -168,39 +130,6 @@ namespace
 		}
 	}
 
-	// While it lives (many solves in a row): no redrawing the active view or
-	// the FeatureManager tree, and SolidWorks told an API command is running.
-	class QuietSolves
-	{
-	public:
-		QuietSolves(ISldWorks* swApp, IModelDoc2* doc) : m_swApp(swApp)
-		{
-			ATL::CComPtr<IDispatch> disp;
-			if (SUCCEEDED(doc->get_ActiveView(&disp)) && disp)
-				m_view = disp;
-			if (m_view)
-				m_view->put_EnableGraphicsUpdate(VARIANT_FALSE);
-			doc->get_FeatureManager(&m_features);
-			if (m_features)
-				m_features->put_EnableFeatureTree(VARIANT_FALSE);
-			m_swApp->put_CommandInProgress(VARIANT_TRUE);
-		}
-		~QuietSolves()
-		{
-			m_swApp->put_CommandInProgress(VARIANT_FALSE);
-			if (m_features)
-				m_features->put_EnableFeatureTree(VARIANT_TRUE);
-			if (m_view)
-				m_view->put_EnableGraphicsUpdate(VARIANT_TRUE);
-		}
-		QuietSolves(const QuietSolves&) = delete;
-		QuietSolves& operator=(const QuietSolves&) = delete;
-
-	private:
-		ATL::CComPtr<ISldWorks> m_swApp;
-		ATL::CComQIPtr<IModelView> m_view;
-		ATL::CComPtr<IFeatureManager> m_features;
-	};
 }
 
 grpc::Status SolidWorksService::InsertComponents(grpc::ServerContext* /*context*/,
@@ -690,6 +619,9 @@ grpc::Status SolidWorksService::MoveComponent(grpc::ServerContext* /*context*/,
 	if (request->steps() < 1 || request->steps() > kMaxSteps)
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
 			"steps must be 1.." + std::to_string(kMaxSteps));
+	if (!std::isfinite(request->time_budget()) || request->time_budget() < 0.0)
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "time_budget must be 0 or more seconds");
+	const bool checkCollisions = request->check_collisions() || request->stop_at_collision();
 
 	std::lock_guard<std::mutex> lock(m_editMutex);
 	ComApartment com;
@@ -748,15 +680,7 @@ grpc::Status SolidWorksService::MoveComponent(grpc::ServerContext* /*context*/,
 
 	// Every top-level component where it is: who the solve moved, and what
 	// to put back.
-	std::vector<SavedPose> saved;
-	for (const auto& c : AllComponents(assembly))
-	{
-		if (ParentOf(c))
-			continue;
-		SavedPose pose;
-		if (ReadPose(c, pose))
-			saved.push_back(std::move(pose));
-	}
+	const std::vector<SavedPose> saved = TopLevelPoses(assembly);
 	const auto errorsBefore = FeatureErrors(FeatureTree(doc));
 
 	// Each step's target is the starting pose moved by that fraction of the
@@ -770,9 +694,39 @@ grpc::Status SolidWorksService::MoveComponent(grpc::ServerContext* /*context*/,
 	};
 	PreferenceToggles toggles(swApp);
 	toggles.Set(swShowErrorsEveryRebuild, false);
+	std::unique_ptr<QuietSolves> quiet;
+	if (checkCollisions)
+		quiet = std::make_unique<QuietSolves>(swApp, doc);
+
+	// Collision checks: interferences before the move, then after each step;
+	// with stop_at_collision the poses before each step, to go back to.
+	constexpr int kMaxInterferences = 200;
+	std::unique_ptr<InterferenceSession> session;
+	std::set<std::string> overlapping;
+	std::vector<SavedPose> previous;
+	if (checkCollisions)
+	{
+		if (grpc::Status status = StartCollisionChecks(assembly, session); !status.ok())
+			return status;
+		bool truncated = false;
+		if (grpc::Status status = session->Check(ids, nullptr, kMaxInterferences,
+				response->mutable_start_interferences(), truncated); !status.ok())
+			return status;
+		for (const auto& interference : response->start_interferences())
+			overlapping.insert(InterferenceKey(interference));
+		if (request->stop_at_collision())
+			previous = saved;
+	}
+	const auto started = std::chrono::steady_clock::now();
 	const int steps = request->steps();
 	for (int k = 1; k <= steps; ++k)
 	{
+		if (checkCollisions && k > 1 && request->time_budget() > 0.0 &&
+			std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count() > request->time_budget())
+		{
+			response->set_out_of_time(true);
+			break;
+		}
 		sld_mcp::v1::ComponentPlacement target;
 		SetPlacement(motion(static_cast<double>(k) / steps) * startPlacement, &target);
 		ATL::CComPtr<IMathTransform> xform = ToMathTransform(math, target);
@@ -787,42 +741,60 @@ grpc::Status SolidWorksService::MoveComponent(grpc::ServerContext* /*context*/,
 			response->set_refused_step(k);
 			break;
 		}
+		if (!checkCollisions)
+			continue;
+
+		sld_mcp::v1::MotionStep* step = response->add_collision_steps();
+		step->set_step(k);
+		SavedPose now;
+		Eigen::Affine3d reached;
+		if (ReadPose(component, now) && PlacementOf(math, now.xform, reached))
+			SetPlacement(reached, step->mutable_placement());
+		bool truncated = false;
+		if (grpc::Status status = session->Check(ids, nullptr, kMaxInterferences, step->mutable_interferences(),
+				truncated); !status.ok())
+			return status;
+		step->set_truncated(truncated);
+		if (response->collision_step() == 0 && HasNewInterference(overlapping, step->interferences()))
+		{
+			response->set_collision_step(k);
+			if (request->stop_at_collision())
+			{
+				response->set_backed_off(true);
+				break;
+			}
+		}
+		if (request->stop_at_collision())
+			previous = TopLevelPoses(assembly);
 	}
-	SetPlacement(motion(1.0) * startPlacement, response->mutable_target());
+	session.reset();  // Done: out of interference mode before anything else
+	quiet.reset();
 	VARIANT_BOOL rebuilt = VARIANT_FALSE;
+	if (response->backed_off())
+		RestorePoses(doc, previous);
+	SetPlacement(motion(1.0) * startPlacement, response->mutable_target());
 	doc->EditRebuild3(&rebuilt);
 	AddNewErrors(errorsBefore, FeatureErrors(FeatureTree(doc)), response->mutable_new_errors());
 
 	DescribeComponent(component, ids, math, response->mutable_component()->mutable_after());
-	std::vector<const SavedPose*> moved;
-	for (const auto& pose : saved)
+	const std::vector<const SavedPose*> moved = MovedSince(saved);
+	for (const SavedPose* pose : moved)
 	{
-		SavedPose now;
-		if (!ReadPose(pose.component, now) || SamePose(now.data, pose.data, 1e-9))
-			continue;
-		moved.push_back(&pose);
-		if (SameObject(pose.component, component))
+		if (SameObject(pose->component, component))
 			continue;
 		sld_mcp::v1::ComponentMove* out = response->add_others();
-		DescribeComponent(pose.component, ids, math, out->mutable_after());
+		DescribeComponent(pose->component, ids, math, out->mutable_after());
 		Eigen::Affine3d before;
 		out->mutable_before()->set_persist_id(out->after().persist_id());
 		out->mutable_before()->set_name(out->after().name());
-		if (PlacementOf(math, pose.xform, before))
+		if (PlacementOf(math, pose->xform, before))
 			SetPlacement(before, out->mutable_before());
 	}
 
 	if (request->restore())
 	{
-		for (const SavedPose* pose : moved)
-			pose->component->put_Transform2(pose->xform);
-		doc->EditRebuild3(&rebuilt);
-		for (const auto& pose : saved)
-		{
-			SavedPose now;
-			if (!ReadPose(pose.component, now) || !SamePose(now.data, pose.data, 1e-9))
-				response->add_not_restored(ComponentName(pose.component));
-		}
+		for (const auto& name : RestorePoses(doc, saved))
+			response->add_not_restored(name);
 		response->set_restored(response->not_restored_size() == 0);
 	}
 	doc->GraphicsRedraw2();

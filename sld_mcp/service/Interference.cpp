@@ -164,50 +164,6 @@ namespace
 		ATL::CComPtr<IModelDoc2> m_active;
 		bool m_shown = false;
 	};
-
-	// The manager's options as the request wants them, put back as they
-	// were when this goes out of scope (the manager keeps them between
-	// checks), then Done -- which leaves interference mode (interferences
-	// shown red, other components wireframe) and marks the assembly
-	// modified (seen 2026-10-24). Only the options that pick what is
-	// checked: changing ShowIgnoredInterferences, MakeInterferingPartsTransparent
-	// or NonInterferingComponentDisplay made SolidWorks drop the coincident
-	// (touching) interferences, and the display goes back with Done anyway.
-	class InterferenceSession
-	{
-	public:
-		explicit InterferenceSession(IInterferenceDetectionMgr* mgr) : m_mgr(mgr)
-		{
-			m_mgr->get_TreatCoincidenceAsInterference(&m_coincidence);
-			m_mgr->get_TreatSubAssembliesAsComponents(&m_subassemblies);
-			m_mgr->get_IncludeMultibodyPartInterferences(&m_multibody);
-			m_mgr->get_IgnoreHiddenBodies(&m_ignoreHidden);
-		}
-		~InterferenceSession()
-		{
-			m_mgr->put_TreatCoincidenceAsInterference(m_coincidence);
-			m_mgr->put_TreatSubAssembliesAsComponents(m_subassemblies);
-			m_mgr->put_IncludeMultibodyPartInterferences(m_multibody);
-			m_mgr->put_IgnoreHiddenBodies(m_ignoreHidden);
-			m_mgr->Done();
-		}
-		InterferenceSession(const InterferenceSession&) = delete;
-		InterferenceSession& operator=(const InterferenceSession&) = delete;
-
-		void Apply(const sld_mcp::v1::CheckInterferenceRequest& r)
-		{
-			auto b = [](bool v) { return v ? VARIANT_TRUE : VARIANT_FALSE; };
-			m_mgr->put_TreatCoincidenceAsInterference(b(r.include_coincident()));
-			m_mgr->put_TreatSubAssembliesAsComponents(b(r.treat_subassemblies_as_components()));
-			m_mgr->put_IncludeMultibodyPartInterferences(b(r.include_multibody_parts()));
-			m_mgr->put_IgnoreHiddenBodies(b(!r.include_hidden()));
-		}
-
-	private:
-		ATL::CComPtr<IInterferenceDetectionMgr> m_mgr;
-		VARIANT_BOOL m_coincidence = VARIANT_FALSE, m_subassemblies = VARIANT_FALSE, m_multibody = VARIANT_FALSE,
-			m_ignoreHidden = VARIANT_FALSE;
-	};
 }
 
 grpc::Status SolidWorksService::CheckInterference(grpc::ServerContext* /*context*/,
@@ -265,58 +221,16 @@ grpc::Status SolidWorksService::CheckInterference(grpc::ServerContext* /*context
 
 	VARIANT_BOOL dirtyBefore = VARIANT_FALSE;
 	target.doc->GetSaveFlag(&dirtyBefore);
-	std::vector<ATL::CComPtr<IDispatch>> found;
 	{
 		InterferenceSession session(mgr);
-		session.Apply(*request);
-		ATL::CComVariant interferences;
-		hr = mgr->GetInterferences(&interferences);
-		if (FAILED(hr))
-			return ComError("IInterferenceDetectionMgr::GetInterferences", hr);
-		found = comvariant::ToDispatches(interferences);
-
+		session.Apply(request->include_coincident(), request->treat_subassemblies_as_components(),
+			request->include_multibody_parts(), request->include_hidden());
 		ComponentList components(ids, math, response->mutable_components());
-		for (const auto& disp : found)
-		{
-			ATL::CComQIPtr<IInterference> interference(disp.p);
-			if (!interference)
-				continue;
-			if (response->interferences_size() >= kMaxInterferences)
-			{
-				response->set_truncated(true);
-				break;
-			}
-			sld_mcp::v1::Interference* out = response->add_interferences();
-			ATL::CComVariant list;
-			if (SUCCEEDED(interference->get_Components(&list)))
-				for (const auto& c : comvariant::ToDispatches(list))
-					if (ATL::CComQIPtr<IComponent2> component(c.p); component)
-					{
-						out->add_component_persist_ids(components.Add(component));
-						out->add_component_names(ComponentName(component));
-					}
-			double volume = 0.0;
-			if (SUCCEEDED(interference->get_Volume(&volume)) && std::isfinite(volume))
-				out->set_volume(volume);
-			VARIANT_BOOL flag = VARIANT_FALSE;
-			if (SUCCEEDED(interference->get_IsPossibleInterference(&flag)))
-				out->set_possible(flag != VARIANT_FALSE);
-			flag = VARIANT_FALSE;
-			if (SUCCEEDED(interference->get_IsFastener(&flag)))
-				out->set_fastener(flag != VARIANT_FALSE);
-			flag = VARIANT_FALSE;
-			if (SUCCEEDED(interference->get_Ignore(&flag)))
-				out->set_ignored(flag != VARIANT_FALSE);
-			ATL::CComPtr<IDispatch> bodyDisp;
-			if (SUCCEEDED(interference->GetInterferenceBody(&bodyDisp)) && bodyDisp)
-				if (ATL::CComQIPtr<IBody2> body(bodyDisp.p); body)
-				{
-					ATL::CComVariant box;
-					if (SUCCEEDED(body->GetBodyBox(&box)))
-						if (const std::vector<double> b = comvariant::ToDoubles(box); b.size() == 6)
-							SetBox(out->mutable_box(), b);
-				}
-		}
+		bool truncated = false;
+		if (grpc::Status status = session.Check(ids, &components, kMaxInterferences,
+				response->mutable_interferences(), truncated); !status.ok())
+			return status;
+		response->set_truncated(truncated);
 	}
 	VARIANT_BOOL dirtyAfter = VARIANT_FALSE;
 	target.doc->GetSaveFlag(&dirtyAfter);

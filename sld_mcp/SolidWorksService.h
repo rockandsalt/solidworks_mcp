@@ -133,6 +133,10 @@ public:
 		const sld_mcp::v1::MoveComponentRequest* request,
 		sld_mcp::v1::MoveComponentResponse* response) override;
 
+	grpc::Status SweepMate(grpc::ServerContext* context,
+		const sld_mcp::v1::SweepMateRequest* request,
+		sld_mcp::v1::SweepMateResponse* response) override;
+
 	grpc::Status InspectMobility(grpc::ServerContext* context,
 		const sld_mcp::v1::InspectMobilityRequest* request,
 		sld_mcp::v1::InspectMobilityResponse* response) override;

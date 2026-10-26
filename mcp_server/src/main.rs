@@ -15,6 +15,7 @@ mod inspect;
 mod interference;
 mod mirror;
 mod mobility;
+mod motion;
 mod note;
 mod pattern;
 mod pmi;
@@ -3039,7 +3040,11 @@ impl SolidWorksTools {
                        does: coincident (faces flush / planes together), concentric (pin in \
                        hole: round faces, circular edges or axes share an axis), parallel, \
                        perpendicular, tangent, distance (distance_mm apart), angle (angle_deg), \
-                       or lock (two components held as they are). `entities` = two ids from \
+                       or lock (two components held as they are). A limit mate is a distance \
+                       or angle mate with a range: min_mm / max_mm (a slider's stroke) or \
+                       min_deg / max_deg (how far a lid opens), starting at distance_mm / \
+                       angle_deg (default the minimum); sweep_mate then runs it through the \
+                       range checking for collisions. `entities` = two ids from \
                        inspect_model on the assembly, on different components: faces or edges \
                        (what=\"faces\" within=\"component:N\" lists a component's faces, in \
                        assembly coordinates), or reference planes/axes as \"feature:N\" (a \
@@ -3127,7 +3132,7 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Move a component of the active assembly while SolidWorks solves its mates, like dragging it: give `translate_mm` (assembly millimeters) and / or a turn (`axis` direction + `angle_deg`, about an axis through `center_mm`, default the component's bounding-box center; the turn happens first). The component goes as far as its mates let it -- the parts of the motion they forbid are dropped -- and components mated to it may follow. The reply gives the requested and the actual pose (origin and turn), the solver's outcome (reached the requested pose / held back by its mates, and how far off / didn't move at all), the other components that moved, and mates that now fail. `restore`=true puts every component back afterwards, to check whether the mates allow a motion (\"does the slider reach 50 mm?\", \"can this lever turn 90 degrees?\") without changing the assembly. Long turns go to the solver in steps (default one per 15 degrees, `steps` to change) so linkages follow the motion. The component must float: fixed ones are refused (fix_components fixed=false first), and so are components inside a subassembly (move the whole subassembly). Requires an open assembly with no sketch being edited."
+        description = "Move a component of the active assembly while SolidWorks solves its mates, like dragging it: give `translate_mm` (assembly millimeters) and / or a turn (`axis` direction + `angle_deg`, about an axis through `center_mm`, default the component's bounding-box center; the turn happens first). The component goes as far as its mates let it -- the parts of the motion they forbid are dropped -- and components mated to it may follow. The reply gives the requested and the actual pose (origin and turn), the solver's outcome (reached the requested pose / held back by its mates, and how far off / didn't move at all), the other components that moved, and mates that now fail. `restore`=true puts every component back afterwards, to check whether the mates allow a motion (\"does the slider reach 50 mm?\", \"can this lever turn 90 degrees?\") without changing the assembly. Long turns go to the solver in steps (default one per 15 degrees, `steps` to change) so linkages follow the motion. `check_collisions`=true runs an interference check before the move and after every step and reports what comes to overlap on the way (first contact, how long, the biggest overlap); `stop_at_collision`=true stops at the first contact and goes back a step (\"move it until it hits\"). A limit mate holds its component at the mate's current value here (SolidWorks' solver doesn't drag along its range): use sweep_mate for motion along a limit mate. The component must float: fixed ones are refused (fix_components fixed=false first), and so are components inside a subassembly (move the whole subassembly). Requires an open assembly with no sketch being edited."
     )]
     async fn move_component(
         &self,
@@ -3145,7 +3150,28 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Mobility inspection of the active assembly: each component's remaining degrees of freedom -- how many translations and rotations its mates still leave, and which: the directions it can slide along, the axes it can turn about (direction + a point on the axis, assembly mm; a screw's advance per turn). Use it to find under-defined components before adding mates, or to check that a mechanism moves the way it should (a hinge turns about its pin, a slider only slides). How: every component is nudged a little along and about the assembly X/Y/Z while SolidWorks solves its mates, as dragging it would, then put back -- nothing changes. Also reports which components drag others along (`drags_along` / `dragged_by`: a follower can move only by moving what it's mated to) and SolidWorks' own under / fully / over defined status. `components` narrows it to some top-level \"component:N\" ids (default: all; a subassembly counts as one rigid component); fixed components have 0. Takes under a second per component SolidWorks doesn't already call fully defined; a very big assembly may need several calls (the reply names any left unchecked). Limits: motion only possible beyond the nudge (a gap, a slot's far end) isn't seen; a component sitting against a limit counts as free that way. Requires an open assembly with no sketch being edited."
+        description = "Run a distance or angle mate of the active assembly through a range of values and check for collisions along the way, like dragging a mechanism through its travel: a limit mate over its own range by default (min..max), any distance / angle mate over from_mm..to_mm or from_deg..to_deg. At each of the steps + 1 values SolidWorks sets the mate's value, re-solves the assembly and runs an interference check; the reply lists the components that come to overlap (between which values they first touch, how long they overlap, the biggest overlap and where), the ones already overlapping before (left out), what the mate moved, and any value SolidWorks refuses (beyond a limit) or can't solve. Puts everything back afterwards unless restore=false; stop_at_collision=true stops at the first contact (\"how far does the lid open before it hits the hinge?\"). This is how to move along a limit mate: move_component and inspect_mobility treat one as held at its current value. `mate` = \"feature:N\" from inspect_model what=\"mates\" or a name like \"LimitAngle1\". About a second per value (a rebuild and an interference check) plus a few seconds per call; stops after 45 s and says how far it got, so keep steps to about 40 per call. Requires an open assembly with no sketch being edited."
+    )]
+    async fn sweep_mate(
+        &self,
+        Parameters(params): Parameters<motion::SweepMateParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            motion::sweep_request(&ids, &params)?
+        };
+        let reply = self
+            .addin
+            .sweep_mate(request.clone())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let text = motion::sweep_reply_text(&mut ids, &request, &reply);
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Mobility inspection of the active assembly: each component's remaining degrees of freedom -- how many translations and rotations its mates still leave, and which: the directions it can slide along, the axes it can turn about (direction + a point on the axis, assembly mm; a screw's advance per turn). Use it to find under-defined components before adding mates, or to check that a mechanism moves the way it should (a hinge turns about its pin, a slider only slides). How: every component is nudged a little along and about the assembly X/Y/Z while SolidWorks solves its mates, as dragging it would, then put back -- nothing changes. Also reports which components drag others along (`drags_along` / `dragged_by`: a follower can move only by moving what it's mated to) and SolidWorks' own under / fully / over defined status. `components` narrows it to some top-level \"component:N\" ids (default: all; a subassembly counts as one rigid component); fixed components have 0. Takes under a second per component SolidWorks doesn't already call fully defined; a very big assembly may need several calls (the reply names any left unchecked). Limits: motion only possible beyond the nudge (a gap, a slot's far end) isn't seen; a limit mate counts as fixed at its current value (SolidWorks' solver keeps it there; sweep_mate drives it through its range). Requires an open assembly with no sketch being edited."
     )]
     async fn inspect_mobility(
         &self,
@@ -3173,8 +3199,9 @@ impl SolidWorksTools {
                        drawing can be checked before it's issued. `components` narrows it to \
                        interferences involving those (ids from inspect_model, or names like \
                        \"bracket-1\"; a subassembly covers its parts). Components are checked \
-                       where they are now (the saved / solved pose), not swept through their \
-                       motion. include_touching also lists faces that only touch; fasteners in \
+                       where they are now (the saved / solved pose); for collisions along a \
+                       motion use move_component check_collisions=true or sweep_mate. \
+                       include_touching also lists faces that only touch; fasteners in \
                        their holes are flagged, as SolidWorks recognises them. Changes \
                        nothing, though SolidWorks marks the assembly modified afterwards. \
                        Requires no sketch open for editing."
@@ -3433,8 +3460,10 @@ impl SolidWorksTools {
         description = "Change an existing mate of the active assembly, like Edit Mate: its kind \
                        (e.g. coincident -> distance with distance_mm), the two entities it mates \
                        (as in add_mate), alignment (\"aligned\"/\"anti_aligned\"/\"closest\" -- \
-                       turns a component around), flip (distance/angle), distance_mm, angle_deg \
-                       or lock_rotation (concentric). `mate` = \"feature:N\" from inspect_model \
+                       turns a component around), flip (distance/angle), distance_mm, angle_deg, \
+                       limits (min_mm / max_mm or min_deg / max_deg: a distance / angle mate \
+                       becomes a limit mate; remove_limits=true makes it plain again) or \
+                       lock_rotation (concentric). `mate` = \"feature:N\" from inspect_model \
                        what=\"mates\" or a name like \"Coincident1\". Only what's given changes. \
                        A new kind replaces the mate with one named after the kind (Coincident1 -> \
                        Distance1), and the mate's id changes with every edit: use the one in the \
@@ -4174,7 +4203,10 @@ impl ServerHandler for SolidWorksTools {
                  up; inspect_mobility reports each component's remaining degrees of freedom \
                  (what it can still slide along / turn about); check_interference finds \
                  components that overlap (also from a drawing \
-                 of the assembly). inspect_annotations reads the model's MBD / PMI (DimXpert dimensions, \
+                 of the assembly). Motion: move_component drags a component while its mates \
+                 solve (check_collisions=true reports what it hits on the way); add_mate \
+                 min_mm / max_mm or min_deg / max_deg makes a limit mate, and sweep_mate runs a \
+                 limit (or distance / angle) mate through its range checking for collisions. inspect_annotations reads the model's MBD / PMI (DimXpert dimensions, \
                  tolerances, datums, feature control frames); add_datum_symbol and \
                  add_geometric_tolerance add datums and feature control frames, to a part, \
                  assembly or drawing. Drawings: inspect_drawing lists \

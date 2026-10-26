@@ -238,11 +238,25 @@ service SolidWorks {
   // back where it was (the reply still says where the move took them).
   // SetTransformAndSolve2 says nothing about the solve (it returned true
   // even when the mates kept the component in place), so how far it got is
-  // read off the poses. Fails with INVALID_ARGUMENT for a component inside a
+  // read off the poses. A limit mate holds the component at its current
+  // value here (seen 2026-10-25): SweepMate moves along one. With
+  // `check_collisions`, Interference Detection runs before the move and
+  // after every step. Fails with INVALID_ARGUMENT for a component inside a
   // subassembly, FAILED_PRECONDITION for a fixed one (SetTransformAndSolve2
   // would move it anyway, and what is locked to it) or a suppressed one, and
   // as AddMate.
   rpc MoveComponent(MoveComponentRequest) returns (MoveComponentResponse);
+
+  // Drives a distance or angle mate of the active assembly (a limit mate
+  // over its range by default) through a range of values in steps -- each
+  // value set on the mate's dimension and the assembly rebuilt, as editing
+  // the value would -- and runs Interference Detection before the sweep
+  // and at every step, then puts the value (and every top-level component)
+  // back unless told not to. It stops at a value SolidWorks refuses (beyond
+  // a limit) or can't solve. Fails with INVALID_ARGUMENT for a mate that
+  // isn't a distance / angle one or a range outside its limits, and as
+  // AddMate.
+  rpc SweepMate(SweepMateRequest) returns (SweepMateResponse);
 
   // How top-level components of the active assembly can still move: the
   // raw material for their remaining degrees of freedom, which the MCP
@@ -1260,6 +1274,17 @@ message MateInfo {
   // swFeatureError_e (0 = fine), e.g. 46 = over-defined.
   int32 error_code = 11;
   bool error_is_warning = 12;
+  // Limit mates only (a DISTANCE / ANGLE mate whose definition is an
+  // "advanced" one, type_name MateLimitDistanceDim / MateLimitPlanarAngleDim):
+  // the range its value may move in. `dimension` is the current value.
+  MateLimits limits = 13;
+}
+
+// The range of a limit mate, in its value's units: meters for DISTANCE,
+// radians for ANGLE. min <= max.
+message MateLimits {
+  double min = 1;
+  double max = 2;
 }
 
 message AddMateRequest {
@@ -1275,6 +1300,10 @@ message AddMateRequest {
   double distance = 5;     // DISTANCE only: meters, >= 0
   double angle = 6;        // ANGLE only: radians, 0..pi
   bool lock_rotation = 7;  // CONCENTRIC only: also stop rotation about the axis
+  // DISTANCE / ANGLE only: make it a limit mate (AddMate5's upper and lower
+  // limits) that lets the value move between these; `distance` / `angle`
+  // is where it starts, and must be in the range.
+  MateLimits limits = 8;
 }
 
 message AddMateResponse {
@@ -1391,6 +1420,28 @@ message MoveComponentRequest {
   int32 steps = 6;
   // Afterwards, put every top-level component back where it was.
   bool restore = 7;
+  // Run Interference Detection (as CheckInterference with its defaults)
+  // before the move and after every step.
+  bool check_collisions = 8;
+  // With check_collisions: stop at the first step with an interference
+  // that wasn't there before the move, and put every top-level component
+  // back where the step before left it.
+  bool stop_at_collision = 9;
+  // With check_collisions: start no further steps after this many seconds
+  // (out_of_time). 0 = no limit.
+  double time_budget = 10;
+}
+
+// One step of a motion checked for collisions.
+message MotionStep {
+  int32 step = 1;  // 1-based
+  // MoveComponent: where the moved component got.
+  ComponentPlacement placement = 2;
+  // SweepMate: the mate's value there (meters / radians).
+  double value = 3;
+  // Every interference there, as CheckInterference reports them.
+  repeated Interference interferences = 4;
+  bool truncated = 5;
 }
 
 message ComponentMove {
@@ -1420,6 +1471,66 @@ message MoveComponentResponse {
   // of the ones that aren't.
   bool restored = 7;
   repeated string not_restored = 8;
+  // check_collisions: the interferences before the move, and after each
+  // step taken.
+  repeated Interference start_interferences = 9;
+  repeated MotionStep collision_steps = 10;
+  // First step with an interference (between components) that wasn't
+  // there before the move; 0 = none.
+  int32 collision_step = 11;
+  // stop_at_collision: the components were put back where step
+  // collision_step - 1 left them (`component.after` is that pose).
+  bool backed_off = 12;
+  bool out_of_time = 13;  // time_budget ran out before the last step
+}
+
+message SweepMateRequest {
+  FeatureTarget mate = 1;  // a distance or angle mate (limit or not)
+  // The range, meters / radians as the mate's value. Unset: a limit mate's
+  // min / max; for other mates `to` must be given and `from` is the
+  // current value.
+  optional double from = 2;
+  optional double to = 3;
+  // `from` / `to` are angles (radians): must match the mate's type.
+  bool angular = 4;
+  // The values tried: from + k / steps * (to - from), k = 0..steps. 1..360.
+  int32 steps = 5;
+  // Stop at the first value with an interference that wasn't there before
+  // the sweep, and go back to the value before it.
+  bool stop_at_collision = 6;
+  // Afterwards, put the mate's value back, and every top-level component
+  // where it was.
+  bool restore = 7;
+  // Start no further steps after this many seconds (out_of_time). 0 = no
+  // limit.
+  double time_budget = 8;
+}
+
+message SweepMateResponse {
+  MateInfo mate = 1;  // before the sweep
+  double from = 2;    // the range used
+  double to = 3;
+  repeated Interference start_interferences = 4;  // before the sweep
+  repeated MotionStep steps = 5;  // the values taken, step k + 1 = value k
+  int32 collision_step = 6;  // as MoveComponentResponse
+  bool backed_off = 7;       // stop_at_collision: back at the value before it
+  // First step whose value SolidWorks refused (e.g. beyond the mate's
+  // limits; `failure` says why) or couldn't solve (mates in error); the
+  // sweep stopped there and went back to the last value that worked.
+  int32 refused_step = 8;
+  string failure = 9;
+  bool out_of_time = 10;
+  // Top-level components the sweep moved: where they were, and where the
+  // end of the sweep left them (before any restore). Only the placement
+  // fields of `before` are set.
+  repeated ComponentMove moved = 11;
+  // restore: the value is back and every top-level component within 1e-9;
+  // else the names of the ones that aren't.
+  bool restored = 12;
+  repeated string not_restored = 13;
+  // Features whose rebuild error is new or different at the end (after any
+  // restore).
+  repeated FeatureProblem new_errors = 14;
 }
 
 message InspectMobilityRequest {
@@ -3413,6 +3524,13 @@ message EditMateRequest {
   optional double distance = 6;  // meters, >= 0
   optional double angle = 7;     // radians, 0..pi
   optional bool lock_rotation = 8;  // concentric only
+  // Distance / angle mates: the limits (meters / radians). Making a mate a
+  // limit mate takes both; a limit mate takes either. The value (given or
+  // kept) must be in the range.
+  optional double min_limit = 9;
+  optional double max_limit = 10;
+  // Make a limit mate a plain distance / angle mate at its current value.
+  bool remove_limits = 11;
 }
 
 message EditMateResponse {

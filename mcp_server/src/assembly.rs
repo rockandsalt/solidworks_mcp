@@ -266,16 +266,41 @@ pub fn mate_error_name(code: i32) -> String {
 }
 
 fn mate_value(m: &proto::MateInfo, obj: &mut Map<String, Value>) {
-    let Some(dim) = &m.dimension else { return };
-    if dim.name.is_empty() {
-        return;
+    if let Some(dim) = &m.dimension
+        && !dim.name.is_empty()
+    {
+        if dim.r#type() == proto::DimensionType::Angular {
+            obj.insert("angle_deg".into(), json!(round(dim.value.to_degrees(), 4)));
+        } else {
+            obj.insert("distance_mm".into(), json!(mm(dim.value)));
+        }
+        obj.insert("dimension".into(), json!(dim.name));
     }
-    if dim.r#type() == proto::DimensionType::Angular {
-        obj.insert("angle_deg".into(), json!(round(dim.value.to_degrees(), 4)));
+    if let Some(limits) = &m.limits {
+        if m.r#type() == proto::MateType::Angle {
+            obj.insert("min_deg".into(), json!(round(limits.min.to_degrees(), 4)));
+            obj.insert("max_deg".into(), json!(round(limits.max.to_degrees(), 4)));
+        } else {
+            obj.insert("min_mm".into(), json!(mm(limits.min)));
+            obj.insert("max_mm".into(), json!(mm(limits.max)));
+        }
+    }
+}
+
+/// ", limits 0.0 .. 40.0 mm" for a limit mate; empty otherwise.
+pub fn limits_text(m: &proto::MateInfo) -> String {
+    let Some(limits) = &m.limits else {
+        return String::new();
+    };
+    if m.r#type() == proto::MateType::Angle {
+        format!(
+            ", limits {} .. {} deg",
+            round(limits.min.to_degrees(), 4),
+            round(limits.max.to_degrees(), 4)
+        )
     } else {
-        obj.insert("distance_mm".into(), json!(mm(dim.value)));
+        format!(", limits {} .. {} mm", mm(limits.min), mm(limits.max))
     }
-    obj.insert("dimension".into(), json!(dim.name));
 }
 
 pub fn mate_json(ids: &mut IdRegistry, m: &proto::MateInfo) -> Value {
@@ -338,9 +363,11 @@ pub enum MateKind {
     Perpendicular,
     /// A curved face touching a face (cylinder on plane, ball in socket, ...).
     Tangent,
-    /// Faces/planes a set distance apart (distance_mm).
+    /// Faces/planes a set distance apart (distance_mm), or anywhere between min_mm and
+    /// max_mm (a limit mate).
     Distance,
-    /// Faces/planes/edges at a set angle (angle_deg).
+    /// Faces/planes/edges at a set angle (angle_deg), or anywhere between min_deg and
+    /// max_deg (a limit mate).
     Angle,
     /// Locks two components together as they are (entities = two component ids).
     Lock,
@@ -412,11 +439,27 @@ pub struct AddMateParams {
     #[serde(default)]
     pub alignment: Option<MateAlign>,
     /// kind="distance" only: the gap between the two entities, in millimeters (0 or more).
+    /// For a limit mate: where it starts (default min_mm).
     #[serde(default)]
     pub distance_mm: Option<f64>,
-    /// kind="angle" only: the angle between the two entities, 0 to 180 degrees.
+    /// kind="angle" only: the angle between the two entities, 0 to 180 degrees. For a limit
+    /// mate: where it starts (default min_deg).
     #[serde(default)]
     pub angle_deg: Option<f64>,
+    /// kind="distance": make it a limit mate, the gap free to move between min_mm and
+    /// max_mm (give both; 0 <= min_mm <= max_mm), e.g. a slider's stroke.
+    #[serde(default)]
+    pub min_mm: Option<f64>,
+    /// kind="distance": the limit mate's largest gap, in millimeters. Give with min_mm.
+    #[serde(default)]
+    pub max_mm: Option<f64>,
+    /// kind="angle": make it a limit mate, the angle free to move between min_deg and
+    /// max_deg (give both; 0..180), e.g. how far a lid opens.
+    #[serde(default)]
+    pub min_deg: Option<f64>,
+    /// kind="angle": the limit mate's largest angle, in degrees. Give with min_deg.
+    #[serde(default)]
+    pub max_deg: Option<f64>,
     /// kind="distance"/"angle": put the gap/angle on the other side. Defaults to false.
     #[serde(default)]
     pub flip: bool,
@@ -428,6 +471,23 @@ pub struct AddMateParams {
 
 fn invalid(message: impl Into<String>) -> McpError {
     McpError::invalid_params(message.into(), None)
+}
+
+/// A limit mate's (min, max), both given or neither; 0 <= min <= max <= `top`.
+fn limit_pair(min: Option<f64>, max: Option<f64>, min_name: &str, max_name: &str, top: f64) -> Result<Option<(f64, f64)>, McpError> {
+    match (min, max) {
+        (None, None) => Ok(None),
+        (Some(lo), Some(hi)) => {
+            if !(lo.is_finite() && hi.is_finite() && 0.0 <= lo && lo <= hi && hi <= top) {
+                let range = if top.is_finite() { format!(" (0 to {top})") } else { " (0 or more)".into() };
+                return Err(invalid(format!(
+                    "{min_name} / {max_name} must satisfy 0 <= {min_name} <= {max_name}{range}, got {lo} / {hi}"
+                )));
+            }
+            Ok(Some((lo, hi)))
+        }
+        _ => Err(invalid(format!("a limit mate needs both {min_name} and {max_name}"))),
+    }
 }
 
 /// Checks the parameters that don't need the registry and returns the two
@@ -466,8 +526,18 @@ pub fn check(params: &AddMateParams) -> Result<[String; 2], McpError> {
         }
     }
 
+    let distance_limits = limit_pair(params.min_mm, params.max_mm, "min_mm", "max_mm", f64::INFINITY)?;
+    let angle_limits = limit_pair(params.min_deg, params.max_deg, "min_deg", "max_deg", 180.0)?;
+    if distance_limits.is_some() && kind != MateKind::Distance {
+        return Err(invalid("only distance mates take min_mm / max_mm (limit angles: kind=\"angle\" with min_deg / max_deg)"));
+    }
+    if angle_limits.is_some() && kind != MateKind::Angle {
+        return Err(invalid("only angle mates take min_deg / max_deg (limit distances: kind=\"distance\" with min_mm / max_mm)"));
+    }
     match (kind, params.distance_mm) {
-        (MateKind::Distance, None) => return Err(invalid("a distance mate needs distance_mm")),
+        (MateKind::Distance, None) if distance_limits.is_none() => {
+            return Err(invalid("a distance mate needs distance_mm (or min_mm and max_mm for a limit mate)"));
+        }
         (MateKind::Distance, Some(d)) if !(d.is_finite() && d >= 0.0) => {
             return Err(invalid(format!("distance_mm must be 0 or more, got {d}")));
         }
@@ -475,12 +545,26 @@ pub fn check(params: &AddMateParams) -> Result<[String; 2], McpError> {
         (_, Some(_)) => return Err(invalid("only distance mates take distance_mm")),
     }
     match (kind, params.angle_deg) {
-        (MateKind::Angle, None) => return Err(invalid("an angle mate needs angle_deg")),
+        (MateKind::Angle, None) if angle_limits.is_none() => {
+            return Err(invalid("an angle mate needs angle_deg (or min_deg and max_deg for a limit mate)"));
+        }
         (MateKind::Angle, Some(d)) if !(d.is_finite() && (0.0..=180.0).contains(&d)) => {
             return Err(invalid(format!("angle_deg must be 0 to 180, got {d}")));
         }
         (MateKind::Angle, _) | (_, None) => {}
         (_, Some(_)) => return Err(invalid("only angle mates take angle_deg")),
+    }
+    for (value, limits, unit) in [
+        (params.distance_mm, distance_limits, "mm"),
+        (params.angle_deg, angle_limits, "deg"),
+    ] {
+        if let (Some(v), Some((lo, hi))) = (value, limits)
+            && !(lo..=hi).contains(&v)
+        {
+            return Err(invalid(format!(
+                "the starting value {v} {unit} isn't within the limits {lo} .. {hi} {unit}"
+            )));
+        }
     }
     if params.lock_rotation && kind != MateKind::Concentric {
         return Err(invalid("lock_rotation only applies to concentric mates"));
@@ -503,9 +587,18 @@ pub fn request(params: &AddMateParams, persist_ids: [Vec<u8>; 2]) -> proto::AddM
         entity_persist_ids: persist_ids.to_vec(),
         alignment: proto::MateAlignment::from(params.alignment.unwrap_or_default()).into(),
         flip: params.flip,
-        distance: params.distance_mm.map_or(0.0, |d| d / MM_PER_M),
-        angle: params.angle_deg.map_or(0.0, f64::to_radians),
+        distance: params.distance_mm.or(params.min_mm).map_or(0.0, |d| d / MM_PER_M),
+        angle: params.angle_deg.or(params.min_deg).map_or(0.0, f64::to_radians),
         lock_rotation: params.lock_rotation,
+        limits: match (params.kind, params.min_mm, params.max_mm, params.min_deg, params.max_deg) {
+            (MateKind::Distance, Some(lo), Some(hi), _, _) => {
+                Some(proto::MateLimits { min: lo / MM_PER_M, max: hi / MM_PER_M })
+            }
+            (MateKind::Angle, _, _, Some(lo), Some(hi)) => {
+                Some(proto::MateLimits { min: lo.to_radians(), max: hi.to_radians() })
+            }
+            _ => None,
+        },
     }
 }
 
@@ -553,6 +646,7 @@ pub fn reply_text(
     } else if let Some(a) = value.get("angle_deg") {
         text += &format!(", {a} deg");
     }
+    text += &limits_text(mate);
     let names: Vec<&str> = mate.component_names.iter().map(String::as_str).filter(|n| !n.is_empty()).collect();
     text += &format!(", between {} and {}", entities[0], entities[1]);
     if !names.is_empty() {
@@ -571,7 +665,16 @@ pub fn reply_text(
     if let Some(dim) = &mate.dimension
         && !dim.name.is_empty()
     {
-        text += &format!(" Change its value later with set_dimension name=\"{}\".", dim.name);
+        if mate.limits.is_some() {
+            text += &format!(
+                " Its value is where it is within the limits: set_dimension name=\"{}\" moves it \
+                 there, sweep_mate mate=\"{mate_id}\" runs it through the range checking for \
+                 collisions (move_component keeps a limit mate at its value).",
+                dim.name
+            );
+        } else {
+            text += &format!(" Change its value later with set_dimension name=\"{}\".", dim.name);
+        }
     }
     text
 }
@@ -737,9 +840,69 @@ mod tests {
             alignment: None,
             distance_mm: None,
             angle_deg: None,
+            min_mm: None,
+            max_mm: None,
+            min_deg: None,
+            max_deg: None,
             flip: false,
             lock_rotation: false,
         }
+    }
+
+    #[test]
+    fn checks_limit_mates() {
+        let mut p = params(MateKind::Distance, &["face:1", "face:2"]);
+        p.min_mm = Some(0.0);
+        assert!(check(&p).is_err(), "max_mm missing");
+        p.max_mm = Some(40.0);
+        assert!(check(&p).is_ok(), "no distance_mm: starts at min_mm");
+        let r = request(&p, [b"a".to_vec(), b"b".to_vec()]);
+        assert_eq!(r.distance, 0.0);
+        let limits = r.limits.unwrap();
+        assert!((limits.min - 0.0).abs() < 1e-15 && (limits.max - 0.04).abs() < 1e-15);
+        p.distance_mm = Some(50.0);
+        assert!(check(&p).is_err(), "start outside the limits");
+        p.distance_mm = Some(25.0);
+        assert!((request(&p, [b"a".to_vec(), b"b".to_vec()]).distance - 0.025).abs() < 1e-15);
+        p.min_mm = Some(45.0);
+        assert!(check(&p).is_err(), "min above max");
+        p.min_mm = Some(-1.0);
+        assert!(check(&p).is_err(), "negative");
+
+        let mut p = params(MateKind::Angle, &["face:1", "face:2"]);
+        p.min_deg = Some(10.0);
+        p.max_deg = Some(200.0);
+        assert!(check(&p).is_err(), "past 180");
+        p.max_deg = Some(110.0);
+        let r = request(&p, [b"a".to_vec(), b"b".to_vec()]);
+        assert!((r.angle - 10f64.to_radians()).abs() < 1e-15);
+        assert!((r.limits.unwrap().max - 110f64.to_radians()).abs() < 1e-15);
+        p.min_mm = Some(0.0);
+        p.max_mm = Some(1.0);
+        assert!(check(&p).is_err(), "mm limits on an angle mate");
+
+        let mut p = params(MateKind::Coincident, &["face:1", "face:2"]);
+        p.min_deg = Some(0.0);
+        p.max_deg = Some(10.0);
+        assert!(check(&p).is_err());
+        assert!(request(&params(MateKind::Coincident, &["face:1", "face:2"]), [vec![], vec![]]).limits.is_none());
+    }
+
+    #[test]
+    fn describes_limit_mates() {
+        let mut ids = IdRegistry::default();
+        let mate = proto::MateInfo {
+            persist_id: b"m".to_vec(),
+            name: "LimitAngle1".into(),
+            r#type: proto::MateType::Angle.into(),
+            limits: Some(proto::MateLimits { min: 0.0, max: std::f64::consts::FRAC_PI_4 }),
+            ..Default::default()
+        };
+        let json = mate_json(&mut ids, &mate);
+        assert_eq!(json["min_deg"], 0.0);
+        assert_eq!(json["max_deg"], 45.0);
+        assert!(json.get("min_mm").is_none());
+        assert_eq!(limits_text(&mate), ", limits 0 .. 45 deg");
     }
 
     #[test]

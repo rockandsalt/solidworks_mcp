@@ -50,6 +50,33 @@ namespace sld_mcp::service
 
 	sld_mcp::v1::ComponentState ToComponentState(long state);
 
+	// The subassembly a component is in; null for a top-level one.
+	ATL::CComPtr<IComponent2> ParentOf(IComponent2* component);
+
+	// A component's transform and its raw numbers, to tell whether it moved
+	// and to put it back.
+	struct SavedPose
+	{
+		ATL::CComPtr<IComponent2> component;
+		ATL::CComPtr<IMathTransform> xform;
+		std::vector<double> data;
+	};
+
+	bool ReadPose(IComponent2* component, SavedPose& out);
+
+	// Same place to within `tolerance` (meters; the axes' numbers are unit).
+	bool SamePose(const std::vector<double>& a, const std::vector<double>& b, double tolerance);
+
+	// Every top-level component where it is now.
+	std::vector<SavedPose> TopLevelPoses(IAssemblyDoc* assembly);
+
+	// The ones of `saved` whose transform changed by more than 1e-9 since.
+	std::vector<const SavedPose*> MovedSince(const std::vector<SavedPose>& saved);
+
+	// Puts every component of `saved` that moved back (put_Transform2, then
+	// a rebuild) and returns the names of the ones that still aren't back.
+	std::vector<std::string> RestorePoses(IModelDoc2* doc, const std::vector<SavedPose>& saved);
+
 	void DescribeComponent(IComponent2* component, PersistIds& ids, IMathUtility* math,
 		sld_mcp::v1::ComponentInfo* info);
 
@@ -106,6 +133,19 @@ namespace sld_mcp::service
 
 	std::set<std::string> MateNames(IModelDoc2* doc);
 
+	// A distance / angle mate's limits, from its definition (late-bound: the
+	// *MateFeatureData's IsAdvancedMate and Minimum/MaximumDistance or
+	// Angle; IMate2's Minimum/MaximumVariation are the same relative to the
+	// value, seen 2026-10-25). False for a mate without limits.
+	bool MateLimitsOf(IFeature* feature, long type, double& minimum, double& maximum);
+
+	// A distance / angle mate's value in words: "12.5 mm", "30 deg".
+	std::string MateValueText(long type, double value);
+
+	// INVALID_ARGUMENT unless `type` is a distance / angle mate, min..max a
+	// range it can have, and `value` in it.
+	grpc::Status CheckMateLimits(long type, double minimum, double maximum, double value);
+
 	void DescribeMate(IFeature* feature, PersistIds& ids, sld_mcp::v1::MateInfo* info);
 
 	std::string MateErrorText(long code);
@@ -155,6 +195,11 @@ namespace sld_mcp::service
 		double distance = 0.0;
 		double angle = 0.0;
 		bool lockRotation = false;
+		// DISTANCE / ANGLE: a limit mate, the value between these (meters /
+		// radians).
+		bool limited = false;
+		double minimum = 0.0;
+		double maximum = 0.0;
 		std::vector<MateRef> refs;
 		// EditMate: `refs` aren't the mate's current entities.
 		bool newRefs = false;
@@ -167,4 +212,83 @@ namespace sld_mcp::service
 	// AddMate5 can leave a broken mate behind even when it reports an error.
 	grpc::Status CreateMate(IModelDoc2* doc, IAssemblyDoc* assembly, const MateSettings& s,
 		ATL::CComPtr<IFeature>& created);
+
+	// While it lives (many solves or rebuilds in a row): no redrawing the active view or
+	// the FeatureManager tree, and SolidWorks told an API command is running.
+	class QuietSolves
+	{
+	public:
+		QuietSolves(ISldWorks* swApp, IModelDoc2* doc) : m_swApp(swApp)
+		{
+			ATL::CComPtr<IDispatch> disp;
+			if (SUCCEEDED(doc->get_ActiveView(&disp)) && disp)
+				m_view = disp;
+			if (m_view)
+				m_view->put_EnableGraphicsUpdate(VARIANT_FALSE);
+			doc->get_FeatureManager(&m_features);
+			if (m_features)
+				m_features->put_EnableFeatureTree(VARIANT_FALSE);
+			m_swApp->put_CommandInProgress(VARIANT_TRUE);
+		}
+		~QuietSolves()
+		{
+			m_swApp->put_CommandInProgress(VARIANT_FALSE);
+			if (m_features)
+				m_features->put_EnableFeatureTree(VARIANT_TRUE);
+			if (m_view)
+				m_view->put_EnableGraphicsUpdate(VARIANT_TRUE);
+		}
+		QuietSolves(const QuietSolves&) = delete;
+		QuietSolves& operator=(const QuietSolves&) = delete;
+
+	private:
+		ATL::CComPtr<ISldWorks> m_swApp;
+		ATL::CComQIPtr<IModelView> m_view;
+		ATL::CComPtr<IFeatureManager> m_features;
+	};
+
+	// Interference Detection on an assembly while this lives: the options
+	// that pick what is checked set as asked, then put back as they were
+	// when it goes out of scope (the manager keeps them between checks),
+	// then Done -- which leaves interference mode (interferences shown red,
+	// other components wireframe) and marks the assembly modified (seen
+	// 2026-10-24). Only those options: changing ShowIgnoredInterferences,
+	// MakeInterferingPartsTransparent or NonInterferingComponentDisplay made
+	// SolidWorks drop the coincident (touching) interferences, and the
+	// display goes back with Done anyway. One session can check again after
+	// components move (SetTransformAndSolve2): GetInterferences recomputes
+	// (seen 2026-10-25).
+	class InterferenceSession
+	{
+	public:
+		explicit InterferenceSession(IInterferenceDetectionMgr* mgr);
+		~InterferenceSession();
+		InterferenceSession(const InterferenceSession&) = delete;
+		InterferenceSession& operator=(const InterferenceSession&) = delete;
+
+		void Apply(bool coincident, bool subassemblies, bool multibody, bool includeHidden);
+
+		// The interferences as the components are now, at most `limit` of
+		// them (`truncated` past that). With `components`, each component is
+		// described there once (its persist id comes from there).
+		grpc::Status Check(PersistIds& ids, ComponentList* components, int limit,
+			google::protobuf::RepeatedPtrField<sld_mcp::v1::Interference>* out, bool& truncated);
+
+	private:
+		ATL::CComPtr<IInterferenceDetectionMgr> m_mgr;
+		VARIANT_BOOL m_coincidence = VARIANT_FALSE, m_subassemblies = VARIANT_FALSE, m_multibody = VARIANT_FALSE,
+			m_ignoreHidden = VARIANT_FALSE;
+	};
+
+	// A session with the Interference Detection dialog's defaults (solids
+	// that overlap, hidden ones ignored), for checks along a motion.
+	grpc::Status StartCollisionChecks(IAssemblyDoc* assembly, std::unique_ptr<InterferenceSession>& out);
+
+	// Which components an interference is between (their persist ids,
+	// sorted), to tell the same pair again at another step.
+	std::string InterferenceKey(const sld_mcp::v1::Interference& interference);
+
+	// Whether `now` has an interference whose key isn't in `before`.
+	bool HasNewInterference(const std::set<std::string>& before,
+		const google::protobuf::RepeatedPtrField<sld_mcp::v1::Interference>& now);
 }

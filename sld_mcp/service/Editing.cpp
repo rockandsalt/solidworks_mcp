@@ -400,6 +400,7 @@ namespace
 				s.distance = info.value();
 			break;
 		}
+		s.limited = MateLimitsOf(feature, s.type, s.minimum, s.maximum);
 		if (s.type == swMateCONCENTRIC)
 		{
 			ATL::CComPtr<IDispatch> definition;
@@ -459,6 +460,15 @@ namespace
 		if (s.type == swMateDISTANCE || s.type == swMateANGLE)
 		{
 			PutByName(definition, L"FlipDimension", ATL::CComVariant(s.flip));
+			// IsAdvancedMate makes a plain distance / angle mate a limit mate
+			// in place, keeping its name, and back (seen 2026-10-25).
+			const bool angle = s.type == swMateANGLE;
+			PutByName(definition, L"IsAdvancedMate", ATL::CComVariant(s.limited));
+			if (s.limited)
+			{
+				PutByName(definition, angle ? L"MinimumAngle" : L"MinimumDistance", ATL::CComVariant(s.minimum));
+				PutByName(definition, angle ? L"MaximumAngle" : L"MaximumDistance", ATL::CComVariant(s.maximum));
+			}
 			if (s.type == swMateDISTANCE)
 				PutByName(definition, L"Distance", ATL::CComVariant(s.distance));
 			else
@@ -680,12 +690,17 @@ grpc::Status SolidWorksService::EditMate(grpc::ServerContext* /*context*/,
 	if (request->has_angle() &&
 		!(std::isfinite(request->angle()) && request->angle() >= 0.0 && request->angle() <= kPi + 1e-9))
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "the angle must be 0 to 180 degrees");
+	const bool setLimits = request->has_min_limit() || request->has_max_limit();
+	if (setLimits && request->remove_limits())
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give new limits or remove them, not both");
 	const bool anyChange = setType || entityCount == 2 ||
 		request->alignment() != sld_mcp::v1::MATE_ALIGNMENT_UNSPECIFIED || request->has_flip() ||
-		request->has_distance() || request->has_angle() || request->has_lock_rotation();
+		request->has_distance() || request->has_angle() || request->has_lock_rotation() || setLimits ||
+		request->remove_limits();
 	if (!anyChange)
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-			"nothing to change -- give a new type, entities, alignment, flip, distance, angle or lock rotation");
+			"nothing to change -- give a new type, entities, alignment, flip, distance, angle, limits or lock "
+			"rotation");
 
 	std::lock_guard<std::mutex> lock(m_editMutex);
 	ComApartment com;
@@ -756,6 +771,34 @@ grpc::Status SolidWorksService::EditMate(grpc::ServerContext* /*context*/,
 		if (target.type != swMateCONCENTRIC)
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "lock rotation only applies to concentric mates");
 		target.lockRotation = request->lock_rotation();
+	}
+	// Limits: kept with the type (a distance range means nothing to an angle
+	// mate), set or removed as asked; the value must lie in them.
+	if (target.type != before.type)
+		target.limited = false;
+	if (request->remove_limits())
+	{
+		if (!before.limited)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "\"" + name + "\" has no limits to remove");
+		target.limited = false;
+	}
+	if (setLimits)
+	{
+		if (!target.limited && !(request->has_min_limit() && request->has_max_limit()))
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"\"" + name + "\" has no limits yet -- give both the minimum and the maximum");
+		target.limited = true;
+		if (request->has_min_limit())
+			target.minimum = request->min_limit();
+		if (request->has_max_limit())
+			target.maximum = request->max_limit();
+	}
+	if (target.limited)
+	{
+		if (grpc::Status status = CheckMateLimits(target.type, target.minimum, target.maximum,
+				target.type == swMateANGLE ? target.angle : target.distance); !status.ok())
+			return grpc::Status(status.error_code(), status.error_message() +
+				(request->has_distance() || request->has_angle() ? "" : " -- give a value in the range too"));
 	}
 	if (entityCount == 2)
 	{
@@ -866,6 +909,11 @@ grpc::Status SolidWorksService::EditMate(grpc::ServerContext* /*context*/,
 			mismatch = "distance " + std::to_string(after.distance * 1000.0) + " mm";
 		else if (target.type == swMateANGLE && std::abs(after.angle - target.angle) > 1e-7)
 			mismatch = "angle " + std::to_string(after.angle * 180.0 / kPi) + " deg";
+		else if (after.limited != target.limited ||
+			(target.limited && (std::abs(after.minimum - target.minimum) > 1e-9 ||
+				std::abs(after.maximum - target.maximum) > 1e-9)))
+			mismatch = after.limited ? "limits " + MateValueText(after.type, after.minimum) + " .. " +
+				MateValueText(after.type, after.maximum) : std::string("no limits");
 		else if (request->alignment() != sld_mcp::v1::MATE_ALIGNMENT_UNSPECIFIED &&
 			request->alignment() != sld_mcp::v1::MATE_ALIGNMENT_CLOSEST && after.alignment != target.alignment)
 			mismatch = "its alignment unchanged";

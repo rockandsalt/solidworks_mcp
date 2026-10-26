@@ -1,6 +1,7 @@
 // AssemblyHelpers.cpp : see AssemblyHelpers.h.
 #include "pch.h"
 #include "AssemblyHelpers.h"
+#include "AnnotationHelpers.h"
 #include "Common.h"
 #include "DimensionHelpers.h"
 #include "FeatureTreeHelpers.h"
@@ -207,6 +208,76 @@ namespace sld_mcp::service
 			DescribePlacement(component, math, info);
 	}
 
+	ATL::CComPtr<IComponent2> ParentOf(IComponent2* component)
+	{
+		ATL::CComPtr<IComponent2> parent;
+		component->GetParent(&parent);
+		return parent;
+	}
+
+	bool ReadPose(IComponent2* component, SavedPose& out)
+	{
+		out.component = component;
+		out.xform.Release();
+		ATL::CComVariant data;
+		if (FAILED(component->get_Transform2(&out.xform)) || !out.xform || FAILED(out.xform->get_ArrayData(&data)))
+			return false;
+		out.data = comvariant::ToDoubles(data);
+		return true;
+	}
+
+	bool SamePose(const std::vector<double>& a, const std::vector<double>& b, double tolerance)
+	{
+		if (a.size() != b.size())
+			return false;
+		for (size_t i = 0; i < a.size(); ++i)
+			if (std::abs(a[i] - b[i]) > tolerance)
+				return false;
+		return true;
+	}
+
+	std::vector<SavedPose> TopLevelPoses(IAssemblyDoc* assembly)
+	{
+		std::vector<SavedPose> saved;
+		for (const auto& c : AllComponents(assembly))
+		{
+			if (ParentOf(c))
+				continue;
+			SavedPose pose;
+			if (ReadPose(c, pose))
+				saved.push_back(std::move(pose));
+		}
+		return saved;
+	}
+
+	std::vector<const SavedPose*> MovedSince(const std::vector<SavedPose>& saved)
+	{
+		std::vector<const SavedPose*> moved;
+		for (const auto& pose : saved)
+		{
+			SavedPose now;
+			if (ReadPose(pose.component, now) && !SamePose(now.data, pose.data, 1e-9))
+				moved.push_back(&pose);
+		}
+		return moved;
+	}
+
+	std::vector<std::string> RestorePoses(IModelDoc2* doc, const std::vector<SavedPose>& saved)
+	{
+		for (const SavedPose* pose : MovedSince(saved))
+			pose->component->put_Transform2(pose->xform);
+		VARIANT_BOOL rebuilt = VARIANT_FALSE;
+		doc->EditRebuild3(&rebuilt);
+		std::vector<std::string> notBack;
+		for (const auto& pose : saved)
+		{
+			SavedPose now;
+			if (!ReadPose(pose.component, now) || !SamePose(now.data, pose.data, 1e-9))
+				notBack.push_back(ComponentName(pose.component));
+		}
+		return notBack;
+	}
+
 	sld_mcp::v1::MateType ToMateType(long type)
 	{
 		switch (type)
@@ -329,6 +400,61 @@ namespace sld_mcp::service
 		return names;
 	}
 
+	bool MateLimitsOf(IFeature* feature, long type, double& minimum, double& maximum)
+	{
+		if (type != swMateDISTANCE && type != swMateANGLE)
+			return false;
+		ATL::CComPtr<IDispatch> definition;
+		ATL::CComVariant advanced, low, high;
+		if (FAILED(feature->GetDefinition(&definition)) || !definition ||
+			!InvokeByName(definition, L"IsAdvancedMate", advanced) || FAILED(advanced.ChangeType(VT_BOOL)) ||
+			advanced.boolVal == VARIANT_FALSE)
+			return false;
+		const bool angle = type == swMateANGLE;
+		if (!InvokeByName(definition, angle ? L"MinimumAngle" : L"MinimumDistance", low) ||
+			!InvokeByName(definition, angle ? L"MaximumAngle" : L"MaximumDistance", high) ||
+			FAILED(low.ChangeType(VT_R8)) || FAILED(high.ChangeType(VT_R8)))
+			return false;
+		// SolidWorks leaves rounding noise on them (a 0 minimum read back as
+		// -6.9e-15 after a few value changes, seen 2026-10-25).
+		auto clean = [](double v) { return std::abs(v) < 1e-12 ? 0.0 : v; };
+		minimum = clean(low.dblVal);
+		maximum = clean(high.dblVal);
+		return std::isfinite(minimum) && std::isfinite(maximum);
+	}
+
+	std::string MateValueText(long type, double value)
+	{
+		char text[64];
+		if (type == swMateANGLE)
+			std::snprintf(text, sizeof(text), "%g deg", value * 180.0 / 3.14159265358979323846);
+		else
+			std::snprintf(text, sizeof(text), "%g mm", value * 1000.0);
+		return text;
+	}
+
+	grpc::Status CheckMateLimits(long type, double minimum, double maximum, double value)
+	{
+		constexpr double kPi = 3.14159265358979323846;
+		if (type != swMateDISTANCE && type != swMateANGLE)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"only distance and angle mates take limits");
+		if (!std::isfinite(minimum) || !std::isfinite(maximum) || minimum > maximum)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"the limits must be two numbers, the minimum no bigger than the maximum");
+		if (type == swMateDISTANCE && minimum < 0.0)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"a distance limit can't be below 0 (flip measures to the other side)");
+		if (type == swMateANGLE && (minimum < 0.0 || maximum > kPi + 1e-9))
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "angle limits must be 0 to 180 degrees");
+		const double tolerance = type == swMateANGLE ? 1e-9 : 1e-10;
+		if (value < minimum - tolerance || value > maximum + tolerance)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"the mate's value " + MateValueText(type, value) + " isn't within its limits " +
+				MateValueText(type, minimum) + " .. " + MateValueText(type, maximum));
+		return grpc::Status::OK;
+	}
+
 	void DescribeMate(IFeature* feature, PersistIds& ids, sld_mcp::v1::MateInfo* info)
 	{
 		info->set_persist_id(ids.Get(feature));
@@ -354,7 +480,15 @@ namespace sld_mcp::service
 			{
 				long value = 0;
 				if (SUCCEEDED(mate->get_Type(&value)))
+				{
 					info->set_type(ToMateType(value));
+					double minimum = 0.0, maximum = 0.0;
+					if (MateLimitsOf(feature, value, minimum, maximum))
+					{
+						info->mutable_limits()->set_min(minimum);
+						info->mutable_limits()->set_max(maximum);
+					}
+				}
 				if (SUCCEEDED(mate->get_Alignment(&value)))
 					info->set_alignment(ToMateAlignment(value));
 				flag = VARIANT_FALSE;
@@ -630,12 +764,16 @@ namespace sld_mcp::service
 			}
 
 		const long alignment = s.type == swMateLOCK ? swMateAlignCLOSEST : s.alignment;
+		// Value, upper limit, lower limit; limits equal to the value: not a
+		// limit mate.
+		const bool distanceLimits = s.limited && s.type == swMateDISTANCE;
+		const bool angleLimits = s.limited && s.type == swMateANGLE;
 		long addError = swAddMateError_ErrorUknown;
 		ATL::CComPtr<IMate2> mate;
 		hr = assembly->AddMate5(s.type, alignment, s.flip ? VARIANT_TRUE : VARIANT_FALSE,
-			s.distance, s.distance, s.distance,  // distance + its limits (same: not a limit mate)
+			s.distance, distanceLimits ? s.maximum : s.distance, distanceLimits ? s.minimum : s.distance,
 			1.0, 1.0,                            // gear ratio, unused
-			s.angle, s.angle, s.angle,           // angle + its limits
+			s.angle, angleLimits ? s.maximum : s.angle, angleLimits ? s.minimum : s.angle,
 			VARIANT_FALSE,                       // a real mate, not just for positioning
 			s.type == swMateCONCENTRIC && s.lockRotation ? VARIANT_TRUE : VARIANT_FALSE,
 			0,                                   // width mate option, unused
@@ -689,5 +827,120 @@ namespace sld_mcp::service
 		}
 		created = mateFeature;
 		return grpc::Status::OK;
+	}
+
+	InterferenceSession::InterferenceSession(IInterferenceDetectionMgr* mgr) : m_mgr(mgr)
+	{
+		m_mgr->get_TreatCoincidenceAsInterference(&m_coincidence);
+		m_mgr->get_TreatSubAssembliesAsComponents(&m_subassemblies);
+		m_mgr->get_IncludeMultibodyPartInterferences(&m_multibody);
+		m_mgr->get_IgnoreHiddenBodies(&m_ignoreHidden);
+	}
+
+	InterferenceSession::~InterferenceSession()
+	{
+		m_mgr->put_TreatCoincidenceAsInterference(m_coincidence);
+		m_mgr->put_TreatSubAssembliesAsComponents(m_subassemblies);
+		m_mgr->put_IncludeMultibodyPartInterferences(m_multibody);
+		m_mgr->put_IgnoreHiddenBodies(m_ignoreHidden);
+		m_mgr->Done();
+	}
+
+	void InterferenceSession::Apply(bool coincident, bool subassemblies, bool multibody, bool includeHidden)
+	{
+		auto b = [](bool v) { return v ? VARIANT_TRUE : VARIANT_FALSE; };
+		m_mgr->put_TreatCoincidenceAsInterference(b(coincident));
+		m_mgr->put_TreatSubAssembliesAsComponents(b(subassemblies));
+		m_mgr->put_IncludeMultibodyPartInterferences(b(multibody));
+		m_mgr->put_IgnoreHiddenBodies(b(!includeHidden));
+	}
+
+	grpc::Status InterferenceSession::Check(PersistIds& ids, ComponentList* components, int limit,
+		google::protobuf::RepeatedPtrField<sld_mcp::v1::Interference>* out, bool& truncated)
+	{
+		truncated = false;
+		ATL::CComVariant interferences;
+		HRESULT hr = m_mgr->GetInterferences(&interferences);
+		if (FAILED(hr))
+			return ComError("IInterferenceDetectionMgr::GetInterferences", hr);
+		for (const auto& disp : comvariant::ToDispatches(interferences))
+		{
+			ATL::CComQIPtr<IInterference> interference(disp.p);
+			if (!interference)
+				continue;
+			if (out->size() >= limit)
+			{
+				truncated = true;
+				break;
+			}
+			sld_mcp::v1::Interference* item = out->Add();
+			ATL::CComVariant list;
+			if (SUCCEEDED(interference->get_Components(&list)))
+				for (const auto& c : comvariant::ToDispatches(list))
+					if (ATL::CComQIPtr<IComponent2> component(c.p); component)
+					{
+						item->add_component_persist_ids(components ? components->Add(component) : ids.Get(component));
+						item->add_component_names(ComponentName(component));
+					}
+			double volume = 0.0;
+			if (SUCCEEDED(interference->get_Volume(&volume)) && std::isfinite(volume))
+				item->set_volume(volume);
+			VARIANT_BOOL flag = VARIANT_FALSE;
+			if (SUCCEEDED(interference->get_IsPossibleInterference(&flag)))
+				item->set_possible(flag != VARIANT_FALSE);
+			flag = VARIANT_FALSE;
+			if (SUCCEEDED(interference->get_IsFastener(&flag)))
+				item->set_fastener(flag != VARIANT_FALSE);
+			flag = VARIANT_FALSE;
+			if (SUCCEEDED(interference->get_Ignore(&flag)))
+				item->set_ignored(flag != VARIANT_FALSE);
+			ATL::CComPtr<IDispatch> bodyDisp;
+			if (SUCCEEDED(interference->GetInterferenceBody(&bodyDisp)) && bodyDisp)
+				if (ATL::CComQIPtr<IBody2> body(bodyDisp.p); body)
+				{
+					ATL::CComVariant box;
+					if (SUCCEEDED(body->GetBodyBox(&box)))
+						if (const std::vector<double> b = comvariant::ToDoubles(box); b.size() == 6)
+							SetBox(item->mutable_box(), b);
+				}
+		}
+		return grpc::Status::OK;
+	}
+
+	grpc::Status StartCollisionChecks(IAssemblyDoc* assembly, std::unique_ptr<InterferenceSession>& out)
+	{
+		ATL::CComPtr<IInterferenceDetectionMgr> mgr;
+		HRESULT hr = assembly->get_InterferenceDetectionManager(&mgr);
+		if (FAILED(hr))
+			return ComError("IAssemblyDoc::InterferenceDetectionManager", hr);
+		if (!mgr)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"SolidWorks has no interference detection for this assembly");
+		out = std::make_unique<InterferenceSession>(mgr);
+		out->Apply(false, false, false, false);
+		return grpc::Status::OK;
+	}
+
+	std::string InterferenceKey(const sld_mcp::v1::Interference& interference)
+	{
+		std::vector<std::string> parts;
+		for (int i = 0; i < interference.component_persist_ids_size(); ++i)
+			parts.push_back(interference.component_persist_ids(i).empty() && i < interference.component_names_size()
+				? "name:" + interference.component_names(i)
+				: interference.component_persist_ids(i));
+		std::sort(parts.begin(), parts.end());
+		std::string key;
+		for (const auto& part : parts)
+			key += std::to_string(part.size()) + ":" + part;
+		return key;
+	}
+
+	bool HasNewInterference(const std::set<std::string>& before,
+		const google::protobuf::RepeatedPtrField<sld_mcp::v1::Interference>& now)
+	{
+		for (const auto& interference : now)
+			if (!before.count(InterferenceKey(interference)))
+				return true;
+		return false;
 	}
 }
