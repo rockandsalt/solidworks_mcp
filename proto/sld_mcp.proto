@@ -244,6 +244,24 @@ service SolidWorks {
   // as AddMate.
   rpc MoveComponent(MoveComponentRequest) returns (MoveComponentResponse);
 
+  // How top-level components of the active assembly can still move: the
+  // raw material for their remaining degrees of freedom, which the MCP
+  // server works out. IComponent2::GetRemainingDOFs answers
+  // swRemainingDofs_Unavailable for every component (seen 2026-10-25), so
+  // each probed component is nudged instead, the way dragging it would:
+  // SetTransformAndSolve2 to +- `step` along the assembly X / Y / Z and
+  // +- `step_angle` about X / Y / Z through its box center (the - one only
+  // when the + one didn't get all the way: else it adds nothing). Each probe
+  // reports where every top-level component that moved ended up; they're
+  // all put back (put_Transform2) before the next one, and the assembly is
+  // rebuilt once at the end. Fixed and suppressed components aren't
+  // probed, nor (with no components named) ones SolidWorks already calls
+  // fully defined: a probe takes a fraction of a second, a component
+  // seconds. Changes nothing (`restored` checks), though SolidWorks marks
+  // the assembly modified. Fails with INVALID_ARGUMENT for a component
+  // inside a subassembly, and as AddMate.
+  rpc InspectMobility(InspectMobilityRequest) returns (InspectMobilityResponse);
+
   // Read-only: where the solid bodies of an assembly's components overlap,
   // as SolidWorks' Interference Detection finds them
   // (IAssemblyDoc::InterferenceDetectionManager), with every component
@@ -1402,6 +1420,72 @@ message MoveComponentResponse {
   // of the ones that aren't.
   bool restored = 7;
   repeated string not_restored = 8;
+}
+
+message InspectMobilityRequest {
+  // Top-level components to probe. Empty = every top-level component.
+  repeated bytes component_persist_ids = 1;
+  double step = 2;        // meters, > 0
+  double step_angle = 3;  // radians, > 0
+  // Stop starting new components after this many seconds; the rest come
+  // back with probed = false and out_of_time set. 0 = no limit.
+  double time_budget = 4;
+}
+
+// IComponent2::GetConstrainedStatus (swConstrainedStatus_e): SolidWorks'
+// own verdict, as the (-) / (+) in the FeatureManager tree.
+enum ConstrainedStatus {
+  CONSTRAINED_STATUS_UNSPECIFIED = 0;
+  CONSTRAINED_STATUS_UNKNOWN = 1;
+  CONSTRAINED_STATUS_UNDER = 2;
+  CONSTRAINED_STATUS_FULLY = 3;
+  CONSTRAINED_STATUS_OVER = 4;
+  CONSTRAINED_STATUS_NO_SOLUTION = 5;
+  CONSTRAINED_STATUS_INVALID_SOLUTION = 6;
+  CONSTRAINED_STATUS_AUTOSOLVE_OFF = 7;
+}
+
+message MovedComponent {
+  bytes persist_id = 1;
+  ComponentPlacement placement = 2;  // where the probe left it
+}
+
+// One nudge of a probed component.
+message MobilityProbe {
+  // 0..2: translate along the assembly X / Y / Z; 3..5: turn about an axis
+  // along X / Y / Z through the component's center.
+  int32 axis = 1;
+  bool negative = 2;   // the - direction
+  bool refused = 3;    // SetTransformAndSolve2 returned false
+  // Every top-level component the solve moved (by more than 1e-9 in the
+  // transform's numbers), the probed one included if it moved.
+  repeated MovedComponent moved = 4;
+}
+
+message ComponentMobility {
+  ComponentInfo component = 1;  // where it is
+  ConstrainedStatus constrained = 2;
+  Vec3 center = 3;  // its box center (assembly space): the rotation probes' pivot
+  // False for fixed / suppressed ones, or out of time. Asked about every
+  // component, one SolidWorks calls fully defined is probed = true without
+  // probes of its own: what it moves with shows in the floating ones'.
+  bool probed = 4;
+  repeated MobilityProbe probes = 5;
+}
+
+message InspectMobilityResponse {
+  // The components asked for (or every top-level one), in that order.
+  repeated ComponentMobility components = 1;
+  // Other components some probe moved (probed = false, no probes): where
+  // they are, for the motion they made.
+  repeated ComponentMobility others = 2;
+  // Every top-level component back within 1e-5 (m, and in the axes'
+  // numbers: the final rebuild moves what the solver only held within
+  // micrometers, e.g. a lock-mated pair); else the names of the ones that
+  // aren't.
+  bool restored = 3;
+  repeated string not_restored = 4;
+  bool out_of_time = 5;  // time_budget ran out before every component was probed
 }
 
 message CheckInterferenceRequest {

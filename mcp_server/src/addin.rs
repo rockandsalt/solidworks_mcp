@@ -366,6 +366,16 @@ impl AddinClient {
         Ok(client.move_component(request).await?.into_inner())
     }
 
+    /// Nudges components of the active assembly to see how they can move;
+    /// meters / radians, everything put back.
+    pub async fn inspect_mobility(
+        &self,
+        request: proto::InspectMobilityRequest,
+    ) -> Result<proto::InspectMobilityResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.inspect_mobility(request).await?.into_inner())
+    }
+
     /// Where the components of the active assembly (or a drawing view's)
     /// overlap; meters.
     pub async fn check_interference(

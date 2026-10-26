@@ -14,6 +14,7 @@ mod hole;
 mod inspect;
 mod interference;
 mod mirror;
+mod mobility;
 mod note;
 mod pattern;
 mod pmi;
@@ -3144,6 +3145,26 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "Mobility inspection of the active assembly: each component's remaining degrees of freedom -- how many translations and rotations its mates still leave, and which: the directions it can slide along, the axes it can turn about (direction + a point on the axis, assembly mm; a screw's advance per turn). Use it to find under-defined components before adding mates, or to check that a mechanism moves the way it should (a hinge turns about its pin, a slider only slides). How: every component is nudged a little along and about the assembly X/Y/Z while SolidWorks solves its mates, as dragging it would, then put back -- nothing changes. Also reports which components drag others along (`drags_along` / `dragged_by`: a follower can move only by moving what it's mated to) and SolidWorks' own under / fully / over defined status. `components` narrows it to some top-level \"component:N\" ids (default: all; a subassembly counts as one rigid component); fixed components have 0. Takes under a second per component SolidWorks doesn't already call fully defined; a very big assembly may need several calls (the reply names any left unchecked). Limits: motion only possible beyond the nudge (a gap, a slot's far end) isn't seen; a component sitting against a limit counts as free that way. Requires an open assembly with no sketch being edited."
+    )]
+    async fn inspect_mobility(
+        &self,
+        Parameters(params): Parameters<mobility::InspectMobilityParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = mobility::request(&params, |id| self.resolve_id(id))?;
+        let reply = self
+            .addin
+            .inspect_mobility(request.clone())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let json = {
+            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            mobility::reply_json(&mut ids, &request, &reply)
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+    }
+
+    #[tool(
         description = "Check an assembly for interference, like SolidWorks' Interference \
                        Detection: which components' solids overlap, by how much (volume in \
                        mm³) and where (the box around each overlap, assembly mm), biggest \
@@ -4150,7 +4171,9 @@ impl ServerHandler for SolidWorksTools {
                  Assemblies: inspect_model lists the components and mates and, within a \
                  component, its faces, edges and planes (in assembly coordinates); add_mate \
                  mates two components by those ids, and render_views shows where they ended \
-                 up; check_interference finds components that overlap (also from a drawing \
+                 up; inspect_mobility reports each component's remaining degrees of freedom \
+                 (what it can still slide along / turn about); check_interference finds \
+                 components that overlap (also from a drawing \
                  of the assembly). inspect_annotations reads the model's MBD / PMI (DimXpert dimensions, \
                  tolerances, datums, feature control frames); add_datum_symbol and \
                  add_geometric_tolerance add datums and feature control frames, to a part, \

@@ -1,10 +1,12 @@
 // Components.cpp : InsertComponents, ReplaceComponents, FixComponents,
-// MoveComponent (see docs/notes/architecture.md, "Assemblies + mates").
+// MoveComponent, InspectMobility (see docs/notes/architecture.md,
+// "Assemblies + mates").
 #include "pch.h"
 #include "Common.h"
 #include "AssemblyHelpers.h"
 #include "DimensionHelpers.h"
 #include "FeatureTreeHelpers.h"
+#include <chrono>
 
 using namespace sld_mcp::service;
 
@@ -140,6 +142,65 @@ namespace
 			doc->EditDelete();
 		doc->ClearSelection2(VARIANT_TRUE);
 	}
+
+	// The center of the component's assembly-space box; `fallback` if
+	// SolidWorks has none.
+	Eigen::Vector3d BoxCenter(IComponent2* component, const Eigen::Vector3d& fallback)
+	{
+		ATL::CComVariant boxVar;
+		if (SUCCEEDED(component->GetBox(VARIANT_FALSE, VARIANT_FALSE, &boxVar)))
+			if (const Eigen::AlignedBox3d box = ToAlignedBox(comvariant::ToDoubles(boxVar)); !box.isEmpty())
+				return box.center();
+		return fallback;
+	}
+
+	sld_mcp::v1::ConstrainedStatus ToConstrainedStatus(long status)
+	{
+		switch (status)
+		{
+		case swUnderConstrained: return sld_mcp::v1::CONSTRAINED_STATUS_UNDER;
+		case swFullyConstrained: return sld_mcp::v1::CONSTRAINED_STATUS_FULLY;
+		case swOverConstrained: return sld_mcp::v1::CONSTRAINED_STATUS_OVER;
+		case swNoSolution: return sld_mcp::v1::CONSTRAINED_STATUS_NO_SOLUTION;
+		case swInvalidSolution: return sld_mcp::v1::CONSTRAINED_STATUS_INVALID_SOLUTION;
+		case swAutosolveOff: return sld_mcp::v1::CONSTRAINED_STATUS_AUTOSOLVE_OFF;
+		default: return sld_mcp::v1::CONSTRAINED_STATUS_UNKNOWN;
+		}
+	}
+
+	// While it lives (many solves in a row): no redrawing the active view or
+	// the FeatureManager tree, and SolidWorks told an API command is running.
+	class QuietSolves
+	{
+	public:
+		QuietSolves(ISldWorks* swApp, IModelDoc2* doc) : m_swApp(swApp)
+		{
+			ATL::CComPtr<IDispatch> disp;
+			if (SUCCEEDED(doc->get_ActiveView(&disp)) && disp)
+				m_view = disp;
+			if (m_view)
+				m_view->put_EnableGraphicsUpdate(VARIANT_FALSE);
+			doc->get_FeatureManager(&m_features);
+			if (m_features)
+				m_features->put_EnableFeatureTree(VARIANT_FALSE);
+			m_swApp->put_CommandInProgress(VARIANT_TRUE);
+		}
+		~QuietSolves()
+		{
+			m_swApp->put_CommandInProgress(VARIANT_FALSE);
+			if (m_features)
+				m_features->put_EnableFeatureTree(VARIANT_TRUE);
+			if (m_view)
+				m_view->put_EnableGraphicsUpdate(VARIANT_TRUE);
+		}
+		QuietSolves(const QuietSolves&) = delete;
+		QuietSolves& operator=(const QuietSolves&) = delete;
+
+	private:
+		ATL::CComPtr<ISldWorks> m_swApp;
+		ATL::CComQIPtr<IModelView> m_view;
+		ATL::CComPtr<IFeatureManager> m_features;
+	};
 }
 
 grpc::Status SolidWorksService::InsertComponents(grpc::ServerContext* /*context*/,
@@ -679,16 +740,9 @@ grpc::Status SolidWorksService::MoveComponent(grpc::ServerContext* /*context*/,
 	Eigen::Affine3d startPlacement;
 	if (!ReadPose(component, start) || !PlacementOf(math, start.xform, startPlacement))
 		return grpc::Status(grpc::StatusCode::INTERNAL, "couldn't read where \"" + name + "\" is");
-	Eigen::Vector3d center = startPlacement.translation();
-	if (request->has_rotation_center())
-		center = ToVector(request->rotation_center());
-	else
-	{
-		ATL::CComVariant boxVar;
-		if (SUCCEEDED(component->GetBox(VARIANT_FALSE, VARIANT_FALSE, &boxVar)))
-			if (const Eigen::AlignedBox3d box = ToAlignedBox(comvariant::ToDoubles(boxVar)); !box.isEmpty())
-				center = box.center();
-	}
+	const Eigen::Vector3d center = request->has_rotation_center()
+		? ToVector(request->rotation_center())
+		: BoxCenter(component, startPlacement.translation());
 	SetVec3(response->mutable_rotation_center(), center);
 	DescribeComponent(component, ids, math, response->mutable_component()->mutable_before());
 
@@ -771,6 +825,227 @@ grpc::Status SolidWorksService::MoveComponent(grpc::ServerContext* /*context*/,
 		}
 		response->set_restored(response->not_restored_size() == 0);
 	}
+	doc->GraphicsRedraw2();
+	return grpc::Status::OK;
+}
+
+grpc::Status SolidWorksService::InspectMobility(grpc::ServerContext* /*context*/,
+	const sld_mcp::v1::InspectMobilityRequest* request,
+	sld_mcp::v1::InspectMobilityResponse* response)
+{
+	const double step = request->step();
+	const double stepAngle = request->step_angle();
+	if (!std::isfinite(step) || step <= 0.0 || !std::isfinite(stepAngle) || stepAngle <= 0.0)
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "step and step_angle must be positive");
+	if (!std::isfinite(request->time_budget()) || request->time_budget() < 0.0)
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "time_budget must be 0 or more");
+	const auto started = std::chrono::steady_clock::now();
+	auto outOfTime = [&] {
+		return request->time_budget() > 0.0 &&
+			std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count() > request->time_budget();
+	};
+
+	std::lock_guard<std::mutex> lock(m_editMutex);
+	ComApartment com;
+	if (!com.Ok())
+		return ComApartmentError();
+
+	ATL::CComPtr<ISldWorks> swApp;
+	if (grpc::Status status = GetSwApp(swApp); !status.ok())
+		return status;
+
+	ATL::CComPtr<IModelDoc2> doc;
+	if (grpc::Status status = GetEditableAssembly(swApp, doc); !status.ok())
+		return status;
+	ATL::CComQIPtr<IAssemblyDoc> assembly(doc.p);
+	if (!assembly)
+		return grpc::Status(grpc::StatusCode::INTERNAL, "active assembly has no IAssemblyDoc interface");
+	ATL::CComPtr<IModelDocExtension> ext;
+	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+		return status;
+	ATL::CComQIPtr<IMathUtility> math;
+	if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
+		return status;
+	PersistIds ids(ext);
+
+	// Every top-level component where it is: what a probe moved, and what
+	// to put back.
+	std::vector<SavedPose> saved;
+	for (const auto& c : AllComponents(assembly))
+	{
+		if (ParentOf(c))
+			continue;
+		SavedPose pose;
+		if (ReadPose(c, pose))
+			saved.push_back(std::move(pose));
+	}
+
+	// The components to probe, each once.
+	std::vector<ATL::CComPtr<IComponent2>> targets;
+	std::set<std::string> targetIds;
+	if (request->component_persist_ids_size() == 0)
+	{
+		for (const auto& pose : saved)
+			if (targetIds.insert(ids.Get(pose.component)).second)
+				targets.push_back(pose.component);
+	}
+	for (const auto& persistId : request->component_persist_ids())
+	{
+		ATL::CComPtr<IDispatch> obj;
+		if (grpc::Status status = ResolvePersistId(ext, persistId, obj); !status.ok())
+			return status;
+		ATL::CComQIPtr<IComponent2> component(obj.p);
+		if (!component)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "that isn't a component");
+		if (ATL::CComPtr<IComponent2> parent = ParentOf(component))
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"\"" + ComponentName(component) + "\" is inside the subassembly \"" + ComponentName(parent) +
+				"\" -- it moves with the whole subassembly: ask about that, or open its file (open_document)");
+		if (targetIds.insert(ids.Get(component)).second)
+			targets.push_back(ATL::CComPtr<IComponent2>(component));
+	}
+
+	// A probe: from the starting pose, translate by +-step along an axis, or
+	// turn by +-stepAngle about an axis through the center.
+	auto nudge = [&](int axis, double sign, const Eigen::Vector3d& center) {
+		Eigen::Affine3d m = Eigen::Affine3d::Identity();
+		const Eigen::Vector3d unit = Eigen::Vector3d::Unit(axis % 3);
+		if (axis < 3)
+			m.translate(sign * step * unit);
+		else
+			m.translate(center).rotate(Eigen::AngleAxisd(sign * stepAngle, unit)).translate(-center);
+		return m;
+	};
+
+	// Every target described first: once a probe has put components back
+	// (put_Transform2, no solve), GetConstrainedStatus answers swNoSolution
+	// for all of them until the rebuild (seen 2026-10-25).
+	std::vector<Eigen::Affine3d> starts;
+	for (const auto& component : targets)
+	{
+		sld_mcp::v1::ComponentMobility* out = response->add_components();
+		DescribeComponent(component, ids, math, out->mutable_component());
+		long constrained = 0;
+		component->GetConstrainedStatus(&constrained);
+		out->set_constrained(ToConstrainedStatus(constrained));
+		const auto start = std::find_if(saved.begin(), saved.end(),
+			[&](const SavedPose& p) { return SameObject(p.component, component); });
+		Eigen::Affine3d startPlacement;
+		if (start == saved.end() || !PlacementOf(math, start->xform, startPlacement))
+			return grpc::Status(grpc::StatusCode::INTERNAL, "couldn't read where \"" + ComponentName(component) + "\" is");
+		starts.push_back(startPlacement);
+		SetVec3(out->mutable_center(), BoxCenter(component, startPlacement.translation()));
+	}
+
+	PreferenceToggles toggles(swApp);
+	toggles.Set(swShowErrorsEveryRebuild, false);
+	std::set<std::string> movedOthers;
+	bool probedAny = false;
+	{
+		QuietSolves quiet(swApp, doc);
+		for (size_t i = 0; i < targets.size(); ++i)
+		{
+			const auto& component = targets[i];
+			sld_mcp::v1::ComponentMobility* out = response->mutable_components(static_cast<int>(i));
+			const std::string pid = out->component().persist_id();
+			const Eigen::Affine3d& startPlacement = starts[i];
+			const Eigen::Vector3d center = ToVector(out->center());
+			// SetTransformAndSolve2 moves a fixed component too (seen
+			// 2026-10-25): nothing to learn from probing one.
+			if (out->component().fixed() || IsSuppressed(component))
+				continue;
+			if (outOfTime())
+			{
+				response->set_out_of_time(true);
+				continue;
+			}
+			out->set_probed(true);
+			// Asked about everything, a component SolidWorks calls fully
+			// defined isn't nudged: its mates hold it against what it's mated
+			// to, and any motion it shares with that shows up when the
+			// floating ones are nudged. Several times faster on a real
+			// assembly (a component takes seconds).
+			if (request->component_persist_ids_size() == 0 && out->constrained() == sld_mcp::v1::CONSTRAINED_STATUS_FULLY)
+				continue;
+			probedAny = true;
+
+			for (int axis = 0; axis < 6; ++axis)
+			{
+				// The + nudge went all the way: that way is free, and the -
+				// one can't add a direction (it matters against a limit).
+				bool reached = false;
+				for (double sign : { 1.0, -1.0 })
+				{
+					if (reached)
+						break;
+					sld_mcp::v1::MobilityProbe* probe = out->add_probes();
+					probe->set_axis(axis);
+					probe->set_negative(sign < 0.0);
+					const Eigen::Affine3d wanted = nudge(axis, sign, center) * startPlacement;
+					sld_mcp::v1::ComponentPlacement target;
+					SetPlacement(wanted, &target);
+					ATL::CComPtr<IMathTransform> xform = ToMathTransform(math, target);
+					if (!xform)
+						return grpc::Status(grpc::StatusCode::INTERNAL, "IMathUtility::CreateTransform failed");
+					VARIANT_BOOL ok = VARIANT_FALSE;
+					HRESULT hr = component->SetTransformAndSolve2(xform, &ok);
+					if (FAILED(hr))
+						return ComError("IComponent2::SetTransformAndSolve2", hr);
+					probe->set_refused(!ok);
+
+					// Who moved, and everyone back.
+					for (const auto& pose : saved)
+					{
+						SavedPose now;
+						if (!ReadPose(pose.component, now) || SamePose(now.data, pose.data, 1e-9))
+							continue;
+						sld_mcp::v1::MovedComponent* moved = probe->add_moved();
+						moved->set_persist_id(ids.Get(pose.component));
+						Eigen::Affine3d placement;
+						if (PlacementOf(math, now.xform, placement))
+						{
+							SetPlacement(placement, moved->mutable_placement());
+							if (moved->persist_id() == pid)
+								reached = (placement.translation() - wanted.translation()).norm() < 0.01 * step &&
+									(placement.linear() - wanted.linear()).norm() < 0.01 * stepAngle;
+						}
+						if (moved->persist_id() != pid)
+							movedOthers.insert(moved->persist_id());
+						pose.component->put_Transform2(pose.xform);
+					}
+				}
+			}
+		}
+	}
+
+	// The other components that moved along, where they are (back at the
+	// start).
+	for (const auto& pose : saved)
+	{
+		const std::string pid = ids.Get(pose.component);
+		if (!movedOthers.count(pid) || targetIds.count(pid))
+			continue;
+		sld_mcp::v1::ComponentMobility* out = response->add_others();
+		DescribeComponent(pose.component, ids, math, out->mutable_component());
+		Eigen::Affine3d placement;
+		PlacementOf(math, pose.xform, placement);
+		SetVec3(out->mutable_center(), BoxCenter(pose.component, placement.translation()));
+	}
+
+	if (probedAny)
+	{
+		VARIANT_BOOL rebuilt = VARIANT_FALSE;
+		doc->EditRebuild3(&rebuilt);
+	}
+	// The rebuild re-solves what isn't solved exactly: two components
+	// locked to each other moved by micrometers (seen 2026-10-25).
+	for (const auto& pose : saved)
+	{
+		SavedPose now;
+		if (!ReadPose(pose.component, now) || !SamePose(now.data, pose.data, 1e-5))
+			response->add_not_restored(ComponentName(pose.component));
+	}
+	response->set_restored(response->not_restored_size() == 0);
 	doc->GraphicsRedraw2();
 	return grpc::Status::OK;
 }
