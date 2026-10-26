@@ -305,6 +305,7 @@
     <ClInclude Include="SwAddin.h" />
     <ClInclude Include="GrpcIncludes.h" />
     <ClInclude Include="RpcServer.h" />
+    <ClInclude Include="InstanceFile.h" />
     <ClInclude Include="SolidWorksService.h" />
     <ClInclude Include="ComVariant.h" />
     <ClInclude Include="service\AnnotationHelpers.h" />
@@ -355,6 +356,7 @@
     <ClCompile Include="sld_mcp.cpp" />
     <ClCompile Include="SwAddin.cpp" />
     <ClCompile Include="RpcServer.cpp" />
+    <ClCompile Include="InstanceFile.cpp" />
     <ClCompile Include="SolidWorksService.cpp" />
     <ClCompile Include="service\AnnotationHelpers.cpp" />
     <ClCompile Include="service\Annotations.cpp" />

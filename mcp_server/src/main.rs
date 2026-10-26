@@ -3,6 +3,7 @@ mod assembly;
 mod component;
 mod delete;
 mod diagnose;
+mod discovery;
 mod drawing;
 mod drawing_image;
 mod edit;
@@ -4061,9 +4062,14 @@ impl SolidWorksTools {
     fn addin_error(&self, status: tonic::Status) -> McpError {
         let message = match status.code() {
             Code::Unavailable => format!(
-                "can't reach the sld_mcp add-in at {} -- open SolidWorks with the \
+                "can't reach the sld_mcp add-in{} -- open SolidWorks with the \
                  sld_mcp add-in enabled ({})",
-                self.addin.endpoint(),
+                self.addin.endpoint().map(|at| format!(" at {at}")).unwrap_or_default(),
+                status.message()
+            ),
+            Code::Unauthenticated => format!(
+                "the sld_mcp add-in{} refused the call: {}",
+                self.addin.endpoint().map(|at| format!(" at {at}")).unwrap_or_default(),
                 status.message()
             ),
             Code::DeadlineExceeded => {
@@ -4181,7 +4187,7 @@ async fn main() -> anyhow::Result<()> {
         .with_ansi(false)
         .init();
 
-    let addin = AddinClient::new()?;
+    let addin = AddinClient::new();
     let service = SolidWorksTools::new(addin).serve(stdio()).await?;
     service.waiting().await?;
     Ok(())

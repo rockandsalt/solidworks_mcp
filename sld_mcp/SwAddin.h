@@ -9,6 +9,7 @@
 #include <memory>
 
 class RpcServer;
+class InstanceFile;
 
 class ATL_NO_VTABLE CSwAddin :
 	public ATL::CComObjectRootEx<ATL::CComSingleThreadModel>,
@@ -46,6 +47,8 @@ private:
 	DWORD m_swAppGitCookie = 0;
 
 	std::unique_ptr<RpcServer> m_rpcServer;
+	// Where m_rpcServer listens and its token, for the MCP server to find.
+	std::unique_ptr<InstanceFile> m_instanceFile;
 };
 
 OBJECT_ENTRY_AUTO(__uuidof(SwMcpAddin), CSwAddin)

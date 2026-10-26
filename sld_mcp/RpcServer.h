@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 
 namespace grpc
 {
@@ -16,11 +17,11 @@ class RpcServer
 {
 public:
 	// Starts serving the SolidWorks service on 127.0.0.1:`port` (loopback
-	// only). `git` / `swAppCookie` identify the ISldWorks the RPC handlers
-	// use; both must outlive this object. Throws std::runtime_error if the
-	// port can't be bound -- typically because another SolidWorks instance
-	// already has it.
-	RpcServer(int port, IGlobalInterfaceTable* git, DWORD swAppCookie);
+	// only; 0 = any free port, see Port()). Calls without `token` in their
+	// x-sld-mcp-token metadata are refused. `git` / `swAppCookie` identify
+	// the ISldWorks the RPC handlers use; both must outlive this object.
+	// Throws std::runtime_error if the port can't be bound.
+	RpcServer(int port, const std::string& token, IGlobalInterfaceTable* git, DWORD swAppCookie);
 	~RpcServer();
 
 	RpcServer(const RpcServer&) = delete;
@@ -31,7 +32,11 @@ public:
 	// period. Safe to call more than once; the destructor calls it too.
 	void Shutdown();
 
+	// The port it listens on.
+	int Port() const { return m_port; }
+
 private:
+	int m_port = 0;
 	std::unique_ptr<grpc::Service> m_service;
 	std::unique_ptr<grpc::Server> m_server;
 };

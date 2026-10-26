@@ -3,7 +3,7 @@
 An MCP server that lets an AI model drive SOLIDWORKS. Two halves:
 
 ```
-MCP client ──stdio──▶ mcp_server (Rust, rmcp) ──gRPC 127.0.0.1:50551──▶ sld_mcp.dll (C++ ATL add-in inside SOLIDWORKS) ──COM──▶ ISldWorks
+MCP client ──stdio──▶ mcp_server (Rust, rmcp) ──gRPC 127.0.0.1:<port>──▶ sld_mcp.dll (C++ ATL add-in inside SOLIDWORKS) ──COM──▶ ISldWorks
 ```
 
 - `proto/sld_mcp.proto`: the IPC contract, single source of truth.

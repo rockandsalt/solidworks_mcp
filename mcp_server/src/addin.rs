@@ -1,10 +1,15 @@
 //! gRPC client for the sld_mcp SolidWorks add-in. The wire contract lives in
 //! proto/sld_mcp.proto at the repo root, shared with the C++ side.
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use tonic::metadata::{AsciiMetadataValue, MetadataValue};
+use tonic::service::Interceptor;
+use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Channel, Endpoint};
+
+use crate::discovery;
 
 pub mod proto {
     tonic::include_proto!("sld_mcp.v1");
@@ -12,8 +17,8 @@ pub mod proto {
 
 use proto::solid_works_client::SolidWorksClient;
 
-const DEFAULT_PORT: u16 = 50551;
-const PORT_ENV: &str = "SLD_MCP_PORT";
+/// Must match kTokenHeader in sld_mcp/RpcServer.cpp.
+const TOKEN_HEADER: &str = "x-sld-mcp-token";
 
 /// How long to wait for the add-in to accept a connection. It's on
 /// loopback, so anything beyond this means it isn't listening.
@@ -23,40 +28,70 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 /// long rebuild or a modal dialog can legitimately stall them for a while.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
-#[derive(Clone)]
+type Client = SolidWorksClient<InterceptedService<Channel, TokenInterceptor>>;
+
+#[derive(Clone, Default)]
 pub struct AddinClient {
-    client: SolidWorksClient<Channel>,
-    endpoint: String,
+    /// The add-in last called and the channel to it.
+    connection: Arc<Mutex<Option<(discovery::Target, Channel)>>>,
+}
+
+/// Puts the instance file's token on every call.
+#[derive(Clone)]
+pub struct TokenInterceptor(Option<AsciiMetadataValue>);
+
+impl Interceptor for TokenInterceptor {
+    fn call(&mut self, mut request: tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> {
+        if let Some(token) = &self.0 {
+            request.metadata_mut().insert(TOKEN_HEADER, token.clone());
+        }
+        Ok(request)
+    }
 }
 
 impl AddinClient {
-    /// Builds a client without connecting. The underlying HTTP/2 connection
-    /// is opened on the first call and then reused by every call after it
-    /// (concurrent ones included); if SolidWorks restarts, tonic
-    /// reconnects on the next call.
-    pub fn new() -> Result<Self> {
-        let port = match std::env::var(PORT_ENV) {
-            Ok(value) => value
-                .parse::<u16>()
-                .with_context(|| format!("{PORT_ENV}={value:?} is not a valid port"))?,
-            Err(_) => DEFAULT_PORT,
-        };
-        let endpoint = format!("http://127.0.0.1:{port}");
-
-        let channel = Endpoint::from_shared(endpoint.clone())?
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
-            .connect_lazy();
-
-        Ok(Self {
-            client: SolidWorksClient::new(channel),
-            endpoint,
-        })
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    /// Where the add-in is expected to be listening, for error messages.
-    pub fn endpoint(&self) -> &str {
-        &self.endpoint
+    /// A client for the add-in to call now. The instance files are read
+    /// again on every call (a directory listing): when SolidWorks restarts
+    /// on another port, the next call goes there. The HTTP/2 connection is
+    /// opened on the first call to a port and then reused by every call
+    /// after it, concurrent ones included.
+    fn client(&self) -> Result<Client, tonic::Status> {
+        let mut connection = self.connection.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let target = match discovery::find() {
+            Ok(target) => target,
+            Err(message) => {
+                *connection = None;
+                return Err(tonic::Status::unavailable(message));
+            }
+        };
+        let channel = match &*connection {
+            Some((current, channel)) if *current == target => channel.clone(),
+            _ => {
+                let channel = Endpoint::from_shared(format!("http://127.0.0.1:{}", target.port))
+                    .map_err(|error| tonic::Status::internal(error.to_string()))?
+                    .connect_timeout(CONNECT_TIMEOUT)
+                    .timeout(REQUEST_TIMEOUT)
+                    .connect_lazy();
+                *connection = Some((target.clone(), channel.clone()));
+                channel
+            }
+        };
+        let token = target.token.as_deref().and_then(|token| MetadataValue::try_from(token).ok());
+        Ok(SolidWorksClient::with_interceptor(channel, TokenInterceptor(token)))
+    }
+
+    /// Where the add-in last called is listening, for error messages; None
+    /// when none was found.
+    pub fn endpoint(&self) -> Option<String> {
+        let connection = self.connection.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        connection.as_ref().map(|(target, _)| match target.pid {
+            Some(pid) => format!("127.0.0.1:{} (SolidWorks pid {pid})", target.port),
+            None => format!("127.0.0.1:{}", target.port),
+        })
     }
 
     /// The active document (none = nothing open) and the SolidWorks session;
@@ -67,7 +102,7 @@ impl AddinClient {
     ) -> Result<proto::GetActiveDocumentResponse, tonic::Status> {
         // Clients are cheap handles onto the shared channel; tonic needs a
         // &mut one per call.
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         let mut request = tonic::Request::new(proto::GetActiveDocumentRequest {});
         if let Some(timeout) = timeout {
             request.set_timeout(timeout);
@@ -76,13 +111,13 @@ impl AddinClient {
     }
 
     pub async fn new_part(&self, units: proto::UnitsChange) -> Result<Option<proto::Document>, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         let response = client.new_part(proto::NewPartRequest { units: Some(units) }).await?;
         Ok(response.into_inner().document)
     }
 
     pub async fn new_assembly(&self, units: proto::UnitsChange) -> Result<Option<proto::Document>, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         let response = client.new_assembly(proto::NewAssemblyRequest { units: Some(units) }).await?;
         Ok(response.into_inner().document)
     }
@@ -91,7 +126,7 @@ impl AddinClient {
         &self,
         request: proto::SetDocumentUnitsRequest,
     ) -> Result<proto::SetDocumentUnitsResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.set_document_units(request).await?.into_inner())
     }
 
@@ -100,7 +135,7 @@ impl AddinClient {
         &self,
         request: proto::NewDrawingRequest,
     ) -> Result<proto::NewDrawingResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         let response = client.new_drawing(request).await?;
         Ok(response.into_inner())
     }
@@ -110,7 +145,7 @@ impl AddinClient {
         &self,
         request: proto::CreateRectangleSketchRequest,
     ) -> Result<proto::CreateRectangleSketchResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         let response = client.create_rectangle_sketch(request).await?;
         Ok(response.into_inner())
     }
@@ -120,7 +155,7 @@ impl AddinClient {
         &self,
         request: proto::AddSketchEntitiesRequest,
     ) -> Result<proto::AddSketchEntitiesResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         let response = client.add_sketch_entities(request).await?;
         Ok(response.into_inner())
     }
@@ -130,7 +165,7 @@ impl AddinClient {
         &self,
         request: proto::ExtrudeSketchRequest,
     ) -> Result<proto::ExtrudeSketchResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         let response = client.extrude_sketch(request).await?;
         Ok(response.into_inner())
     }
@@ -140,7 +175,7 @@ impl AddinClient {
         &self,
         request: proto::RevolveSketchRequest,
     ) -> Result<proto::RevolveSketchResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.revolve_sketch(request).await?.into_inner())
     }
 
@@ -149,7 +184,7 @@ impl AddinClient {
         &self,
         request: proto::SweepSketchRequest,
     ) -> Result<proto::SweepSketchResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.sweep_sketch(request).await?.into_inner())
     }
 
@@ -158,7 +193,7 @@ impl AddinClient {
         &self,
         request: proto::FilletEdgesRequest,
     ) -> Result<proto::EdgeFeatureResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.fillet_edges(request).await?.into_inner())
     }
 
@@ -167,7 +202,7 @@ impl AddinClient {
         &self,
         request: proto::ChamferEdgesRequest,
     ) -> Result<proto::EdgeFeatureResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.chamfer_edges(request).await?.into_inner())
     }
 
@@ -175,7 +210,7 @@ impl AddinClient {
         &self,
         request: proto::MirrorFeaturesRequest,
     ) -> Result<proto::MirrorFeaturesResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.mirror_features(request).await?.into_inner())
     }
 
@@ -183,7 +218,7 @@ impl AddinClient {
         &self,
         request: proto::MirrorSketchEntitiesRequest,
     ) -> Result<proto::MirrorSketchEntitiesResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.mirror_sketch_entities(request).await?.into_inner())
     }
 
@@ -192,7 +227,7 @@ impl AddinClient {
         &self,
         request: proto::PatternFeaturesRequest,
     ) -> Result<proto::PatternFeaturesResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.pattern_features(request).await?.into_inner())
     }
 
@@ -201,7 +236,7 @@ impl AddinClient {
         &self,
         request: proto::PatternSketchEntitiesRequest,
     ) -> Result<proto::PatternSketchEntitiesResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.pattern_sketch_entities(request).await?.into_inner())
     }
 
@@ -210,7 +245,7 @@ impl AddinClient {
         &self,
         request: proto::InspectModelRequest,
     ) -> Result<proto::InspectModelResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         let response = client.inspect_model(request).await?;
         Ok(response.into_inner())
     }
@@ -222,8 +257,7 @@ impl AddinClient {
     ) -> Result<proto::GetMeshResponse, tonic::Status> {
         // A detailed part's mesh is far past tonic's default 4 MB cap.
         let mut client = self
-            .client
-            .clone()
+            .client()?
             .max_decoding_message_size(MAX_MESH_MESSAGE);
         let response = client.get_mesh(request).await?;
         Ok(response.into_inner())
@@ -233,7 +267,7 @@ impl AddinClient {
         &self,
         request: proto::InspectSketchRequest,
     ) -> Result<proto::InspectSketchResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.inspect_sketch(request).await?.into_inner())
     }
 
@@ -242,7 +276,7 @@ impl AddinClient {
         &self,
         request: proto::AddSketchDimensionsRequest,
     ) -> Result<proto::AddSketchDimensionsResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.add_sketch_dimensions(request).await?.into_inner())
     }
 
@@ -250,7 +284,7 @@ impl AddinClient {
         &self,
         request: proto::AddSketchRelationsRequest,
     ) -> Result<proto::AddSketchRelationsResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.add_sketch_relations(request).await?.into_inner())
     }
 
@@ -258,7 +292,7 @@ impl AddinClient {
         &self,
         request: proto::FullyDefineSketchRequest,
     ) -> Result<proto::FullyDefineSketchResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.fully_define_sketch(request).await?.into_inner())
     }
 
@@ -267,7 +301,7 @@ impl AddinClient {
         &self,
         request: proto::SetDimensionValueRequest,
     ) -> Result<proto::SetDimensionValueResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.set_dimension_value(request).await?.into_inner())
     }
 
@@ -276,7 +310,7 @@ impl AddinClient {
         &self,
         request: proto::SetDimensionToleranceRequest,
     ) -> Result<proto::SetDimensionToleranceResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.set_dimension_tolerance(request).await?.into_inner())
     }
 
@@ -285,7 +319,7 @@ impl AddinClient {
         &self,
         request: proto::HoleWizardRequest,
     ) -> Result<proto::HoleWizardResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.hole_wizard(request).await?.into_inner())
     }
 
@@ -294,7 +328,7 @@ impl AddinClient {
         &self,
         request: proto::AddMateRequest,
     ) -> Result<proto::AddMateResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.add_mate(request).await?.into_inner())
     }
 
@@ -303,7 +337,7 @@ impl AddinClient {
         &self,
         request: proto::InsertComponentsRequest,
     ) -> Result<proto::InsertComponentsResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.insert_components(request).await?.into_inner())
     }
 
@@ -311,7 +345,7 @@ impl AddinClient {
         &self,
         request: proto::ReplaceComponentsRequest,
     ) -> Result<proto::ReplaceComponentsResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.replace_components(request).await?.into_inner())
     }
 
@@ -319,7 +353,7 @@ impl AddinClient {
         &self,
         request: proto::FixComponentsRequest,
     ) -> Result<proto::FixComponentsResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.fix_components(request).await?.into_inner())
     }
 
@@ -328,7 +362,7 @@ impl AddinClient {
         &self,
         request: proto::MoveComponentRequest,
     ) -> Result<proto::MoveComponentResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.move_component(request).await?.into_inner())
     }
 
@@ -338,13 +372,13 @@ impl AddinClient {
         &self,
         request: proto::CheckInterferenceRequest,
     ) -> Result<proto::CheckInterferenceResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.check_interference(request).await?.into_inner())
     }
 
     /// The active document's 3D annotations (PMI); meters / radians.
     pub async fn inspect_annotations(&self) -> Result<proto::InspectAnnotationsResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client
             .inspect_annotations(proto::InspectAnnotationsRequest {})
             .await?
@@ -359,8 +393,7 @@ impl AddinClient {
     ) -> Result<proto::InspectDrawingResponse, tonic::Status> {
         // A detailed view lists thousands of edges.
         let mut client = self
-            .client
-            .clone()
+            .client()?
             .max_decoding_message_size(MAX_MESH_MESSAGE);
         Ok(client.inspect_drawing(request).await?.into_inner())
     }
@@ -370,7 +403,7 @@ impl AddinClient {
         &self,
         request: proto::AddDrawingDimensionsRequest,
     ) -> Result<proto::AddDrawingDimensionsResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.add_drawing_dimensions(request).await?.into_inner())
     }
 
@@ -378,7 +411,7 @@ impl AddinClient {
         &self,
         request: proto::InsertModelItemsRequest,
     ) -> Result<proto::InsertModelItemsResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.insert_model_items(request).await?.into_inner())
     }
 
@@ -387,7 +420,7 @@ impl AddinClient {
         &self,
         request: proto::SetupSheetRequest,
     ) -> Result<proto::SetupSheetResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.setup_sheet(request).await?.into_inner())
     }
 
@@ -396,7 +429,7 @@ impl AddinClient {
         &self,
         request: proto::SetupDrawingViewRequest,
     ) -> Result<proto::SetupDrawingViewResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.setup_drawing_view(request).await?.into_inner())
     }
 
@@ -405,7 +438,7 @@ impl AddinClient {
         &self,
         request: proto::SetupDrawingAnnotationRequest,
     ) -> Result<proto::SetupDrawingAnnotationResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.setup_drawing_annotation(request).await?.into_inner())
     }
 
@@ -415,7 +448,7 @@ impl AddinClient {
         &self,
         request: proto::AddModelAnnotationRequest,
     ) -> Result<proto::AddModelAnnotationResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.add_model_annotation(request).await?.into_inner())
     }
 
@@ -423,7 +456,7 @@ impl AddinClient {
         &self,
         request: proto::DeleteDrawingAnnotationsRequest,
     ) -> Result<proto::DeleteDrawingAnnotationsResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.delete_drawing_annotations(request).await?.into_inner())
     }
 
@@ -431,7 +464,7 @@ impl AddinClient {
         &self,
         request: proto::SetupDrawingTableRequest,
     ) -> Result<proto::SetupDrawingTableResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.setup_drawing_table(request).await?.into_inner())
     }
 
@@ -439,7 +472,7 @@ impl AddinClient {
         &self,
         request: proto::AddBalloonsRequest,
     ) -> Result<proto::AddBalloonsResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.add_balloons(request).await?.into_inner())
     }
 
@@ -447,7 +480,7 @@ impl AddinClient {
         &self,
         request: proto::DrawSheetFormatRequest,
     ) -> Result<proto::DrawSheetFormatResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.draw_sheet_format(request).await?.into_inner())
     }
 
@@ -455,7 +488,7 @@ impl AddinClient {
         &self,
         request: proto::CustomPropertiesRequest,
     ) -> Result<proto::CustomPropertiesResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.custom_properties(request).await?.into_inner())
     }
 
@@ -463,7 +496,7 @@ impl AddinClient {
         &self,
         request: proto::PartMaterialRequest,
     ) -> Result<proto::PartMaterialResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.part_material(request).await?.into_inner())
     }
 
@@ -471,7 +504,7 @@ impl AddinClient {
         &self,
         request: proto::DeleteFeaturesRequest,
     ) -> Result<proto::DeleteFeaturesResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.delete_features(request).await?.into_inner())
     }
 
@@ -479,7 +512,7 @@ impl AddinClient {
         &self,
         request: proto::DeleteSketchEntitiesRequest,
     ) -> Result<proto::DeleteSketchEntitiesResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.delete_sketch_entities(request).await?.into_inner())
     }
 
@@ -487,7 +520,7 @@ impl AddinClient {
         &self,
         request: proto::DiagnoseModelRequest,
     ) -> Result<proto::DiagnoseModelResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.diagnose_model(request).await?.into_inner())
     }
 
@@ -497,7 +530,7 @@ impl AddinClient {
         &self,
         request: proto::RenderDrawingRequest,
     ) -> Result<proto::RenderDrawingResponse, tonic::Status> {
-        let mut client = self.client.clone().max_decoding_message_size(MAX_MESH_MESSAGE);
+        let mut client = self.client()?.max_decoding_message_size(MAX_MESH_MESSAGE);
         Ok(client.render_drawing(request).await?.into_inner())
     }
 
@@ -505,7 +538,7 @@ impl AddinClient {
         &self,
         request: proto::EditExtrudeRequest,
     ) -> Result<proto::EditExtrudeResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.edit_extrude(request).await?.into_inner())
     }
 
@@ -513,7 +546,7 @@ impl AddinClient {
         &self,
         request: proto::EditMateRequest,
     ) -> Result<proto::EditMateResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.edit_mate(request).await?.into_inner())
     }
 
@@ -521,7 +554,7 @@ impl AddinClient {
         &self,
         request: proto::SaveDocumentRequest,
     ) -> Result<proto::SaveDocumentResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.save_document(request).await?.into_inner())
     }
 
@@ -529,7 +562,7 @@ impl AddinClient {
         &self,
         request: proto::OpenDocumentRequest,
     ) -> Result<proto::OpenDocumentResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.open_document(request).await?.into_inner())
     }
 
@@ -537,7 +570,7 @@ impl AddinClient {
         &self,
         request: proto::CreateReferenceGeometryRequest,
     ) -> Result<proto::CreateReferenceGeometryResponse, tonic::Status> {
-        let mut client = self.client.clone();
+        let mut client = self.client()?;
         Ok(client.create_reference_geometry(request).await?.into_inner())
     }
 }

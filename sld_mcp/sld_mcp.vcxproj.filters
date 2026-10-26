@@ -52,6 +52,9 @@
     <ClInclude Include="RpcServer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="InstanceFile.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="SolidWorksService.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -103,6 +106,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="RpcServer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="InstanceFile.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="SolidWorksService.cpp">

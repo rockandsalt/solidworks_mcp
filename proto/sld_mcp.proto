@@ -5,8 +5,10 @@
 //   - Rust: mcp_server/build.rs (tonic-prost-build)
 //   - C++:  sld_mcp/sld_mcp.vcxproj, target SldMcpGenerateProto (vcpkg's protoc + grpc_cpp_plugin)
 //
-// The add-in listens on 127.0.0.1:<port>; the port defaults to 50551 and can
-// be overridden on both sides with the SLD_MCP_PORT environment variable.
+// The add-in listens on 127.0.0.1:<a port the OS picks> and publishes it in
+// %LOCALAPPDATA%\sld_mcp\instances\<pid>.json with a token every call must
+// send as x-sld-mcp-token metadata (docs/notes/architecture.md, "Finding the
+// add-in"). SLD_MCP_PORT pins the port on both sides.
 syntax = "proto3";
 
 package sld_mcp.v1;

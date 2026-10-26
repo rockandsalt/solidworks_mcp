@@ -6,6 +6,7 @@
 #include "sldmcp_i.h"
 #include "SwAddin.h"
 #include "RpcServer.h"
+#include "InstanceFile.h"
 #include <objidl.h>
 #include <cwchar>
 #include <exception>
@@ -13,8 +14,7 @@
 
 namespace
 {
-	// Must match DEFAULT_PORT / PORT_ENV in mcp_server/src/addin.rs.
-	constexpr int kDefaultPort = 50551;
+	// Must match PORT_ENV in mcp_server/src/discovery.rs.
 	const wchar_t kPortEnvVar[] = L"SLD_MCP_PORT";
 
 	// From swconst.tlb (swMessageBoxIcon_e / swMessageBoxBtn_e), which this
@@ -22,17 +22,20 @@ namespace
 	constexpr long kSwMbWarning = 1;
 	constexpr long kSwMbOk = 2;
 
+	// SLD_MCP_PORT if set, else 0: any free port the OS picks (a fixed
+	// default can be taken, or reserved by Windows; the instance file says
+	// which one it got).
 	int GetPort()
 	{
 		wchar_t value[16] = {};
 		DWORD len = GetEnvironmentVariableW(kPortEnvVar, value, static_cast<DWORD>(std::size(value)));
 		if (len == 0 || len >= std::size(value))
-			return kDefaultPort;
+			return 0;
 
 		wchar_t* end = nullptr;
 		long port = std::wcstol(value, &end, 10);
 		if (*end != L'\0' || port <= 0 || port > 65535)
-			return kDefaultPort;
+			return 0;
 		return static_cast<int>(port);
 	}
 
@@ -84,10 +87,19 @@ STDMETHODIMP CSwAddin::ConnectToSW(IDispatch* ThisSW, long Cookie, VARIANT_BOOL*
 
 	try
 	{
-		m_rpcServer = std::make_unique<RpcServer>(GetPort(), m_git, m_swAppGitCookie);
+		const std::string token = NewToken();
+		m_rpcServer = std::make_unique<RpcServer>(GetPort(), token, m_git, m_swAppGitCookie);
+		m_instanceFile = std::make_unique<InstanceFile>(m_rpcServer->Port(), token);
 	}
 	catch (const std::exception& ex)
 	{
+		// No client can find a server without its file.
+		if (m_rpcServer)
+		{
+			m_rpcServer->Shutdown();
+			m_rpcServer.reset();
+		}
+
 		std::wstring message = L"sld_mcp: the MCP bridge couldn't start, so it won't be available "
 			L"in this SolidWorks session.\n\n";
 		message += ATL::CA2W(ex.what(), CP_UTF8);
@@ -106,6 +118,9 @@ STDMETHODIMP CSwAddin::DisconnectFromSW(VARIANT_BOOL* IsDisconnected)
 {
 	if (IsDisconnected == nullptr)
 		return E_POINTER;
+
+	// Unpublish first, so no new client finds a server that's going away.
+	m_instanceFile.reset();
 
 	// Stop the server (waiting out in-flight calls) before tearing down the
 	// GIT registration its handlers depend on.

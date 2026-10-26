@@ -48,7 +48,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $outDir = Join-Path $PSScriptRoot 'out'
 $dll = Join-Path $root "sld_mcp\x64\$Configuration\sld_mcp.dll"
-$port = if ($env:SLD_MCP_PORT) { [int]$env:SLD_MCP_PORT } else { 50551 }
+$instancesDir = Join-Path $env:LOCALAPPDATA 'sld_mcp\instances'
 
 # The 3DEXPERIENCE launcher command from CLAUDE.md. It returns at once; the
 # launcher then signs in and starts SLDWORKS.exe on its own.
@@ -65,7 +65,21 @@ function Get-SwProcess {
     @(Get-Process -Name SLDWORKS -ErrorAction SilentlyContinue)
 }
 
+# The add-in's port: SLD_MCP_PORT, else the one in the instance file of the
+# newest running SolidWorks (sld_mcp/InstanceFile.h); $null = none yet.
+function Get-AddinPort {
+    if ($env:SLD_MCP_PORT) { return [int]$env:SLD_MCP_PORT }
+    $pids = @(Get-SwProcess | ForEach-Object { $_.Id })
+    $files = @(Get-ChildItem -LiteralPath $instancesDir -Filter '*.json' -ErrorAction SilentlyContinue |
+        ForEach-Object { try { Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json } catch { } } |
+        Where-Object { $_ -and $pids -contains $_.pid } | Sort-Object started -Descending)
+    if ($files.Count) { return [int]$files[0].port }
+    return $null
+}
+
 function Test-AddinListening {
+    $port = Get-AddinPort
+    if (-not $port) { return $false }
     $client = New-Object System.Net.Sockets.TcpClient
     try {
         $connect = $client.BeginConnect('127.0.0.1', $port, $null, $null)
@@ -206,7 +220,11 @@ function Show-Status {
         return
     }
     Write-Host "SolidWorks: running (PID $($procs.Id -join ', '), started $($procs[0].StartTime))"
-    Write-Host ("Add-in:     {0} on 127.0.0.1:{1}" -f $(if (Test-AddinListening) { 'listening' } else { 'NOT listening' }), $port)
+    $port = Get-AddinPort
+    if (-not $port) { Write-Host "Add-in:     NOT loaded (no instance file in $instancesDir)" }
+    else {
+        Write-Host ("Add-in:     {0} on 127.0.0.1:{1}" -f $(if (Test-AddinListening) { 'listening' } else { 'NOT listening' }), $port)
+    }
     $dialogs = @(Get-SwDialogs)
     if ($dialogs.Count) { Write-Host "Dialogs:    $($dialogs -join ', ')" }
     try {
@@ -225,7 +243,7 @@ function Show-Status {
 function Start-Sw {
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     if ((Get-SwProcess).Count -gt 0 -and (Test-AddinListening)) {
-        Write-Step "SolidWorks is already up, add-in listening on $port"
+        Write-Step "SolidWorks is already up, add-in listening on $(Get-AddinPort)"
         return
     }
     if ((Get-SwProcess).Count -eq 0) {
@@ -250,7 +268,8 @@ function Start-Sw {
     while (-not (Test-AddinListening)) {
         if ((Get-SwProcess).Count -eq 0) { Fail-WithDiagnostics "SolidWorks exited while starting." }
         if ((Get-Date) -gt $deadline) {
-            Fail-WithDiagnostics "SolidWorks is running but the add-in didn't listen on $port within $TimeoutSec s."
+            Fail-WithDiagnostics ("SolidWorks is running but the add-in didn't start listening within $TimeoutSec s " +
+                "(instance files: $instancesDir).")
         }
         $comReady = $false
         try {
@@ -280,7 +299,7 @@ function Start-Sw {
         }
         Start-Sleep -Seconds 3
     }
-    Write-Step "SolidWorks is up, add-in listening on $port"
+    Write-Step "SolidWorks is up, add-in listening on $(Get-AddinPort)"
 }
 
 # Scenarios leave never-saved documents (Part1, ...) behind, which are fine to
