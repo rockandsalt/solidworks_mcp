@@ -2,8 +2,9 @@
 //! params, turning each placement (origin + optional axes) into the
 //! orthonormal frame the add-in hands to AddComponents3, and the reply.
 //! Also replace_components: swapping components for another file, and the
-//! report of which mates came through; and fix_components: fixing or
-//! floating components.
+//! report of which mates came through; fix_components: fixing or floating
+//! components; and move_component: moving one while SolidWorks solves its
+//! mates, with how far it got.
 //!
 //! Parts and subassemblies go in the same way (a subassembly is just an
 //! .SLDASM file); several instances of one file are several placements, and
@@ -13,12 +14,12 @@
 use rmcp::{ErrorData as McpError, schemars};
 use serde::Deserialize;
 
-use glam::{DQuat, DVec3};
+use glam::{DMat3, DQuat, DVec3};
 
 use crate::addin::proto;
 use crate::assembly::{self, placement_text};
 use crate::{delete, edit, files};
-use crate::inspect::{IdRegistry, Kind, MM_PER_M, point_mm};
+use crate::inspect::{IdRegistry, Kind, MM_PER_M, direction as unit_text, mm, point_mm, round};
 
 /// More than this in one call is almost certainly a mistake (and slow).
 const MAX_INSTANCES: usize = 100;
@@ -487,6 +488,235 @@ pub fn fix_reply_text(ids: &mut IdRegistry, params: &FixComponentsParams, reply:
     text
 }
 
+/// A turn of more than this per solver step risks the solver jumping to
+/// another solution of the mates (a linkage flipping over).
+const MAX_DEG_PER_STEP: f64 = 15.0;
+const MAX_STEPS: u32 = 360;
+/// Closer than this (mm, degrees) counts as the requested pose / no motion.
+const REACHED_MM: f64 = 1e-3;
+const REACHED_DEG: f64 = 0.01;
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct MoveComponentParams {
+    /// The component to move, by id ("component:3" from inspect_model what="components"): a
+    /// floating (not fixed) top-level component.
+    pub component: String,
+    /// How far to move it, [dx, dy, dz] in assembly millimeters; applied after the rotation.
+    #[serde(default)]
+    pub translate_mm: Option<[f64; 3]>,
+    /// The direction of the axis to turn it about, in assembly coordinates, e.g. [0, 0, 1].
+    /// Give with angle_deg.
+    #[serde(default)]
+    pub axis: Option<[f64; 3]>,
+    /// How far to turn it about `axis`, in degrees (right-hand rule; negative turns the other
+    /// way), -360..360.
+    #[serde(default)]
+    pub angle_deg: Option<f64>,
+    /// A point the rotation axis goes through, in assembly millimeters. Default: the center
+    /// of the component's bounding box (turn it in place).
+    #[serde(default)]
+    pub center_mm: Option<[f64; 3]>,
+    /// The motion goes to the solver in this many equal parts, so a long turn follows its
+    /// path (a linkage doesn't flip to another solution). Default: one per 15 degrees of
+    /// turn, 1 for a translation. 1..360.
+    #[serde(default)]
+    pub steps: Option<u32>,
+    /// true: afterwards put every component back where it started; the reply still says
+    /// where the move took them, which makes it a "would the mates allow this" check.
+    /// Default false: the move is kept.
+    #[serde(default)]
+    pub restore: bool,
+}
+
+/// The MoveComponent request, with the component id resolved by `resolve`.
+pub fn move_request(
+    params: &MoveComponentParams,
+    resolve: impl FnOnce(&str) -> Result<Vec<u8>, McpError>,
+) -> Result<proto::MoveComponentRequest, McpError> {
+    let id = params.component.trim();
+    if Kind::of_id(id) != Some(Kind::Component) {
+        return Err(invalid(format!(
+            "component takes a component id like \"component:2\" (inspect_model lists them), got {id:?}"
+        )));
+    }
+    let translation = DVec3::from_array(params.translate_mm.unwrap_or_default());
+    if !translation.is_finite() {
+        return Err(invalid("translate_mm must be three finite numbers"));
+    }
+    let angle = params.angle_deg.unwrap_or_default();
+    if !angle.is_finite() || angle.abs() > 360.0 {
+        return Err(invalid(format!("angle_deg must be between -360 and 360, got {angle}")));
+    }
+    let axis = direction("axis", params.axis)?;
+    let center = params.center_mm.map(DVec3::from_array);
+    match (axis, angle != 0.0) {
+        (None, true) => return Err(invalid("angle_deg needs the axis to turn about, e.g. axis=[0, 0, 1]")),
+        (Some(_), false) => return Err(invalid("axis needs angle_deg, how far to turn")),
+        _ => {}
+    }
+    if center.is_some() && angle == 0.0 {
+        return Err(invalid("center_mm is the rotation axis' point: give it with axis and angle_deg"));
+    }
+    if center.is_some_and(|c| !c.is_finite()) {
+        return Err(invalid("center_mm must be three finite numbers"));
+    }
+    if translation == DVec3::ZERO && angle == 0.0 {
+        return Err(invalid("give translate_mm and / or axis + angle_deg: the motion to try"));
+    }
+    let steps = match params.steps {
+        Some(n) if !(1..=MAX_STEPS).contains(&n) => {
+            return Err(invalid(format!("steps must be 1..{MAX_STEPS}, got {n}")));
+        }
+        Some(n) => n,
+        None => ((angle.abs() / MAX_DEG_PER_STEP).ceil() as u32).clamp(1, MAX_STEPS),
+    };
+    Ok(proto::MoveComponentRequest {
+        component_persist_id: resolve(id)?,
+        translation: Some(to_proto(translation / MM_PER_M)),
+        rotation_axis: Some(to_proto(axis.unwrap_or(DVec3::Z))),
+        rotation_angle: angle.to_radians(),
+        rotation_center: center.map(|c| to_proto(c / MM_PER_M)),
+        steps: steps as i32,
+        restore: params.restore,
+    })
+}
+
+fn vec(v: &Option<proto::Vec3>) -> DVec3 {
+    v.as_ref().map(|v| DVec3::new(v.x, v.y, v.z)).unwrap_or_default()
+}
+
+/// Origin (meters) and rotation (the axes as columns).
+fn frame(origin: &Option<proto::Vec3>, x: &Option<proto::Vec3>, y: &Option<proto::Vec3>, z: &Option<proto::Vec3>) -> (DVec3, DMat3) {
+    (vec(origin), DMat3::from_cols(vec(x), vec(y), vec(z)))
+}
+
+fn info_frame(c: &proto::ComponentInfo) -> (DVec3, DMat3) {
+    frame(&c.origin, &c.x_axis, &c.y_axis, &c.z_axis)
+}
+
+/// The turn taking `from` to `to`: angle in degrees (0..180) and axis.
+fn turn(from: DMat3, to: DMat3) -> (f64, DVec3) {
+    let (axis, angle) = DQuat::from_mat3(&(to * from.transpose())).normalize().to_axis_angle();
+    let (axis, angle) = if angle > std::f64::consts::PI {
+        (-axis, std::f64::consts::TAU - angle)
+    } else {
+        (axis, angle)
+    };
+    (angle.to_degrees(), axis)
+}
+
+/// "origin [..] -> [..] mm (by [..] mm), turned 20.0 deg about [..]".
+fn motion_text(from: (DVec3, DMat3), to: (DVec3, DMat3)) -> String {
+    let point = |p: DVec3| point_mm(&to_proto(p));
+    let mut text = format!(
+        "origin {} -> {} mm (by {} mm, {} mm)",
+        point(from.0),
+        point(to.0),
+        point(to.0 - from.0),
+        mm((to.0 - from.0).length())
+    );
+    let (deg, axis) = turn(from.1, to.1);
+    if deg >= REACHED_DEG {
+        text += &format!(", turned {} deg about {}", round(deg, 2), unit_text(&to_proto(axis)));
+    }
+    text
+}
+
+/// Whether `from` -> `to` is a motion at all: the solver leaves sub-micron
+/// noise on components it didn't really move (seen 2026-10-25).
+fn moves(from: (DVec3, DMat3), to: (DVec3, DMat3)) -> bool {
+    (to.0 - from.0).length() * MM_PER_M >= REACHED_MM || turn(from.1, to.1).0 >= REACHED_DEG
+}
+
+pub fn move_reply_text(ids: &mut IdRegistry, params: &MoveComponentParams, request: &proto::MoveComponentRequest, reply: &proto::MoveComponentResponse) -> String {
+    let (Some(before), Some(after)) = reply.component.as_ref().map(|c| (c.before.as_ref(), c.after.as_ref())).unwrap_or_default() else {
+        return "SolidWorks didn't report the component".into();
+    };
+    let id = ids.id_for(Kind::Component, &after.persist_id).unwrap_or_default();
+    let start = info_frame(before);
+    let reached = info_frame(after);
+    let target = reply.target.as_ref().map(|t| frame(&t.origin, &t.x_axis, &t.y_axis, &t.z_axis)).unwrap_or(start);
+
+    let mut text = if params.restore {
+        format!("Tried moving {} ({id}), then put everything back.", after.name)
+    } else {
+        format!("Moved {} ({id}).", after.name)
+    };
+    text += &format!("\nAsked: {}", motion_text(start, target));
+    if request.rotation_angle != 0.0 {
+        text += &format!(
+            " (axis through {} mm, in {} step{})",
+            point_mm(&reply.rotation_center.clone().unwrap_or_default()),
+            request.steps,
+            if request.steps == 1 { "" } else { "s" }
+        );
+    }
+    text += &format!("\nGot:   {}", motion_text(start, reached));
+
+    // How far it got: off from the target, and how much it moved at all.
+    let off_mm = (target.0 - reached.0).length() * MM_PER_M;
+    let off_deg = turn(reached.1, target.1).0;
+    text += "\nSolver: ";
+    text += &if off_mm < REACHED_MM && off_deg < REACHED_DEG {
+        "reached the requested pose (its mates allow this motion).".to_string()
+    } else if !moves(start, reached) {
+        "it didn't move: its mates don't allow this motion (or the solver wouldn't move what \
+         they tie it to). inspect_model what=\"mates\" shows what holds it."
+            .to_string()
+    } else {
+        format!(
+            "its mates held it back: it ended {} mm and {} deg from the requested pose, having \
+             moved along the directions they leave free.",
+            mm(off_mm / MM_PER_M),
+            round(off_deg, 2)
+        )
+    };
+    if reply.refused_step > 0 {
+        text += &format!(
+            "\nSolidWorks refused step {} of {}; the move stopped there.",
+            reply.refused_step, request.steps
+        );
+    }
+
+    let others: Vec<_> = reply
+        .others
+        .iter()
+        .filter_map(|o| Some((o.before.as_ref()?, o.after.as_ref()?)))
+        .filter(|(b, a)| moves(info_frame(b), info_frame(a)))
+        .collect();
+    if !others.is_empty() {
+        text += "\nAlso moved by their mates:";
+        for (b, a) in &others {
+            let other_id = ids.id_for(Kind::Component, &a.persist_id).unwrap_or_default();
+            text += &format!("\n- {} ({other_id}): {}", a.name, motion_text(info_frame(b), info_frame(a)));
+        }
+    }
+
+    let problems = delete::problems_text(&reply.new_errors);
+    if !problems.is_empty() {
+        text += &format!("\nAfter the move: {}", problems.trim_start());
+        if !params.restore {
+            text += "\nMove it back (the opposite motion), or edit_mate / delete_features the failing mates.";
+        }
+    }
+
+    if params.restore {
+        if reply.restored {
+            text += "\nRestored: every component is back where it started (the poses above are where \
+                     the move took them).";
+        } else {
+            text += &format!(
+                "\nNot back where they started: {} -- they're where the move left them.",
+                reply.not_restored.join(", ")
+            );
+        }
+    } else if moves(start, reached) || !others.is_empty() {
+        text += "\nEarlier inspect_model coordinates of the moved components are out of date (their ids \
+                 still work).";
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -741,5 +971,126 @@ mod tests {
         assert!(text.starts_with("fixed 1 component:\n- component:1: block-1 (fixed)"), "{text}");
         assert!(text.contains("Now failing to rebuild: Distance1"), "{text}");
         assert!(text.contains("float it again"), "{text}");
+    }
+
+    fn move_params(translate: Option<[f64; 3]>, axis: Option<[f64; 3]>, angle: Option<f64>) -> MoveComponentParams {
+        MoveComponentParams {
+            component: "component:1".into(),
+            translate_mm: translate,
+            axis,
+            angle_deg: angle,
+            center_mm: None,
+            steps: None,
+            restore: false,
+        }
+    }
+
+    #[test]
+    fn move_request_checks_the_motion() {
+        let resolve = |id: &str| -> Result<Vec<u8>, McpError> { Ok(id.as_bytes().to_vec()) };
+        assert!(move_request(&move_params(None, None, None), resolve).is_err());
+        assert!(move_request(&move_params(Some([0.0; 3]), None, None), resolve).is_err());
+        assert!(move_request(&move_params(None, None, Some(30.0)), resolve).is_err());
+        assert!(move_request(&move_params(None, Some([0.0, 0.0, 1.0]), None), resolve).is_err());
+        assert!(move_request(&move_params(None, Some([0.0; 3]), Some(30.0)), resolve).is_err());
+        assert!(move_request(&move_params(None, Some([0.0, 0.0, 1.0]), Some(400.0)), resolve).is_err());
+        let mut p = move_params(Some([10.0, 0.0, 0.0]), None, None);
+        p.center_mm = Some([0.0; 3]);
+        assert!(move_request(&p, resolve).is_err(), "center without a rotation");
+        p.center_mm = None;
+        p.component = "face:1".into();
+        assert!(move_request(&p, resolve).is_err());
+        p.component = "component:1".into();
+        p.steps = Some(0);
+        assert!(move_request(&p, resolve).is_err());
+
+        let r = move_request(&move_params(Some([10.0, 0.0, 0.0]), None, None), resolve).unwrap();
+        assert_eq!(r.translation.unwrap().x, 0.01);
+        assert_eq!((r.rotation_angle, r.steps, r.rotation_center), (0.0, 1, None));
+        let mut p = move_params(None, Some([0.0, 0.0, 2.0]), Some(-100.0));
+        p.center_mm = Some([5.0, 0.0, 0.0]);
+        let r = move_request(&p, resolve).unwrap();
+        assert_eq!(r.steps, 7, "one per 15 degrees");
+        assert!((r.rotation_angle + 100f64.to_radians()).abs() < 1e-12);
+        assert_eq!(r.rotation_axis.unwrap().z, 1.0);
+        assert_eq!(r.rotation_center.unwrap().x, 0.005);
+    }
+
+    fn pose(pid: &[u8], name: &str, origin: [f64; 3], turned_deg: f64) -> proto::ComponentInfo {
+        let (s, c) = turned_deg.to_radians().sin_cos();
+        let v = |x, y, z| Some(proto::Vec3 { x, y, z });
+        proto::ComponentInfo {
+            persist_id: pid.to_vec(),
+            name: name.into(),
+            origin: v(origin[0], origin[1], origin[2]),
+            x_axis: v(c, s, 0.0),
+            y_axis: v(-s, c, 0.0),
+            z_axis: v(0.0, 0.0, 1.0),
+            ..Default::default()
+        }
+    }
+
+    fn move_reply(after: proto::ComponentInfo, target: &proto::ComponentInfo) -> proto::MoveComponentResponse {
+        proto::MoveComponentResponse {
+            component: Some(proto::ComponentMove { before: Some(pose(b"s", "slider-1", [0.0, 0.06, 0.0], 0.0)), after: Some(after) }),
+            target: Some(proto::ComponentPlacement {
+                origin: target.origin.clone(),
+                x_axis: target.x_axis.clone(),
+                y_axis: target.y_axis.clone(),
+                z_axis: target.z_axis.clone(),
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn move_text_tells_how_far_it_got() {
+        let resolve = |id: &str| -> Result<Vec<u8>, McpError> { Ok(id.as_bytes().to_vec()) };
+        let mut ids = IdRegistry::default();
+        let params = move_params(Some([10.0, 5.0, 3.0]), None, None);
+        let request = move_request(&params, resolve).unwrap();
+        let target = pose(b"s", "slider-1", [0.01, 0.065, 0.003], 0.0);
+
+        // Held back: only x was free; the follower came along.
+        let mut reply = move_reply(pose(b"s", "slider-1", [0.01, 0.06, 0.0], 0.0), &target);
+        reply.others.push(proto::ComponentMove {
+            before: Some(pose(b"f", "follower-1", [0.0, 0.12, 0.0], 0.0)),
+            after: Some(pose(b"f", "follower-1", [0.01, 0.12, 0.0], 0.0)),
+        });
+        let text = move_reply_text(&mut ids, &params, &request, &reply);
+        assert!(text.starts_with("Moved slider-1 (component:1).\nAsked: origin [0.0,60.0,0.0] -> [10.0,65.0,3.0] mm"), "{text}");
+        assert!(text.contains("\nGot:   origin [0.0,60.0,0.0] -> [10.0,60.0,0.0] mm (by [10.0,0.0,0.0] mm, 10 mm)"), "{text}");
+        assert!(text.contains("held it back: it ended 5.831 mm and 0 deg from"), "{text}");
+        assert!(text.contains("\n- follower-1 (component:2): origin [0.0,120.0,0.0] -> [10.0,120.0,0.0] mm"), "{text}");
+        assert!(text.contains("out of date"), "{text}");
+
+        // Reached.
+        let text = move_reply_text(&mut ids, &params, &request, &move_reply(target.clone(), &target));
+        assert!(text.contains("Solver: reached the requested pose"), "{text}");
+
+        // Didn't move, with restore.
+        let mut params = params;
+        params.restore = true;
+        let mut reply = move_reply(pose(b"s", "slider-1", [0.0, 0.06, 0.0], 0.0), &target);
+        reply.restored = true;
+        reply.others.push(proto::ComponentMove {
+            before: Some(pose(b"f", "follower-1", [0.0, 0.12, 0.0], 0.0)),
+            after: Some(pose(b"f", "follower-1", [1e-9, 0.12, 0.0], 1e-6)),
+        });
+        let text = move_reply_text(&mut ids, &params, &request, &reply);
+        assert!(text.starts_with("Tried moving slider-1 (component:1), then put everything back."), "{text}");
+        assert!(text.contains("Solver: it didn't move"), "{text}");
+        assert!(text.contains("Restored: every component is back") && !text.contains("out of date"), "{text}");
+        assert!(!text.contains("Also moved"), "solver noise isn't a move: {text}");
+
+        // A turn: reported in degrees about the axis.
+        let params = move_params(None, Some([0.0, 0.0, 1.0]), Some(30.0));
+        let request = move_request(&params, resolve).unwrap();
+        let turned = pose(b"s", "slider-1", [0.0, 0.06, 0.0], 30.0);
+        let mut reply = move_reply(turned.clone(), &turned);
+        reply.new_errors.push(proto::FeatureProblem { name: "Angle1".into(), type_name: "MateAngleDim".into(), error_code: 46, warning: false });
+        let text = move_reply_text(&mut ids, &params, &request, &reply);
+        assert!(text.contains("turned 30 deg about [0.0,0.0,1.0] (axis through [0.0,0.0,0.0] mm, in 2 steps)"), "{text}");
+        assert!(text.contains("Now failing to rebuild: Angle1") && text.contains("Move it back"), "{text}");
     }
 }

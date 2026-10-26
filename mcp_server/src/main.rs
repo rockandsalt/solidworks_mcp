@@ -3125,6 +3125,24 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "Move a component of the active assembly while SolidWorks solves its mates, like dragging it: give `translate_mm` (assembly millimeters) and / or a turn (`axis` direction + `angle_deg`, about an axis through `center_mm`, default the component's bounding-box center; the turn happens first). The component goes as far as its mates let it -- the parts of the motion they forbid are dropped -- and components mated to it may follow. The reply gives the requested and the actual pose (origin and turn), the solver's outcome (reached the requested pose / held back by its mates, and how far off / didn't move at all), the other components that moved, and mates that now fail. `restore`=true puts every component back afterwards, to check whether the mates allow a motion (\"does the slider reach 50 mm?\", \"can this lever turn 90 degrees?\") without changing the assembly. Long turns go to the solver in steps (default one per 15 degrees, `steps` to change) so linkages follow the motion. The component must float: fixed ones are refused (fix_components fixed=false first), and so are components inside a subassembly (move the whole subassembly). Requires an open assembly with no sketch being edited."
+    )]
+    async fn move_component(
+        &self,
+        Parameters(params): Parameters<component::MoveComponentParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = component::move_request(&params, |id| self.resolve_id(id))?;
+        let reply = self
+            .addin
+            .move_component(request.clone())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let text = component::move_reply_text(&mut ids, &params, &request, &reply);
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
         description = "Check an assembly for interference, like SolidWorks' Interference \
                        Detection: which components' solids overlap, by how much (volume in \
                        mm³) and where (the box around each overlap, assembly mm), biggest \

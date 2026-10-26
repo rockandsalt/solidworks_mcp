@@ -323,6 +323,15 @@ impl AddinClient {
         Ok(client.fix_components(request).await?.into_inner())
     }
 
+    /// Moves a component while SolidWorks solves its mates; meters / radians.
+    pub async fn move_component(
+        &self,
+        request: proto::MoveComponentRequest,
+    ) -> Result<proto::MoveComponentResponse, tonic::Status> {
+        let mut client = self.client.clone();
+        Ok(client.move_component(request).await?.into_inner())
+    }
+
     /// Where the components of the active assembly (or a drawing view's)
     /// overlap; meters.
     pub async fn check_interference(

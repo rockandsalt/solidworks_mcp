@@ -1,5 +1,5 @@
-// Components.cpp : InsertComponents, ReplaceComponents, FixComponents (see
-// docs/notes/architecture.md, "Assemblies + mates").
+// Components.cpp : InsertComponents, ReplaceComponents, FixComponents,
+// MoveComponent (see docs/notes/architecture.md, "Assemblies + mates").
 #include "pch.h"
 #include "Common.h"
 #include "AssemblyHelpers.h"
@@ -65,6 +65,64 @@ namespace
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
 			ToUtf8(path) + " has no configuration \"" + ToUtf8(configuration) + "\"" +
 			(list.empty() ? std::string() : " -- it has " + list));
+	}
+
+	Eigen::Vector3d ToVector(const sld_mcp::v1::Vec3& v)
+	{
+		return Eigen::Vector3d(v.x(), v.y(), v.z());
+	}
+
+	// A placement as a transform SetTransformAndSolve2 / put_Transform2
+	// take, in AddComponents3's layout (Transform2 reads back the same, seen
+	// 2026-10-25).
+	ATL::CComPtr<IMathTransform> ToMathTransform(IMathUtility* math, const sld_mcp::v1::ComponentPlacement& p)
+	{
+		std::vector<double> data;
+		AppendTransform(p, data);
+		ATL::CComPtr<IDispatch> disp;
+		if (FAILED(math->CreateTransform(comvariant::FromDoubles(data.data(), data.size()), &disp)) || !disp)
+			return nullptr;
+		ATL::CComQIPtr<IMathTransform> xform(disp.p);
+		return ATL::CComPtr<IMathTransform>(xform);
+	}
+
+	void SetPlacement(const Eigen::Affine3d& placement, sld_mcp::v1::ComponentPlacement* out)
+	{
+		SetVec3(out->mutable_origin(), Eigen::Vector3d(placement.translation()));
+		SetVec3(out->mutable_x_axis(), Eigen::Vector3d(placement.linear().col(0)));
+		SetVec3(out->mutable_y_axis(), Eigen::Vector3d(placement.linear().col(1)));
+		SetVec3(out->mutable_z_axis(), Eigen::Vector3d(placement.linear().col(2)));
+	}
+
+	// A component's transform and its raw numbers, to tell whether it moved
+	// and to put it back.
+	struct SavedPose
+	{
+		ATL::CComPtr<IComponent2> component;
+		ATL::CComPtr<IMathTransform> xform;
+		std::vector<double> data;
+	};
+
+	bool ReadPose(IComponent2* component, SavedPose& out)
+	{
+		out.component = component;
+		out.xform.Release();
+		ATL::CComVariant data;
+		if (FAILED(component->get_Transform2(&out.xform)) || !out.xform || FAILED(out.xform->get_ArrayData(&data)))
+			return false;
+		out.data = comvariant::ToDoubles(data);
+		return true;
+	}
+
+	// Same place to within `tolerance` (meters; the axes' numbers are unit).
+	bool SamePose(const std::vector<double>& a, const std::vector<double>& b, double tolerance)
+	{
+		if (a.size() != b.size())
+			return false;
+		for (size_t i = 0; i < a.size(); ++i)
+			if (std::abs(a[i] - b[i]) > tolerance)
+				return false;
+		return true;
 	}
 
 	// Deletes components again (all or nothing). Best effort.
@@ -546,5 +604,173 @@ grpc::Status SolidWorksService::FixComponents(grpc::ServerContext* /*context*/,
 
 	for (size_t i = 0; i < components.size(); ++i)
 		DescribeComponent(components[i], ids, math, response->mutable_components(static_cast<int>(i))->mutable_after());
+	return grpc::Status::OK;
+}
+
+grpc::Status SolidWorksService::MoveComponent(grpc::ServerContext* /*context*/,
+	const sld_mcp::v1::MoveComponentRequest* request,
+	sld_mcp::v1::MoveComponentResponse* response)
+{
+	constexpr int kMaxSteps = 360;
+	if (!IsFinite(request->translation()) || !IsFinite(request->rotation_axis()) ||
+		!std::isfinite(request->rotation_angle()) || !IsFinite(request->rotation_center()))
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "the move isn't finite numbers");
+	const Eigen::Vector3d translation = ToVector(request->translation());
+	const double angle = request->rotation_angle();
+	Eigen::Vector3d axis = ToVector(request->rotation_axis());
+	if (angle != 0.0)
+	{
+		if (axis.norm() < 1e-9)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a rotation needs an axis");
+		axis.normalize();
+	}
+	if (translation.isZero(0.0) && angle == 0.0)
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give a translation or a rotation");
+	if (request->steps() < 1 || request->steps() > kMaxSteps)
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+			"steps must be 1.." + std::to_string(kMaxSteps));
+
+	std::lock_guard<std::mutex> lock(m_editMutex);
+	ComApartment com;
+	if (!com.Ok())
+		return ComApartmentError();
+
+	ATL::CComPtr<ISldWorks> swApp;
+	if (grpc::Status status = GetSwApp(swApp); !status.ok())
+		return status;
+
+	ATL::CComPtr<IModelDoc2> doc;
+	if (grpc::Status status = GetEditableAssembly(swApp, doc); !status.ok())
+		return status;
+	ATL::CComQIPtr<IAssemblyDoc> assembly(doc.p);
+	if (!assembly)
+		return grpc::Status(grpc::StatusCode::INTERNAL, "active assembly has no IAssemblyDoc interface");
+	ATL::CComPtr<IModelDocExtension> ext;
+	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+		return status;
+	ATL::CComQIPtr<IMathUtility> math;
+	if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
+		return status;
+	PersistIds ids(ext);
+
+	ATL::CComPtr<IDispatch> obj;
+	if (grpc::Status status = ResolvePersistId(ext, request->component_persist_id(), obj); !status.ok())
+		return status;
+	ATL::CComQIPtr<IComponent2> component(obj.p);
+	if (!component)
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "that isn't a component");
+	const std::string name = ComponentName(component);
+	if (ATL::CComPtr<IComponent2> parent = ParentOf(component))
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+			"\"" + name + "\" is inside the subassembly \"" + ComponentName(parent) +
+			"\" -- move the whole subassembly, or open its file (open_document) and move it there");
+	if (IsSuppressed(component))
+		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "\"" + name + "\" is suppressed");
+	// SetTransformAndSolve2 moves a fixed component too, and whatever is
+	// locked to it (seen 2026-10-25).
+	VARIANT_BOOL fixed = VARIANT_FALSE;
+	component->IsFixed(&fixed);
+	if (fixed)
+		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+			"\"" + name + "\" is fixed -- float it first (fix_components with fixed=false), or move what is "
+			"mated to it instead");
+
+	SavedPose start;
+	Eigen::Affine3d startPlacement;
+	if (!ReadPose(component, start) || !PlacementOf(math, start.xform, startPlacement))
+		return grpc::Status(grpc::StatusCode::INTERNAL, "couldn't read where \"" + name + "\" is");
+	Eigen::Vector3d center = startPlacement.translation();
+	if (request->has_rotation_center())
+		center = ToVector(request->rotation_center());
+	else
+	{
+		ATL::CComVariant boxVar;
+		if (SUCCEEDED(component->GetBox(VARIANT_FALSE, VARIANT_FALSE, &boxVar)))
+			if (const Eigen::AlignedBox3d box = ToAlignedBox(comvariant::ToDoubles(boxVar)); !box.isEmpty())
+				center = box.center();
+	}
+	SetVec3(response->mutable_rotation_center(), center);
+	DescribeComponent(component, ids, math, response->mutable_component()->mutable_before());
+
+	// Every top-level component where it is: who the solve moved, and what
+	// to put back.
+	std::vector<SavedPose> saved;
+	for (const auto& c : AllComponents(assembly))
+	{
+		if (ParentOf(c))
+			continue;
+		SavedPose pose;
+		if (ReadPose(c, pose))
+			saved.push_back(std::move(pose));
+	}
+	const auto errorsBefore = FeatureErrors(FeatureTree(doc));
+
+	// Each step's target is the starting pose moved by that fraction of the
+	// motion: turned about the center, then translated.
+	auto motion = [&](double s) {
+		Eigen::Affine3d m = Eigen::Affine3d::Identity();
+		m.translate(s * translation);
+		if (angle != 0.0)
+			m.translate(center).rotate(Eigen::AngleAxisd(s * angle, axis)).translate(-center);
+		return m;
+	};
+	PreferenceToggles toggles(swApp);
+	toggles.Set(swShowErrorsEveryRebuild, false);
+	const int steps = request->steps();
+	for (int k = 1; k <= steps; ++k)
+	{
+		sld_mcp::v1::ComponentPlacement target;
+		SetPlacement(motion(static_cast<double>(k) / steps) * startPlacement, &target);
+		ATL::CComPtr<IMathTransform> xform = ToMathTransform(math, target);
+		if (!xform)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "IMathUtility::CreateTransform failed");
+		VARIANT_BOOL ok = VARIANT_FALSE;
+		HRESULT hr = component->SetTransformAndSolve2(xform, &ok);
+		if (FAILED(hr))
+			return ComError("IComponent2::SetTransformAndSolve2", hr);
+		if (!ok)
+		{
+			response->set_refused_step(k);
+			break;
+		}
+	}
+	SetPlacement(motion(1.0) * startPlacement, response->mutable_target());
+	VARIANT_BOOL rebuilt = VARIANT_FALSE;
+	doc->EditRebuild3(&rebuilt);
+	AddNewErrors(errorsBefore, FeatureErrors(FeatureTree(doc)), response->mutable_new_errors());
+
+	DescribeComponent(component, ids, math, response->mutable_component()->mutable_after());
+	std::vector<const SavedPose*> moved;
+	for (const auto& pose : saved)
+	{
+		SavedPose now;
+		if (!ReadPose(pose.component, now) || SamePose(now.data, pose.data, 1e-9))
+			continue;
+		moved.push_back(&pose);
+		if (SameObject(pose.component, component))
+			continue;
+		sld_mcp::v1::ComponentMove* out = response->add_others();
+		DescribeComponent(pose.component, ids, math, out->mutable_after());
+		Eigen::Affine3d before;
+		out->mutable_before()->set_persist_id(out->after().persist_id());
+		out->mutable_before()->set_name(out->after().name());
+		if (PlacementOf(math, pose.xform, before))
+			SetPlacement(before, out->mutable_before());
+	}
+
+	if (request->restore())
+	{
+		for (const SavedPose* pose : moved)
+			pose->component->put_Transform2(pose->xform);
+		doc->EditRebuild3(&rebuilt);
+		for (const auto& pose : saved)
+		{
+			SavedPose now;
+			if (!ReadPose(pose.component, now) || !SamePose(now.data, pose.data, 1e-9))
+				response->add_not_restored(ComponentName(pose.component));
+		}
+		response->set_restored(response->not_restored_size() == 0);
+	}
+	doc->GraphicsRedraw2();
 	return grpc::Status::OK;
 }

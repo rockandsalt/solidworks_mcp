@@ -228,6 +228,20 @@ service SolidWorks {
   // select (suppressed).
   rpc FixComponents(FixComponentsRequest) returns (FixComponentsResponse);
 
+  // Moves a component of the active assembly toward a new pose while
+  // SolidWorks solves its mates (IComponent2::SetTransformAndSolve2, in
+  // `steps` equal parts of the motion): it goes as far as its mates let it,
+  // and components mated to it may follow. Then rebuilds and reports where
+  // everything ended up, or with `restore` puts every top-level component
+  // back where it was (the reply still says where the move took them).
+  // SetTransformAndSolve2 says nothing about the solve (it returned true
+  // even when the mates kept the component in place), so how far it got is
+  // read off the poses. Fails with INVALID_ARGUMENT for a component inside a
+  // subassembly, FAILED_PRECONDITION for a fixed one (SetTransformAndSolve2
+  // would move it anyway, and what is locked to it) or a suppressed one, and
+  // as AddMate.
+  rpc MoveComponent(MoveComponentRequest) returns (MoveComponentResponse);
+
   // Read-only: where the solid bodies of an assembly's components overlap,
   // as SolidWorks' Interference Detection finds them
   // (IAssemblyDoc::InterferenceDetectionManager), with every component
@@ -1339,6 +1353,53 @@ message FixComponentsResponse {
   // Features (mates, mostly) whose rebuild error is new or different
   // since the change.
   repeated FeatureProblem new_errors = 2;
+}
+
+// The motion is: turn by rotation_angle about rotation_axis through
+// rotation_center, then translate. Assembly space, meters / radians.
+message MoveComponentRequest {
+  bytes component_persist_id = 1;
+  Vec3 translation = 2;
+  // Unit; ignored when rotation_angle is 0.
+  Vec3 rotation_axis = 3;
+  double rotation_angle = 4;  // right-hand rule about rotation_axis
+  // Unset: the center of the component's box.
+  Vec3 rotation_center = 5;
+  // The motion is handed to the solver in this many equal parts (each
+  // one's target taken from the starting pose), so a long turn follows its
+  // path rather than jumping to another solution. 1..360.
+  int32 steps = 6;
+  // Afterwards, put every top-level component back where it was.
+  bool restore = 7;
+}
+
+message ComponentMove {
+  // For components other than the moved one: only the placement fields
+  // (origin, axes) are set.
+  ComponentInfo before = 1;
+  ComponentInfo after = 2;
+}
+
+message MoveComponentResponse {
+  // The moved component: before, and where the solve left it (before any
+  // restore).
+  ComponentMove component = 1;
+  // Where the motion asked it to go.
+  ComponentPlacement target = 2;
+  Vec3 rotation_center = 3;  // the one used
+  // Other top-level components the solve moved (mated to it), in assembly
+  // order.
+  repeated ComponentMove others = 4;
+  // Features (mates, mostly) whose rebuild error is new or different since
+  // the move, before any restore.
+  repeated FeatureProblem new_errors = 5;
+  // First step (1-based) SetTransformAndSolve2 returned false for; the
+  // move stopped there. 0 = none did.
+  int32 refused_step = 6;
+  // restore: every top-level component back within 1e-9 m; else the names
+  // of the ones that aren't.
+  bool restored = 7;
+  repeated string not_restored = 8;
 }
 
 message CheckInterferenceRequest {

@@ -34,6 +34,13 @@ namespace sld_mcp::service
 	// A component's solid and surface bodies.
 	std::vector<ATL::CComPtr<IBody2>> ComponentBodies(IComponent2* component);
 
+	// A component transform (IComponent2::Transform2) as component ->
+	// assembly, read through where it puts the origin and unit axes.
+	bool PlacementOf(IMathUtility* math, IMathTransform* xform, Eigen::Affine3d& out);
+
+	// Sets origin and axes of `info` from a component -> assembly placement.
+	void SetPlacement(const Eigen::Affine3d& placement, sld_mcp::v1::ComponentInfo* info);
+
 	// Fills the placement fields of `info` (origin + axes in assembly space)
 	// and decides `local_geometry`: whether the bodies' own boxes are in
 	// component coordinates. That's what the SolidWorks docs imply, but it's

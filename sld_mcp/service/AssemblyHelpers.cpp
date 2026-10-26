@@ -91,13 +91,8 @@ namespace sld_mcp::service
 		return out;
 	}
 
-	void DescribePlacement(IComponent2* component, IMathUtility* math, sld_mcp::v1::ComponentInfo* info)
+	bool PlacementOf(IMathUtility* math, IMathTransform* xform, Eigen::Affine3d& out)
 	{
-		info->set_local_geometry(true);
-		ATL::CComPtr<IMathTransform> xform;
-		if (FAILED(component->get_Transform2(&xform)) || !xform)
-			return;
-
 		// Where the component's origin and unit axes land pins down its
 		// component -> assembly transform, whatever IMathTransform's internal
 		// layout is.
@@ -106,16 +101,32 @@ namespace sld_mcp::service
 		Eigen::Vector3d placed[4];
 		for (int i = 0; i < 4; ++i)
 			if (!TransformPoint(math, xform, unit[i], placed[i]))
-				return;
-		Eigen::Affine3d placement = Eigen::Affine3d::Identity();
-		placement.translation() = placed[0];
+				return false;
+		out = Eigen::Affine3d::Identity();
+		out.translation() = placed[0];
 		for (int a = 0; a < 3; ++a)
-			placement.linear().col(a) = placed[a + 1] - placed[0];
+			out.linear().col(a) = placed[a + 1] - placed[0];
+		return true;
+	}
 
+	void SetPlacement(const Eigen::Affine3d& placement, sld_mcp::v1::ComponentInfo* info)
+	{
 		SetVec3(info->mutable_origin(), Eigen::Vector3d(placement.translation()));
 		SetVec3(info->mutable_x_axis(), Eigen::Vector3d(placement.linear().col(0)));
 		SetVec3(info->mutable_y_axis(), Eigen::Vector3d(placement.linear().col(1)));
 		SetVec3(info->mutable_z_axis(), Eigen::Vector3d(placement.linear().col(2)));
+	}
+
+	void DescribePlacement(IComponent2* component, IMathUtility* math, sld_mcp::v1::ComponentInfo* info)
+	{
+		info->set_local_geometry(true);
+		ATL::CComPtr<IMathTransform> xform;
+		if (FAILED(component->get_Transform2(&xform)) || !xform)
+			return;
+		Eigen::Affine3d placement;
+		if (!PlacementOf(math, xform, placement))
+			return;
+		SetPlacement(placement, info);
 
 		// Assembly-space box of the component vs. its bodies' own boxes.
 		ATL::CComVariant assemblyBoxVar;
