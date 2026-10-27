@@ -174,89 +174,577 @@ namespace
 		spec->set_thread_diameter(read(&IWizardHoleFeatureData2::get_ThreadDiameter));
 		spec->set_thread_depth(read(&IWizardHoleFeatureData2::get_ThreadDepth));
 	}
+
+	using HoleRequest = sld_mcp::v1::HoleWizardRequest;
+	using Point3 = std::array<double, 3>;
+	// Sketch points by ISketchPoint::GetID.
+	using PointIds = std::set<std::pair<long long, long long>>;
+
+	grpc::Status Invalid(const std::string& why)
+	{
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, why);
+	}
+
+	// Checks the request before anything touches SolidWorks. `genericType` =
+	// the swWzdGeneralHoleTypes_e of its kind.
+	grpc::Status ValidateHoleRequest(const HoleRequest& request, long& genericType)
+	{
+		switch (request.kind())
+		{
+		case sld_mcp::v1::HOLE_KIND_HOLE:        genericType = swWzdHole; break;
+		case sld_mcp::v1::HOLE_KIND_COUNTERBORE: genericType = swWzdCounterBore; break;
+		case sld_mcp::v1::HOLE_KIND_COUNTERSINK: genericType = swWzdCounterSink; break;
+		case sld_mcp::v1::HOLE_KIND_TAP:         genericType = swWzdTap; break;
+		default: return Invalid("kind must be HOLE, COUNTERBORE, COUNTERSINK or TAP");
+		}
+		const bool fromSketch = !request.sketch_name().empty();
+		if (fromSketch && (!request.face_persist_id().empty() || !request.locations().empty()))
+			return Invalid("give either a sketch of hole points or a face (with locations), not both");
+		if (!fromSketch && request.face_persist_id().empty())
+			return Invalid("give a sketch of hole points, or the face to put the holes on");
+		if (request.size().empty())
+			return Invalid("give the hole size, e.g. \"M5\"");
+		if (request.locations_size() > kMaxHoleLocations)
+			return Invalid("too many hole locations in one call (max " + std::to_string(kMaxHoleLocations) + ")");
+		for (const auto& location : request.locations())
+			if (!IsFinite(location))
+				return Invalid("hole locations must be finite");
+		if (!request.through_all() && !(std::isfinite(request.depth()) && request.depth() > 0.0))
+			return Invalid("depth must be positive (or set through_all)");
+		for (const auto& [has, value] : {
+				std::pair{request.has_diameter(), request.diameter()},
+				std::pair{request.has_counterbore_diameter(), request.counterbore_diameter()},
+				std::pair{request.has_counterbore_depth(), request.counterbore_depth()},
+				std::pair{request.has_countersink_diameter(), request.countersink_diameter()},
+				std::pair{request.has_thread_depth(), request.thread_depth()}})
+			if (has && !(std::isfinite(value) && value > 0.0))
+				return Invalid("hole dimensions must be positive");
+		if (request.has_countersink_angle() &&
+			!(std::isfinite(request.countersink_angle()) && request.countersink_angle() > 0.0 &&
+				request.countersink_angle() < 3.14159265358979))
+			return Invalid("the countersink angle must be between 0 and 180 degrees");
+		return grpc::Status::OK;
+	}
+
+	// An optional size, or -1 = "use the standard's value".
+	double OrStandard(bool has, double value)
+	{
+		return has ? value : -1.0;
+	}
+
+	// Value1..Value12 of HoleWizard5, which mean different things per hole
+	// type; -1 = "use the standard's value".
+	std::array<double, 12> WizardValues(const HoleRequest& request, long genericType)
+	{
+		double fit = -1.0;
+		switch (request.fit())
+		{
+		case sld_mcp::v1::SCREW_FIT_CLOSE:  fit = swScrewClearanceClose; break;
+		case sld_mcp::v1::SCREW_FIT_NORMAL: fit = swScrewClearanceNormal; break;
+		case sld_mcp::v1::SCREW_FIT_LOOSE:  fit = swScrewClearanceLoose; break;
+		default: break;
+		}
+		std::array<double, 12> values;
+		values.fill(-1.0);
+		switch (genericType)
+		{
+		case swWzdCounterBore:
+			// C-bore diameter, c-bore depth, head clearance, screw fit, ...
+			values[0] = OrStandard(request.has_counterbore_diameter(), request.counterbore_diameter());
+			values[1] = OrStandard(request.has_counterbore_depth(), request.counterbore_depth());
+			values[3] = fit;
+			break;
+		case swWzdCounterSink:
+			// C-sink diameter, c-sink angle, head clearance, screw fit, ...
+			values[0] = OrStandard(request.has_countersink_diameter(), request.countersink_diameter());
+			values[1] = OrStandard(request.has_countersink_angle(), request.countersink_angle());
+			values[3] = fit;
+			break;
+		case swWzdHole:
+			// Screw fit, drill angle, ...
+			values[0] = fit;
+			break;
+		case swWzdTap:
+			// Thread depth, near/far c-sink diameter/angle, drill angle, cosmetic
+			// thread type, thread end condition, ...
+			values[0] = OrStandard(request.has_thread_depth(), request.thread_depth());
+			values[6] = request.cosmetic_thread() ? static_cast<double>(swCosmeticThreadWithCallout) : -1.0;
+			break;
+		}
+		return values;
+	}
+
+	// HoleWizard5 with the requested hole, which puts holes wherever the
+	// current selection says.
+	class HoleWizardCall
+	{
+	public:
+		HoleWizardCall(IFeatureManager* featureManager, const HoleRequest& request, long genericType)
+			: m_featureManager(featureManager), m_request(request), m_genericType(genericType),
+			  m_values(WizardValues(request, genericType)), m_size(FromUtf8(request.size()))
+		{
+		}
+
+		HRESULT Run(ATL::CComPtr<IFeature>& hole) const
+		{
+			hole.Release();
+			const bool throughAll = m_request.through_all();
+			const ATL::CComBSTR threadClass(L"");
+			const std::array<double, 12>& v = m_values;
+			return m_featureManager->HoleWizard5(
+				m_genericType,
+				m_request.standard(),
+				m_request.fastener_type(),
+				m_size,
+				static_cast<short>(throughAll ? swEndCondThroughAll : swEndCondBlind),
+				OrStandard(m_request.has_diameter(), m_request.diameter()),
+				throughAll ? -1.0 : m_request.depth(),
+				-1.0,               // Length: slots only
+				v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11],
+				threadClass,        // ANSI inch thread class; empty = default
+				m_request.reverse_direction() ? VARIANT_TRUE : VARIANT_FALSE,
+				VARIANT_TRUE,       // FeatureScope
+				VARIANT_TRUE,       // AutoSelect: all bodies
+				VARIANT_FALSE,      // AssemblyFeatureScope (assemblies only)
+				VARIANT_FALSE,      // AutoSelectComponents
+				VARIANT_FALSE,      // PropagateFeatureToParts
+				&hole);
+		}
+
+		// What to check when SolidWorks makes no hole.
+		std::string BadHoleHint() const
+		{
+			return "check that size \"" + m_request.size() + "\" exists for that standard and fastener type "
+				"(written as the Hole Wizard lists it, e.g. \"M5\" or \"#10\"), and that the holes go into "
+				"material (try reverse_direction)";
+		}
+
+	private:
+		IFeatureManager* m_featureManager;
+		const HoleRequest& m_request;
+		long m_genericType;
+		std::array<double, 12> m_values;
+		ATL::CComBSTR m_size;
+	};
+
+	// What the Hole Wizard built.
+	struct HoleResult
+	{
+		ATL::CComPtr<IFeature> hole;
+		ATL::CComPtr<IFeature> placementFeature;
+		ATL::CComPtr<ISketch> placement;
+		// Points of the placement sketch that aren't hole centers (ends and
+		// centers of construction geometry in a user's sketch).
+		PointIds notCenters;
+	};
+
+	// ---- Holes at the points of the user's sketch ------------------------------
+
+	bool UsedByFeature(IFeature* sketchFeature)
+	{
+		long children = 0;
+		return SUCCEEDED(sketchFeature->IGetChildCount(&children)) && children > 0;
+	}
+
+	// The points of a user's sketch that are hole centers. Holes go at sketch
+	// points, so the sketch may only hold points and construction geometry,
+	// whose end/center points aren't holes (they go into `notCenters`).
+	grpc::Status HoleCentersOf(ISketch* sketch, const std::string& name,
+		std::vector<ATL::CComPtr<ISketchPoint>>& centers, PointIds& notCenters)
+	{
+		ATL::CComVariant segments;
+		const HRESULT hr = sketch->GetSketchSegments(&segments);
+		if (FAILED(hr))
+			return ComError("ISketch::GetSketchSegments", hr);
+		for (const auto& segment : comvariant::ToDispatches(segments))
+		{
+			sld_mcp::v1::SketchItem item;
+			if (!segment || !DescribeSketchItem(segment, std::string(), &item))
+				continue;
+			if (!item.construction())
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+					"\"" + name + "\" has " + (item.name().empty() ? std::string("a segment") : item.name()) +
+					", which isn't construction geometry -- a hole-point sketch should hold only sketch points "
+					"(plus construction lines for reference)");
+			for (const auto* ref : {&item.start_point(), &item.end_point(), &item.center_point()})
+				if (ref->id0() || ref->id1())
+					notCenters.emplace(ref->id0(), ref->id1());
+		}
+		for (const auto& point : SketchPoints(sketch))
+		{
+			bool isPoint = false;
+			long long id0 = 0, id1 = 0;
+			ATL::CComQIPtr<ISketchPoint> sketchPoint(point.p);
+			if (sketchPoint && SketchEntityId(point, isPoint, id0, id1) && !notCenters.count({id0, id1}))
+				centers.push_back(sketchPoint);
+		}
+		if (centers.empty())
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"\"" + name + "\" has no sketch points to put holes at -- add them with sketch_point");
+		if (centers.size() > static_cast<size_t>(kMaxHoleLocations))
+			return Invalid("too many hole points in one sketch (max " + std::to_string(kMaxHoleLocations) + ")");
+		return grpc::Status::OK;
+	}
+
+	// Runs the wizard with the sketch preselected, like in the UI. Tried two
+	// ways: the sketch feature, then its points. Either only counts if the new
+	// feature absorbed the sketch; otherwise the hole is deleted again and
+	// `hole` stays null.
+	HRESULT RunWizardOnSketch(IModelDoc2* doc, IModelDocExtension* ext, const HoleWizardCall& wizard,
+		IFeature* sketchFeature, const std::vector<ATL::CComPtr<ISketchPoint>>& centers,
+		ATL::CComPtr<IFeature>& hole)
+	{
+		for (int attempt = 0; attempt < 2 && !hole; ++attempt)
+		{
+			doc->ClearSelection2(VARIANT_TRUE);
+			bool selected = true;
+			if (attempt == 0)
+			{
+				VARIANT_BOOL ok = VARIANT_FALSE;
+				selected = SUCCEEDED(sketchFeature->Select2(VARIANT_FALSE, 0, &ok)) && ok;
+			}
+			else
+				for (size_t i = 0; i < centers.size() && selected; ++i)
+				{
+					VARIANT_BOOL ok = VARIANT_FALSE;
+					selected = SUCCEEDED(centers[i]->Select4(i > 0 ? VARIANT_TRUE : VARIANT_FALSE, nullptr, &ok)) && ok;
+				}
+			if (!selected)
+				continue;
+			const HRESULT hr = wizard.Run(hole);
+			doc->ClearSelection2(VARIANT_TRUE);
+			if (FAILED(hr))
+				return hr;
+			if (hole && !UsedByFeature(sketchFeature))
+			{
+				// Holes went somewhere else: not what was asked.
+				DeleteFeatureAndSketches(doc, ext, hole);
+				hole.Release();
+			}
+		}
+		return S_OK;
+	}
+
+	// The user's own sketch of (dimensioned) points becomes the hole feature's
+	// placement sketch, so its dimensions keep driving the holes.
+	grpc::Status HolesFromSketch(IModelDoc2* doc, IModelDocExtension* ext, const HoleWizardCall& wizard,
+		const std::string& sketchName, HoleResult& result)
+	{
+		ATL::CComPtr<IFeature> sketchFeature;
+		if (grpc::Status status = FindSketchByName(doc, sketchName, sketchFeature); !status.ok())
+			return status;
+		const std::string name = FeatureName(sketchFeature);
+		if (UsedByFeature(sketchFeature))
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"\"" + name + "\" is already used by a feature -- put the hole points in a sketch of their own");
+		ATL::CComPtr<ISketch> sketch;
+		if (grpc::Status status = SketchOf(sketchFeature, sketch); !status.ok())
+			return status;
+
+		std::vector<ATL::CComPtr<ISketchPoint>> centers;
+		if (grpc::Status status = HoleCentersOf(sketch, name, centers, result.notCenters); !status.ok())
+			return status;
+		if (const HRESULT hr = RunWizardOnSketch(doc, ext, wizard, sketchFeature, centers, result.hole); FAILED(hr))
+			return ComError("IFeatureManager::HoleWizard5", hr);
+		if (!result.hole)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"SolidWorks couldn't put holes at the points of \"" + name + "\" -- " + wizard.BadHoleHint() +
+				". The sketch must be on a planar face or plane; or give the face and locations instead");
+		result.placementFeature = sketchFeature;
+		return SketchOf(result.placementFeature, result.placement);
+	}
+
+	// ---- Holes at locations on a face -------------------------------------------
+
+	// Selects a planar face at a point with a short ray straight down onto it,
+	// starting outside the material. Selecting the face at a location is what
+	// tells the Hole Wizard to put a hole there; one selection per hole.
+	class FaceRays
+	{
+	public:
+		FaceRays(IModelDoc2* doc, IModelDocExtension* ext, ISelectionMgr* selections, const FacePlane& plane)
+			: m_doc(doc), m_ext(ext), m_selections(selections), m_plane(plane)
+		{
+		}
+
+		bool SelectAt(const Point3& p, bool append) const
+		{
+			const double* n = m_plane.normal;
+			VARIANT_BOOL selected = VARIANT_FALSE;
+			const HRESULT hr = m_ext->SelectByRay(
+				p[0] + n[0] * kHoleRayLift, p[1] + n[1] * kHoleRayLift, p[2] + n[2] * kHoleRayLift,
+				-n[0], -n[1], -n[2], kHoleRayRadius, swSelFACES, append ? VARIANT_TRUE : VARIANT_FALSE, 0,
+				swSelectOptionDefault, &selected);
+			return SUCCEEDED(hr) && selected;
+		}
+
+		// Selects the first `n` points; returns how many selections stuck.
+		size_t SelectFirst(const std::vector<Point3>& points, size_t n) const
+		{
+			m_doc->ClearSelection2(VARIANT_TRUE);
+			for (size_t i = 0; i < n; ++i)
+				if (!SelectAt(points[i], i > 0))
+					break;
+			return static_cast<size_t>(SelectedCount());
+		}
+
+		// What a ray at `p` selects; null unless it's exactly one thing.
+		ATL::CComPtr<IDispatch> HitAt(const Point3& p) const
+		{
+			m_doc->ClearSelection2(VARIANT_TRUE);
+			ATL::CComPtr<IDispatch> hit;
+			if (SelectAt(p, false) && SelectedCount() == 1)
+				m_selections->GetSelectedObject6(1, -1, &hit);
+			return hit;
+		}
+
+	private:
+		long SelectedCount() const
+		{
+			long count = 0;
+			m_selections->GetSelectedObjectCount2(-1, &count);
+			return count;
+		}
+
+		IModelDoc2* m_doc;
+		IModelDocExtension* m_ext;
+		ISelectionMgr* m_selections;
+		FacePlane m_plane;
+	};
+
+	// Where on the face the holes go, projected onto its plane: the requested
+	// locations, or else the center of the face's box.
+	grpc::Status HoleLocations(IFace2* face, const FacePlane& plane, const HoleRequest& request,
+		std::vector<Point3>& points)
+	{
+		for (const auto& location : request.locations())
+		{
+			const double p[3] = {location.x(), location.y(), location.z()};
+			points.push_back(ProjectOntoPlane(plane, p));
+		}
+		if (!points.empty())
+			return grpc::Status::OK;
+
+		ATL::CComVariant box;
+		const HRESULT hr = face->GetBox(&box);
+		if (FAILED(hr))
+			return ComError("IFace2::GetBox", hr);
+		const std::vector<double> b = comvariant::ToDoubles(box);
+		if (b.size() < 6)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no box for the face");
+		const double center[3] = {(b[0] + b[3]) / 2.0, (b[1] + b[4]) / 2.0, (b[2] + b[5]) / 2.0};
+		points.push_back(ProjectOntoPlane(plane, center));
+		return grpc::Status::OK;
+	}
+
+	// Checks, before changing anything, that every location really is on the
+	// face (and not, say, in a hole through it, where the ray would hit
+	// something deeper -- though a location inside an earlier hole got through
+	// in a test, 2026-10-26).
+	grpc::Status CheckLocationsOnFace(IModelDoc2* doc, IModelDocExtension* ext, const FaceRays& rays,
+		const std::string& facePid, const std::vector<Point3>& points, bool atBoxCenter)
+	{
+		for (size_t i = 0; i < points.size(); ++i)
+		{
+			const ATL::CComPtr<IDispatch> hit = rays.HitAt(points[i]);
+			if (!hit || PersistIdOf(ext, hit) != facePid)
+			{
+				doc->ClearSelection2(VARIANT_TRUE);
+				return Invalid(atBoxCenter
+					? "the center of the face's bounding box " + PointText(points[i]) +
+						" isn't on the face -- give locations"
+					: "hole location " + std::to_string(i + 1) + " " + PointText(points[i]) +
+						" isn't on that face (after projecting it onto the face's plane)");
+			}
+		}
+		doc->ClearSelection2(VARIANT_TRUE);
+		return grpc::Status::OK;
+	}
+
+	// Runs the wizard on the face. Normally every location is selected up
+	// front. If SolidWorks won't hold the same face selected more than once, or
+	// the wizard doesn't use every selection, falls back to the first location
+	// only. `direct` = how many of the locations the hole feature got.
+	grpc::Status RunWizardOnFace(IModelDoc2* doc, IModelDocExtension* ext, const HoleWizardCall& wizard,
+		const FaceRays& rays, const std::vector<Point3>& points, HoleResult& result, size_t& direct)
+	{
+		auto selectFirstOnly = [&]() {
+			direct = 1;
+			if (rays.SelectFirst(points, 1) == 1)
+				return grpc::Status::OK;
+			doc->ClearSelection2(VARIANT_TRUE);
+			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks wouldn't select the face");
+		};
+
+		direct = points.size();
+		if (rays.SelectFirst(points, direct) != direct)
+			if (grpc::Status status = selectFirstOnly(); !status.ok())
+				return status;
+
+		for (int attempt = 0; attempt < 2; ++attempt)
+		{
+			const HRESULT hr = wizard.Run(result.hole);
+			doc->ClearSelection2(VARIANT_TRUE);
+			if (FAILED(hr))
+				return ComError("IFeatureManager::HoleWizard5", hr);
+			if (!result.hole)
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+					"SolidWorks couldn't create the hole -- " + wizard.BadHoleHint());
+			if (grpc::Status status = FindHolePlacementSketch(result.hole, result.placementFeature, result.placement);
+				!status.ok())
+			{
+				DeleteFeatureAndSketches(doc, ext, result.hole);
+				return status;
+			}
+			if (direct == 1 || SketchPoints(result.placement).size() == direct)
+				break;
+			// The wizard didn't put a hole at every selection: start over with
+			// one, and add the rest to the placement sketch.
+			DeleteFeatureAndSketches(doc, ext, result.hole);
+			if (grpc::Status status = selectFirstOnly(); !status.ok())
+				return status;
+		}
+		return grpc::Status::OK;
+	}
+
+	// Adds points[from..] to the hole's placement sketch: the hole feature puts
+	// a hole at every point there. All or nothing: on failure the hole is
+	// deleted.
+	grpc::Status AddPlacementPoints(IModelDoc2* doc, IModelDocExtension* ext, ISketchManager* sketchManager,
+		SketchSpace& space, const std::vector<Point3>& points, size_t from, HoleResult& result)
+	{
+		result.placement.Release(); // OpenExistingSketch fills it with the open sketch
+		if (grpc::Status status = OpenExistingSketch(doc, result.placementFeature, result.placement); !status.ok())
+		{
+			DeleteFeatureAndSketches(doc, ext, result.hole);
+			return status;
+		}
+		// The sketch is now open: no early returns until it's closed.
+		space.Attach(result.placement);
+		VARIANT_BOOL previousAddToDB = VARIANT_FALSE;
+		sketchManager->get_AddToDB(&previousAddToDB);
+		sketchManager->put_AddToDB(VARIANT_TRUE);
+		grpc::Status failure = grpc::Status::OK;
+		for (size_t i = from; i < points.size() && failure.ok(); ++i)
+		{
+			double s[3];
+			ATL::CComPtr<ISketchPoint> point;
+			HRESULT hr = S_OK;
+			if (!space.ToSketch(points[i].data(), s))
+				failure = grpc::Status(grpc::StatusCode::INTERNAL,
+					"couldn't map a hole location into the placement sketch's coordinates");
+			else if (FAILED(hr = sketchManager->CreatePoint(s[0], s[1], 0.0, &point)))
+				failure = ComError("ISketchManager::CreatePoint", hr);
+			else if (!point)
+				failure = grpc::Status(grpc::StatusCode::INTERNAL,
+					"SolidWorks didn't create hole location " + std::to_string(i + 1));
+		}
+		sketchManager->put_AddToDB(previousAddToDB);
+		const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_TRUE);
+		doc->ClearSelection2(VARIANT_TRUE);
+		if (failure.ok() && FAILED(closeHr))
+			failure = ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
+		if (failure.ok() &&
+			(!FindHolePlacementSketch(result.hole, result.placementFeature, result.placement).ok() ||
+				SketchPoints(result.placement).size() != points.size()))
+			failure = grpc::Status(grpc::StatusCode::INTERNAL,
+				"SolidWorks didn't keep every hole location in the placement sketch");
+		if (!failure.ok())
+			DeleteFeatureAndSketches(doc, ext, result.hole);
+		return failure;
+	}
+
+	// Holes at locations on a planar face, in a placement sketch the Hole
+	// Wizard makes.
+	grpc::Status HolesOnFace(IModelDoc2* doc, IModelDocExtension* ext, const HoleWizardCall& wizard,
+		SketchSpace& space, const HoleRequest& request, HoleResult& result)
+	{
+		ATL::CComPtr<IDispatch> faceObj;
+		if (grpc::Status status = ResolvePersistId(ext, request.face_persist_id(), faceObj); !status.ok())
+			return status;
+		ATL::CComQIPtr<IFace2> face(faceObj.p);
+		if (!face)
+			return Invalid("that ID isn't a face -- the Hole Wizard needs a planar face");
+		FacePlane plane;
+		if (grpc::Status status = ReadFacePlane(face, plane); !status.ok())
+			return status;
+		// The same bytes a selected object's persist ID is compared to.
+		const std::string facePid = PersistIdOf(ext, face);
+		std::vector<Point3> points;
+		if (grpc::Status status = HoleLocations(face, plane, request, points); !status.ok())
+			return status;
+
+		ATL::CComPtr<ISelectionMgr> selections;
+		const HRESULT hr = doc->get_ISelectionManager(&selections);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::ISelectionManager", hr);
+		if (!selections)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no selection manager");
+		ATL::CComPtr<ISketchManager> sketchManager;
+		if (grpc::Status status = GetSketchManager(doc, sketchManager); !status.ok())
+			return status;
+
+		const FaceRays rays(doc, ext, selections, plane);
+		if (grpc::Status status = CheckLocationsOnFace(doc, ext, rays, facePid, points, request.locations().empty());
+			!status.ok())
+			return status;
+		size_t direct = 0;
+		if (grpc::Status status = RunWizardOnFace(doc, ext, wizard, rays, points, result, direct); !status.ok())
+			return status;
+		if (direct < points.size())
+			return AddPlacementPoints(doc, ext, sketchManager, space, points, direct, result);
+		return grpc::Status::OK;
+	}
+
+	// ---- The reply --------------------------------------------------------------
+
+	// The feature, its placement sketch and frame, the hole centers (with ids
+	// for dimensioning them, and in model space) and what the wizard built.
+	grpc::Status DescribeHoles(IModelDocExtension* ext, SketchSpace& space, const HoleResult& result,
+		sld_mcp::v1::HoleWizardResponse* response)
+	{
+		ATL::CComBSTR featureName;
+		const HRESULT hr = result.hole->get_Name(&featureName);
+		if (FAILED(hr))
+			return ComError("IFeature::Name", hr);
+		response->set_feature_name(ToUtf8(featureName));
+		response->set_sketch_name(FeatureName(result.placementFeature));
+
+		space.Attach(result.placement);
+		const std::string sketchPid = PersistIdOf(ext, result.placementFeature);
+		bool allMapped = true;
+		for (const auto& point : SketchPoints(result.placement))
+		{
+			sld_mcp::v1::SketchItem item;
+			if (!point || !DescribeSketchItem(point, sketchPid, &item) ||
+				result.notCenters.count({item.ref().id0(), item.ref().id1()}))
+				continue;
+			const double s[3] = {item.position().x(), item.position().y(), 0.0};
+			double m[3];
+			allMapped = allMapped && space.ToModel(s, m);
+			if (allMapped)
+				SetVec3(response->add_centers_model(), m);
+			response->add_centers()->Swap(&item);
+		}
+		// Both lists in step, or no model positions at all.
+		if (!allMapped)
+			response->clear_centers_model();
+		sld_mcp::v1::SketchFrame frame;
+		if (space.Frame(frame))
+			*response->mutable_frame() = frame;
+
+		ReadHoleSpec(result.hole, response->mutable_spec());
+		return grpc::Status::OK;
+	}
 }
 
 grpc::Status SolidWorksService::HoleWizard(grpc::ServerContext* /*context*/,
 	const sld_mcp::v1::HoleWizardRequest* request,
 	sld_mcp::v1::HoleWizardResponse* response)
 {
-	// Validate before touching SolidWorks.
-	auto invalid = [](const std::string& why) { return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, why); };
 	long genericType = 0;
-	switch (request->kind())
-	{
-	case sld_mcp::v1::HOLE_KIND_HOLE:        genericType = swWzdHole; break;
-	case sld_mcp::v1::HOLE_KIND_COUNTERBORE: genericType = swWzdCounterBore; break;
-	case sld_mcp::v1::HOLE_KIND_COUNTERSINK: genericType = swWzdCounterSink; break;
-	case sld_mcp::v1::HOLE_KIND_TAP:         genericType = swWzdTap; break;
-	default: return invalid("kind must be HOLE, COUNTERBORE, COUNTERSINK or TAP");
-	}
-	const bool fromSketch = !request->sketch_name().empty();
-	if (fromSketch && (!request->face_persist_id().empty() || !request->locations().empty()))
-		return invalid("give either a sketch of hole points or a face (with locations), not both");
-	if (!fromSketch && request->face_persist_id().empty())
-		return invalid("give a sketch of hole points, or the face to put the holes on");
-	if (request->size().empty())
-		return invalid("give the hole size, e.g. \"M5\"");
-	if (request->locations_size() > kMaxHoleLocations)
-		return invalid("too many hole locations in one call (max 500)");
-	for (const auto& location : request->locations())
-		if (!IsFinite(location))
-			return invalid("hole locations must be finite");
-	const bool throughAll = request->through_all();
-	if (!throughAll && !(std::isfinite(request->depth()) && request->depth() > 0.0))
-		return invalid("depth must be positive (or set through_all)");
-	for (const auto& [has, value] : {
-			std::pair{request->has_diameter(), request->diameter()},
-			std::pair{request->has_counterbore_diameter(), request->counterbore_diameter()},
-			std::pair{request->has_counterbore_depth(), request->counterbore_depth()},
-			std::pair{request->has_countersink_diameter(), request->countersink_diameter()},
-			std::pair{request->has_thread_depth(), request->thread_depth()}})
-		if (has && !(std::isfinite(value) && value > 0.0))
-			return invalid("hole dimensions must be positive");
-	if (request->has_countersink_angle() &&
-		!(std::isfinite(request->countersink_angle()) && request->countersink_angle() > 0.0 &&
-			request->countersink_angle() < 3.14159265358979))
-		return invalid("the countersink angle must be between 0 and 180 degrees");
-
-	// Value1..Value12 of HoleWizard5 mean different things per hole type;
-	// -1 = "use the standard's value".
-	auto opt = [](bool has, double value) { return has ? value : -1.0; };
-	double fit = -1.0;
-	switch (request->fit())
-	{
-	case sld_mcp::v1::SCREW_FIT_CLOSE:  fit = swScrewClearanceClose; break;
-	case sld_mcp::v1::SCREW_FIT_NORMAL: fit = swScrewClearanceNormal; break;
-	case sld_mcp::v1::SCREW_FIT_LOOSE:  fit = swScrewClearanceLoose; break;
-	default: break;
-	}
-	std::array<double, 12> values;
-	values.fill(-1.0);
-	switch (genericType)
-	{
-	case swWzdCounterBore:
-		// C-bore diameter, c-bore depth, head clearance, screw fit, ...
-		values[0] = opt(request->has_counterbore_diameter(), request->counterbore_diameter());
-		values[1] = opt(request->has_counterbore_depth(), request->counterbore_depth());
-		values[3] = fit;
-		break;
-	case swWzdCounterSink:
-		// C-sink diameter, c-sink angle, head clearance, screw fit, ...
-		values[0] = opt(request->has_countersink_diameter(), request->countersink_diameter());
-		values[1] = opt(request->has_countersink_angle(), request->countersink_angle());
-		values[3] = fit;
-		break;
-	case swWzdHole:
-		// Screw fit, drill angle, ...
-		values[0] = fit;
-		break;
-	case swWzdTap:
-		// Thread depth, near/far c-sink diameter/angle, drill angle, cosmetic
-		// thread type, thread end condition, ...
-		values[0] = opt(request->has_thread_depth(), request->thread_depth());
-		values[6] = request->cosmetic_thread() ? static_cast<double>(swCosmeticThreadWithCallout) : -1.0;
-		break;
-	}
+	if (grpc::Status status = ValidateHoleRequest(*request, genericType); !status.ok())
+		return status;
 
 	std::lock_guard<std::mutex> lock(m_editMutex);
 	ComApartment com;
@@ -276,7 +764,7 @@ grpc::Status SolidWorksService::HoleWizard(grpc::ServerContext* /*context*/,
 		return status;
 
 	ATL::CComPtr<IFeatureManager> featureManager;
-	HRESULT hr = doc->get_FeatureManager(&featureManager);
+	const HRESULT hr = doc->get_FeatureManager(&featureManager);
 	if (FAILED(hr))
 		return ComError("IModelDoc2::FeatureManager", hr);
 	if (!featureManager)
@@ -286,349 +774,12 @@ grpc::Status SolidWorksService::HoleWizard(grpc::ServerContext* /*context*/,
 	if (grpc::Status status = space.Init(swApp); !status.ok())
 		return status;
 
-	const ATL::CComBSTR size = FromUtf8(request->size());
-	const ATL::CComBSTR threadClass(L"");
-	// Puts holes wherever the current selection says.
-	auto runWizard = [&](ATL::CComPtr<IFeature>& hole) {
-		hole.Release();
-		return featureManager->HoleWizard5(
-			genericType,
-			request->standard(),
-			request->fastener_type(),
-			size,
-			static_cast<short>(throughAll ? swEndCondThroughAll : swEndCondBlind),
-			opt(request->has_diameter(), request->diameter()),
-			throughAll ? -1.0 : request->depth(),
-			-1.0,               // Length: slots only
-			values[0], values[1], values[2], values[3], values[4], values[5],
-			values[6], values[7], values[8], values[9], values[10], values[11],
-			threadClass,        // ANSI inch thread class; empty = default
-			request->reverse_direction() ? VARIANT_TRUE : VARIANT_FALSE,
-			VARIANT_TRUE,       // FeatureScope
-			VARIANT_TRUE,       // AutoSelect: all bodies
-			VARIANT_FALSE,      // AssemblyFeatureScope (assemblies only)
-			VARIANT_FALSE,      // AutoSelectComponents
-			VARIANT_FALSE,      // PropagateFeatureToParts
-			&hole);
-	};
-	const std::string badHole =
-		"check that size \"" + request->size() + "\" exists for that standard and fastener type (written as "
-		"the Hole Wizard lists it, e.g. \"M5\" or \"#10\"), and that the holes go into material (try "
-		"reverse_direction)";
-
-	ATL::CComPtr<IFeature> hole;
-	ATL::CComPtr<IFeature> placementFeature;
-	ATL::CComPtr<ISketch> placement;
-	// Sketch points that aren't hole centers (ends and centers of
-	// construction geometry in a user's sketch), by GetID.
-	std::set<std::pair<long long, long long>> notCenters;
-
-	if (fromSketch)
-	{
-		// The user's own sketch of (dimensioned) points becomes the hole
-		// feature's placement sketch, so its dimensions keep driving the holes.
-		ATL::CComPtr<IFeature> sketchFeature;
-		if (grpc::Status status = FindSketchByName(doc, request->sketch_name(), sketchFeature); !status.ok())
-			return status;
-		const std::string name = FeatureName(sketchFeature);
-		auto usedByFeature = [&]() {
-			long children = 0;
-			return SUCCEEDED(sketchFeature->IGetChildCount(&children)) && children > 0;
-		};
-		if (usedByFeature())
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				"\"" + name + "\" is already used by a feature -- put the hole points in a sketch of their own");
-		ATL::CComPtr<ISketch> sketch;
-		if (grpc::Status status = SketchOf(sketchFeature, sketch); !status.ok())
-			return status;
-
-		// Holes go at sketch points, so the sketch may only hold points and
-		// construction geometry (whose end/center points aren't holes).
-		ATL::CComVariant segments;
-		hr = sketch->GetSketchSegments(&segments);
-		if (FAILED(hr))
-			return ComError("ISketch::GetSketchSegments", hr);
-		for (const auto& segment : comvariant::ToDispatches(segments))
-		{
-			sld_mcp::v1::SketchItem item;
-			if (!segment || !DescribeSketchItem(segment, std::string(), &item))
-				continue;
-			if (!item.construction())
-				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-					"\"" + name + "\" has " + (item.name().empty() ? std::string("a segment") : item.name()) +
-					", which isn't construction geometry -- a hole-point sketch should hold only sketch points "
-					"(plus construction lines for reference)");
-			for (const auto* ref : {&item.start_point(), &item.end_point(), &item.center_point()})
-				if (ref->id0() || ref->id1())
-					notCenters.emplace(ref->id0(), ref->id1());
-		}
-		std::vector<ATL::CComPtr<ISketchPoint>> holePoints;
-		for (const auto& point : SketchPoints(sketch))
-		{
-			bool isPoint = false;
-			long long id0 = 0, id1 = 0;
-			ATL::CComQIPtr<ISketchPoint> sketchPoint(point.p);
-			if (sketchPoint && SketchEntityId(point, isPoint, id0, id1) && !notCenters.count({id0, id1}))
-				holePoints.push_back(sketchPoint);
-		}
-		if (holePoints.empty())
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				"\"" + name + "\" has no sketch points to put holes at -- add them with sketch_point");
-		if (holePoints.size() > static_cast<size_t>(kMaxHoleLocations))
-			return invalid("too many hole points in one sketch (max 500)");
-
-		// Like preselecting the sketch in the UI. Tried two ways: the sketch
-		// feature, then its points. Either only counts if the new feature
-		// absorbed the sketch; otherwise the hole is deleted again.
-		for (int attempt = 0; attempt < 2 && !hole; ++attempt)
-		{
-			doc->ClearSelection2(VARIANT_TRUE);
-			bool selected = true;
-			if (attempt == 0)
-			{
-				VARIANT_BOOL ok = VARIANT_FALSE;
-				selected = SUCCEEDED(sketchFeature->Select2(VARIANT_FALSE, 0, &ok)) && ok;
-			}
-			else
-				for (size_t i = 0; i < holePoints.size() && selected; ++i)
-				{
-					VARIANT_BOOL ok = VARIANT_FALSE;
-					selected = SUCCEEDED(holePoints[i]->Select4(i > 0 ? VARIANT_TRUE : VARIANT_FALSE, nullptr, &ok)) && ok;
-				}
-			if (!selected)
-				continue;
-			hr = runWizard(hole);
-			doc->ClearSelection2(VARIANT_TRUE);
-			if (FAILED(hr))
-				return ComError("IFeatureManager::HoleWizard5", hr);
-			if (hole && !usedByFeature())
-			{
-				// Holes went somewhere else: not what was asked.
-				DeleteFeatureAndSketches(doc, ext, hole);
-				hole.Release();
-			}
-		}
-		if (!hole)
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				"SolidWorks couldn't put holes at the points of \"" + name + "\" -- " + badHole +
-				". The sketch must be on a planar face or plane; or give the face and locations instead");
-		placementFeature = sketchFeature;
-		if (grpc::Status status = SketchOf(placementFeature, placement); !status.ok())
-			return status;
-	}
-	else
-	{
-		// The face, and where on it the holes go.
-		ATL::CComPtr<IDispatch> faceObj;
-		if (grpc::Status status = ResolvePersistId(ext, request->face_persist_id(), faceObj); !status.ok())
-			return status;
-		ATL::CComQIPtr<IFace2> face(faceObj.p);
-		if (!face)
-			return invalid("that ID isn't a face -- the Hole Wizard needs a planar face");
-		FacePlane plane;
-		if (grpc::Status status = ReadFacePlane(face, plane); !status.ok())
-			return status;
-		// The same bytes a selected object's persist ID is compared to.
-		const std::string facePid = PersistIdOf(ext, face);
-
-		std::vector<std::array<double, 3>> points;
-		if (request->locations().empty())
-		{
-			ATL::CComVariant box;
-			hr = face->GetBox(&box);
-			if (FAILED(hr))
-				return ComError("IFace2::GetBox", hr);
-			const std::vector<double> b = comvariant::ToDoubles(box);
-			if (b.size() < 6)
-				return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no box for the face");
-			const double center[3] = {(b[0] + b[3]) / 2.0, (b[1] + b[4]) / 2.0, (b[2] + b[5]) / 2.0};
-			points.push_back(ProjectOntoPlane(plane, center));
-		}
-		else
-			for (const auto& location : request->locations())
-			{
-				const double p[3] = {location.x(), location.y(), location.z()};
-				points.push_back(ProjectOntoPlane(plane, p));
-			}
-
-		ATL::CComPtr<ISelectionMgr> selections;
-		hr = doc->get_ISelectionManager(&selections);
-		if (FAILED(hr))
-			return ComError("IModelDoc2::ISelectionManager", hr);
-		if (!selections)
-			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no selection manager");
-
-		ATL::CComPtr<ISketchManager> sketchManager;
-		if (grpc::Status status = GetSketchManager(doc, sketchManager); !status.ok())
-			return status;
-
-		// Selecting the face with a ray at a location is what tells the Hole
-		// Wizard to put a hole there; one selection per hole.
-		auto selectAt = [&](const std::array<double, 3>& p, bool append) {
-			VARIANT_BOOL selected = VARIANT_FALSE;
-			const HRESULT rayHr = ext->SelectByRay(
-				p[0] + plane.normal[0] * kHoleRayLift, p[1] + plane.normal[1] * kHoleRayLift,
-				p[2] + plane.normal[2] * kHoleRayLift, -plane.normal[0], -plane.normal[1], -plane.normal[2],
-				kHoleRayRadius, swSelFACES, append ? VARIANT_TRUE : VARIANT_FALSE, 0, swSelectOptionDefault,
-				&selected);
-			return SUCCEEDED(rayHr) && selected;
-		};
-		auto selectedCount = [&]() {
-			long count = 0;
-			selections->GetSelectedObjectCount2(-1, &count);
-			return count;
-		};
-		// Selects the first `n` locations; returns how many selections stuck.
-		auto selectLocations = [&](size_t n) {
-			doc->ClearSelection2(VARIANT_TRUE);
-			for (size_t i = 0; i < n; ++i)
-				if (!selectAt(points[i], i > 0))
-					break;
-			return static_cast<size_t>(selectedCount());
-		};
-
-		// Check every location really is on the face (and not, say, in a hole
-		// through it, where the ray would hit something deeper) before
-		// changing anything.
-		for (size_t i = 0; i < points.size(); ++i)
-		{
-			doc->ClearSelection2(VARIANT_TRUE);
-			ATL::CComPtr<IDispatch> hit;
-			if (selectAt(points[i], false) && selectedCount() == 1)
-				selections->GetSelectedObject6(1, -1, &hit);
-			if (!hit || PersistIdOf(ext, hit) != facePid)
-			{
-				doc->ClearSelection2(VARIANT_TRUE);
-				return invalid(request->locations().empty()
-					? "the center of the face's bounding box " + PointText(points[i]) +
-						" isn't on the face -- give locations"
-					: "hole location " + std::to_string(i + 1) + " " + PointText(points[i]) +
-						" isn't on that face (after projecting it onto the face's plane)");
-			}
-		}
-		doc->ClearSelection2(VARIANT_TRUE);
-
-		// Normally every location is selected up front. If SolidWorks won't
-		// hold the same face selected more than once, or the wizard doesn't
-		// use every selection, fall back to one location and add the rest as
-		// points in the placement sketch afterwards.
-		size_t direct = points.size();
-		if (selectLocations(direct) != direct)
-		{
-			direct = 1;
-			if (selectLocations(1) != 1)
-			{
-				doc->ClearSelection2(VARIANT_TRUE);
-				return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks wouldn't select the face");
-			}
-		}
-
-		for (int attempt = 0; attempt < 2; ++attempt)
-		{
-			hr = runWizard(hole);
-			doc->ClearSelection2(VARIANT_TRUE);
-			if (FAILED(hr))
-				return ComError("IFeatureManager::HoleWizard5", hr);
-			if (!hole)
-				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-					"SolidWorks couldn't create the hole -- " + badHole);
-			if (grpc::Status status = FindHolePlacementSketch(hole, placementFeature, placement); !status.ok())
-			{
-				DeleteFeatureAndSketches(doc, ext, hole);
-				return status;
-			}
-			if (direct == 1 || SketchPoints(placement).size() == direct)
-				break;
-			// The wizard didn't put a hole at every selection: start over with
-			// one, and add the rest to the placement sketch.
-			DeleteFeatureAndSketches(doc, ext, hole);
-			direct = 1;
-			if (selectLocations(1) != 1)
-			{
-				doc->ClearSelection2(VARIANT_TRUE);
-				return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks wouldn't select the face");
-			}
-		}
-
-		// Remaining locations become points in the placement sketch; the hole
-		// feature puts a hole at every point there.
-		if (direct < points.size())
-		{
-			placement.Release(); // OpenExistingSketch fills it with the open sketch
-			if (grpc::Status status = OpenExistingSketch(doc, placementFeature, placement); !status.ok())
-			{
-				DeleteFeatureAndSketches(doc, ext, hole);
-				return status;
-			}
-			// The sketch is now open: no early returns until it's closed.
-			space.Attach(placement);
-			VARIANT_BOOL previousAddToDB = VARIANT_FALSE;
-			sketchManager->get_AddToDB(&previousAddToDB);
-			sketchManager->put_AddToDB(VARIANT_TRUE);
-			grpc::Status failure = grpc::Status::OK;
-			for (size_t i = direct; i < points.size() && failure.ok(); ++i)
-			{
-				double s[3];
-				ATL::CComPtr<ISketchPoint> point;
-				if (!space.ToSketch(points[i].data(), s))
-					failure = grpc::Status(grpc::StatusCode::INTERNAL,
-						"couldn't map a hole location into the placement sketch's coordinates");
-				else if (FAILED(hr = sketchManager->CreatePoint(s[0], s[1], 0.0, &point)))
-					failure = ComError("ISketchManager::CreatePoint", hr);
-				else if (!point)
-					failure = grpc::Status(grpc::StatusCode::INTERNAL,
-						"SolidWorks didn't create hole location " + std::to_string(i + 1));
-			}
-			sketchManager->put_AddToDB(previousAddToDB);
-			const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_TRUE);
-			doc->ClearSelection2(VARIANT_TRUE);
-			if (failure.ok() && FAILED(closeHr))
-				failure = ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
-			if (failure.ok() &&
-				(!FindHolePlacementSketch(hole, placementFeature, placement).ok() ||
-					SketchPoints(placement).size() != points.size()))
-				failure = grpc::Status(grpc::StatusCode::INTERNAL,
-					"SolidWorks didn't keep every hole location in the placement sketch");
-			if (!failure.ok())
-			{
-				// All or nothing.
-				DeleteFeatureAndSketches(doc, ext, hole);
-				return failure;
-			}
-		}
-	}
-
-	ATL::CComBSTR featureName;
-	hr = hole->get_Name(&featureName);
-	if (FAILED(hr))
-		return ComError("IFeature::Name", hr);
-	response->set_feature_name(ToUtf8(featureName));
-	response->set_sketch_name(FeatureName(placementFeature));
-
-	// The centers, with IDs for dimensioning them, and in model space.
-	space.Attach(placement);
-	const std::string sketchPid = PersistIdOf(ext, placementFeature);
-	bool allMapped = true;
-	for (const auto& point : SketchPoints(placement))
-	{
-		sld_mcp::v1::SketchItem item;
-		if (!point || !DescribeSketchItem(point, sketchPid, &item) ||
-			notCenters.count({item.ref().id0(), item.ref().id1()}))
-			continue;
-		const double s[3] = {item.position().x(), item.position().y(), 0.0};
-		double m[3];
-		allMapped = allMapped && space.ToModel(s, m);
-		if (allMapped)
-			SetVec3(response->add_centers_model(), m);
-		response->add_centers()->Swap(&item);
-	}
-	// Both lists in step, or no model positions at all.
-	if (!allMapped)
-		response->clear_centers_model();
-	sld_mcp::v1::SketchFrame frame;
-	if (space.Frame(frame))
-		*response->mutable_frame() = frame;
-
-	ReadHoleSpec(hole, response->mutable_spec());
-	return grpc::Status::OK;
+	const HoleWizardCall wizard(featureManager, *request, genericType);
+	HoleResult result;
+	const grpc::Status status = request->sketch_name().empty()
+		? HolesOnFace(doc, ext, wizard, space, *request, result)
+		: HolesFromSketch(doc, ext, wizard, request->sketch_name(), result);
+	if (!status.ok())
+		return status;
+	return DescribeHoles(ext, space, result, response);
 }
