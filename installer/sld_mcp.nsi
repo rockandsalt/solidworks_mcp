@@ -80,6 +80,11 @@ Var SwReleases    ; installed SOLIDWORKS releases found, e.g. "2025, 2026"
 
 !define MUI_WELCOMEPAGE_TEXT "This installs the SolidWorks MCP add-in for SOLIDWORKS ${SW_MIN_YEAR} and newer, and the MCP server that lets Claude Desktop or Codex drive SOLIDWORKS through it.$\r$\n$\r$\nClose SOLIDWORKS, Claude Desktop and Codex before continuing.$\r$\n$\r$\n$_CLICK"
 !insertmacro MUI_PAGE_WELCOME
+; Shown for information only: the AGPL doesn't need to be accepted to run the
+; program (section 9), so the page has a plain Next button instead of I Agree.
+!define MUI_LICENSEPAGE_BUTTON "$(^NextBtn)"
+!define MUI_LICENSEPAGE_TEXT_BOTTOM "${APP_NAME} is free software under the GNU Affero General Public License v3. You don't need to accept it to install or use the program; it sets the terms for copying, modifying and distributing it. A copy is installed as LICENSE.txt."
+!insertmacro MUI_PAGE_LICENSE "${__FILEDIR__}\..\LICENSE"
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
@@ -149,6 +154,7 @@ Section "SolidWorks add-in and MCP server" SecCore
   File "/oname=sld_mcp.dll" "${ADDIN_DLL}"
   File "/oname=mcp_server.exe" "${SERVER_EXE}"
   File "/oname=configure-clients.ps1" "${__FILEDIR__}\configure-clients.ps1"
+  File "/oname=LICENSE.txt" "${__FILEDIR__}\..\LICENSE"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 SectionEnd
 
@@ -297,6 +303,7 @@ Section "Uninstall"
   Delete "$INSTDIR\sld_mcp.dll"
   Delete "$INSTDIR\mcp_server.exe"
   Delete "$INSTDIR\configure-clients.ps1"
+  Delete "$INSTDIR\LICENSE.txt"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
 
