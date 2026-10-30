@@ -219,6 +219,9 @@
     <ClCompile Include="service\Sweep.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>
+    <ClCompile Include="service\Loft.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
     <ClCompile Include="service\Tolerances.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>

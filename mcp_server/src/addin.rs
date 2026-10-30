@@ -188,6 +188,14 @@ impl AddinClient {
         Ok(client.sweep_sketch(request).await?.into_inner())
     }
 
+    pub async fn loft_sketch(
+        &self,
+        request: proto::LoftSketchRequest,
+    ) -> Result<proto::LoftSketchResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.loft_sketch(request).await?.into_inner())
+    }
+
     /// Radius in meters.
     pub async fn fillet_edges(
         &self,

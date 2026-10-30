@@ -390,6 +390,7 @@
     <ClCompile Include="service\SeedHelpers.cpp" />
     <ClCompile Include="service\Revolve.cpp" />
     <ClCompile Include="service\Sweep.cpp" />
+    <ClCompile Include="service\Loft.cpp" />
     <ClCompile Include="service\SketchConstraints.cpp" />
     <ClCompile Include="service\SketchHelpers.cpp" />
     <ClCompile Include="service\Sketches.cpp" />

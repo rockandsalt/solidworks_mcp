@@ -53,6 +53,10 @@ public:
 		const sld_mcp::v1::SweepSketchRequest* request,
 		sld_mcp::v1::SweepSketchResponse* response) override;
 
+	grpc::Status LoftSketch(grpc::ServerContext* context,
+		const sld_mcp::v1::LoftSketchRequest* request,
+		sld_mcp::v1::LoftSketchResponse* response) override;
+
 	grpc::Status FilletEdges(grpc::ServerContext* context,
 		const sld_mcp::v1::FilletEdgesRequest* request,
 		sld_mcp::v1::EdgeFeatureResponse* response) override;

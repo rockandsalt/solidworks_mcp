@@ -13,6 +13,7 @@ mod gdt;
 mod hole;
 mod inspect;
 mod interference;
+mod loft;
 mod mirror;
 mod mobility;
 mod motion;
@@ -299,7 +300,7 @@ impl PointConverter {
     }
 }
 
-/// Flags an extruded, revolved or swept sketch that isn't fully defined.
+/// Flags an extruded, revolved, swept or lofted sketch that isn't fully defined.
 fn sketch_status_note(sketch_name: &str, status: proto::DefinitionStatus) -> String {
     match status {
         proto::DefinitionStatus::Fully | proto::DefinitionStatus::Unspecified => String::new(),
@@ -1435,6 +1436,26 @@ impl SolidWorksTools {
         Parameters(params): Parameters<sweep::SweepParams>,
     ) -> Result<CallToolResult, McpError> {
         self.sweep(params, true).await
+    }
+
+    #[tool(
+        description = "Loft through two or more profile sketches of the active part, in order, into a solid (lofted boss: a transition between a square and a round section, a bottle neck, a duct, a blade, a pyramid), merging with any existing body. Draw each profile as one closed contour in its own sketch on its own plane (e.g. Front, and a create_reference_plane offset from it), then give profiles = their sketch names in the order to pass through. The first or last profile may be a sketch holding a single sketch_point (a loft to a tip). guide_curves (sketches touching every profile) shape the sides; closed loops back to the first profile; start_normal / end_normal make the loft leave / meet the end profiles at right angles. Requires an open part with no sketch being edited."
+    )]
+    async fn loft_sketch(
+        &self,
+        Parameters(params): Parameters<loft::LoftParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.loft(params, false).await
+    }
+
+    #[tool(
+        description = "Cut by lofting through two or more profile sketches of the active part (cut-loft), removing material: a tapered pocket, a funnel-shaped hole, a transition from a square to a round opening. Profiles, guide_curves, closed and start_normal / end_normal as for loft_sketch; the loft must pass through material. Requires an open part with no sketch being edited."
+    )]
+    async fn cut_loft_sketch(
+        &self,
+        Parameters(params): Parameters<loft::LoftParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.loft(params, true).await
     }
 
     #[tool(
@@ -3638,6 +3659,21 @@ impl SolidWorksTools {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
+    /// Shared by loft_sketch and cut_loft_sketch.
+    async fn loft(&self, params: loft::LoftParams, cut: bool) -> Result<CallToolResult, McpError> {
+        let request = loft::request(&params, cut)?;
+        let reply = self
+            .addin
+            .loft_sketch(request.clone())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let mut text = loft::reply_text(&request, &reply);
+        for (name, status) in request.profiles.iter().zip(reply.profile_status()) {
+            text += &sketch_status_note(name, status);
+        }
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
     /// Shared by the reference geometry tools: `from` describes the
     /// references for the reply, `given` numbers them for error messages.
     async fn reference_geometry(
@@ -4182,7 +4218,7 @@ impl ServerHandler for SolidWorksTools {
                  (pass sketch_name to keep adding to one sketch), then extrude_sketch or \
                  cut_extrude_sketch, or for round parts revolve_sketch / cut_revolve_sketch \
                  about a centerline (sketch_line with construction=true), or sweep_sketch / \
-                 cut_sweep_sketch to run a profile (or a circle) along a path sketch; \
+                 cut_sweep_sketch to run a profile (or a circle) along a path sketch, or                  loft_sketch / cut_loft_sketch to blend through profiles on several planes; \
                  fillet_edges / chamfer_edges round or bevel edges (by edge or face id); \
                  mirror_features copies features or bodies about a plane, and \
                  mirror_sketch_entities mirrors sketch geometry about a centerline; \

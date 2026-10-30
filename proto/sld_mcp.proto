@@ -77,6 +77,14 @@ service SolidWorks {
   // names, FAILED_PRECONDITION when SolidWorks won't make the feature.
   rpc SweepSketch(SweepSketchRequest) returns (SweepSketchResponse);
 
+  // Lofts through two or more profile sketches, in order, optionally
+  // following guide curves, into a boss (merging with any existing body) or
+  // a cut (IFeatureManager::InsertProtrusionBlend2 / InsertCutBlend). Same
+  // preconditions as ExtrudeSketch; INVALID_ARGUMENT for too few profiles or
+  // a feature given twice, NOT_FOUND for unknown names, FAILED_PRECONDITION
+  // when SolidWorks won't make the feature.
+  rpc LoftSketch(LoftSketchRequest) returns (LoftSketchResponse);
+
   // Rounds edges of the active part with a constant-radius fillet
   // (IFeatureManager::FeatureFillet3), or bevels them with a chamfer
   // (IFeatureManager::InsertFeatureChamfer). Edges are given directly or
@@ -952,6 +960,31 @@ message SweepSketchResponse {
   DefinitionStatus sketch_status = 3;
   // The path's feature-tree name.
   string path = 4;
+}
+
+message LoftSketchRequest {
+  // Feature-tree names of the profile sketches, in loft order, at least 2:
+  // each a closed 2D sketch; the first and the last may instead hold a
+  // single sketch point (a loft to a point).
+  repeated string profiles = 1;
+  // Feature-tree names of guide curves (sketches or curve features), each
+  // touching every profile.
+  repeated string guide_curves = 2;
+  // Loft from the last profile back to the first (at least 3 profiles).
+  bool closed = 3;
+  // The loft leaves the first / reaches the last profile at right angles to
+  // it (start / end tangency "normal to profile"). Not with closed.
+  bool start_normal = 4;
+  bool end_normal = 5;
+  // Remove material (cut-loft) instead of adding it.
+  bool cut = 6;
+}
+
+message LoftSketchResponse {
+  // Feature-tree name of the new feature, e.g. "Loft1", "Cut-Loft1".
+  string feature_name = 1;
+  // How fully defined each profile sketch was, in the request's order.
+  repeated DefinitionStatus profile_status = 2;
 }
 
 message FilletEdgesRequest {
