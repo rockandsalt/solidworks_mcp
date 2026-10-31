@@ -216,6 +216,7 @@ pub fn type_label(type_name: &str) -> &str {
     match type_name {
         "ProfileFeature" => "sketch",
         "3DProfileFeature" => "3D sketch",
+        "Helix" => "helix",
         "Extrusion" | "BaseBody" | "Boss" => "boss-extrude",
         "Cut" => "cut-extrude",
         // SolidWorks 2026 types both a boss on an existing body and a cut "ICE".

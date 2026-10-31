@@ -76,13 +76,18 @@ fn type_name(t: proto::SketchItemType) -> &'static str {
     }
 }
 
-/// A sketch point (meters) as [x, y] in millimeters.
-fn xy_mm(v: &proto::Vec3) -> Value {
-    json!([mm(v.x), mm(v.y)])
+/// A sketch point (meters) in millimeters: [x, y], or [x, y, z] in a 3D sketch.
+fn position_mm(v: &proto::Vec3, is_3d: bool) -> Value {
+    if is_3d {
+        json!([mm(v.x), mm(v.y), mm(v.z)])
+    } else {
+        json!([mm(v.x), mm(v.y)])
+    }
 }
 
-/// One sketch entity. Positions are in the sketch's own 2D coordinates.
-pub fn item_json(ids: &mut IdRegistry, item: &proto::SketchItem) -> Value {
+/// One sketch entity. Positions are in the sketch's own 2D coordinates, or model coordinates
+/// in a 3D sketch.
+pub fn item_json(ids: &mut IdRegistry, item: &proto::SketchItem, is_3d: bool) -> Value {
     use proto::SketchItemType as T;
     let mut obj = Map::new();
     obj.insert("id".into(), item_id(ids, item).map_or(Value::Null, Value::String));
@@ -104,13 +109,13 @@ pub fn item_json(ids: &mut IdRegistry, item: &proto::SketchItem) -> Value {
             obj.insert(key.to_string(), json!(id));
         }
         if let Some(at) = at {
-            obj.insert(format!("{key}_mm"), xy_mm(at));
+            obj.insert(format!("{key}_mm"), position_mm(at, is_3d));
         }
     };
     match t {
         T::Point => {
             if let Some(p) = &item.position {
-                obj.insert("at_mm".into(), xy_mm(p));
+                obj.insert("at_mm".into(), position_mm(p, is_3d));
             }
         }
         T::Circle => {
@@ -224,6 +229,9 @@ pub fn relation_name(constraint_type: i32) -> String {
         32 => "converted edge",
         42 => "merge",
         47 => "sketch offset",
+        48 | 51 | 64 | 66 => "along x",
+        49 | 52 | 65 | 67 => "along y",
+        50 | 53 => "along z",
         57 => "patterned",
         n => return format!("other (type {n})"),
     }
@@ -255,6 +263,9 @@ pub fn render_inspect(ids: &mut IdRegistry, reply: &proto::InspectSketchResponse
     let mut out = Map::new();
     out.insert("sketch".into(), json!(reply.sketch_name));
     out.insert("status".into(), json!(status_name(reply.status())));
+    if reply.is_3d {
+        out.insert("is_3d".into(), json!(true));
+    }
     if let Some(frame) = &reply.frame
         && let (Some(o), Some(x), Some(y), Some(n)) = (&frame.origin, &frame.x_axis, &frame.y_axis, &frame.normal)
     {
@@ -277,8 +288,8 @@ pub fn render_inspect(ids: &mut IdRegistry, reply: &proto::InspectSketchResponse
         .items
         .iter()
         .partition(|item| item.r#type() == proto::SketchItemType::Point);
-    let segments: Vec<Value> = segments.iter().map(|item| item_json(ids, item)).collect();
-    let points: Vec<Value> = points.iter().map(|item| item_json(ids, item)).collect();
+    let segments: Vec<Value> = segments.iter().map(|item| item_json(ids, item, reply.is_3d)).collect();
+    let points: Vec<Value> = points.iter().map(|item| item_json(ids, item, reply.is_3d)).collect();
     out.insert("segments".into(), Value::Array(segments));
     out.insert("points".into(), Value::Array(points));
     out.insert(
@@ -321,11 +332,12 @@ pub fn state_text(ids: &mut IdRegistry, sketch_name: &str, state: Option<&proto:
     } else {
         String::new()
     };
-    text += &format!(
-        "; not fully defined yet: {}{more}. Add dimensions/relations for what matters, then \
-         fully_define_sketch to lock the rest.",
-        named.join(", ")
-    );
+    text += &format!("; not fully defined yet: {}{more}.", named.join(", "));
+    text += if state.is_3d {
+        " Add dimensions/relations for what matters."
+    } else {
+        " Add dimensions/relations for what matters, then fully_define_sketch to lock the rest."
+    };
     text
 }
 
@@ -377,10 +389,11 @@ mod tests {
             status: proto::DefinitionStatus::Under as i32,
             ..Default::default()
         };
-        let json = item_json(&mut ids, &line);
+        let json = item_json(&mut ids, &line, false);
         assert_eq!(json["id"], "line:1");
         assert_eq!(json["start"], "point:1");
         assert_eq!(json["end_mm"], json!([50.0, 0.0]));
+        assert_eq!(item_json(&mut ids, &line, true)["end_mm"], json!([50.0, 0.0, 0.0]));
         assert_eq!(json["status"], "under defined");
         assert_eq!(decode_ref(&ids, "line:1").unwrap(), r(false, 7));
         assert_eq!(decode_ref(&ids, "point:2").unwrap(), r(true, 2));
@@ -411,10 +424,15 @@ mod tests {
                 ..Default::default()
             }],
             not_fully_defined_count: 4,
+            is_3d: false,
         };
         let text = state_text(&mut ids, "Sketch1", Some(&state));
         assert!(text.contains("Sketch1 is under defined"), "{text}");
         assert!(text.contains("point:1 and 3 more"), "{text}");
+        assert!(text.contains("fully_define_sketch"), "{text}");
+        let state_3d = proto::SketchState { is_3d: true, ..state.clone() };
+        let text = state_text(&mut ids, "3DSketch1", Some(&state_3d));
+        assert!(!text.contains("fully_define_sketch"), "{text}");
         let fully = proto::SketchState { status: proto::DefinitionStatus::Fully as i32, ..Default::default() };
         assert_eq!(state_text(&mut ids, "Sketch1", Some(&fully)), " Sketch1 is fully defined.");
     }

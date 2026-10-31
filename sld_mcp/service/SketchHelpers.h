@@ -26,8 +26,13 @@ namespace sld_mcp::service
 	// its first point), plus that feature's name for SelectByID2.
 	void FindOrigin(IModelDoc2* doc, ATL::CComPtr<ISketchPoint>& point, std::string& featureName);
 
-	// A 2D sketch by its feature-tree name.
-	grpc::Status FindSketchByName(IModelDoc2* doc, const std::string& name, ATL::CComPtr<IFeature>& sketch);
+	// A sketch by its feature-tree name: 2D, or also 3D with `allow3D`.
+	grpc::Status FindSketchByName(IModelDoc2* doc, const std::string& name, ATL::CComPtr<IFeature>& sketch,
+		bool allow3D = false);
+
+	// Whether a sketch is a 3D sketch. Its "sketch space" is model space, and
+	// its points' Z count.
+	bool IsSketch3D(ISketch* sketch);
 
 	// Converts points between model space and an open sketch's own space
 	// (x, y in the sketch plane; z = distance from it) with IMathPoints.
@@ -107,9 +112,9 @@ namespace sld_mcp::service
 	// A SketchState lists at most this many entities that aren't fully defined.
 	constexpr int kMaxListedUndefined = 50;
 
-	// The last 2D sketch in the feature tree, used by a feature or not --
-	// "the sketch I just drew".
-	grpc::Status FindLatestSketch(IModelDoc2* doc, ATL::CComPtr<IFeature>& sketch);
+	// The last 2D sketch (or also 3D, with `allow3D`) in the feature tree, used
+	// by a feature or not -- "the sketch I just drew".
+	grpc::Status FindLatestSketch(IModelDoc2* doc, ATL::CComPtr<IFeature>& sketch, bool allow3D = false);
 
 	// The last 2D sketch in the feature tree that no feature uses yet, i.e.
 	// what a user means by "extrude this sketch". Sketches a feature has
@@ -119,7 +124,8 @@ namespace sld_mcp::service
 		IFeature* except = nullptr);
 
 	// A sketch by name, or the latest one when `name` is empty.
-	grpc::Status ResolveSketchFeature(IModelDoc2* doc, const std::string& name, ATL::CComPtr<IFeature>& sketch);
+	grpc::Status ResolveSketchFeature(IModelDoc2* doc, const std::string& name, ATL::CComPtr<IFeature>& sketch,
+		bool allow3D = false);
 
 	// The ISketch behind a sketch feature.
 	grpc::Status SketchOf(IFeature* feature, ATL::CComPtr<ISketch>& sketch);
@@ -261,6 +267,27 @@ namespace sld_mcp::service
 		std::vector<Entry> m_entries;
 	};
 
+	// In a 3D sketch every arc owns an extra sketch point, on its axis one radius
+	// from its center, that GetSketchPoints2 lists like any other (seen
+	// 2026-10-31). Nobody drew it and it means nothing to a caller, so it's left
+	// out of what's reported. Empty for a 2D sketch.
+	class ArcAxisPoints
+	{
+	public:
+		ArcAxisPoints(ISketch* sketch, const SketchItems& items);
+
+		bool Contains(IDispatch* point) const;
+
+	private:
+		struct Axis
+		{
+			Eigen::Vector3d center;
+			Eigen::Vector3d normal;
+			double radius;
+		};
+		std::vector<Axis> m_axes;
+	};
+
 	// The sketch's overall status and the entities that aren't fully defined.
 	void ReadSketchState(ISketch* sketch, const std::string& sketchPid, sld_mcp::v1::SketchState* state);
 
@@ -282,8 +309,8 @@ namespace sld_mcp::service
 	SketchItemKey SketchKeyOf(const sld_mcp::v1::SketchItemRef& ref);
 	std::set<SketchItemKey> SketchKeys(const SketchItems& items);
 
-	// The sketch an entity-editing request works in: `sketchName`, else the
-	// sketch its first item is in.
+	// The 2D sketch an entity-editing request (mirror, pattern, offset) works
+	// in: `sketchName`, else the sketch its first item is in.
 	grpc::Status ResolveItemsSketch(IModelDoc2* doc, IModelDocExtension* ext, const std::string& sketchName,
 		const sld_mcp::v1::SketchItemRef& first, ATL::CComPtr<IFeature>& sketchFeature);
 

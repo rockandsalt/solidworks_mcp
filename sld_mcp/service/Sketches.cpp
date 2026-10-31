@@ -80,14 +80,23 @@ namespace
 		}
 	}
 
-	// Maps request points into the open sketch's 2D coordinates (z = 0).
+	// Maps request points into the open sketch's coordinates: 2D (z = 0), or
+	// in a 3D sketch the model coordinates they came in.
 	struct SketchPointMapper
 	{
 		const SketchSpace& space;
 		bool modelSpace;
+		bool is3D;
 
 		bool operator()(const sld_mcp::v1::Vec3& p, double out[3]) const
 		{
+			if (is3D)
+			{
+				out[0] = p.x();
+				out[1] = p.y();
+				out[2] = p.z();
+				return true;
+			}
 			if (modelSpace)
 			{
 				const double in[3] = {p.x(), p.y(), p.z()};
@@ -105,9 +114,25 @@ namespace
 		}
 	};
 
-	double Distance2D(const double a[3], const double b[3])
+	// Between two mapped points: 3D sketches use all of it, in 2D z is 0.
+	double Distance(const double a[3], const double b[3])
 	{
-		return std::hypot(a[0] - b[0], a[1] - b[1]);
+		return (Eigen::Vector3d(a[0], a[1], a[2]) - Eigen::Vector3d(b[0], b[1], b[2])).norm();
+	}
+
+	// Opens a new 3D sketch. On failure nothing is left open.
+	grpc::Status OpenNew3DSketch(IModelDoc2* doc, ISketchManager* sketchManager, ATL::CComPtr<ISketch>& sketch)
+	{
+		HRESULT hr = doc->ClearSelection2(VARIANT_TRUE);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::ClearSelection2", hr);
+		hr = sketchManager->Insert3DSketch(VARIANT_TRUE);
+		if (FAILED(hr))
+			return ComError("ISketchManager::Insert3DSketch", hr);
+		hr = doc->IGetActiveSketch2(&sketch);
+		if (FAILED(hr) || !sketch)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks didn't open a new 3D sketch");
+		return grpc::Status::OK;
 	}
 
 	// Draws one (validated) entity into the open sketch and returns what was
@@ -131,14 +156,20 @@ namespace
 			double s[3], e[3];
 			if (!map(entity.line().start(), s) || !map(entity.line().end(), e))
 				return mapFailed;
-			if (Distance2D(s, e) < kSketchTolerance)
-				return invalid("a line's start and end are the same point in the sketch plane");
-			hr = sketchManager->CreateLine(s[0], s[1], 0.0, e[0], e[1], 0.0, &segment);
+			if (Distance(s, e) < kSketchTolerance)
+				return invalid(map.is3D ? "a line's start and end are the same point"
+				                        : "a line's start and end are the same point in the sketch plane");
+			hr = sketchManager->CreateLine(s[0], s[1], s[2], e[0], e[1], e[2], &segment);
 			break;
 		}
 		case Entity::kCircle:
 		{
 			what = "circle";
+			// CreateCircleByRadius has no normal: it would lie level with model
+			// XY, whatever was meant (seen 2026-10-31).
+			if (map.is3D)
+				return invalid("a 3D sketch can't take a circle (it wouldn't know which way to face) -- "
+				               "draw it in a 2D sketch on a plane, or two 3-point arcs");
 			double c[3];
 			if (!map(entity.circle().center(), c))
 				return mapFailed;
@@ -154,17 +185,20 @@ namespace
 				return mapFailed;
 			if (arc.has_center())
 			{
+				if (map.is3D)
+					return invalid("in a 3D sketch an arc is given by a point it passes `through`, which "
+					               "settles its plane and direction, not by its center");
 				double c[3];
 				if (!map(arc.center(), c))
 					return mapFailed;
-				const double radius = Distance2D(s, c);
-				const double toEnd = Distance2D(e, c);
+				const double radius = Distance(s, c);
+				const double toEnd = Distance(e, c);
 				if (radius < kSketchTolerance || toEnd < kSketchTolerance)
 					return invalid("an arc's start and end must both be away from its center");
 				// The radius comes from the start; the end only gives the angle.
 				for (int i = 0; i < 2; ++i)
 					e[i] = c[i] + (e[i] - c[i]) * radius / toEnd;
-				if (Distance2D(s, e) < kSketchTolerance)
+				if (Distance(s, e) < kSketchTolerance)
 					return invalid("an arc's start and end are at the same angle around its center -- "
 					               "draw a circle for a full turn");
 				// Direction: +1 counterclockwise, -1 clockwise.
@@ -176,16 +210,17 @@ namespace
 				double t[3];
 				if (!map(arc.through(), t))
 					return mapFailed;
-				const double chord = Distance2D(s, e);
+				const double chord = Distance(s, e);
 				if (chord < kSketchTolerance)
 					return invalid("an arc's start and end are the same point -- draw a circle instead");
 				// Twice the triangle's area over its base = the through point's
 				// distance from the chord.
-				const double cross = (t[0] - s[0]) * (e[1] - s[1]) - (t[1] - s[1]) * (e[0] - s[0]);
-				if (std::abs(cross) / chord < kSketchTolerance)
+				const Eigen::Vector3d start(s[0], s[1], s[2]);
+				const double cross = (Eigen::Vector3d(t[0], t[1], t[2]) - start).cross(Eigen::Vector3d(e[0], e[1], e[2]) - start).norm();
+				if (cross / chord < kSketchTolerance)
 					return invalid("an arc's three points are in a straight line -- draw a line instead");
 				// Start, end, then a point on the arc.
-				hr = sketchManager->Create3PointArc(s[0], s[1], 0.0, e[0], e[1], 0.0, t[0], t[1], 0.0, &segment);
+				hr = sketchManager->Create3PointArc(s[0], s[1], s[2], e[0], e[1], e[2], t[0], t[1], t[2], &segment);
 			}
 			break;
 		}
@@ -202,15 +237,16 @@ namespace
 				double p[3];
 				if (!map(spline.points(i), p))
 					return mapFailed;
-				if (i > 0 && Distance2D(p, previous) < kSketchTolerance)
-					return invalid("a spline has two consecutive points at the same place in the sketch plane");
+				if (i > 0 && Distance(p, previous) < kSketchTolerance)
+					return invalid(map.is3D ? "a spline has two consecutive points at the same place"
+					                        : "a spline has two consecutive points at the same place in the sketch plane");
 				if (i == 0)
 					std::copy(p, p + 3, first);
 				std::copy(p, p + 3, previous);
 				data.insert(data.end(), p, p + 3);
 			}
 			// A spline whose last point is its first is closed.
-			if (spline.closed() && Distance2D(previous, first) >= kSketchTolerance)
+			if (spline.closed() && Distance(previous, first) >= kSketchTolerance)
 				data.insert(data.end(), first, first + 3);
 			ATL::CComVariant points = comvariant::FromDoubles(data.data(), data.size());
 			hr = sketchManager->CreateSpline(points, &segment);
@@ -222,7 +258,7 @@ namespace
 			if (!map(entity.point().position(), p))
 				return mapFailed;
 			ATL::CComPtr<ISketchPoint> point;
-			hr = sketchManager->CreatePoint(p[0], p[1], 0.0, &point);
+			hr = sketchManager->CreatePoint(p[0], p[1], p[2], &point);
 			if (FAILED(hr))
 				return ComError("ISketchManager::CreatePoint", hr);
 			if (!point)
@@ -466,12 +502,18 @@ grpc::Status SolidWorksService::AddSketchEntities(grpc::ServerContext* /*context
 	// Validate before touching SolidWorks.
 	const bool existing = !request->sketch_name().empty();
 	const bool onEntity = !request->on_persist_id().empty();
+	const bool new3D = request->sketch_3d();
 	int planeIndex = 0;
 	if (existing)
 	{
-		if (onEntity || request->plane() != sld_mcp::v1::PLANE_UNSPECIFIED)
+		if (onEntity || new3D || request->plane() != sld_mcp::v1::PLANE_UNSPECIFIED)
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
 				"give either an existing sketch_name or where to put a new sketch, not both");
+	}
+	else if (new3D)
+	{
+		if (onEntity || request->plane() != sld_mcp::v1::PLANE_UNSPECIFIED)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a 3D sketch isn't on a plane or face");
 	}
 	else if (!onEntity && !StandardPlaneIndex(request->plane(), planeIndex))
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "plane must be FRONT, TOP or RIGHT");
@@ -502,12 +544,15 @@ grpc::Status SolidWorksService::AddSketchEntities(grpc::ServerContext* /*context
 	SketchTarget target;
 	if (existing)
 	{
-		if (grpc::Status status = FindSketchByName(doc, request->sketch_name(), sketchFeature); !status.ok())
+		if (grpc::Status status = FindSketchByName(doc, request->sketch_name(), sketchFeature, true); !status.ok())
 			return status;
 	}
-	else if (grpc::Status status = ResolveSketchTarget(doc, request->on_persist_id(), planeIndex, target);
-		!status.ok())
-		return status;
+	else if (!new3D)
+	{
+		if (grpc::Status status = ResolveSketchTarget(doc, request->on_persist_id(), planeIndex, target);
+			!status.ok())
+			return status;
+	}
 
 	SketchSpace space;
 	if (grpc::Status status = space.Init(swApp); !status.ok())
@@ -533,7 +578,9 @@ grpc::Status SolidWorksService::AddSketchEntities(grpc::ServerContext* /*context
 	}
 	else
 	{
-		if (grpc::Status status = OpenNewSketch(doc, sketchManager, target, sketch); !status.ok())
+		if (grpc::Status status = new3D ? OpenNew3DSketch(doc, sketchManager, sketch)
+		                                : OpenNewSketch(doc, sketchManager, target, sketch);
+			!status.ok())
 			return status;
 		sketchFeature = ATL::CComQIPtr<IFeature>(sketch.p);
 	}
@@ -541,7 +588,8 @@ grpc::Status SolidWorksService::AddSketchEntities(grpc::ServerContext* /*context
 	// The sketch is now open: everything below must fall through to the
 	// InsertSketch call that closes it, so no early returns until then.
 	space.Attach(sketch);
-	const SketchPointMapper map{space, request->model_space()};
+	const bool is3D = new3D || IsSketch3D(sketch);
+	const SketchPointMapper map{space, request->model_space(), is3D};
 
 	// AddToDB skips snapping and inferencing, so entities land exactly at the
 	// requested coordinates instead of snapping to nearby geometry.
@@ -550,6 +598,9 @@ grpc::Status SolidWorksService::AddSketchEntities(grpc::ServerContext* /*context
 	sketchManager->put_AddToDB(VARIANT_TRUE);
 
 	grpc::Status failure = grpc::Status::OK;
+	if (is3D && !request->model_space())
+		failure = grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+			"a 3D sketch has no 2D coordinates -- give points as [x, y, z] in model coordinates");
 	std::vector<ATL::CComPtr<IDispatch>> created;
 	for (int i = 0; i < request->entities_size() && failure.ok(); ++i)
 	{
@@ -581,7 +632,7 @@ grpc::Status SolidWorksService::AddSketchEntities(grpc::ServerContext* /*context
 		}
 
 		sld_mcp::v1::SketchFrame frame;
-		if (space.Frame(frame))
+		if (!is3D && space.Frame(frame))
 			*response->mutable_frame() = frame;
 	}
 	else if (existing)
@@ -595,7 +646,8 @@ grpc::Status SolidWorksService::AddSketchEntities(grpc::ServerContext* /*context
 		sketchFeature->get_Name(&sketchName);
 
 	// Close the sketch (and rebuild).
-	const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_TRUE);
+	const HRESULT closeHr = is3D ? sketchManager->Insert3DSketch(VARIANT_TRUE)
+	                             : sketchManager->InsertSketch(VARIANT_TRUE);
 	doc->ClearSelection2(VARIANT_TRUE);
 
 	if (!failure.ok())
@@ -620,6 +672,7 @@ grpc::Status SolidWorksService::AddSketchEntities(grpc::ServerContext* /*context
 
 	response->set_sketch_name(ToUtf8(sketchName));
 	response->set_created_sketch(!existing);
+	response->set_is_3d(is3D);
 	response->set_entity_count(static_cast<int32_t>(created.size()));
 	return grpc::Status::OK;
 }
@@ -646,7 +699,7 @@ grpc::Status SolidWorksService::InspectSketch(grpc::ServerContext* /*context*/,
 		return status;
 
 	ATL::CComPtr<IFeature> feature;
-	if (grpc::Status status = ResolveSketchFeature(doc, request->sketch_name(), feature); !status.ok())
+	if (grpc::Status status = ResolveSketchFeature(doc, request->sketch_name(), feature, true); !status.ok())
 		return status;
 	ATL::CComPtr<ISketch> sketch;
 	if (grpc::Status status = SketchOf(feature, sketch); !status.ok())
@@ -655,8 +708,10 @@ grpc::Status SolidWorksService::InspectSketch(grpc::ServerContext* /*context*/,
 	const std::string sketchPid = PersistIdOf(ext, feature);
 	response->set_sketch_name(sketchName);
 
+	const bool is3D = IsSketch3D(sketch);
+	response->set_is_3d(is3D);
 	SketchSpace space;
-	if (space.Init(swApp).ok())
+	if (!is3D && space.Init(swApp).ok())
 	{
 		space.Attach(sketch);
 		sld_mcp::v1::SketchFrame frame;
@@ -668,6 +723,7 @@ grpc::Status SolidWorksService::InspectSketch(grpc::ServerContext* /*context*/,
 
 	SketchItems items;
 	items.Load(sketch);
+	const ArcAxisPoints hidden(sketch, items);
 	for (const auto& entry : items.All())
 	{
 		if (static_cast<size_t>(response->items_size()) >= kMaxSketchItems)
@@ -675,6 +731,8 @@ grpc::Status SolidWorksService::InspectSketch(grpc::ServerContext* /*context*/,
 			response->set_truncated(true);
 			break;
 		}
+		if (entry.point && hidden.Contains(entry.obj))
+			continue;
 		sld_mcp::v1::SketchItem item;
 		if (DescribeSketchItem(entry.obj, sketchPid, &item))
 			response->add_items()->Swap(&item);

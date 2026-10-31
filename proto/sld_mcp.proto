@@ -46,7 +46,8 @@ service SolidWorks {
   rpc CreateRectangleSketch(CreateRectangleSketchRequest) returns (CreateRectangleSketchResponse);
 
   // Draws lines, circles, arcs, splines and/or points into a sketch of the
-  // active part -- a new one on a plane or face, or an existing one by name
+  // active part -- a new one on a plane or face, a new 3D one, or an existing
+  // one by name (2D or 3D; a 3D sketch takes no circles and only 3-point arcs)
   // -- then closes the sketch. Coincident end points are merged, so a chain
   // of entities that ends where it started forms a closed contour. All or
   // nothing: if any entity fails, none of them are kept (and a new sketch is
@@ -84,6 +85,13 @@ service SolidWorks {
   // a feature given twice, NOT_FOUND for unknown names, FAILED_PRECONDITION
   // when SolidWorks won't make the feature.
   rpc LoftSketch(LoftSketchRequest) returns (LoftSketchResponse);
+
+  // Makes a helix or spiral curve from a 2D sketch holding one circle
+  // (IModelDoc2::InsertHelix), e.g. as a sweep's path. Same preconditions and
+  // sketch defaulting as ExtrudeSketch; INVALID_ARGUMENT for bad sizes or a
+  // definition missing a value, FAILED_PRECONDITION for a sketch that isn't
+  // one circle or when SolidWorks won't make the curve.
+  rpc CreateHelix(CreateHelixRequest) returns (CreateHelixResponse);
 
   // Rounds edges of the active part with a constant-radius fillet
   // (IFeatureManager::FeatureFillet3), or bevels them with a chamfer
@@ -799,8 +807,9 @@ message CreateRectangleSketchResponse {
 // AddSketchEntities
 
 message AddSketchEntitiesRequest {
-  // Add to this existing 2D sketch, e.g. "Sketch1". When set, `plane` and
-  // `on_persist_id` must be left unset. Empty means create a new sketch.
+  // Add to this existing 2D or 3D sketch, e.g. "Sketch1", "3DSketch1". When
+  // set, `plane`, `on_persist_id` and `sketch_3d` must be left unset. Empty
+  // means create a new sketch.
   string sketch_name = 1;
   // New sketches: one of the default planes, or (instead) a planar face or
   // reference plane feature by persist_id, as in CreateRectangleSketch.
@@ -808,10 +817,13 @@ message AddSketchEntitiesRequest {
   bytes on_persist_id = 3;
   // How every point below is given:
   //   false: sketch 2D coordinates (x, y; z is ignored), meters.
-  //   true:  model-space points, meters, projected onto the sketch plane.
+  //   true:  model-space points, meters, projected onto the sketch plane (in
+  //          a 3D sketch: used as they are; a 3D sketch needs this).
   bool model_space = 4;
   // Drawn in order. At least one.
   repeated SketchEntity entities = 5;
+  // Create a new 3D sketch (it has no plane) instead of a 2D one.
+  bool sketch_3d = 6;
 }
 
 message SketchEntity {
@@ -876,6 +888,8 @@ message AddSketchEntitiesResponse {
   // What was drawn, in request order, with IDs for dimensioning. A drawn
   // point that was merged into another entity's end point is left out.
   repeated SketchItem items = 6;
+  // The sketch is a 3D sketch: `frame` is unset, positions are model space.
+  bool is_3d = 7;
 }
 
 // Chains of connected segments in a sketch. Boss/cut extrusions need
@@ -980,6 +994,57 @@ message SweepSketchResponse {
   DefinitionStatus sketch_status = 3;
   // The path's feature-tree name.
   string path = 4;
+}
+
+// What sets a helix's size; values match swHelixDefinedBy_e + 1.
+enum HelixDefinition {
+  HELIX_DEFINITION_UNSPECIFIED = 0;
+  HELIX_DEFINITION_PITCH_AND_REVOLUTIONS = 1;
+  HELIX_DEFINITION_HEIGHT_AND_REVOLUTIONS = 2;
+  HELIX_DEFINITION_HEIGHT_AND_PITCH = 3;
+  // A flat spiral in the sketch's plane: pitch = growth of radius per turn.
+  HELIX_DEFINITION_SPIRAL = 4;
+}
+
+message CreateHelixRequest {
+  // Feature-tree name of a 2D sketch holding one circle (and at most
+  // construction geometry besides). Empty means the most recent 2D sketch not
+  // yet used by any feature.
+  string sketch_name = 1;
+  HelixDefinition definition = 2;
+  // Meters, > 0, where the definition uses them.
+  double height = 3;
+  double pitch = 4;
+  // Turns, > 0, where the definition uses them.
+  double revolutions = 5;
+  // Go to the other side of the sketch plane.
+  bool reverse_direction = 6;
+  bool clockwise = 7;
+  // Radians, where the curve starts round the circle.
+  double start_angle = 8;
+  // Radians, in (0, pi/2); 0 = no taper. Not with a spiral.
+  double taper_angle = 9;
+  // The taper widens along the helix instead of narrowing.
+  bool taper_outward = 10;
+}
+
+message CreateHelixResponse {
+  // Feature-tree name of the new curve, e.g. "Helix/Spiral1".
+  string feature_name = 1;
+  // The sketch it was made from (useful when the request left it empty).
+  string sketch_name = 2;
+  // Read back from the feature; meters, turns.
+  double height = 3;
+  double pitch = 4;
+  double revolutions = 5;
+  // The circle: model-space center, meters.
+  Vec3 center = 6;
+  double radius = 7;
+  // The curve's ends in model space, and its length; unset / 0 if SolidWorks
+  // won't report them.
+  Vec3 start = 8;
+  Vec3 end = 9;
+  double length = 10;
 }
 
 message LoftSketchRequest {
@@ -2036,6 +2101,8 @@ message SketchState {
   repeated SketchItem not_fully_defined = 2;
   // How many there are in all (may exceed the list).
   int32 not_fully_defined_count = 3;
+  // It's a 3D sketch, which FullyDefineSketch doesn't take.
+  bool is_3d = 4;
 }
 
 enum DimensionType {
@@ -2081,6 +2148,8 @@ message InspectSketchResponse {
   SketchContours contours = 7;
   // Set when items were cut off at the add-in's safety limit.
   bool truncated = 8;
+  // The sketch is a 3D sketch: `frame` is unset, positions are model space.
+  bool is_3d = 9;
 }
 
 // Something a dimension or relation attaches to.
@@ -2143,6 +2212,11 @@ enum RelationKind {
   RELATION_KIND_FIXED = 12;         // anything
   RELATION_KIND_SYMMETRIC = 13;     // 2 entities + a centerline, in that order
   RELATION_KIND_MERGE = 14;         // 2 points
+  // 3D sketches only (where horizontal / vertical don't apply): lines along a
+  // model axis.
+  RELATION_KIND_ALONG_X = 15;
+  RELATION_KIND_ALONG_Y = 16;
+  RELATION_KIND_ALONG_Z = 17;
 }
 
 message SketchRelation {

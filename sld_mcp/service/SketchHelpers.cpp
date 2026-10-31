@@ -74,7 +74,14 @@ namespace sld_mcp::service
 		}
 	}
 
-	grpc::Status FindSketchByName(IModelDoc2* doc, const std::string& name, ATL::CComPtr<IFeature>& sketch)
+	bool IsSketch3D(ISketch* sketch)
+	{
+		VARIANT_BOOL is3D = VARIANT_FALSE;
+		return SUCCEEDED(sketch->Is3D(&is3D)) && is3D != VARIANT_FALSE;
+	}
+
+	grpc::Status FindSketchByName(IModelDoc2* doc, const std::string& name, ATL::CComPtr<IFeature>& sketch,
+		bool allow3D)
 	{
 		ATL::CComQIPtr<IPartDoc> part(doc);
 		if (!part)
@@ -90,10 +97,17 @@ namespace sld_mcp::service
 		hr = sketch->GetTypeName2(&typeName);
 		if (FAILED(hr))
 			return ComError("IFeature::GetTypeName2", hr);
-		if (typeName != L"ProfileFeature")
+		if (typeName == L"3DProfileFeature" && !allow3D)
 		{
 			sketch.Release();
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "\"" + name + "\" isn't a 2D sketch");
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"\"" + name + "\" is a 3D sketch, and this needs a 2D one");
+		}
+		if (typeName != L"ProfileFeature" && typeName != L"3DProfileFeature")
+		{
+			sketch.Release();
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"\"" + name + "\" isn't a " + (allow3D ? "sketch" : "2D sketch"));
 		}
 		return grpc::Status::OK;
 	}
@@ -120,7 +134,7 @@ namespace sld_mcp::service
 		return true;
 	}
 
-	grpc::Status FindLatestSketch(IModelDoc2* doc, ATL::CComPtr<IFeature>& sketch)
+	grpc::Status FindLatestSketch(IModelDoc2* doc, ATL::CComPtr<IFeature>& sketch, bool allow3D)
 	{
 		ATL::CComPtr<IFeature> feature;
 		HRESULT hr = doc->IFirstFeature(&feature);
@@ -134,7 +148,7 @@ namespace sld_mcp::service
 			hr = feature->GetTypeName2(&typeName);
 			if (FAILED(hr))
 				return ComError("IFeature::GetTypeName2", hr);
-			if (typeName == L"ProfileFeature")
+			if (typeName == L"ProfileFeature" || (allow3D && typeName == L"3DProfileFeature"))
 				sketch = feature;
 
 			ATL::CComPtr<IFeature> next;
@@ -145,7 +159,7 @@ namespace sld_mcp::service
 		}
 		if (!sketch)
 			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				"the active part has no 2D sketch -- create one first");
+				std::string("the active part has no ") + (allow3D ? "sketch" : "2D sketch") + " -- create one first");
 		return grpc::Status::OK;
 	}
 
@@ -186,9 +200,10 @@ namespace sld_mcp::service
 		return grpc::Status::OK;
 	}
 
-	grpc::Status ResolveSketchFeature(IModelDoc2* doc, const std::string& name, ATL::CComPtr<IFeature>& sketch)
+	grpc::Status ResolveSketchFeature(IModelDoc2* doc, const std::string& name, ATL::CComPtr<IFeature>& sketch,
+		bool allow3D)
 	{
-		return name.empty() ? FindLatestSketch(doc, sketch) : FindSketchByName(doc, name, sketch);
+		return name.empty() ? FindLatestSketch(doc, sketch, allow3D) : FindSketchByName(doc, name, sketch, allow3D);
 	}
 
 	grpc::Status SketchOf(IFeature* feature, ATL::CComPtr<ISketch>& sketch)
@@ -333,7 +348,9 @@ namespace sld_mcp::service
 		ATL::CComQIPtr<ISketchPoint> point(pointDisp);
 		if (!point || FAILED(point->get_X(&out[0])) || FAILED(point->get_Y(&out[1])))
 			return false;
-		out[2] = 0.0;
+		// 0 in a 2D sketch.
+		if (FAILED(point->get_Z(&out[2])))
+			out[2] = 0.0;
 		return true;
 	}
 
@@ -451,16 +468,54 @@ namespace sld_mcp::service
 		return true;
 	}
 
+	ArcAxisPoints::ArcAxisPoints(ISketch* sketch, const SketchItems& items)
+	{
+		if (!IsSketch3D(sketch))
+			return;
+		for (const auto& e : items.All())
+		{
+			if (e.point || e.type != swSketchARC)
+				continue;
+			ATL::CComQIPtr<ISketchArc> arc(e.obj.p);
+			ATL::CComPtr<IDispatch> center;
+			ATL::CComVariant normal;
+			double c[3], radius = 0.0;
+			if (!arc || FAILED(arc->GetCenterPoint2(&center)) || !PointPosition(center, c) ||
+				FAILED(arc->GetRadius(&radius)) || FAILED(arc->GetNormalVector(&normal)))
+				continue;
+			const std::vector<double> n = comvariant::ToDoubles(normal);
+			if (n.size() >= 3)
+				m_axes.push_back({Eigen::Vector3d(c[0], c[1], c[2]), Eigen::Vector3d(n[0], n[1], n[2]).normalized(), radius});
+		}
+	}
+
+	bool ArcAxisPoints::Contains(IDispatch* point) const
+	{
+		constexpr double kTolerance = 1e-9;
+		double p[3];
+		if (m_axes.empty() || !PointPosition(point, p))
+			return false;
+		const Eigen::Vector3d at(p[0], p[1], p[2]);
+		return std::any_of(m_axes.begin(), m_axes.end(), [&](const Axis& axis) {
+			const Eigen::Vector3d offset = at - axis.center;
+			return std::abs(offset.norm() - axis.radius) < kTolerance && offset.cross(axis.normal).norm() < kTolerance;
+		});
+	}
+
 	void ReadSketchState(ISketch* sketch, const std::string& sketchPid, sld_mcp::v1::SketchState* state)
 	{
 		state->set_status(SketchStatus(sketch));
+		state->set_is_3d(IsSketch3D(sketch));
 		SketchItems items;
 		items.Load(sketch);
+		const ArcAxisPoints hidden(sketch, items);
 		int count = 0;
 		for (const auto& e : items.All())
 		{
 			const long status = ItemStatus(e.obj);
 			if (status == swFullyConstrained || status == 0 || status == swUnknownConstraint)
+				continue;
+			if (e.point && hidden.Contains(e.obj))
 				continue;
 			++count;
 			if (state->not_fully_defined_size() < kMaxListedUndefined)
@@ -539,6 +594,12 @@ namespace sld_mcp::service
 		sketchFeature = ATL::CComQIPtr<IFeature>(obj.p);
 		if (!sketchFeature)
 			return grpc::Status(grpc::StatusCode::INTERNAL, "a sketch reference didn't resolve to a feature");
+		ATL::CComPtr<ISketch> sketch;
+		if (grpc::Status status = SketchOf(sketchFeature, sketch); !status.ok())
+			return status;
+		if (IsSketch3D(sketch))
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"\"" + FeatureName(sketchFeature) + "\" is a 3D sketch, and this needs a 2D one");
 		return grpc::Status::OK;
 	}
 

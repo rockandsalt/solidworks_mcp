@@ -263,7 +263,7 @@ grpc::Status SolidWorksService::DeleteSketchEntities(grpc::ServerContext* /*cont
 	ATL::CComPtr<IFeature> sketchFeature;
 	if (!request->sketch_name().empty())
 	{
-		if (grpc::Status status = FindSketchByName(doc, request->sketch_name(), sketchFeature); !status.ok())
+		if (grpc::Status status = FindSketchByName(doc, request->sketch_name(), sketchFeature, true); !status.ok())
 			return status;
 	}
 	else

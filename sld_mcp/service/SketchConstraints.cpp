@@ -249,7 +249,7 @@ namespace
 		const google::protobuf::RepeatedPtrField<Constraint>& constraints, ATL::CComPtr<IFeature>& sketch)
 	{
 		if (!name.empty())
-			return FindSketchByName(doc, name, sketch);
+			return FindSketchByName(doc, name, sketch, true);
 		for (const auto& constraint : constraints)
 			for (const auto& ref : constraint.refs())
 				if (ref.has_item())
@@ -495,6 +495,9 @@ namespace
 		case sld_mcp::v1::RELATION_KIND_FIXED:         return "fixed";
 		case sld_mcp::v1::RELATION_KIND_SYMMETRIC:     return "symmetric";
 		case sld_mcp::v1::RELATION_KIND_MERGE:         return "merge";
+		case sld_mcp::v1::RELATION_KIND_ALONG_X:       return "along_x";
+		case sld_mcp::v1::RELATION_KIND_ALONG_Y:       return "along_y";
+		case sld_mcp::v1::RELATION_KIND_ALONG_Z:       return "along_z";
 		default:                                        return "unknown";
 		}
 	}
@@ -509,6 +512,9 @@ namespace
 		case K::RELATION_KIND_HORIZONTAL:
 		case K::RELATION_KIND_VERTICAL:
 		case K::RELATION_KIND_FIXED:
+		case K::RELATION_KIND_ALONG_X:
+		case K::RELATION_KIND_ALONG_Y:
+		case K::RELATION_KIND_ALONG_Z:
 			lo = 1;
 			hi = kMaxRelationRefs;
 			break;
@@ -569,8 +575,17 @@ namespace
 		case sld_mcp::v1::RELATION_KIND_FIXED:         return L"sgFIXED";
 		case sld_mcp::v1::RELATION_KIND_SYMMETRIC:     return L"sgSYMMETRIC";
 		case sld_mcp::v1::RELATION_KIND_MERGE:         return L"sgMERGEPOINTS";
+		case sld_mcp::v1::RELATION_KIND_ALONG_X:       return L"sgALONGX3D";
+		case sld_mcp::v1::RELATION_KIND_ALONG_Y:       return L"sgALONGY3D";
+		case sld_mcp::v1::RELATION_KIND_ALONG_Z:       return L"sgALONGZ3D";
 		default:                                        return nullptr;
 		}
+	}
+
+	bool IsAlongAxis(sld_mcp::v1::RelationKind kind)
+	{
+		return kind == sld_mcp::v1::RELATION_KIND_ALONG_X || kind == sld_mcp::v1::RELATION_KIND_ALONG_Y ||
+			kind == sld_mcp::v1::RELATION_KIND_ALONG_Z;
 	}
 
 	// Deletes the relations past the first `keep`, newest first. Best effort:
@@ -703,6 +718,10 @@ grpc::Status SolidWorksService::AddSketchDimensions(grpc::ServerContext* /*conte
 		for (int i = 0; i < count; ++i)
 		{
 			const auto& dimension = request->dimensions(i);
+			if (IsSketch3D(sketch) && (dimension.kind() == sld_mcp::v1::DIMENSION_KIND_HORIZONTAL ||
+				dimension.kind() == sld_mcp::v1::DIMENSION_KIND_VERTICAL))
+				return rollback(grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					where(i) + ": a 3D sketch has no horizontal or vertical -- use length or distance"));
 			std::vector<ResolvedRef> refs(dimension.refs_size());
 			for (int r = 0; r < dimension.refs_size(); ++r)
 				if (grpc::Status status = ResolveRef(ctx, dimension.refs(r), refs[r]); !status.ok())
@@ -868,6 +887,14 @@ grpc::Status SolidWorksService::AddSketchRelations(grpc::ServerContext* /*contex
 		for (int i = 0; i < count; ++i)
 		{
 			const auto& relation = request->relations(i);
+			const bool is3D = IsSketch3D(sketch);
+			if (IsAlongAxis(relation.kind()) && !is3D)
+				return rollback(grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					where(i) + ": along_x / along_y / along_z are for 3D sketches -- use horizontal or vertical"));
+			if (is3D && (relation.kind() == sld_mcp::v1::RELATION_KIND_HORIZONTAL ||
+				relation.kind() == sld_mcp::v1::RELATION_KIND_VERTICAL))
+				return rollback(grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					where(i) + ": a 3D sketch has no horizontal or vertical -- use along_x, along_y or along_z"));
 			std::vector<ResolvedRef> refs(relation.refs_size());
 			bool allPoints = true;
 			for (int r = 0; r < relation.refs_size(); ++r)

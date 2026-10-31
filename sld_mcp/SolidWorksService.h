@@ -65,6 +65,10 @@ public:
 		const sld_mcp::v1::ChamferEdgesRequest* request,
 		sld_mcp::v1::EdgeFeatureResponse* response) override;
 
+	grpc::Status CreateHelix(grpc::ServerContext* context,
+		const sld_mcp::v1::CreateHelixRequest* request,
+		sld_mcp::v1::CreateHelixResponse* response) override;
+
 	grpc::Status ShellBody(grpc::ServerContext* context,
 		const sld_mcp::v1::ShellBodyRequest* request,
 		sld_mcp::v1::EdgeFeatureResponse* response) override;

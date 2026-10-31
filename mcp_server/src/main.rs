@@ -10,6 +10,7 @@ mod edit;
 mod files;
 mod fillet;
 mod gdt;
+mod helix;
 mod hole;
 mod inspect;
 mod interference;
@@ -141,16 +142,16 @@ struct SketchPlacement {
 }
 
 /// A point for the sketch_* tools, in millimeters: [x, y] in the sketch's own 2D coordinates,
-/// or [x, y, z] in model coordinates, projected onto the sketch plane. All points in one call
-/// must use the same form.
+/// or [x, y, z] in model coordinates, projected onto the sketch plane (a 3D sketch takes only
+/// these, as they are). All points in one call must use the same form.
 type Point = Vec<f64>;
 
 /// Which sketch the sketch_* tools draw in.
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 struct SketchTarget {
-    /// Add to this existing sketch, e.g. "Sketch1" (the name an earlier sketch_* or
-    /// create_*_sketch call reported, or a ProfileFeature from inspect_model). Omit to create a
-    /// new sketch.
+    /// Add to this existing sketch, e.g. "Sketch1" or "3DSketch1" (the name an earlier sketch_*
+    /// or create_*_sketch call reported, or a ProfileFeature / 3DProfileFeature from
+    /// inspect_model). Omit to create a new sketch.
     #[serde(default)]
     sketch_name: Option<String>,
     /// New sketch only: the plane to sketch on. Defaults to the Front plane.
@@ -161,6 +162,19 @@ struct SketchTarget {
     /// model coordinates to place geometry on a face without knowing its sketch axes.
     #[serde(default)]
     on: Option<String>,
+}
+
+/// Which sketch the drawing tools draw in, which unlike the other sketch tools can be a new 3D one.
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+struct DrawTarget {
+    /// New sketch only: make it a 3D sketch, which has no plane: geometry goes exactly where
+    /// its [x, y, z] model coordinates say, for a path or guide curve that doesn't lie in a
+    /// plane. It can be swept along or used as a loft guide, not extruded. Takes lines, splines,
+    /// points and arcs given by `through`, no circles. Defaults to false.
+    #[serde(default)]
+    sketch_3d: bool,
+    #[serde(flatten)]
+    sketch: SketchTarget,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -176,7 +190,7 @@ struct SketchLineParams {
     #[serde(default)]
     construction: bool,
     #[serde(flatten)]
-    target: SketchTarget,
+    target: DrawTarget,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -193,7 +207,7 @@ struct SketchCircleParams {
     #[serde(default)]
     construction: bool,
     #[serde(flatten)]
-    target: SketchTarget,
+    target: DrawTarget,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -218,7 +232,7 @@ struct SketchArcParams {
     #[serde(default)]
     construction: bool,
     #[serde(flatten)]
-    target: SketchTarget,
+    target: DrawTarget,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -233,7 +247,7 @@ struct SketchSplineParams {
     #[serde(default)]
     construction: bool,
     #[serde(flatten)]
-    target: SketchTarget,
+    target: DrawTarget,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -241,7 +255,7 @@ struct SketchPointParams {
     /// Points to place, each [x, y] (sketch) or [x, y, z] (model), in millimeters.
     points: Vec<Point>,
     #[serde(flatten)]
-    target: SketchTarget,
+    target: DrawTarget,
 }
 
 /// Most entities or spline points one sketch_* call may draw (the add-in's limit).
@@ -656,6 +670,15 @@ enum RelationKind {
     Symmetric,
     /// 2 points become one.
     Merge,
+    /// 3D sketches only: lines along the model's X axis.
+    #[serde(rename = "along_x")]
+    AlongX,
+    /// 3D sketches only: lines along the model's Y axis.
+    #[serde(rename = "along_y")]
+    AlongY,
+    /// 3D sketches only: lines along the model's Z axis.
+    #[serde(rename = "along_z")]
+    AlongZ,
 }
 
 impl RelationKind {
@@ -675,6 +698,9 @@ impl RelationKind {
             RelationKind::Fixed => "fixed",
             RelationKind::Symmetric => "symmetric",
             RelationKind::Merge => "merge",
+            RelationKind::AlongX => "along_x",
+            RelationKind::AlongY => "along_y",
+            RelationKind::AlongZ => "along_z",
         }
     }
 }
@@ -696,6 +722,9 @@ impl From<RelationKind> for proto::RelationKind {
             RelationKind::Fixed => proto::RelationKind::Fixed,
             RelationKind::Symmetric => proto::RelationKind::Symmetric,
             RelationKind::Merge => proto::RelationKind::Merge,
+            RelationKind::AlongX => proto::RelationKind::AlongX,
+            RelationKind::AlongY => proto::RelationKind::AlongY,
+            RelationKind::AlongZ => proto::RelationKind::AlongZ,
         }
     }
 }
@@ -1031,7 +1060,8 @@ impl SolidWorksTools {
                        point back to the first, e.g. for a polygon to extrude). Draws into a new \
                        sketch on the Front/Top/Right plane or `on` a planar face, or into an \
                        existing sketch given by sketch_name -- use that to combine lines, arcs \
-                       and splines into one profile. Points are [x, y] in sketch coordinates or \
+                       and splines into one profile -- or into a 3D sketch (sketch_3d=true), for a \
+                       path that doesn't lie in a plane. Points are [x, y] in sketch coordinates or \
                        [x, y, z] in model coordinates (projected onto the sketch plane), in \
                        millimeters. End points that meet are joined, and the result says how many \
                        closed contours the sketch has (extrude_sketch needs closed ones) and how \
@@ -1084,9 +1114,9 @@ impl SolidWorksTools {
         description = "Draw a circle in a sketch of the active part, by center and radius or \
                        diameter -- e.g. a hole profile to cut-extrude. Draws into a new sketch on \
                        the Front/Top/Right plane or `on` a planar face, or into an existing sketch \
-                       given by sketch_name. The center is [x, y] in sketch coordinates or \
-                       [x, y, z] in model coordinates (projected onto the sketch plane), in \
-                       millimeters. Requires an open part with no sketch being edited."
+                       given by sketch_name (not a 3D sketch). The center is [x, y] in sketch \
+                       coordinates or [x, y, z] in model coordinates (projected onto the sketch \
+                       plane), in millimeters. Requires an open part with no sketch being edited."
     )]
     async fn sketch_circle(
         &self,
@@ -1128,10 +1158,11 @@ impl SolidWorksTools {
                        by a third point it passes `through`. Draws into a new sketch on the \
                        Front/Top/Right plane or `on` a planar face, or into an existing sketch \
                        given by sketch_name -- e.g. to round off a chain of lines into a slot or \
-                       a U shape. Points are [x, y] in sketch coordinates or [x, y, z] in model \
-                       coordinates (projected onto the sketch plane), in millimeters. End points \
-                       that meet other entities are joined. Requires an open part with no sketch \
-                       being edited."
+                       a U shape -- or a 3D sketch (sketch_3d=true; `through` only: the three \
+                       points set the arc's plane). Points are [x, y] in sketch coordinates or \
+                       [x, y, z] in model coordinates (projected onto the sketch plane), in \
+                       millimeters. End points that meet other entities are joined. Requires an \
+                       open part with no sketch being edited."
     )]
     async fn sketch_arc(
         &self,
@@ -1181,11 +1212,12 @@ impl SolidWorksTools {
     #[tool(
         description = "Draw a smooth spline curve through the given points, in order, in a \
                        sketch of the active part (closed=true makes a closed loop). Draws into a \
-                       new sketch on the Front/Top/Right plane or `on` a planar face, or into an \
-                       existing sketch given by sketch_name. Points are [x, y] in sketch \
-                       coordinates or [x, y, z] in model coordinates (projected onto the sketch \
-                       plane), in millimeters. Its ends join other entities they meet. Requires \
-                       an open part with no sketch being edited."
+                       new sketch on the Front/Top/Right plane or `on` a planar face, into a new \
+                       3D sketch (sketch_3d=true, for a curve through space), or into an existing \
+                       sketch given by sketch_name. Points are [x, y] in sketch coordinates or \
+                       [x, y, z] in model coordinates (projected onto the sketch plane), in \
+                       millimeters. Its ends join other entities they meet. Requires an open part \
+                       with no sketch being edited."
     )]
     async fn sketch_spline(
         &self,
@@ -1225,7 +1257,8 @@ impl SolidWorksTools {
     #[tool(
         description = "Place sketch points in a sketch of the active part, e.g. reference \
                        points for later geometry. Draws into a new sketch on the Front/Top/Right \
-                       plane or `on` a planar face, or into an existing sketch given by \
+                       plane or `on` a planar face, into a new 3D sketch (sketch_3d=true), or into \
+                       an existing sketch given by \
                        sketch_name. Points are [x, y] in sketch coordinates or [x, y, z] in model \
                        coordinates (projected onto the sketch plane), in millimeters. Requires an \
                        open part with no sketch being edited."
@@ -1508,6 +1541,29 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(fillet::chamfer_text(&params, &reply))]))
+    }
+
+    #[tool(
+        description = "Make a helix or a flat spiral curve in the active part from a sketch \
+                       holding one circle (sketch_circle first): the circle sets the diameter, its \
+                       plane the axis. Give exactly two of pitch_mm, height_mm and revolutions \
+                       (spiral=true: pitch_mm and revolutions); clockwise, reverse_direction, \
+                       start_angle_deg and taper_deg shape it further. The curve is not solid: \
+                       use it as sweep_sketch's or cut_sweep_sketch's path for a spring, a coil or \
+                       a thread. The reply says where it starts and ends. The sketch stays with \
+                       the curve. Requires an open part with no sketch being edited."
+    )]
+    async fn create_helix(
+        &self,
+        Parameters(params): Parameters<helix::HelixParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = helix::request(&params)?;
+        let reply = self
+            .addin
+            .create_helix(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(helix::reply_text(&params, &reply))]))
     }
 
     #[tool(
@@ -2763,10 +2819,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Look at one 2D sketch of the active part without changing it: every \
+        description = "Look at one sketch of the active part without changing it: every \
                        segment and point with an id (\"line:3\", \"arc:1\", \"circle:2\", \
                        \"point:7\" -- end points and centers are points) and its geometry in the \
-                       sketch's own 2D coordinates (mm), the sketch's dimensions (names like \
+                       sketch's own 2D coordinates (mm; [x, y, z] model coordinates in a 3D \
+                       sketch), the sketch's dimensions (names like \
                        \"D1@Sketch1\" and values) and relations, and whether the sketch is fully \
                        defined; entities that can still move carry a status. Defaults to the last \
                        sketch. Use the ids with dimension_sketch and add_sketch_relations."
@@ -2852,7 +2909,8 @@ impl SolidWorksTools {
         description = "Add geometric relations between entities of a sketch of the active part: \
                        horizontal, vertical, coincident, midpoint, collinear, parallel, \
                        perpendicular, tangent, concentric, coradial, equal, fixed, symmetric \
-                       (2 entities then the line to mirror about), merge. Entities are sketch ids \
+                       (2 entities then the line to mirror about), merge; in a 3D sketch along_x, \
+                       along_y, along_z instead of horizontal and vertical. Entities are sketch ids \
                        from inspect_sketch or the sketch_* tools (\"line:3\", \"point:7\"), \
                        \"origin\" (e.g. coincident a circle's center point with the origin), or \
                        an edge/face id from inspect_model. Relations can move geometry to satisfy \
@@ -3844,11 +3902,12 @@ impl SolidWorksTools {
     /// describes the result. `what` names what was drawn, e.g. "3 lines".
     async fn draw_sketch(
         &self,
-        target: SketchTarget,
+        target: DrawTarget,
         model_space: bool,
         entities: Vec<proto::SketchEntity>,
         what: String,
     ) -> Result<CallToolResult, McpError> {
+        let DrawTarget { sketch_3d, sketch: target } = target;
         let sketch_name = target
             .sketch_name
             .as_deref()
@@ -3862,6 +3921,28 @@ impl SolidWorksTools {
                 None,
             ));
         }
+        if sketch_3d {
+            if sketch_name.is_some() {
+                return Err(McpError::invalid_params(
+                    "sketch_3d is for a new sketch; sketch_name alone adds to an existing one, 3D \
+                     or not",
+                    None,
+                ));
+            }
+            if on.is_some() || target.plane.is_some() {
+                return Err(McpError::invalid_params(
+                    "a 3D sketch isn't on a plane or face -- drop plane/on or sketch_3d",
+                    None,
+                ));
+            }
+            if !model_space {
+                return Err(McpError::invalid_params(
+                    "a 3D sketch has no 2D coordinates -- give points as [x, y, z] in model \
+                     coordinates",
+                    None,
+                ));
+            }
+        }
         let plane = target.plane.unwrap_or_default();
 
         let on_persist_id = match on {
@@ -3870,7 +3951,7 @@ impl SolidWorksTools {
         };
         let request = proto::AddSketchEntitiesRequest {
             sketch_name: sketch_name.unwrap_or_default().to_string(),
-            plane: if sketch_name.is_some() {
+            plane: if sketch_name.is_some() || sketch_3d {
                 proto::Plane::Unspecified
             } else {
                 proto::Plane::from(plane)
@@ -3879,6 +3960,7 @@ impl SolidWorksTools {
             on_persist_id,
             model_space,
             entities,
+            sketch_3d,
         };
         let result = self
             .addin
@@ -3888,6 +3970,7 @@ impl SolidWorksTools {
 
         let place = match (sketch_name, on) {
             (Some(_), _) => String::new(),
+            (None, _) if sketch_3d => " (new 3D sketch)".to_string(),
             (None, Some(id)) => format!(" (new sketch on {id})"),
             (None, None) => format!(" (new sketch on the {plane:?} plane)"),
         };
@@ -3901,7 +3984,9 @@ impl SolidWorksTools {
                 " {} now has {} closed and {} open contour(s)",
                 result.sketch_name, contours.closed, contours.open
             );
-            text += if contours.closed > 0 && contours.open == 0 {
+            text += if result.is_3d {
+                "; a 3D sketch can be a sweep path or a loft guide curve, not extruded."
+            } else if contours.closed > 0 && contours.open == 0 {
                 "; ready to extrude."
             } else if contours.open > 0 {
                 "; extrude_sketch needs closed ones, so connect the open ends if you mean to \
@@ -4285,6 +4370,9 @@ impl ServerHandler for SolidWorksTools {
                  cut_extrude_sketch, or for round parts revolve_sketch / cut_revolve_sketch \
                  about a centerline (sketch_line with construction=true), or sweep_sketch / \
                  cut_sweep_sketch to run a profile (or a circle) along a path sketch, or                  loft_sketch / cut_loft_sketch to blend through profiles on several planes; \
+                 a path needn't lie in a plane: the sketch_* tools with sketch_3d=true draw a 3D \
+                 sketch, and create_helix turns a circle's sketch into a helix or spiral curve \
+                 (a spring, a coil, a thread); \
                  fillet_edges / chamfer_edges round or bevel edges (by edge or face id); \
                  shell_body hollows out a solid into walls, with chosen faces left open; \
                  mirror_features copies features or bodies about a plane, and \

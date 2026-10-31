@@ -214,6 +214,15 @@ impl AddinClient {
         Ok(client.chamfer_edges(request).await?.into_inner())
     }
 
+    /// Sizes in meters, angles in radians.
+    pub async fn create_helix(
+        &self,
+        request: proto::CreateHelixRequest,
+    ) -> Result<proto::CreateHelixResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.create_helix(request).await?.into_inner())
+    }
+
     /// Thicknesses in meters.
     pub async fn shell_body(
         &self,
