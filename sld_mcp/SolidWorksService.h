@@ -77,6 +77,10 @@ public:
 		const sld_mcp::v1::MirrorSketchEntitiesRequest* request,
 		sld_mcp::v1::MirrorSketchEntitiesResponse* response) override;
 
+	grpc::Status OffsetSketchEntities(grpc::ServerContext* context,
+		const sld_mcp::v1::OffsetSketchEntitiesRequest* request,
+		sld_mcp::v1::OffsetSketchEntitiesResponse* response) override;
+
 	grpc::Status PatternFeatures(grpc::ServerContext* context,
 		const sld_mcp::v1::PatternFeaturesRequest* request,
 		sld_mcp::v1::PatternFeaturesResponse* response) override;

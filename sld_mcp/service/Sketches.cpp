@@ -8,101 +8,6 @@ using namespace sld_mcp::service;
 
 namespace
 {
-	// What a new sketch goes on: a planar face (`face` + `faceEntity`) or a
-	// reference plane feature (`plane`); exactly one is set once resolved.
-	struct SketchTarget
-	{
-		ATL::CComPtr<IFace2> face;
-		ATL::CComPtr<IEntity> faceEntity;
-		ATL::CComPtr<IFeature> plane;
-	};
-
-	// Resolves `onPersistId` (a planar face or a reference plane feature), or
-	// the standard plane `planeIndex` when it's empty.
-	grpc::Status ResolveSketchTarget(IModelDoc2* doc, const std::string& onPersistId, int planeIndex,
-		SketchTarget& target)
-	{
-		if (onPersistId.empty())
-			return FindStandardPlane(doc, planeIndex, target.plane);
-
-		ATL::CComPtr<IModelDocExtension> ext;
-		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-			return status;
-		ATL::CComPtr<IDispatch> obj;
-		if (grpc::Status status = ResolvePersistId(ext, onPersistId, obj); !status.ok())
-			return status;
-
-		if (ATL::CComQIPtr<IFace2> face(obj.p); face)
-		{
-			ATL::CComPtr<ISurface> surface;
-			VARIANT_BOOL planar = VARIANT_FALSE;
-			if (FAILED(face->IGetSurface(&surface)) || !surface ||
-				FAILED(surface->IsPlane(&planar)) || !planar)
-				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-					"that face isn't planar -- sketches need a planar face or a reference plane");
-			if (FAILED(face->QueryInterface(IID_PPV_ARGS(&target.faceEntity))) || !target.faceEntity)
-				return grpc::Status(grpc::StatusCode::INTERNAL, "face has no IEntity interface");
-			target.face = face;
-			return grpc::Status::OK;
-		}
-		if (ATL::CComQIPtr<IFeature> feature(obj.p); feature)
-		{
-			ATL::CComBSTR typeName;
-			HRESULT hr = feature->GetTypeName2(&typeName);
-			if (FAILED(hr))
-				return ComError("IFeature::GetTypeName2", hr);
-			if (typeName != L"RefPlane")
-				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-					"\"" + FeatureName(feature) + "\" isn't a reference plane -- sketches need a "
-					"planar face or a reference plane");
-			target.plane = feature;
-			return grpc::Status::OK;
-		}
-		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-			"that ID isn't a face or a reference plane -- sketches need a planar face or a reference plane");
-	}
-
-	// Selects the target and opens a new sketch on it. On failure nothing is
-	// left open.
-	grpc::Status OpenNewSketch(IModelDoc2* doc, ISketchManager* sketchManager, const SketchTarget& target,
-		ATL::CComPtr<ISketch>& sketch)
-	{
-		HRESULT hr = doc->ClearSelection2(VARIANT_TRUE);
-		if (FAILED(hr))
-			return ComError("IModelDoc2::ClearSelection2", hr);
-		VARIANT_BOOL selected = VARIANT_FALSE;
-		hr = target.faceEntity ? target.faceEntity->Select4(VARIANT_FALSE, nullptr, &selected)
-		                       : target.plane->Select2(VARIANT_FALSE, 0, &selected);
-		if (FAILED(hr))
-			return ComError(target.faceEntity ? "IEntity::Select4" : "IFeature::Select2", hr);
-		if (!selected)
-			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks wouldn't select the sketch plane");
-
-		// Opens a new sketch on the selected plane or face.
-		hr = sketchManager->InsertSketch(VARIANT_TRUE);
-		if (FAILED(hr))
-			return ComError("ISketchManager::InsertSketch", hr);
-		hr = doc->IGetActiveSketch2(&sketch);
-		if (FAILED(hr) || !sketch)
-		{
-			doc->ClearSelection2(VARIANT_TRUE);
-			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks didn't open a sketch on the plane");
-		}
-		return grpc::Status::OK;
-	}
-
-	// Deletes a (closed) sketch feature, e.g. one left empty by a failed
-	// RPC. Best effort.
-	void DeleteSketchFeature(IModelDoc2* doc, IFeature* sketchFeature)
-	{
-		VARIANT_BOOL selected = VARIANT_FALSE;
-		if (sketchFeature && SUCCEEDED(sketchFeature->Select2(VARIANT_FALSE, 0, &selected)) && selected)
-		{
-			doc->EditDelete();
-			doc->ClearSelection2(VARIANT_TRUE);
-		}
-	}
-
 	// Requests with more entities (or spline points) than this are refused.
 	constexpr int kMaxSketchEntities = 1000;
 
@@ -341,24 +246,6 @@ namespace
 	}
 
 	// Deletes entities drawn into the still-open sketch. Best effort.
-	void DeleteDrawnEntities(IModelDoc2* doc, const std::vector<ATL::CComPtr<IDispatch>>& entities)
-	{
-		doc->ClearSelection2(VARIANT_TRUE);
-		bool any = false;
-		for (const auto& entity : entities)
-		{
-			VARIANT_BOOL selected = VARIANT_FALSE;
-			if (ATL::CComQIPtr<ISketchSegment> segment(entity.p); segment)
-				segment->Select4(VARIANT_TRUE, nullptr, &selected);
-			else if (ATL::CComQIPtr<ISketchPoint> point(entity.p); point)
-				point->Select4(VARIANT_TRUE, nullptr, &selected);
-			any = any || selected;
-		}
-		if (any)
-			doc->EditDelete();
-		doc->ClearSelection2(VARIANT_TRUE);
-	}
-
 	// Sets the sketch persist ID on every ref in an item, for items described
 	// before the sketch's persist ID was known.
 	void StampSketchId(sld_mcp::v1::SketchItem* item, const std::string& sketchPid)

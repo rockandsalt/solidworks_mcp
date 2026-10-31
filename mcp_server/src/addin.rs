@@ -239,6 +239,15 @@ impl AddinClient {
         Ok(client.mirror_sketch_entities(request).await?.into_inner())
     }
 
+    /// Lengths in meters.
+    pub async fn offset_sketch_entities(
+        &self,
+        request: proto::OffsetSketchEntitiesRequest,
+    ) -> Result<proto::OffsetSketchEntitiesResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.offset_sketch_entities(request).await?.into_inner())
+    }
+
     /// Lengths in meters, angles in radians.
     pub async fn pattern_features(
         &self,

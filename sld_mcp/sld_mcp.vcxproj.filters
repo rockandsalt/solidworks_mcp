@@ -192,6 +192,9 @@
     <ClCompile Include="service\Mirror.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>
+    <ClCompile Include="service\SketchOffset.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
     <ClCompile Include="service\Mesh.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>

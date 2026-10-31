@@ -123,6 +123,16 @@ service SolidWorks {
   // if a sketch is already open or SolidWorks mirrors nothing.
   rpc MirrorSketchEntities(MirrorSketchEntitiesRequest) returns (MirrorSketchEntitiesResponse);
 
+  // Offsets segments of a 2D sketch of the active part inside that sketch
+  // (ISketchManager::SketchOffset2), or model edges and faces into an existing
+  // or new sketch (IModelDoc2::SketchOffsetEntities2): the new entities follow
+  // the originals through an offset relation. Then closes the sketch, rebuilds
+  // and reports the new entities, the contours, the definition state and
+  // features that now have errors. FAILED_PRECONDITION if a sketch is already
+  // open, or the distance leaves no shape or would turn an arc inside out
+  // (nothing is left behind then).
+  rpc OffsetSketchEntities(OffsetSketchEntitiesRequest) returns (OffsetSketchEntitiesResponse);
+
   // Patterns features (by persist_id or name) or bodies of the active part
   // along one or two directions (IFeatureManager::FeatureLinearPattern5) or
   // round an axis (FeatureCircularPattern5). Same preconditions as
@@ -1100,6 +1110,59 @@ message MirrorSketchEntitiesResponse {
   // Mirrored lines that SolidWorks extended across the axis instead of
   // copying (a line ending on the axis at a right angle), as they are now.
   repeated SketchItem extended = 6;
+}
+
+enum OffsetSide {
+  OFFSET_SIDE_UNSPECIFIED = 0;
+  // Away from a closed contour's inside; on an open chain, the right-hand side
+  // going from start to end of the first entity.
+  OFFSET_SIDE_OUTWARD = 1;
+  OFFSET_SIDE_INWARD = 2;   // the other side
+  OFFSET_SIDE_BOTH = 3;
+}
+
+// What joins the two offsets of an open chain (swSkOffsetCapEndType_e).
+enum OffsetCaps {
+  OFFSET_CAPS_NONE = 0;
+  OFFSET_CAPS_ARCS = 1;
+  OFFSET_CAPS_LINES = 2;
+}
+
+message OffsetSketchEntitiesRequest {
+  // The sketch to draw in, e.g. "Sketch1". Empty: the sketch the items belong
+  // to, or a new sketch for model edges and faces.
+  string sketch_name = 1;
+  // New sketch only: a default plane, or a planar face or reference plane by
+  // persist_id.
+  Plane plane = 2;
+  bytes on_persist_id = 3;
+  // Segments to offset, all in that sketch. With no model_persist_ids either,
+  // every segment of sketch_name other than construction ones.
+  repeated SketchItemRef items = 4;
+  // Edges and faces to offset (a face: its outer loop), by persist_id from
+  // InspectModel. Not with `items`.
+  repeated bytes model_persist_ids = 5;
+  double distance = 6;  // meters, more than 0
+  OffsetSide side = 7;
+  // Also offset what's connected to the given entities: a sketch contour; for
+  // model edges, what's tangent to them.
+  bool chain = 8;
+  // The rest is for items only. Caps need OFFSET_SIDE_BOTH.
+  OffsetCaps caps = 9;
+  bool base_construction = 10;    // turn the originals into construction geometry
+  bool offset_construction = 11;  // make the new entities construction geometry
+  bool add_dimension = 12;        // a driving dimension of the distance
+}
+
+message OffsetSketchEntitiesResponse {
+  string sketch_name = 1;
+  bool created_sketch = 2;
+  // The new segments.
+  repeated SketchItem items = 3;
+  SketchContours contours = 4;
+  SketchState state = 5;
+  // Features whose rebuild error is new or different since the offset.
+  repeated FeatureProblem new_errors = 6;
 }
 
 // One direction of a linear feature pattern.

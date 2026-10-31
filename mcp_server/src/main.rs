@@ -18,6 +18,7 @@ mod mirror;
 mod mobility;
 mod motion;
 mod note;
+mod offset;
 mod pattern;
 mod pmi;
 mod properties;
@@ -3378,6 +3379,41 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "Offset entities of a sketch of the active part by a distance, like \
+                       SolidWorks' Offset Entities: copies that stay parallel to the originals \
+                       and follow them through an offset relation, e.g. a wall's inner outline. \
+                       entities = sketch ids from inspect_sketch or the sketch_* tools (\"line:3\", \
+                       \"arc:1\", \"circle:2\"), offset inside their sketch (chain=true takes a \
+                       whole contour from one of its entities), or omit them and give sketch_name \
+                       to offset everything in that sketch except construction geometry. Or model \
+                       edge and face ids from inspect_model (\"edge:4\", \"face:2\"), projected \
+                       into sketch_name or a new sketch on plane or on (a single face defaults to \
+                       a new sketch on itself); a face offsets its outer loop only. side = \
+                       \"outward\" (the default), \"inward\" or \"both\". Reports the new entities' \
+                       ids, the sketch's contours and definition state, and features that now \
+                       fail to rebuild; check an open chain's side with inspect_sketch. Refuses a \
+                       distance that leaves no shape or turns an arc inside out, leaving nothing \
+                       behind. Requires no sketch open for editing."
+    )]
+    async fn offset_sketch_entities(
+        &self,
+        Parameters(params): Parameters<offset::OffsetParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            offset::request(&ids, &params)?
+        };
+        let reply = self
+            .addin
+            .offset_sketch_entities(request)
+            .await
+            .map_err(|status| delete::with_legend(self.addin_error(status), "entity", &offset::given(&params)))?;
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let text = offset::reply_text(&mut ids, &params, &reply);
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
         description = "Copy entities of a sketch of the active part in a row or grid inside the \
                        same sketch, e.g. a row of slots or a grid of hole circles to cut in one \
                        go. entities = sketch ids from inspect_sketch or the sketch_* tools \
@@ -4253,6 +4289,8 @@ impl ServerHandler for SolidWorksTools {
                  shell_body hollows out a solid into walls, with chosen faces left open; \
                  mirror_features copies features or bodies about a plane, and \
                  mirror_sketch_entities mirrors sketch geometry about a centerline; \
+                 offset_sketch_entities offsets sketch entities, or model edges and faces into \
+                 a sketch; \
                  linear_pattern_features / circular_pattern_features copy features or bodies \
                  in a row, grid or round an axis, and linear_pattern_sketch_entities / \
                  circular_pattern_sketch_entities do the same inside a sketch. \

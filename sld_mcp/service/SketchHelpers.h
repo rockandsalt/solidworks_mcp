@@ -130,6 +130,32 @@ namespace sld_mcp::service
 
 	grpc::Status GetSketchManager(IModelDoc2* doc, ATL::CComPtr<ISketchManager>& sketchManager);
 
+	// What a new sketch goes on: a planar face (`face` + `faceEntity`) or a
+	// reference plane feature (`plane`); exactly one is set once resolved.
+	struct SketchTarget
+	{
+		ATL::CComPtr<IFace2> face;
+		ATL::CComPtr<IEntity> faceEntity;
+		ATL::CComPtr<IFeature> plane;
+	};
+
+	// Resolves `onPersistId` (a planar face or a reference plane feature), or
+	// the standard plane `planeIndex` when it's empty.
+	grpc::Status ResolveSketchTarget(IModelDoc2* doc, const std::string& onPersistId, int planeIndex,
+		SketchTarget& target);
+
+	// Selects the target and opens a new sketch on it. On failure nothing is
+	// left open.
+	grpc::Status OpenNewSketch(IModelDoc2* doc, ISketchManager* sketchManager, const SketchTarget& target,
+		ATL::CComPtr<ISketch>& sketch);
+
+	// Deletes a (closed) sketch feature, e.g. one left empty by a failed
+	// RPC. Best effort.
+	void DeleteSketchFeature(IModelDoc2* doc, IFeature* sketchFeature);
+
+	// Deletes segments or points of the open sketch. Best effort.
+	void DeleteDrawnEntities(IModelDoc2* doc, const std::vector<ATL::CComPtr<IDispatch>>& entities);
+
 	// The persist ID of a feature (empty if SolidWorks won't give one).
 	std::string PersistIdOf(IModelDocExtension* ext, IUnknown* obj);
 
