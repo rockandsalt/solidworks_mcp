@@ -384,6 +384,7 @@
     <ClCompile Include="service\InspectModel.cpp" />
     <ClCompile Include="service\Mates.cpp" />
     <ClCompile Include="service\Mirror.cpp" />
+    <ClCompile Include="service\SketchEditing.cpp" />
     <ClCompile Include="service\SketchOffset.cpp" />
     <ClCompile Include="service\ModelAnnotations.cpp" />
     <ClCompile Include="service\Mesh.cpp" />

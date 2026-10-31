@@ -257,6 +257,32 @@ impl AddinClient {
         Ok(client.offset_sketch_entities(request).await?.into_inner())
     }
 
+    pub async fn convert_entities(
+        &self,
+        request: proto::ConvertEntitiesRequest,
+    ) -> Result<proto::ConvertEntitiesResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.convert_entities(request).await?.into_inner())
+    }
+
+    /// Lengths in meters, angles in radians.
+    pub async fn sketch_corners(
+        &self,
+        request: proto::SketchCornersRequest,
+    ) -> Result<proto::SketchEditResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.sketch_corners(request).await?.into_inner())
+    }
+
+    /// Points in meters.
+    pub async fn trim_sketch_entity(
+        &self,
+        request: proto::TrimSketchEntityRequest,
+    ) -> Result<proto::SketchEditResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.trim_sketch_entity(request).await?.into_inner())
+    }
+
     /// Lengths in meters, angles in radians.
     pub async fn pattern_features(
         &self,

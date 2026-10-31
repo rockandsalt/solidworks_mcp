@@ -128,6 +128,18 @@ pub fn item_json(ids: &mut IdRegistry, item: &proto::SketchItem, is_3d: bool) ->
             point(&mut obj, "end", item.end_point.as_ref(), item.end.as_ref());
             obj.insert("radius_mm".into(), json!(mm(item.radius)));
         }
+        T::Ellipse => {
+            point(&mut obj, "center", item.center_point.as_ref(), item.center.as_ref());
+            point(&mut obj, "major", item.major_point.as_ref(), item.major.as_ref());
+            point(&mut obj, "minor", item.minor_point.as_ref(), item.minor.as_ref());
+            point(&mut obj, "start", item.start_point.as_ref(), item.start.as_ref());
+            point(&mut obj, "end", item.end_point.as_ref(), item.end.as_ref());
+            if let (Some(c), Some(major), Some(minor)) = (&item.center, &item.major, &item.minor) {
+                let from_center = |p: &proto::Vec3| (p.x - c.x).hypot(p.y - c.y);
+                obj.insert("major_radius_mm".into(), json!(mm(from_center(major))));
+                obj.insert("minor_radius_mm".into(), json!(mm(from_center(minor))));
+            }
+        }
         _ => {
             point(&mut obj, "start", item.start_point.as_ref(), item.start.as_ref());
             point(&mut obj, "end", item.end_point.as_ref(), item.end.as_ref());
@@ -151,8 +163,8 @@ pub fn item_summary(ids: &mut IdRegistry, item: &proto::SketchItem) -> Option<St
     let end = point_id(ids, item.end_point.as_ref());
     let center = point_id(ids, item.center_point.as_ref());
     Some(match (item.r#type(), start, end, center) {
-        (T::Circle, _, _, Some(c)) => format!("{id} (center {c})"),
-        (T::Arc, Some(s), Some(e), Some(c)) => format!("{id} ({s} -> {e}, center {c})"),
+        (T::Arc | T::Ellipse, Some(s), Some(e), Some(c)) => format!("{id} ({s} -> {e}, center {c})"),
+        (T::Circle | T::Ellipse, _, _, Some(c)) => format!("{id} (center {c})"),
         (_, Some(s), Some(e), _) => format!("{id} ({s} -> {e})"),
         _ => id,
     })

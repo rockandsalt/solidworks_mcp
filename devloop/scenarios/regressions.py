@@ -3,6 +3,7 @@
 #   py devloop/mcp_client.py run devloop/scenarios/regressions.py
 
 import math
+import re
 
 # A 60 x 40 x 8 plate on the Front plane: the boss grows along the sketch normal.
 mcp.call("create_part")
@@ -62,3 +63,15 @@ assert "is from another document" in r.text, r.text
 r = mcp.call("add_sketch_relations", relations=[{"kind": "equal", "entities": [circles[0], new_ids[0]]}],
              expect_error=True)
 assert "is from another document" in r.text, r.text
+
+# A new sketch right after a dimension or relation closed a sketch: the first InsertSketch did
+# nothing, in the same part and in a new one ("SolidWorks didn't open a sketch on the plane").
+mcp.call("create_part")
+r = mcp.call("sketch_line", points=[[0, 0], [10, 0]])
+line = re.findall(r"line:\d+", r.text)[0]
+mcp.call("dimension_sketch", dimensions=[{"kind": "length", "entities": [line], "value_mm": 30}])
+r = mcp.call("sketch_line", points=[[0, 0], [10, 0]], plane="top")
+line = re.findall(r"line:\d+", r.text)[0]
+mcp.call("add_sketch_relations", relations=[{"kind": "horizontal", "entities": [line]}])
+mcp.call("create_part")
+mcp.call("create_rectangle_sketch", width_mm=10, height_mm=10)

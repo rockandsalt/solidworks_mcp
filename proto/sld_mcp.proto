@@ -141,6 +141,26 @@ service SolidWorks {
   // (nothing is left behind then).
   rpc OffsetSketchEntities(OffsetSketchEntitiesRequest) returns (OffsetSketchEntitiesResponse);
 
+  // Projects model edges and faces, or segments of another sketch, into an
+  // existing or new sketch (ISketchManager::SketchUseEdge3): the new entities
+  // stay tied to what they came from. Then closes the sketch, rebuilds and
+  // reports the new entities, the contours, the definition state and features
+  // that now have errors. FAILED_PRECONDITION if a sketch is already open or
+  // nothing comes of it (nothing is left behind then).
+  rpc ConvertEntities(ConvertEntitiesRequest) returns (ConvertEntitiesResponse);
+
+  // Rounds or chamfers corners of a 2D sketch of the active part
+  // (ISketchManager::CreateFillet / CreateChamfer). Then closes the sketch,
+  // rebuilds and reports what's new, what changed, the contours, the definition
+  // state and features that now have errors. All or nothing: FAILED_PRECONDITION
+  // if a corner can't be made (the rest is undone).
+  rpc SketchCorners(SketchCornersRequest) returns (SketchEditResponse);
+
+  // Trims or extends a segment of a 2D sketch of the active part
+  // (ISketchManager::SketchTrim / SketchExtend). Reports as SketchCorners.
+  // FAILED_PRECONDITION if nothing would change, or not as asked (undone then).
+  rpc TrimSketchEntity(TrimSketchEntityRequest) returns (SketchEditResponse);
+
   // Patterns features (by persist_id or name) or bodies of the active part
   // along one or two directions (IFeatureManager::FeatureLinearPattern5) or
   // round an axis (FeatureCircularPattern5). Same preconditions as
@@ -836,6 +856,9 @@ message SketchEntity {
     SketchArc arc = 4;
     SketchSpline spline = 5;
     SketchPointEntity point = 6;
+    SketchSlot slot = 7;
+    SketchPolygon polygon = 8;
+    SketchEllipse ellipse = 9;
   }
 }
 
@@ -874,6 +897,39 @@ message SketchPointEntity {
   Vec3 position = 1;
 }
 
+// A slot whose end arcs are centered on `start` and `end`: straight between
+// them, or along an arc given by at most one of `center` and `through` as in
+// SketchArc. 2D sketches only, as for polygons and ellipses.
+message SketchSlot {
+  Vec3 start = 1;
+  Vec3 end = 2;
+  Vec3 center = 3;
+  Vec3 through = 4;
+  bool clockwise = 5;  // center arcs only
+  double width = 6;    // meters, > 0
+  // Driving dimensions of the width and the length between the end centers.
+  bool add_dimensions = 7;
+}
+
+// A regular polygon with a corner `corner_radius` from `center`, in the
+// direction `angle` (radians, counterclockwise from sketch x).
+message SketchPolygon {
+  Vec3 center = 1;
+  int32 sides = 2;
+  double corner_radius = 3;
+  double angle = 4;
+  // Its construction circle touches the sides, instead of the corners.
+  bool inscribed = 5;
+}
+
+// `angle`: of the major axis, radians, counterclockwise from sketch x.
+message SketchEllipse {
+  Vec3 center = 1;
+  double major_radius = 2;  // meters
+  double minor_radius = 3;  // meters, > 0, not more than major_radius
+  double angle = 4;
+}
+
 message AddSketchEntitiesResponse {
   // Feature-tree name of the sketch drawn into.
   string sketch_name = 1;
@@ -886,7 +942,8 @@ message AddSketchEntitiesResponse {
   // couldn't report them.
   SketchContours contours = 5;
   // What was drawn, in request order, with IDs for dimensioning. A drawn
-  // point that was merged into another entity's end point is left out.
+  // point that was merged into another entity's end point is left out. A slot
+  // or polygon comes as all the segments it's made of.
   repeated SketchItem items = 6;
   // The sketch is a 3D sketch: `frame` is unset, positions are model space.
   bool is_3d = 7;
@@ -1228,6 +1285,106 @@ message OffsetSketchEntitiesResponse {
   SketchState state = 5;
   // Features whose rebuild error is new or different since the offset.
   repeated FeatureProblem new_errors = 6;
+}
+
+message ConvertEntitiesRequest {
+  // The sketch to draw in, 2D or 3D, e.g. "Sketch1". Empty: a new sketch, on
+  // `plane` / `on_persist_id`, or a 3D one with `sketch_3d`.
+  string sketch_name = 1;
+  Plane plane = 2;
+  bytes on_persist_id = 3;
+  bool sketch_3d = 4;
+  // Edges and faces, by persist_id from InspectModel.
+  repeated bytes model_persist_ids = 5;
+  // Segments of other sketches. Not of the sketch drawn in.
+  repeated SketchItemRef items = 6;
+  ConvertLoops loops = 7;
+}
+
+// Which loops of a face to convert.
+enum ConvertLoops {
+  CONVERT_LOOPS_ALL = 0;
+  CONVERT_LOOPS_OUTER = 1;
+  CONVERT_LOOPS_INNER = 2;  // its holes
+}
+
+message ConvertEntitiesResponse {
+  string sketch_name = 1;
+  bool created_sketch = 2;
+  bool is_3d = 3;
+  // The new segments.
+  repeated SketchItem items = 4;
+  SketchContours contours = 5;
+  SketchState state = 6;
+  // Features whose rebuild error is new or different since the conversion.
+  repeated FeatureProblem new_errors = 7;
+}
+
+enum SketchChamferKind {
+  SKETCH_CHAMFER_KIND_UNSPECIFIED = 0;
+  SKETCH_CHAMFER_KIND_EQUAL = 1;      // `distance` on both entities
+  SKETCH_CHAMFER_KIND_DISTANCES = 2;  // `distance` on the first, `second` on the other
+  SKETCH_CHAMFER_KIND_ANGLE = 3;      // `distance` on the first, `second` from it (radians)
+}
+
+message SketchChamfer {
+  SketchChamferKind kind = 1;
+  double distance = 2;  // meters
+  double second = 3;
+}
+
+message SketchCornersRequest {
+  // E.g. "Sketch1". Empty: the sketch the items belong to.
+  string sketch_name = 1;
+  // Sketch points, each the corner where two segments meet; or exactly two
+  // segments, for the corner between them.
+  repeated SketchItemRef items = 2;
+  oneof kind {
+    double fillet_radius = 3;  // meters
+    SketchChamfer chamfer = 4;
+  }
+}
+
+enum SketchTrimKind {
+  SKETCH_TRIM_KIND_UNSPECIFIED = 0;
+  // Remove the piece of `item` at `at`, between what crosses it there (all of
+  // it, if nothing does).
+  SKETCH_TRIM_KIND_PIECE = 1;
+  // Grow `item` and `other` until they meet in a corner. They mustn't cross.
+  SKETCH_TRIM_KIND_CORNER = 2;
+  // Grow the end of `item` nearest `at` up to the next entity in its way.
+  SKETCH_TRIM_KIND_EXTEND = 3;
+}
+
+message TrimSketchEntityRequest {
+  // E.g. "Sketch1". Empty: the sketch the item belongs to.
+  string sketch_name = 1;
+  SketchItemRef item = 2;
+  SketchTrimKind kind = 3;
+  // Sketch 2D coordinates, meters; or model space with `model_space`, projected
+  // onto the sketch plane. Not for CORNER.
+  Vec3 at = 4;
+  bool model_space = 5;
+  SketchItemRef other = 6;  // CORNER only
+}
+
+// What an edit of existing sketch entities did.
+message SketchEditResponse {
+  string sketch_name = 1;
+  // New segments, and new sketch points on no segment (a corner kept for what
+  // was dimensioned to it, the middle of a split).
+  repeated SketchItem items = 2;
+  // Segments whose geometry changed, as they are now. A circle trimmed into an
+  // arc is one of them.
+  repeated SketchItem changed = 3;
+  // Segments that are gone.
+  repeated SketchItemRef deleted = 4;
+  // Dimensions the edit added, e.g. a fillet's radius.
+  repeated DimensionInfo dimensions = 5;
+  SketchContours contours = 6;
+  SketchState state = 7;
+  // Features whose rebuild error is new or different since the edit.
+  repeated FeatureProblem new_errors = 8;
 }
 
 // One direction of a linear feature pattern.
@@ -2076,7 +2233,9 @@ enum DefinitionStatus {
 //   LINE:           start, end (+ start_point, end_point), length
 //   ARC:            start, end, center (+ the three points), radius, length
 //   CIRCLE:         center (+ center_point), radius, length
-//   SPLINE/ELLIPSE: start, end (+ points) when SolidWorks reports them, length
+//   SPLINE:         start, end (+ points) when SolidWorks reports them, length
+//   ELLIPSE:        center, major, minor (+ the three points), length; start,
+//                   end (+ points) when it's only a part of one
 message SketchItem {
   SketchItemRef ref = 1;
   SketchItemType type = 2;
@@ -2092,6 +2251,10 @@ message SketchItem {
   SketchItemRef start_point = 12;
   SketchItemRef end_point = 13;
   SketchItemRef center_point = 14;
+  Vec3 major = 15;  // the end of the major axis
+  Vec3 minor = 16;  // the end of the minor axis
+  SketchItemRef major_point = 17;
+  SketchItemRef minor_point = 18;
 }
 
 // How defined a sketch is, and what can still move.

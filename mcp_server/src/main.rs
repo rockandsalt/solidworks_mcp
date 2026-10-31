@@ -29,6 +29,7 @@ mod revolve;
 mod sheet;
 mod sheet_format;
 mod shell;
+mod sketch_edit;
 mod sketch;
 mod sweep;
 mod table;
@@ -258,8 +259,116 @@ struct SketchPointParams {
     target: DrawTarget,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SketchSlotParams {
+    /// Center of the slot's arc at one end, [x, y] (sketch) or [x, y, z] (model), in millimeters.
+    start: Point,
+    /// Center of the arc at the other end.
+    end: Point,
+    /// Overall width in millimeters: twice the radius of the end arcs.
+    width_mm: f64,
+    /// For a curved slot: the center of the arc it follows, counterclockwise from start to end
+    /// unless clockwise=true. `end` only gives the angle: it's moved onto the radius set by
+    /// `start`. Leave out center and through for a straight slot.
+    #[serde(default)]
+    center: Option<Point>,
+    /// For a curved slot: a point on the arc it follows, between start and end, instead of center.
+    #[serde(default)]
+    through: Option<Point>,
+    /// With `center`: follow the arc clockwise, as seen looking at the sketch from the side its
+    /// normal points to. Defaults to false.
+    #[serde(default)]
+    clockwise: bool,
+    /// Add driving dimensions of the width and of the length between the end centers, which
+    /// set_dimension can change later. Defaults to false.
+    #[serde(default)]
+    add_dimensions: bool,
+    /// Draw it as construction geometry (reference only, ignored by features). Defaults to false.
+    #[serde(default)]
+    construction: bool,
+    #[serde(flatten)]
+    target: SketchTarget,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SketchPolygonParams {
+    /// Center, [x, y] (sketch) or [x, y, z] (model), in millimeters.
+    center: Point,
+    /// Number of sides, 3 to 40.
+    sides: i32,
+    /// From the center to a corner, in millimeters. Give this or flat_radius_mm.
+    #[serde(default)]
+    corner_radius_mm: Option<f64>,
+    /// From the center to the middle of a side, in millimeters: half the size across flats. Give
+    /// this or corner_radius_mm.
+    #[serde(default)]
+    flat_radius_mm: Option<f64>,
+    /// Direction from the center to a corner (with corner_radius_mm) or to the middle of a side
+    /// (with flat_radius_mm), degrees counterclockwise from sketch X. Defaults to 0.
+    #[serde(default)]
+    angle_deg: f64,
+    /// Draw the sides as construction geometry (reference only, ignored by features). Defaults to
+    /// false.
+    #[serde(default)]
+    construction: bool,
+    #[serde(flatten)]
+    target: SketchTarget,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SketchEllipseParams {
+    /// Center, [x, y] (sketch) or [x, y, z] (model), in millimeters.
+    center: Point,
+    /// From the center to the far end of the long axis, in millimeters.
+    major_radius_mm: f64,
+    /// From the center to the end of the short axis, in millimeters. Less than major_radius_mm.
+    minor_radius_mm: f64,
+    /// Direction of the long axis, degrees counterclockwise from sketch X. Defaults to 0.
+    #[serde(default)]
+    angle_deg: f64,
+    /// Draw it as construction geometry (reference only, ignored by features). Defaults to false.
+    #[serde(default)]
+    construction: bool,
+    #[serde(flatten)]
+    target: SketchTarget,
+}
+
 /// Most entities or spline points one sketch_* call may draw (the add-in's limit).
 const MAX_SKETCH_ITEMS: usize = 1000;
+
+/// A polygon as the add-in draws it: from the center to a corner, in the direction of one
+/// (radians), and whether its construction circle touches the sides.
+fn polygon_shape(
+    sides: i32,
+    corner_radius_mm: Option<f64>,
+    flat_radius_mm: Option<f64>,
+    angle_deg: f64,
+) -> Result<(f64, f64, bool), McpError> {
+    if !(3..=40).contains(&sides) {
+        return Err(McpError::invalid_params(format!("a polygon needs 3 to 40 sides, got {sides}"), None));
+    }
+    if !angle_deg.is_finite() {
+        return Err(McpError::invalid_params("angle_deg must be finite", None));
+    }
+    let half_side = std::f64::consts::PI / f64::from(sides);
+    let (radius, angle, inscribed) = match (corner_radius_mm, flat_radius_mm) {
+        (Some(r), None) => (r, angle_deg.to_radians(), false),
+        (None, Some(r)) => (r / half_side.cos(), angle_deg.to_radians() + half_side, true),
+        _ => {
+            return Err(McpError::invalid_params(
+                "give exactly one of corner_radius_mm or flat_radius_mm",
+                None,
+            ));
+        }
+    };
+    if !(radius.is_finite() && radius > 0.0) {
+        return Err(McpError::invalid_params(
+            "the radius must be a positive number of millimeters",
+            None,
+        ));
+    }
+    Ok((radius / MM_PER_M, angle, inscribed))
+}
 
 /// Turns tool points into wire points (meters), checking that they're well formed and that a
 /// call doesn't mix sketch [x, y] and model [x, y, z] points.
@@ -1293,6 +1402,320 @@ impl SolidWorksTools {
         let what = count_of(n, "point");
         self.draw_sketch(params.target, points.model_space(), entities, what)
             .await
+    }
+
+    #[tool(
+        description = "Draw a slot (two parallel sides with round ends) in a 2D sketch of the \
+                       active part, straight between the two end centers `start` and `end`, or \
+                       curved along an arc given by its `center` or a point it passes `through` \
+                       -- e.g. a profile to cut-extrude. Draws into a new sketch on the \
+                       Front/Top/Right plane or `on` a planar face, or into an existing sketch \
+                       given by sketch_name. Points are [x, y] in sketch coordinates or [x, y, z] \
+                       in model coordinates (projected onto the sketch plane), in millimeters. \
+                       Reports every segment's id, plus the construction line or arc down its \
+                       middle and the point at its center. Requires an open part with no sketch \
+                       being edited."
+    )]
+    async fn sketch_slot(
+        &self,
+        Parameters(params): Parameters<SketchSlotParams>,
+    ) -> Result<CallToolResult, McpError> {
+        if !(params.width_mm.is_finite() && params.width_mm > 0.0) {
+            return Err(McpError::invalid_params(
+                "width_mm must be a positive number of millimeters",
+                None,
+            ));
+        }
+        if params.center.is_some() && params.through.is_some() {
+            return Err(McpError::invalid_params(
+                "give center or through for a curved slot, not both",
+                None,
+            ));
+        }
+        if params.clockwise && params.center.is_none() {
+            return Err(McpError::invalid_params(
+                "clockwise only applies with `center`; a slot through a point has its direction from \
+                 that point",
+                None,
+            ));
+        }
+        let mut points = PointConverter::default();
+        let start = points.convert(&params.start, "start")?;
+        let end = points.convert(&params.end, "end")?;
+        let center = params.center.as_ref().map(|c| points.convert(c, "center")).transpose()?;
+        let through = params.through.as_ref().map(|t| points.convert(t, "through")).transpose()?;
+        let what = format!(
+            "a {}slot {} mm wide",
+            if center.is_some() || through.is_some() { "curved " } else { "" },
+            params.width_mm
+        );
+        let entity = sketch_entity(
+            params.construction,
+            proto::sketch_entity::Geometry::Slot(proto::SketchSlot {
+                start: Some(start),
+                end: Some(end),
+                center,
+                through,
+                clockwise: params.clockwise,
+                width: params.width_mm / MM_PER_M,
+                add_dimensions: params.add_dimensions,
+            }),
+        );
+        let target = DrawTarget { sketch_3d: false, sketch: params.target };
+        self.draw_sketch(target, points.model_space(), vec![entity], what).await
+    }
+
+    #[tool(
+        description = "Draw a regular polygon in a 2D sketch of the active part, e.g. a hexagon \
+                       for a bolt head or nut, sized by the distance from its center to a corner \
+                       (corner_radius_mm) or to the middle of a side (flat_radius_mm: half the \
+                       size across flats). Draws into a new sketch on the Front/Top/Right plane or \
+                       `on` a planar face, or into an existing sketch given by sketch_name. The \
+                       center is [x, y] in sketch coordinates or [x, y, z] in model coordinates \
+                       (projected onto the sketch plane), in millimeters. Reports the ids of the \
+                       sides and of a construction circle through the corners (or touching the \
+                       sides, with flat_radius_mm): a diameter dimension on it sets the polygon's \
+                       size. Requires an open part with no sketch being edited."
+    )]
+    async fn sketch_polygon(
+        &self,
+        Parameters(params): Parameters<SketchPolygonParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let (corner_radius, angle, inscribed) = polygon_shape(
+            params.sides,
+            params.corner_radius_mm,
+            params.flat_radius_mm,
+            params.angle_deg,
+        )?;
+        let mut points = PointConverter::default();
+        let center = points.convert(&params.center, "center")?;
+        let entity = sketch_entity(
+            params.construction,
+            proto::sketch_entity::Geometry::Polygon(proto::SketchPolygon {
+                center: Some(center),
+                sides: params.sides,
+                corner_radius,
+                angle,
+                inscribed,
+            }),
+        );
+        let what = format!("a polygon with {} sides", params.sides);
+        let target = DrawTarget { sketch_3d: false, sketch: params.target };
+        self.draw_sketch(target, points.model_space(), vec![entity], what).await
+    }
+
+    #[tool(
+        description = "Draw a whole ellipse in a 2D sketch of the active part, by its center and \
+                       the radii of its long and short axes, the long axis at angle_deg from \
+                       sketch X. Draws into a new sketch on the Front/Top/Right plane or `on` a \
+                       planar face, or into an existing sketch given by sketch_name. The center is \
+                       [x, y] in sketch coordinates or [x, y, z] in model coordinates (projected \
+                       onto the sketch plane), in millimeters. inspect_sketch gives the ids of its \
+                       center and axis end points; distance dimensions from the center to them set \
+                       its size. trim_sketch_entity makes a part of an ellipse from it. Requires an \
+                       open part with no sketch being edited."
+    )]
+    async fn sketch_ellipse(
+        &self,
+        Parameters(params): Parameters<SketchEllipseParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let (major, minor) = (params.major_radius_mm, params.minor_radius_mm);
+        if !(major.is_finite() && minor.is_finite() && minor > 0.0 && major > minor) {
+            return Err(McpError::invalid_params(
+                format!(
+                    "major_radius_mm must be more than minor_radius_mm, and that more than 0, got {major} \
+                     and {minor} (equal radii are a circle: use sketch_circle)"
+                ),
+                None,
+            ));
+        }
+        if !params.angle_deg.is_finite() {
+            return Err(McpError::invalid_params("angle_deg must be finite", None));
+        }
+        let mut points = PointConverter::default();
+        let center = points.convert(&params.center, "center")?;
+        let entity = sketch_entity(
+            params.construction,
+            proto::sketch_entity::Geometry::Ellipse(proto::SketchEllipse {
+                center: Some(center),
+                major_radius: major / MM_PER_M,
+                minor_radius: minor / MM_PER_M,
+                angle: params.angle_deg.to_radians(),
+            }),
+        );
+        let what = format!("an ellipse of {major} x {minor} mm radii");
+        let target = DrawTarget { sketch_3d: false, sketch: params.target };
+        self.draw_sketch(target, points.model_space(), vec![entity], what).await
+    }
+
+    #[tool(
+        description = "Round corners of a 2D sketch of the active part with arcs of one radius, \
+                       like SolidWorks' Sketch Fillet. entities = sketch point ids (\"point:3\"), \
+                       each where two entities meet; or exactly two entity ids (\"line:1\", \
+                       \"arc:2\") for the corner between them, extended to it if they don't touch \
+                       yet. Lines and arcs shorten to make room, and what was dimensioned to the \
+                       corner stays on a point left there. Adds a radius dimension, which \
+                       set_dimension can change, and equal relations between arcs made together. \
+                       Reports the new arcs, what changed, the contours, the definition state, \
+                       and features that now fail to rebuild. All or nothing: refuses a radius \
+                       with no room or entities that cross (trim_sketch_entity first). Requires no \
+                       sketch open for editing."
+    )]
+    async fn sketch_fillet(
+        &self,
+        Parameters(params): Parameters<sketch_edit::SketchFilletParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            sketch_edit::fillet_request(&ids, &params)?
+        };
+        let reply = self.addin.sketch_corners(request).await.map_err(|status| {
+            delete::with_legend(self.addin_error(status), "entity", &sketch_edit::given(&params.entities))
+        })?;
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let text = format!(
+            "filleted {} with radius {} mm in {}.{}",
+            sketch_edit::given(&params.entities).join(", "),
+            params.radius_mm,
+            reply.sketch_name,
+            sketch_edit::edit_text(&mut ids, &reply)
+        );
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Cut corners of a 2D sketch of the active part with a straight line, like \
+                       SolidWorks' Sketch Chamfer. entities = sketch point ids (\"point:3\"), each \
+                       where two entities meet; or exactly two entity ids (\"line:1\", \"line:2\") \
+                       that touch. distance_mm alone is the same on both sides. With two entity \
+                       ids, second_distance_mm or angle_deg make the sides differ: distance_mm is \
+                       along the first entity, second_distance_mm along the other, angle_deg from \
+                       the first. Adds dimensions of the chamfer, which set_dimension can change, \
+                       and keeps the sharp corner as a point. Reports the new lines, what changed, \
+                       the contours, the definition state, and features that now fail to rebuild. \
+                       All or nothing: refuses sizes with no room or entities that don't touch. \
+                       Requires no sketch open for editing."
+    )]
+    async fn sketch_chamfer(
+        &self,
+        Parameters(params): Parameters<sketch_edit::SketchChamferParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            sketch_edit::chamfer_request(&ids, &params)?
+        };
+        let reply = self.addin.sketch_corners(request).await.map_err(|status| {
+            delete::with_legend(self.addin_error(status), "entity", &sketch_edit::given(&params.entities))
+        })?;
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let text = format!(
+            "chamfered {} in {}.{}",
+            sketch_edit::given(&params.entities).join(", "),
+            reply.sketch_name,
+            sketch_edit::edit_text(&mut ids, &reply)
+        );
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Trim an entity of a 2D sketch of the active part. With `at`: removes the \
+                       piece of the entity at that point, between whatever crosses it on either \
+                       side -- the whole entity if nothing does. A piece from the middle of a line \
+                       leaves two lines, and a circle becomes an arc with a new id, so use the ids \
+                       in the reply. With corner_with: this entity and the other grow until they \
+                       meet in a corner (they must not cross already). `at` is [x, y] in sketch \
+                       coordinates or [x, y, z] in model coordinates, in millimeters; the nearest \
+                       point on the entity counts. One piece per call. Reports what's new, what \
+                       changed, what's gone, the contours, the definition state, and features that \
+                       now fail to rebuild. Requires no sketch open for editing."
+    )]
+    async fn trim_sketch_entity(
+        &self,
+        Parameters(params): Parameters<sketch_edit::TrimParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            sketch_edit::trim_request(&ids, &params)?
+        };
+        let legend = [params.entity.trim().to_string()];
+        let reply = self
+            .addin
+            .trim_sketch_entity(request)
+            .await
+            .map_err(|status| delete::with_legend(self.addin_error(status), "entity", &legend))?;
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let text = format!(
+            "trimmed {} in {}.{}",
+            params.entity.trim(),
+            reply.sketch_name,
+            sketch_edit::edit_text(&mut ids, &reply)
+        );
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Extend an end of a line or arc of a 2D sketch of the active part up to the \
+                       next entity in its way, leaving them touching. `at` picks the end: the one \
+                       nearest that point, [x, y] in sketch coordinates or [x, y, z] in model \
+                       coordinates, in millimeters. Calling again goes on past that entity to the \
+                       next one. Refuses an end with nothing in its way. Reports what changed, the \
+                       contours, the definition state, and features that now fail to rebuild. \
+                       Requires no sketch open for editing."
+    )]
+    async fn extend_sketch_entity(
+        &self,
+        Parameters(params): Parameters<sketch_edit::ExtendParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            sketch_edit::extend_request(&ids, &params)?
+        };
+        let legend = [params.entity.trim().to_string()];
+        let reply = self
+            .addin
+            .trim_sketch_entity(request)
+            .await
+            .map_err(|status| delete::with_legend(self.addin_error(status), "entity", &legend))?;
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let text = format!(
+            "extended {} in {}.{}",
+            params.entity.trim(),
+            reply.sketch_name,
+            sketch_edit::edit_text(&mut ids, &reply)
+        );
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Project model edges and faces, or entities of other sketches, into a sketch \
+                       of the active part, like SolidWorks' Convert Entities: the new entities \
+                       stay tied to what they came from and follow it when it changes, and need no \
+                       dimensions. entities = edge and face ids from inspect_model (\"edge:4\", \
+                       \"face:2\") or other sketches' ids from inspect_sketch (\"line:3\"). A face \
+                       brings its outer loop and its holes (loops=\"outer\" or \"inner\" for one of \
+                       them); an edge brings only itself, so give a face or every edge for a \
+                       whole loop. They go into \
+                       sketch_name, or a new sketch on plane or on (a single face defaults to a \
+                       new sketch on itself), or a new 3D sketch (sketch_3d=true), where edges keep \
+                       their place in space: e.g. a sweep path. Reports the new entities' ids, the \
+                       sketch's contours and definition state, and features that now fail to \
+                       rebuild. Refuses what comes to nothing, leaving nothing behind. Requires no \
+                       sketch open for editing."
+    )]
+    async fn convert_entities(
+        &self,
+        Parameters(params): Parameters<sketch_edit::ConvertParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            sketch_edit::convert_request(&ids, &params)?
+        };
+        let reply = self.addin.convert_entities(request).await.map_err(|status| {
+            delete::with_legend(self.addin_error(status), "entity", &sketch_edit::given(&params.entities))
+        })?;
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let text = sketch_edit::convert_text(&mut ids, &params, &reply);
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     #[tool(
@@ -4378,7 +4801,10 @@ impl ServerHandler for SolidWorksTools {
                  mirror_features copies features or bodies about a plane, and \
                  mirror_sketch_entities mirrors sketch geometry about a centerline; \
                  offset_sketch_entities offsets sketch entities, or model edges and faces into \
-                 a sketch; \
+                 a sketch; convert_entities projects edges, faces or other sketches' entities \
+                 into a sketch; sketch_slot / sketch_polygon / sketch_ellipse draw those shapes; \
+                 sketch_fillet / sketch_chamfer round or cut sketch corners, and \
+                 trim_sketch_entity / extend_sketch_entity trim and extend sketch entities; \
                  linear_pattern_features / circular_pattern_features copy features or bodies \
                  in a row, grid or round an axis, and linear_pattern_sketch_entities / \
                  circular_pattern_sketch_entities do the same inside a sketch. \
@@ -4469,6 +4895,24 @@ mod tests {
         let mut points = PointConverter::default();
         points.convert(&[0.0, 0.0], "start").unwrap();
         assert!(points.convert(&[0.0, 0.0, 0.0], "end").is_err());
+    }
+
+    #[test]
+    fn polygon_shapes() {
+        // By a corner: as given, with the circle through the corners.
+        let (r, a, inscribed) = polygon_shape(6, Some(10.0), None, 30.0).unwrap();
+        assert!((r - 0.01).abs() < 1e-12 && (a - 30f64.to_radians()).abs() < 1e-12 && !inscribed);
+        // By a side: the corner is half a side on from its middle, and further out.
+        let (r, a, inscribed) = polygon_shape(6, None, Some(10.0), 0.0).unwrap();
+        assert!((r - 0.01 / 30f64.to_radians().cos()).abs() < 1e-12);
+        assert!((a - 30f64.to_radians()).abs() < 1e-12 && inscribed);
+
+        assert!(polygon_shape(2, Some(10.0), None, 0.0).is_err());
+        assert!(polygon_shape(41, Some(10.0), None, 0.0).is_err());
+        assert!(polygon_shape(6, None, None, 0.0).is_err());
+        assert!(polygon_shape(6, Some(10.0), Some(10.0), 0.0).is_err());
+        assert!(polygon_shape(6, Some(0.0), None, 0.0).is_err());
+        assert!(polygon_shape(6, Some(10.0), None, f64::NAN).is_err());
     }
 
     #[test]

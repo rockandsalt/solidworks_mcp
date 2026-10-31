@@ -155,6 +155,9 @@ namespace sld_mcp::service
 	grpc::Status OpenNewSketch(IModelDoc2* doc, ISketchManager* sketchManager, const SketchTarget& target,
 		ATL::CComPtr<ISketch>& sketch);
 
+	// Opens a new 3D sketch. On failure nothing is left open.
+	grpc::Status OpenNew3DSketch(IModelDoc2* doc, ISketchManager* sketchManager, ATL::CComPtr<ISketch>& sketch);
+
 	// Deletes a (closed) sketch feature, e.g. one left empty by a failed
 	// RPC. Best effort.
 	void DeleteSketchFeature(IModelDoc2* doc, IFeature* sketchFeature);

@@ -85,6 +85,18 @@ public:
 		const sld_mcp::v1::OffsetSketchEntitiesRequest* request,
 		sld_mcp::v1::OffsetSketchEntitiesResponse* response) override;
 
+	grpc::Status ConvertEntities(grpc::ServerContext* context,
+		const sld_mcp::v1::ConvertEntitiesRequest* request,
+		sld_mcp::v1::ConvertEntitiesResponse* response) override;
+
+	grpc::Status SketchCorners(grpc::ServerContext* context,
+		const sld_mcp::v1::SketchCornersRequest* request,
+		sld_mcp::v1::SketchEditResponse* response) override;
+
+	grpc::Status TrimSketchEntity(grpc::ServerContext* context,
+		const sld_mcp::v1::TrimSketchEntityRequest* request,
+		sld_mcp::v1::SketchEditResponse* response) override;
+
 	grpc::Status PatternFeatures(grpc::ServerContext* context,
 		const sld_mcp::v1::PatternFeaturesRequest* request,
 		sld_mcp::v1::PatternFeaturesResponse* response) override;

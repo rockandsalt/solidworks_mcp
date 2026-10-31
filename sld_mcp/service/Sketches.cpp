@@ -20,6 +20,11 @@ namespace
 	// chains of entities connect into contours.
 	constexpr double kMergeDistance = 1e-8;
 
+	constexpr int kMinPolygonSides = 3;
+
+	// What SolidWorks' polygon tool goes up to.
+	constexpr int kMaxPolygonSides = 40;
+
 	// Checks an entity's shape before SolidWorks is touched: the right
 	// points are present and every number is finite. Geometric degeneracy is
 	// checked when drawing, once points are in sketch coordinates.
@@ -75,8 +80,48 @@ namespace
 			if (!point(entity.point().has_position(), entity.point().position()))
 				return invalid("a point needs a finite position");
 			return grpc::Status::OK;
+		case Entity::kSlot:
+		{
+			const auto& slot = entity.slot();
+			if (!point(slot.has_start(), slot.start()) || !point(slot.has_end(), slot.end()))
+				return invalid("a slot needs a finite start and end");
+			if (slot.has_center() && slot.has_through())
+				return invalid("a slot along an arc needs one of center or through, not both");
+			if ((slot.has_center() && !IsFinite(slot.center())) || (slot.has_through() && !IsFinite(slot.through())))
+				return invalid("a slot's center/through point must be finite");
+			if (slot.clockwise() && !slot.has_center())
+				return invalid("clockwise only applies to slots along an arc given by its center");
+			if (!(std::isfinite(slot.width()) && slot.width() > kSketchTolerance))
+				return invalid("a slot's width must be positive");
+			return grpc::Status::OK;
+		}
+		case Entity::kPolygon:
+		{
+			const auto& polygon = entity.polygon();
+			if (!point(polygon.has_center(), polygon.center()))
+				return invalid("a polygon needs a finite center");
+			if (polygon.sides() < kMinPolygonSides || polygon.sides() > kMaxPolygonSides)
+				return invalid("a polygon needs 3 to 40 sides");
+			if (!(std::isfinite(polygon.corner_radius()) && polygon.corner_radius() > kSketchTolerance))
+				return invalid("a polygon's radius must be positive");
+			if (!std::isfinite(polygon.angle()))
+				return invalid("a polygon's angle must be finite");
+			return grpc::Status::OK;
+		}
+		case Entity::kEllipse:
+		{
+			const auto& ellipse = entity.ellipse();
+			if (!point(ellipse.has_center(), ellipse.center()))
+				return invalid("an ellipse needs a finite center");
+			if (!(std::isfinite(ellipse.major_radius()) && std::isfinite(ellipse.minor_radius()) &&
+				ellipse.minor_radius() > kSketchTolerance && ellipse.major_radius() >= ellipse.minor_radius()))
+				return invalid("an ellipse needs a positive minor radius, not more than its major radius");
+			if (!std::isfinite(ellipse.angle()))
+				return invalid("an ellipse's angle must be finite");
+			return grpc::Status::OK;
+		}
 		default:
-			return invalid("an entity has no geometry (line, circle, arc, spline or point)");
+			return invalid("an entity has no geometry (line, circle, arc, spline, point, slot, polygon or ellipse)");
 		}
 	}
 
@@ -120,30 +165,132 @@ namespace
 		return (Eigen::Vector3d(a[0], a[1], a[2]) - Eigen::Vector3d(b[0], b[1], b[2])).norm();
 	}
 
-	// Opens a new 3D sketch. On failure nothing is left open.
-	grpc::Status OpenNew3DSketch(IModelDoc2* doc, ISketchManager* sketchManager, ATL::CComPtr<ISketch>& sketch)
+	// Draws a slot. SolidWorks makes its segments, a construction center line or
+	// arc, and a point in the middle.
+	grpc::Status DrawSlot(ISketchManager* sketchManager, const SketchPointMapper& map,
+		const sld_mcp::v1::SketchSlot& slot)
 	{
-		HRESULT hr = doc->ClearSelection2(VARIANT_TRUE);
+		auto invalid = [](const std::string& why) { return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, why); };
+		const grpc::Status mapFailed(grpc::StatusCode::INTERNAL,
+			"couldn't map a point into the sketch's coordinates");
+		double s[3], e[3];
+		if (!map(slot.start(), s) || !map(slot.end(), e))
+			return mapFailed;
+		if (Distance(s, e) < kSketchTolerance)
+			return invalid("a slot's start and end are the same point in the sketch plane");
+		long type = swSketchSlotCreationType_line;
+		long direction = 1;
+		// What the three points are depends on the type: start, end, unused;
+		// center, start, end; or start, end, a point between them.
+		double p1[3] = {s[0], s[1], 0.0}, p2[3] = {e[0], e[1], 0.0}, p3[3] = {};
+		if (slot.has_center())
+		{
+			double c[3];
+			if (!map(slot.center(), c))
+				return mapFailed;
+			const double radius = Distance(s, c);
+			const double toEnd = Distance(e, c);
+			if (radius < kSketchTolerance || toEnd < kSketchTolerance)
+				return invalid("a slot's start and end must both be away from the center of its arc");
+			if (radius <= slot.width() / 2.0)
+				return invalid("a slot along an arc must be narrower than twice the arc's radius");
+			// As for arcs: the radius comes from the start.
+			for (int i = 0; i < 2; ++i)
+				e[i] = c[i] + (e[i] - c[i]) * radius / toEnd;
+			if (Distance(s, e) < kSketchTolerance)
+				return invalid("a slot's start and end are at the same angle around its center");
+			type = swSketchSlotCreationType_arc;
+			direction = slot.clockwise() ? -1 : 1;
+			std::copy(c, c + 3, p1);
+			std::copy(s, s + 3, p2);
+			std::copy(e, e + 3, p3);
+		}
+		else if (slot.has_through())
+		{
+			if (!map(slot.through(), p3))
+				return mapFailed;
+			const Eigen::Vector3d start(s[0], s[1], s[2]);
+			const double cross = (Eigen::Vector3d(p3[0], p3[1], p3[2]) - start).cross(Eigen::Vector3d(e[0], e[1], e[2]) - start).norm();
+			if (cross / Distance(s, e) < kSketchTolerance)
+				return invalid("a slot's three points are in a straight line -- leave out through for a straight slot");
+			type = swSketchSlotCreationType_3pointarc;
+		}
+		ATL::CComPtr<ISketchSlot> created;
+		const HRESULT hr = sketchManager->CreateSketchSlot(type, swSketchSlotLengthType_CenterCenter, slot.width(),
+			p1[0], p1[1], 0.0, p2[0], p2[1], 0.0, p3[0], p3[1], 0.0, direction,
+			slot.add_dimensions() ? VARIANT_TRUE : VARIANT_FALSE, &created);
 		if (FAILED(hr))
-			return ComError("IModelDoc2::ClearSelection2", hr);
-		hr = sketchManager->Insert3DSketch(VARIANT_TRUE);
-		if (FAILED(hr))
-			return ComError("ISketchManager::Insert3DSketch", hr);
-		hr = doc->IGetActiveSketch2(&sketch);
-		if (FAILED(hr) || !sketch)
-			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks didn't open a new 3D sketch");
+			return ComError("ISketchManager::CreateSketchSlot", hr);
+		if (!created)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"SolidWorks didn't create the slot -- e.g. it's wider than the arc it follows can take");
 		return grpc::Status::OK;
 	}
 
-	// Draws one (validated) entity into the open sketch and returns what was
-	// created: an ISketchSegment, or an ISketchPoint for points.
-	grpc::Status DrawSketchEntity(ISketchManager* sketchManager, const SketchPointMapper& map,
-		const sld_mcp::v1::SketchEntity& entity, ATL::CComPtr<IDispatch>& created)
+	grpc::Status DrawPolygon(ISketchManager* sketchManager, const SketchPointMapper& map,
+		const sld_mcp::v1::SketchPolygon& polygon)
+	{
+		double c[3];
+		if (!map(polygon.center(), c))
+			return grpc::Status(grpc::StatusCode::INTERNAL, "couldn't map a point into the sketch's coordinates");
+		// The point is a corner whichever construction circle it gets (seen
+		// 2026-10-31).
+		ATL::CComVariant segments;
+		const HRESULT hr = sketchManager->CreatePolygon(c[0], c[1], 0.0,
+			c[0] + polygon.corner_radius() * std::cos(polygon.angle()),
+			c[1] + polygon.corner_radius() * std::sin(polygon.angle()), 0.0,
+			polygon.sides(), polygon.inscribed() ? VARIANT_TRUE : VARIANT_FALSE, &segments);
+		if (FAILED(hr))
+			return ComError("ISketchManager::CreatePolygon", hr);
+		if (comvariant::ToDispatches(segments).empty())
+			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks didn't create the polygon");
+		return grpc::Status::OK;
+	}
+
+	// Draws one (validated) entity into the open sketch and appends what was
+	// created: ISketchSegments, or an ISketchPoint for points.
+	grpc::Status DrawSketchEntity(ISketch* sketch, ISketchManager* sketchManager, const SketchPointMapper& map,
+		const sld_mcp::v1::SketchEntity& entity, std::vector<ATL::CComPtr<IDispatch>>& created)
 	{
 		using Entity = sld_mcp::v1::SketchEntity;
 		auto invalid = [](const std::string& why) { return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, why); };
 		const grpc::Status mapFailed(grpc::StatusCode::INTERNAL,
 			"couldn't map a point into the sketch's coordinates");
+
+		// One entity, many segments: what's new is what counts, also what these
+		// calls don't return (a slot gives an ISketchSlot).
+		if (entity.geometry_case() == Entity::kSlot || entity.geometry_case() == Entity::kPolygon)
+		{
+			if (map.is3D)
+				return invalid(entity.has_slot() ? "a 3D sketch can't take a slot (it wouldn't know which way to face)"
+				                                 : "a 3D sketch can't take a polygon (it wouldn't know which way to face)");
+			SketchItems items;
+			items.Load(sketch);
+			const std::set<SketchItemKey> before = SketchKeys(items);
+			if (grpc::Status status = entity.has_slot() ? DrawSlot(sketchManager, map, entity.slot())
+			                                            : DrawPolygon(sketchManager, map, entity.polygon());
+				!status.ok())
+				return status;
+			items.Load(sketch);
+			std::set<SketchItemKey> onSegment;
+			for (const auto& e : items.All())
+			{
+				sld_mcp::v1::SketchItem item;
+				if (e.point || before.count(SketchKeyOf(e)) || !DescribeSketchItem(e.obj, std::string(), &item))
+					continue;
+				for (const sld_mcp::v1::SketchItemRef* p : {&item.start_point(), &item.end_point(), &item.center_point()})
+					if (p->point())
+						onSegment.insert(SketchKeyOf(*p));
+				if (ATL::CComQIPtr<ISketchSegment> segment(e.obj.p); segment && entity.construction())
+					segment->put_ConstructionGeometry(VARIANT_TRUE);
+				created.push_back(e.obj);
+			}
+			// A slot's middle, to dimension it by.
+			for (const auto& e : items.All())
+				if (e.point && !before.count(SketchKeyOf(e)) && !onSegment.count(SketchKeyOf(e)))
+					created.push_back(e.obj);
+			return grpc::Status::OK;
+		}
 
 		ATL::CComPtr<ISketchSegment> segment;
 		HRESULT hr = S_OK;
@@ -263,8 +410,24 @@ namespace
 				return ComError("ISketchManager::CreatePoint", hr);
 			if (!point)
 				return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks didn't create the point");
-			created = point.p;
+			created.push_back(point.p);
 			return grpc::Status::OK;
+		}
+		case Entity::kEllipse:
+		{
+			what = "ellipse";
+			if (map.is3D)
+				return invalid("a 3D sketch can't take an ellipse (it wouldn't know which way to face)");
+			const auto& ellipse = entity.ellipse();
+			double c[3];
+			if (!map(ellipse.center(), c))
+				return mapFailed;
+			const double ca = std::cos(ellipse.angle());
+			const double sa = std::sin(ellipse.angle());
+			hr = sketchManager->CreateEllipse(c[0], c[1], 0.0,
+				c[0] + ellipse.major_radius() * ca, c[1] + ellipse.major_radius() * sa, 0.0,
+				c[0] - ellipse.minor_radius() * sa, c[1] + ellipse.minor_radius() * ca, 0.0, &segment);
+			break;
 		}
 		default:
 			return invalid("an entity has no geometry");
@@ -277,7 +440,7 @@ namespace
 				"SolidWorks didn't create the " + what + " (degenerate geometry?)");
 		if (entity.construction())
 			segment->put_ConstructionGeometry(VARIANT_TRUE);
-		created = segment.p;
+		created.push_back(segment.p);
 		return grpc::Status::OK;
 	}
 
@@ -604,11 +767,8 @@ grpc::Status SolidWorksService::AddSketchEntities(grpc::ServerContext* /*context
 	std::vector<ATL::CComPtr<IDispatch>> created;
 	for (int i = 0; i < request->entities_size() && failure.ok(); ++i)
 	{
-		ATL::CComPtr<IDispatch> entity;
-		failure = DrawSketchEntity(sketchManager, map, request->entities(i), entity);
-		if (failure.ok())
-			created.push_back(entity);
-		else
+		failure = DrawSketchEntity(sketch, sketchManager, map, request->entities(i), created);
+		if (!failure.ok())
 			failure = grpc::Status(failure.error_code(),
 				"entity " + std::to_string(i + 1) + ": " + failure.error_message());
 	}
@@ -673,7 +833,7 @@ grpc::Status SolidWorksService::AddSketchEntities(grpc::ServerContext* /*context
 	response->set_sketch_name(ToUtf8(sketchName));
 	response->set_created_sketch(!existing);
 	response->set_is_3d(is3D);
-	response->set_entity_count(static_cast<int32_t>(created.size()));
+	response->set_entity_count(request->entities_size());
 	return grpc::Status::OK;
 }
 

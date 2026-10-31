@@ -459,8 +459,28 @@ namespace sld_mcp::service
 			break;
 		}
 		case swSketchELLIPSE:
+		{
 			item->set_type(sld_mcp::v1::SKETCH_ITEM_TYPE_ELLIPSE);
+			ATL::CComQIPtr<ISketchEllipse> ellipse(segment);
+			if (!ellipse)
+				break;
+			ATL::CComPtr<IDispatch> center, major, minor, start, end;
+			if (SUCCEEDED(ellipse->GetCenterPoint2(&center)))
+				SetItemPoint(center, sketchPid, item->mutable_center(), item->mutable_center_point());
+			if (SUCCEEDED(ellipse->GetMajorPoint2(&major)))
+				SetItemPoint(major, sketchPid, item->mutable_major(), item->mutable_major_point());
+			if (SUCCEEDED(ellipse->GetMinorPoint2(&minor)))
+				SetItemPoint(minor, sketchPid, item->mutable_minor(), item->mutable_minor_point());
+			// A whole ellipse has no ends to speak of.
+			if (SUCCEEDED(ellipse->GetStartPoint2(&start)) && SUCCEEDED(ellipse->GetEndPoint2(&end)))
+			{
+				double a[3], b[3];
+				if (start && end && PointPosition(start, a) && PointPosition(end, b) &&
+					(Eigen::Vector3d(a[0], a[1], a[2]) - Eigen::Vector3d(b[0], b[1], b[2])).norm() > 1e-9)
+					startEnd(start, end);
+			}
 			break;
+		}
 		default:
 			item->set_type(sld_mcp::v1::SKETCH_ITEM_TYPE_OTHER);
 			break;
@@ -705,20 +725,26 @@ namespace sld_mcp::service
 		HRESULT hr = doc->ClearSelection2(VARIANT_TRUE);
 		if (FAILED(hr))
 			return ComError("IModelDoc2::ClearSelection2", hr);
-		VARIANT_BOOL selected = VARIANT_FALSE;
-		hr = target.faceEntity ? target.faceEntity->Select4(VARIANT_FALSE, nullptr, &selected)
-		                       : target.plane->Select2(VARIANT_FALSE, 0, &selected);
-		if (FAILED(hr))
-			return ComError(target.faceEntity ? "IEntity::Select4" : "IFeature::Select2", hr);
-		if (!selected)
-			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks wouldn't select the sketch plane");
+		// After a sketch was closed with nothing selected (dimension_sketch,
+		// add_sketch_relations), the next InsertSketch does nothing, also in another
+		// document, and the one after works (seen 2026-10-31; why isn't known).
+		for (int attempt = 0; attempt < 2 && !sketch; ++attempt)
+		{
+			VARIANT_BOOL selected = VARIANT_FALSE;
+			hr = target.faceEntity ? target.faceEntity->Select4(VARIANT_FALSE, nullptr, &selected)
+			                       : target.plane->Select2(VARIANT_FALSE, 0, &selected);
+			if (FAILED(hr))
+				return ComError(target.faceEntity ? "IEntity::Select4" : "IFeature::Select2", hr);
+			if (!selected)
+				return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks wouldn't select the sketch plane");
 
-		// Opens a new sketch on the selected plane or face.
-		hr = sketchManager->InsertSketch(VARIANT_TRUE);
-		if (FAILED(hr))
-			return ComError("ISketchManager::InsertSketch", hr);
-		hr = doc->IGetActiveSketch2(&sketch);
-		if (FAILED(hr) || !sketch)
+			// Opens a new sketch on the selected plane or face.
+			hr = sketchManager->InsertSketch(VARIANT_TRUE);
+			if (FAILED(hr))
+				return ComError("ISketchManager::InsertSketch", hr);
+			doc->IGetActiveSketch2(&sketch);
+		}
+		if (!sketch)
 		{
 			doc->ClearSelection2(VARIANT_TRUE);
 			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks didn't open a sketch on the plane");
@@ -739,6 +765,20 @@ namespace sld_mcp::service
 	}
 
 	// Deletes entities drawn into the still-open sketch. Best effort.
+	grpc::Status OpenNew3DSketch(IModelDoc2* doc, ISketchManager* sketchManager, ATL::CComPtr<ISketch>& sketch)
+	{
+		HRESULT hr = doc->ClearSelection2(VARIANT_TRUE);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::ClearSelection2", hr);
+		hr = sketchManager->Insert3DSketch(VARIANT_TRUE);
+		if (FAILED(hr))
+			return ComError("ISketchManager::Insert3DSketch", hr);
+		hr = doc->IGetActiveSketch2(&sketch);
+		if (FAILED(hr) || !sketch)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks didn't open a new 3D sketch");
+		return grpc::Status::OK;
+	}
+
 	void DeleteDrawnEntities(IModelDoc2* doc, const std::vector<ATL::CComPtr<IDispatch>>& entities)
 	{
 		doc->ClearSelection2(VARIANT_TRUE);
