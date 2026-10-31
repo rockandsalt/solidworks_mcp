@@ -65,6 +65,10 @@ public:
 		const sld_mcp::v1::ChamferEdgesRequest* request,
 		sld_mcp::v1::EdgeFeatureResponse* response) override;
 
+	grpc::Status ShellBody(grpc::ServerContext* context,
+		const sld_mcp::v1::ShellBodyRequest* request,
+		sld_mcp::v1::EdgeFeatureResponse* response) override;
+
 	grpc::Status MirrorFeatures(grpc::ServerContext* context,
 		const sld_mcp::v1::MirrorFeaturesRequest* request,
 		sld_mcp::v1::MirrorFeaturesResponse* response) override;

@@ -26,6 +26,7 @@ mod render;
 mod revolve;
 mod sheet;
 mod sheet_format;
+mod shell;
 mod sketch;
 mod sweep;
 mod table;
@@ -1506,6 +1507,35 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(fillet::chamfer_text(&params, &reply))]))
+    }
+
+    #[tool(
+        description = "Hollow out a solid body of the active part, leaving walls of an even \
+                       thickness (shell): an enclosure, a tray, a cup, a housing. open_faces = \
+                       face ids (\"face:3\") from inspect_model to remove, leaving openings, e.g. \
+                       the top face of a box; with none the body is closed all round with an \
+                       empty cavity inside. face_thicknesses gives walls a thickness of their own, \
+                       e.g. a thicker base; outward adds the walls outside the faces, making the \
+                       body bigger. One body per call: in a part with several, open_faces says \
+                       which (all of one body), or body for a closed shell. Usually after the \
+                       extrudes and the outside fillets \
+                       (they carry through to the inside), before features that belong inside the \
+                       cavity. Requires an open part with no sketch being edited."
+    )]
+    async fn shell_body(
+        &self,
+        Parameters(params): Parameters<shell::ShellParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            shell::request(&ids, &params)?
+        };
+        let reply = self
+            .addin
+            .shell_body(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(shell::reply_text(&params, &reply))]))
     }
 
     #[tool(
@@ -4220,6 +4250,7 @@ impl ServerHandler for SolidWorksTools {
                  about a centerline (sketch_line with construction=true), or sweep_sketch / \
                  cut_sweep_sketch to run a profile (or a circle) along a path sketch, or                  loft_sketch / cut_loft_sketch to blend through profiles on several planes; \
                  fillet_edges / chamfer_edges round or bevel edges (by edge or face id); \
+                 shell_body hollows out a solid into walls, with chosen faces left open; \
                  mirror_features copies features or bodies about a plane, and \
                  mirror_sketch_entities mirrors sketch geometry about a centerline; \
                  linear_pattern_features / circular_pattern_features copy features or bodies \

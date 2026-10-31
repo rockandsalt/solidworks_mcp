@@ -168,6 +168,9 @@
     <ClCompile Include="service\Fillet.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>
+    <ClCompile Include="service\Shell.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
     <ClCompile Include="service\FeatureTreeHelpers.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>

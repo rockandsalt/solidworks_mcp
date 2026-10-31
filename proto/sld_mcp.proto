@@ -95,6 +95,16 @@ service SolidWorks {
   rpc FilletEdges(FilletEdgesRequest) returns (EdgeFeatureResponse);
   rpc ChamferEdges(ChamferEdgesRequest) returns (EdgeFeatureResponse);
 
+  // Hollows out a solid body of the active part, leaving walls of a given
+  // thickness (IModelDoc2::InsertFeatureShell), with the given faces open or
+  // closed all round. Same preconditions as ExtrudeSketch; INVALID_ARGUMENT
+  // for bad thicknesses, references that aren't faces, faces of two bodies or
+  // a closed shell of a part with several bodies and no body named (or with
+  // walls of their own thickness), NOT_FOUND for stale ids,
+  // FAILED_PRECONDITION when SolidWorks won't make the feature (e.g. walls
+  // too thick for the body; nothing is left behind then).
+  rpc ShellBody(ShellBodyRequest) returns (EdgeFeatureResponse);
+
   // Mirrors features (by persist_id or name) or bodies of the active part
   // about a plane: a planar face, a reference plane or a default plane
   // (IFeatureManager::InsertMirrorFeature2). Same preconditions as
@@ -1016,8 +1026,31 @@ message ChamferEdgesRequest {
 }
 
 message EdgeFeatureResponse {
-  // Feature-tree name of the new feature, e.g. "Fillet1", "Chamfer1".
+  // Feature-tree name of the new feature, e.g. "Fillet1", "Chamfer1", "Shell1".
   string feature_name = 1;
+}
+
+message ShellBodyRequest {
+  // Meters, more than 0: the walls, except those in `face_thicknesses`.
+  double thickness = 1;
+  // Faces to remove (the openings), by model_persist_id. None: closed all
+  // round, hollow inside.
+  repeated GeometryRef open_faces = 2;
+  // Walls with their own thickness. Not faces in `open_faces`.
+  repeated ShellFaceThickness face_thicknesses = 3;
+  // Add the walls outside the body's faces instead of inside them.
+  bool outward = 4;
+  // The body to shell, by persist_id from InspectModel: needed for a closed
+  // shell of a part with several solid bodies. Not with `open_faces` (they
+  // say which) or `face_thicknesses` (SolidWorks can't do that there).
+  bytes body = 5;
+}
+
+message ShellFaceThickness {
+  // A face of the body, by model_persist_id.
+  GeometryRef face = 1;
+  // Meters, more than 0.
+  double thickness = 2;
 }
 
 message MirrorFeaturesRequest {
