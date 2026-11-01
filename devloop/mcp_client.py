@@ -10,7 +10,10 @@ Standard library only (Python 3.10+). See docs/notes/devloop.md.
 
 `run` first makes sure SolidWorks is up with the add-in listening and closes
 every open document, discarding changes (devloop/sw.ps1 start + reset), so
-each run starts from the same state.
+each run starts from the same state. A run that passes closes its documents
+again. Saved documents and exports are deleted from devloop/out/ after a run
+that passes and before the next run; a failed run keeps its documents open and
+its files until then, to look at. --no-reset closes and deletes nothing.
 
 Each run gets its own folder under devloop/out/ with transcript.jsonl (every
 request and result in full), server.log (mcp_server's stderr, RUST_LOG=debug
@@ -52,6 +55,8 @@ OUT = DEVLOOP / "out"
 CALL_TIMEOUT_S = 90
 # Printed per result; the transcript always has everything.
 PRINT_LIMIT = 4000
+# What scenarios save and export; logs, transcripts and images stay.
+SAVED_FILES = {".sldprt", ".sldasm", ".slddrw", ".drwdot", ".step", ".igs", ".x_t", ".stl", ".dxf", ".pdf"}
 
 
 class ToolError(Exception):
@@ -209,11 +214,20 @@ class Client:
         self._stderr.close()
 
 
-def sw(action: str):
-    """Runs devloop/sw.ps1 <action> (Windows PowerShell, which its COM calls need)."""
-    command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(DEVLOOP / "sw.ps1"), action]
+def sw(*args: str):
+    """Runs devloop/sw.ps1 <args> (Windows PowerShell, which its COM calls need)."""
+    command = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(DEVLOOP / "sw.ps1"), *args]
     if subprocess.run(command).returncode != 0:
-        raise RuntimeError(f"sw.ps1 {action} failed")
+        raise RuntimeError(f"sw.ps1 {' '.join(args)} failed")
+
+
+def delete_saved_files():
+    for path in OUT.rglob("*"):
+        if path.suffix.lower() in SAVED_FILES:
+            try:
+                path.unlink()
+            except OSError as error:
+                print(f"couldn't delete {path}: {error}")
 
 
 def new_run_dir(name: str) -> Path:
@@ -234,6 +248,7 @@ def main(argv: list[str]) -> int:
         sw("start")
         if reset:
             sw("reset")
+            delete_saved_files()
     run_dir = new_run_dir(name)
     print(f"run folder: {run_dir}")
     client = Client(run_dir)
@@ -257,6 +272,13 @@ def main(argv: list[str]) -> int:
         return 1
     finally:
         client.close()
+    if command == "run" and reset:
+        try:
+            # The reset before the run refused to lose anyone's work, so what's open now is the scenarios'.
+            sw("reset", "-Force")
+            delete_saved_files()
+        except RuntimeError as error:
+            print(f"WARNING: documents left open: {error}")
     print(f"\nOK -- run folder: {run_dir}")
     return 0
 

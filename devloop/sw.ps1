@@ -50,7 +50,7 @@ $outDir = Join-Path $PSScriptRoot 'out'
 $dll = Join-Path $root "sld_mcp\x64\$Configuration\sld_mcp.dll"
 $instancesDir = Join-Path $env:LOCALAPPDATA 'sld_mcp\instances'
 
-# The 3DEXPERIENCE launcher command from CLAUDE.md. It returns at once; the
+# The 3DEXPERIENCE launcher command. It returns at once; the
 # launcher then signs in and starts SLDWORKS.exe on its own.
 $catstart = 'C:\Program Files\Dassault Systemes\SOLIDWORKS 3DEXPERIENCE R2026x\win_b64\code\bin\CATSTART.exe'
 $catstartArgs = '-run "SWXDesktopLauncher.exe" -object "--AppName=\"SWXCSWK_AP\" -tenant=OI000596756 -monoapp ' +
