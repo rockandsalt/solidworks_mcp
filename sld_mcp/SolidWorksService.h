@@ -73,6 +73,14 @@ public:
 		const sld_mcp::v1::ShellBodyRequest* request,
 		sld_mcp::v1::EdgeFeatureResponse* response) override;
 
+	grpc::Status RibSketch(grpc::ServerContext* context,
+		const sld_mcp::v1::RibSketchRequest* request,
+		sld_mcp::v1::RibSketchResponse* response) override;
+
+	grpc::Status DraftFaces(grpc::ServerContext* context,
+		const sld_mcp::v1::DraftFacesRequest* request,
+		sld_mcp::v1::DraftFacesResponse* response) override;
+
 	grpc::Status MirrorFeatures(grpc::ServerContext* context,
 		const sld_mcp::v1::MirrorFeaturesRequest* request,
 		sld_mcp::v1::MirrorFeaturesResponse* response) override;

@@ -377,6 +377,8 @@
     <ClCompile Include="service\Extrude.cpp" />
     <ClCompile Include="service\Fillet.cpp" />
     <ClCompile Include="service\Shell.cpp" />
+    <ClCompile Include="service\Rib.cpp" />
+    <ClCompile Include="service\Draft.cpp" />
     <ClCompile Include="service\Helix.cpp" />
     <ClCompile Include="service\FeatureTreeHelpers.cpp" />
     <ClCompile Include="service\Files.cpp" />

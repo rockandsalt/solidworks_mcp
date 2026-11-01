@@ -232,6 +232,24 @@ impl AddinClient {
         Ok(client.shell_body(request).await?.into_inner())
     }
 
+    /// Thickness in meters, draft in radians.
+    pub async fn rib_sketch(
+        &self,
+        request: proto::RibSketchRequest,
+    ) -> Result<proto::RibSketchResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.rib_sketch(request).await?.into_inner())
+    }
+
+    /// Angle in radians.
+    pub async fn draft_faces(
+        &self,
+        request: proto::DraftFacesRequest,
+    ) -> Result<proto::DraftFacesResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.draft_faces(request).await?.into_inner())
+    }
+
     pub async fn mirror_features(
         &self,
         request: proto::MirrorFeaturesRequest,

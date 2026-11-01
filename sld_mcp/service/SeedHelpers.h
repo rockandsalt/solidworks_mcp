@@ -36,4 +36,10 @@ namespace sld_mcp::service
 
 	// Solid bodies in the part.
 	int SolidBodyCount(IModelDoc2* doc);
+
+	// A volume change smaller than this (m^3, 1 mm^3) is no change.
+	constexpr double kVolumeTolerance = 1e-9;
+
+	// The volume of every solid body of the part, m^3.
+	double SolidVolume(IModelDoc2* doc);
 }

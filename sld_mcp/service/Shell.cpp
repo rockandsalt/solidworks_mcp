@@ -20,9 +20,6 @@ namespace
 	// More references than anyone selects by hand.
 	constexpr int kMaxFaces = 500;
 
-	// A volume change smaller than this (m^3, 1 mm^3) is no change.
-	constexpr double kVolumeTolerance = 1e-9;
-
 	// Resolves one face into `selection`, refusing anything else.
 	grpc::Status AddFace(IModelDoc2* doc, IModelDocExtension* ext, const sld_mcp::v1::GeometryRef& ref, long mark,
 		const std::string& label, Selection& selection)
@@ -53,28 +50,6 @@ namespace
 						"those faces belong to more than one body: shell one body per call");
 			}
 		return grpc::Status::OK;
-	}
-
-	// The volume of every solid body of the part, m^3.
-	double SolidVolume(IModelDoc2* doc)
-	{
-		ATL::CComQIPtr<IPartDoc> part(doc);
-		ATL::CComVariant bodies;
-		if (!part || FAILED(part->GetBodies2(swSolidBody, VARIANT_FALSE, &bodies)))
-			return 0.0;
-		double volume = 0.0;
-		for (const auto& disp : comvariant::ToDispatches(bodies))
-		{
-			ATL::CComQIPtr<IBody2> body(disp.p);
-			ATL::CComVariant mass;
-			if (!body || FAILED(body->GetMassProperties(1.0, &mass)))
-				continue;
-			// [CoM x, y, z, volume, ...]
-			const std::vector<double> m = comvariant::ToDoubles(mass);
-			if (m.size() >= 4)
-				volume += m[3];
-		}
-		return volume;
 	}
 
 	// The selection the shell calls read: each wall of its own thickness is

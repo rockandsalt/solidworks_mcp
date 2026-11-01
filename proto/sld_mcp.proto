@@ -113,6 +113,21 @@ service SolidWorks {
   // too thick for the body; nothing is left behind then).
   rpc ShellBody(ShellBodyRequest) returns (EdgeFeatureResponse);
 
+  // Makes a rib from an open or closed sketch of the active part
+  // (IFeatureManager::InsertRib): a thin wall out of the sketch's lines,
+  // running on until it meets the body. Same preconditions as ExtrudeSketch;
+  // INVALID_ARGUMENT for bad sizes, NOT_FOUND for an unknown sketch,
+  // FAILED_PRECONDITION when SolidWorks won't make it (nothing is left behind
+  // then, and the sketch stays unused).
+  rpc RibSketch(RibSketchRequest) returns (RibSketchResponse);
+
+  // Tapers faces of the active part about a neutral plane
+  // (IFeatureManager::InsertMultiFaceDraft). Same preconditions as
+  // ExtrudeSketch; INVALID_ARGUMENT for a bad angle or references of the wrong
+  // kind, NOT_FOUND for stale ids, FAILED_PRECONDITION when SolidWorks won't
+  // make it (nothing is left behind then).
+  rpc DraftFaces(DraftFacesRequest) returns (DraftFacesResponse);
+
   // Mirrors features (by persist_id or name) or bodies of the active part
   // about a plane: a planar face, a reference plane or a default plane
   // (IFeatureManager::InsertMirrorFeature2). Same preconditions as
@@ -1183,6 +1198,65 @@ message ShellFaceThickness {
   GeometryRef face = 1;
   // Meters, more than 0.
   double thickness = 2;
+}
+
+message RibSketchRequest {
+  // Feature-tree name of the sketch. Empty means the most recent sketch not
+  // yet used by any feature.
+  string sketch_name = 1;
+  // Meters, more than 0: the rib's total thickness.
+  double thickness = 2;
+  // All the thickness on one side of the sketch instead of centered on it.
+  bool one_sided = 3;
+  // One-sided only: the other side.
+  bool flip_side = 4;
+  // Grow the rib along the sketch normal instead of within the sketch plane.
+  bool normal_to_sketch = 5;
+  // Grow it the other way. Not set: the default way, else, when that makes
+  // nothing, the other way (`direction_flipped`).
+  bool reverse_direction = 6;
+  // Radians, 0 or more and under 90 degrees: taper of the rib's sides.
+  double draft_angle = 7;
+  // Draft only: get thicker away from the sketch instead of thinner.
+  bool draft_outward = 8;
+}
+
+message RibSketchResponse {
+  // Feature-tree name of the new feature, e.g. "Rib1".
+  string feature_name = 1;
+  // The sketch that was used (useful when the request left it empty).
+  string sketch_name = 2;
+  // How fully defined that sketch was.
+  DefinitionStatus sketch_status = 3;
+  // The default way made nothing, so the rib grew the other way, as
+  // reverse_direction would have.
+  bool direction_flipped = 4;
+  // Volume the rib added, m^3.
+  double volume_change = 5;
+}
+
+message DraftFacesRequest {
+  // Radians, more than 0 and under 90 degrees.
+  double angle = 1;
+  // The faces to taper, by model_persist_id.
+  repeated GeometryRef faces = 2;
+  // Where the faces keep their size: a planar face or reference plane by
+  // model_persist_id, a reference plane by feature_name, or a default plane.
+  GeometryRef neutral_plane = 3;
+  // Reverse the pull direction.
+  bool flip = 4;
+  // swDraftFacePropagationType_e: 0 only the faces given, 1 also tangent faces,
+  // 2 all loops, 3 inner loops, 4 outer loops.
+  int32 propagation = 5;
+}
+
+message DraftFacesResponse {
+  // Feature-tree name of the new feature, e.g. "Draft1".
+  string feature_name = 1;
+  // Change of the solid volume, m^3: negative when the draft removed material
+  // (0 is possible: about a plane through a wall, one half grows as the other
+  // shrinks).
+  double volume_change = 2;
 }
 
 message MirrorFeaturesRequest {

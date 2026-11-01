@@ -122,4 +122,25 @@ namespace sld_mcp::service
 			return 0;
 		return static_cast<int>(comvariant::ToDispatches(bodies).size());
 	}
+
+	double SolidVolume(IModelDoc2* doc)
+	{
+		ATL::CComQIPtr<IPartDoc> part(doc);
+		ATL::CComVariant bodies;
+		if (!part || FAILED(part->GetBodies2(swSolidBody, VARIANT_FALSE, &bodies)))
+			return 0.0;
+		double volume = 0.0;
+		for (const auto& disp : comvariant::ToDispatches(bodies))
+		{
+			ATL::CComQIPtr<IBody2> body(disp.p);
+			ATL::CComVariant mass;
+			if (!body || FAILED(body->GetMassProperties(1.0, &mass)))
+				continue;
+			// [CoM x, y, z, volume, ...]
+			const std::vector<double> m = comvariant::ToDoubles(mass);
+			if (m.size() >= 4)
+				volume += m[3];
+		}
+		return volume;
+	}
 }

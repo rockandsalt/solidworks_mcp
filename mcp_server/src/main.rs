@@ -4,6 +4,7 @@ mod component;
 mod delete;
 mod diagnose;
 mod discovery;
+mod draft;
 mod drawing;
 mod drawing_image;
 mod edit;
@@ -26,6 +27,7 @@ mod properties;
 mod refgeom;
 mod render;
 mod revolve;
+mod rib;
 mod sheet;
 mod sheet_format;
 mod shell;
@@ -2016,6 +2018,60 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(shell::reply_text(&params, &reply))]))
+    }
+
+    #[tool(
+        description = "Make a rib: a thin stiffening wall of the active part grown from a sketch \
+                       until it meets the body, e.g. a web across a tray or a gusset in a corner. \
+                       Draw the sketch first, usually one open line or chain on a plane across \
+                       the part, where the rib's free edge should be: it needn't reach the walls, \
+                       its ends carry on to them, but they must run into material (over a plain \
+                       plate, draw the chain down to the plate). The rib grows within the sketch \
+                       plane, or along the sketch's normal with normal_to_sketch, towards the \
+                       material; if the default way makes nothing it goes the other way and says \
+                       so. By default \
+                       uses the most recently created sketch that isn't used by a feature yet. \
+                       Requires an open part with a solid body and no sketch being edited."
+    )]
+    async fn rib_sketch(
+        &self,
+        Parameters(params): Parameters<rib::RibParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = rib::request(&params)?;
+        let reply = self
+            .addin
+            .rib_sketch(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            rib::reply_text(&params, &reply) + &sketch_status_note(&reply.sketch_name, reply.sketch_status()),
+        )]))
+    }
+
+    #[tool(
+        description = "Taper faces of the active part about a neutral plane (draft), so a molded \
+                       or cast part comes out of its mold. faces = the walls to taper, ids \
+                       (\"face:3\") from inspect_model; neutral_plane = where they keep their \
+                       size: \"front\" / \"top\" / \"right\", a planar face id or a reference \
+                       plane. The reply says whether the body grew or shrank; flip leans the \
+                       faces the other way. propagation takes in tangent faces, or all, inner or \
+                       outer walls on the plane. For the sides of one extrude, edit_extrude's \
+                       draft_deg is simpler. Requires an open part with no sketch being edited."
+    )]
+    async fn draft_faces(
+        &self,
+        Parameters(params): Parameters<draft::DraftParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            draft::request(&ids, &params)?
+        };
+        let reply = self
+            .addin
+            .draft_faces(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(draft::reply_text(&params, &reply))]))
     }
 
     #[tool(
@@ -4797,7 +4853,10 @@ impl ServerHandler for SolidWorksTools {
                  sketch, and create_helix turns a circle's sketch into a helix or spiral curve \
                  (a spring, a coil, a thread); \
                  fillet_edges / chamfer_edges round or bevel edges (by edge or face id); \
+ \
                  shell_body hollows out a solid into walls, with chosen faces left open; \
+                 rib_sketch grows a thin wall from a sketch to the body; draft_faces tapers \
+                 faces about a neutral plane; \
                  mirror_features copies features or bodies about a plane, and \
                  mirror_sketch_entities mirrors sketch geometry about a centerline; \
                  offset_sketch_entities offsets sketch entities, or model edges and faces into \

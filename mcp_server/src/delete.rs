@@ -227,6 +227,7 @@ pub fn type_label(type_name: &str) -> &str {
         "Chamfer" => "chamfer",
         "Shell" => "shell",
         "Draft" => "draft",
+        "Rib" => "rib",
         "LPattern" => "linear pattern",
         "CirPattern" => "circular pattern",
         "MirrorPattern" | "MirrorSolid" => "mirror",
