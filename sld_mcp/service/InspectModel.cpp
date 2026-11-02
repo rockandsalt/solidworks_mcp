@@ -5,6 +5,7 @@
 #include "pch.h"
 #include "Common.h"
 #include "AssemblyHelpers.h"
+#include "FeatureTreeHelpers.h"
 #include "ReferenceHelpers.h"
 
 using namespace sld_mcp::service;
@@ -98,6 +99,11 @@ namespace
 
 				if (referenceExt && IsReferenceType(info->type_name()))
 					DescribeReferenceGeometry(referenceExt, feature, info->type_name(), info->mutable_reference());
+
+				long visibility = swVisibilityStateShown;
+				if ((IsSketchType(info->type_name()) || IsReferenceType(info->type_name())) &&
+					SUCCEEDED(feature->get_Visible(&visibility)))
+					info->set_hidden(visibility == swVisibilityStateHide);
 			}
 
 			ATL::CComPtr<IFeature> next;
@@ -130,6 +136,10 @@ namespace
 		long type = swSolidBody;
 		if (SUCCEEDED(body->GetType(&type)))
 			info->set_solid(type == swSolidBody);
+
+		VARIANT_BOOL visible = VARIANT_TRUE;
+		if (SUCCEEDED(body->get_Visible(&visible)))
+			info->set_hidden(visible == VARIANT_FALSE);
 
 		ATL::CComVariant box;
 		if (SUCCEEDED(body->GetBodyBox(&box)))

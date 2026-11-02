@@ -581,6 +581,26 @@ service SolidWorks {
   // `opened` false and its error bits (swFileLoadError_e) for the MCP
   // server to name; warnings (missing references, ...) likewise.
   rpc OpenDocument(OpenDocumentRequest) returns (OpenDocumentResponse);
+
+  // Closes a document's window (ISldWorks::CloseDoc), silently; the document
+  // that was active stays so unless it's the one closed. NOT_FOUND if no open
+  // document goes by that name, FAILED_PRECONDITION if there's nothing open or
+  // it has unsaved changes and discard_changes isn't set.
+  rpc CloseDocument(CloseDocumentRequest) returns (CloseDocumentResponse);
+
+  // Takes back the active document's last steps (IModelDoc2::EditUndo2), and
+  // more if it would stop inside a sketch, and reports what that changed.
+  // FAILED_PRECONDITION if nothing is open or a sketch is open for editing.
+  rpc Undo(UndoRequest) returns (UndoResponse);
+
+  // Hides or shows bodies, sketches and reference geometry of the active part
+  // or assembly, and components of the active assembly; each read back.
+  // Everything is checked before anything changes. INVALID_ARGUMENT / NOT_FOUND
+  // for targets that can't be, FAILED_PRECONDITION if the active document isn't
+  // a part or assembly, a sketch is open, or SolidWorks changed none of those
+  // that needed it. A suppressed component's id doesn't resolve (FAILED_PRECONDITION).
+  rpc SetVisibility(SetVisibilityRequest) returns (SetVisibilityResponse);
+
   // Adds a reference plane, axis, point (or several points along a curve)
   // or coordinate system to the active part, built like the Reference
   // Geometry commands from references: model geometry (faces, edges,
@@ -786,6 +806,63 @@ message OpenDocumentResponse {
   // swFileLoadError_e / swFileLoadWarning_e bits.
   int32 errors = 4;
   int32 warnings = 5;
+}
+
+message CloseDocumentRequest {
+  // Window title, full path or file name of an open document, in any case.
+  // Empty: the active document.
+  string document = 1;
+  // Close it even with unsaved changes.
+  bool discard_changes = 2;
+}
+
+message CloseDocumentResponse {
+  Document closed = 1;
+  // It had unsaved changes (IModelDoc2::GetSaveFlag).
+  bool had_unsaved_changes = 2;
+  // Another open document uses it: only its window closed. SolidWorks keeps
+  // it loaded for that document, with any changes.
+  bool still_loaded = 3;
+  // The active document now; unset when none is left.
+  Document active = 4;
+}
+
+message UndoRequest {
+  int32 steps = 1;  // 1..100
+}
+
+message UndoResponse {
+  string document = 1;  // title of the document undone in
+  // Features gone from / back in the tree, in tree order.
+  repeated FeatureRef removed = 2;
+  repeated FeatureRef restored = 3;
+  // Parts: volume of the solid bodies before and after, m^3.
+  double volume_before = 4;
+  double volume_after = 5;
+  // The steps asked for, and those it took to get out of a sketch.
+  int32 steps_taken = 6;
+}
+
+message SetVisibilityRequest {
+  // A body (part), a component (assembly), a sketch or a reference plane /
+  // axis / point / coordinate system, by persist_id; features also by name.
+  repeated FeatureTarget items = 1;  // at least one
+  bool visible = 2;
+}
+
+message VisibilityChange {
+  string name = 1;
+  // "body", "component", "sketch" or "reference geometry".
+  string kind = 2;
+  // It was hidden or shown by this call; false: it already was, or (see
+  // `visible`) SolidWorks didn't do it.
+  bool changed = 3;
+  bool visible = 4;  // read back
+}
+
+message SetVisibilityResponse {
+  // In request order, each once.
+  repeated VisibilityChange items = 1;
 }
 
 // The three default reference planes every part starts with. Resolved by
@@ -2105,6 +2182,8 @@ message FeatureInfo {
   // Reference planes, axes, points and coordinate systems of the document
   // itself (not of components): where they are.
   ReferenceGeometry reference = 10;
+  // Sketches and reference geometry: hidden (IFeature::Visible).
+  bool hidden = 11;
 }
 
 message BodyInfo {
@@ -2119,6 +2198,7 @@ message BodyInfo {
   // Assemblies: the component the body is in; `box` and `mass` are then in
   // its coordinates (see ComponentInfo).
   bytes component_persist_id = 8;
+  bool hidden = 9;
 }
 
 message MassProperties {

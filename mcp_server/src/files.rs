@@ -55,6 +55,17 @@ pub struct OpenDocumentParams {
 }
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+pub struct CloseDocumentParams {
+    /// Which open document: its title, file name or full path. Default: the active document.
+    #[serde(default)]
+    pub document: Option<String>,
+    /// Close it even if it has unsaved changes, which are lost. Default false: a document with
+    /// unsaved changes is refused.
+    #[serde(default)]
+    pub discard_changes: bool,
+}
+
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub struct CreateDrawingParams {
     /// Drawing template (.drwdot): an absolute path, or the name of a template in SolidWorks'
     /// document template folder (e.g. "Drawing"). Default: the user's default drawing template.
@@ -287,6 +298,35 @@ pub fn open_request(params: &OpenDocumentParams) -> Result<proto::OpenDocumentRe
         r#type: format.types[0] as i32,
         read_only: params.read_only,
     })
+}
+
+/// The CloseDocument request for `params`.
+pub fn close_request(params: &CloseDocumentParams) -> Result<proto::CloseDocumentRequest, McpError> {
+    let document = params.document.as_deref().map(str::trim).unwrap_or_default();
+    if params.document.is_some() && document.is_empty() {
+        return Err(invalid("document is empty -- leave it out to close the active document".into()));
+    }
+    Ok(proto::CloseDocumentRequest { document: document.to_string(), discard_changes: params.discard_changes })
+}
+
+/// "closed block.SLDPRT (...); its unsaved changes are lost. Part2 (...) is the
+/// active document now."
+pub fn close_reply_text(reply: &proto::CloseDocumentResponse) -> String {
+    let closed = reply.closed.clone().unwrap_or_default();
+    let mut text = format!("closed {}", describe(&closed));
+    if reply.still_loaded {
+        text += "; an open document still uses it, so SolidWorks keeps it loaded for that document";
+        if reply.had_unsaved_changes {
+            text += ", with its unsaved changes";
+        }
+    } else if reply.had_unsaved_changes {
+        text += if closed.path.is_empty() { "; it was never saved, so it's gone" } else { "; its unsaved changes are lost" };
+    }
+    text += ". ";
+    match &reply.active {
+        Some(active) => text + &format!("{} is the active document now.", describe(active)),
+        None => text + "No document is open now.",
+    }
 }
 
 /// A part or assembly file to insert into an assembly: an absolute path to
@@ -654,6 +694,47 @@ mod tests {
 
     fn save(path: Option<&str>) -> SaveDocumentParams {
         SaveDocumentParams { path: path.map(Into::into), ..Default::default() }
+    }
+
+    #[test]
+    fn close_requests() {
+        let r = close_request(&CloseDocumentParams::default()).unwrap();
+        assert_eq!((r.document.as_str(), r.discard_changes), ("", false));
+        let params = CloseDocumentParams { document: Some(" Part1 ".into()), discard_changes: true };
+        let r = close_request(&params).unwrap();
+        assert_eq!((r.document.as_str(), r.discard_changes), ("Part1", true));
+        assert!(close_request(&CloseDocumentParams { document: Some(" ".into()), ..Default::default() }).is_err());
+    }
+
+    #[test]
+    fn close_replies() {
+        let doc = |title: &str, path: &str| proto::Document {
+            title: title.into(),
+            path: path.into(),
+            r#type: DocumentType::Part as i32,
+            ..Default::default()
+        };
+        let mut reply = proto::CloseDocumentResponse {
+            closed: Some(doc("block.SLDPRT", r"C:\block.SLDPRT")),
+            active: Some(doc("Part2", "")),
+            ..Default::default()
+        };
+        assert_eq!(
+            close_reply_text(&reply),
+            r"closed block.SLDPRT (part, C:\block.SLDPRT). Part2 (part, never saved) is the active document now."
+        );
+        reply.had_unsaved_changes = true;
+        assert!(close_reply_text(&reply).contains("; its unsaved changes are lost. "));
+        reply.still_loaded = true;
+        reply.active = None;
+        let text = close_reply_text(&reply);
+        assert!(text.contains("keeps it loaded for that document, with its unsaved changes. No document"), "{text}");
+        let reply = proto::CloseDocumentResponse {
+            closed: Some(doc("Part1", "")),
+            had_unsaved_changes: true,
+            ..Default::default()
+        };
+        assert!(close_reply_text(&reply).contains("it was never saved, so it's gone"));
     }
 
     #[test]

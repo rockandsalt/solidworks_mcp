@@ -177,6 +177,12 @@
     <ClCompile Include="service\Draft.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>
+    <ClCompile Include="service\Undo.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\Visibility.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
     <ClCompile Include="service\Helix.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>

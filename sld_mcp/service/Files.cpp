@@ -1,4 +1,4 @@
-// Files.cpp : Documents: GetActiveDocument, NewPart, NewAssembly, NewDrawing, SetDocumentUnits, SaveDocument, OpenDocument (see docs/notes/files.md, units.md).
+// Files.cpp : Documents: GetActiveDocument, NewPart, NewAssembly, NewDrawing, SetDocumentUnits, SaveDocument, OpenDocument, CloseDocument (see docs/notes/files.md, units.md).
 #include "pch.h"
 #include "Common.h"
 #include "DimensionHelpers.h"
@@ -112,6 +112,58 @@ namespace
 			return status;
 		}
 		return DescribeDocument(doc, out);
+	}
+
+	// Every loaded document, those without a window of their own (a component
+	// of an open assembly) too.
+	std::vector<ATL::CComPtr<IModelDoc2>> LoadedDocuments(ISldWorks* swApp)
+	{
+		std::vector<ATL::CComPtr<IModelDoc2>> documents;
+		ATL::CComVariant all;
+		if (SUCCEEDED(swApp->GetDocuments(&all)))
+			for (const auto& disp : comvariant::ToDispatches(all))
+				if (ATL::CComQIPtr<IModelDoc2> doc(disp.p); doc)
+					documents.push_back(ATL::CComPtr<IModelDoc2>(doc));
+		return documents;
+	}
+
+	bool HasWindow(IModelDoc2* doc)
+	{
+		VARIANT_BOOL visible = VARIANT_FALSE;
+		return SUCCEEDED(doc->get_Visible(&visible)) && visible;
+	}
+
+	std::string TitleOf(IModelDoc2* doc)
+	{
+		ATL::CComBSTR title;
+		doc->GetTitle(&title);
+		return ToUtf8(title);
+	}
+
+	// The open document going by a title, full path or file name, in any case.
+	// (GetOpenDocumentByName only takes a full path, seen 2026-11-01.)
+	grpc::Status FindOpenDocument(ISldWorks* swApp, const std::string& name, ATL::CComPtr<IModelDoc2>& out)
+	{
+		const ATL::CComBSTR wanted = FromUtf8(name);
+		std::string open;
+		for (const auto& doc : LoadedDocuments(swApp))
+		{
+			if (!HasWindow(doc))
+				continue;
+			ATL::CComBSTR title, path;
+			doc->GetTitle(&title);
+			doc->GetPathName(&path);
+			const std::wstring file = path.Length() > 0 ? std::filesystem::path(path.m_str).filename().wstring() : L"";
+			if (_wcsicmp(wanted, title) == 0 || (path.Length() > 0 && _wcsicmp(wanted, path) == 0) ||
+				(!file.empty() && _wcsicmp(wanted, file.c_str()) == 0))
+			{
+				out = doc;
+				return grpc::Status::OK;
+			}
+			open += (open.empty() ? "" : ", ") + ToUtf8(title);
+		}
+		return grpc::Status(grpc::StatusCode::NOT_FOUND, "no open document is called \"" + name + "\" -- " +
+			(open.empty() ? "nothing is open" : "open: " + open));
 	}
 
 	// This SolidWorks process: its id and start time (process ids get reused).
@@ -501,4 +553,74 @@ grpc::Status SolidWorksService::OpenDocument(grpc::ServerContext* /*context*/,
 		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "opened " + response->document().title() +
 			" but SolidWorks wouldn't make it the active document");
 	return grpc::Status::OK;
+}
+
+grpc::Status SolidWorksService::CloseDocument(grpc::ServerContext* /*context*/,
+	const sld_mcp::v1::CloseDocumentRequest* request,
+	sld_mcp::v1::CloseDocumentResponse* response)
+{
+	std::lock_guard<std::mutex> lock(m_editMutex);
+	ComApartment com;
+	if (!com.Ok())
+		return ComApartmentError();
+
+	ATL::CComPtr<ISldWorks> swApp;
+	if (grpc::Status status = GetSwApp(swApp); !status.ok())
+		return status;
+
+	ATL::CComPtr<IModelDoc2> active;
+	HRESULT hr = swApp->get_IActiveDoc2(&active);
+	if (FAILED(hr))
+		return ComError("ISldWorks::IActiveDoc2", hr);
+	ATL::CComPtr<IModelDoc2> doc;
+	if (!request->document().empty())
+	{
+		if (grpc::Status status = FindOpenDocument(swApp, request->document(), doc); !status.ok())
+			return status;
+	}
+	else if (!active)
+		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "no document is open in SolidWorks");
+	else
+		doc = active;
+	if (grpc::Status status = DescribeDocument(doc, response->mutable_closed()); !status.ok())
+		return status;
+	const std::string title = response->closed().title();
+
+	// CloseDoc never asks: it throws unsaved changes away (seen 2026-11-01).
+	VARIANT_BOOL dirty = VARIANT_FALSE;
+	hr = doc->GetSaveFlag(&dirty);
+	if (FAILED(hr))
+		return ComError("IModelDoc2::GetSaveFlag", hr);
+	response->set_had_unsaved_changes(dirty != VARIANT_FALSE);
+	if (dirty && !request->discard_changes())
+		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, title + " has unsaved changes -- save_document "
+			"first, or close it with discard_changes to lose them");
+
+	// Closing a document in the background activates another one (seen
+	// 2026-11-01), so the one that was active is put back afterwards.
+	const std::string keepActive = active && !SameObject(active, doc) ? TitleOf(active) : std::string();
+	active.Release();
+	doc.Release();
+	hr = swApp->CloseDoc(FromUtf8(title));
+	if (FAILED(hr))
+		return ComError("ISldWorks::CloseDoc", hr);
+
+	for (const auto& loaded : LoadedDocuments(swApp))
+		if (TitleOf(loaded) == title)
+		{
+			if (HasWindow(loaded))
+				return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks didn't close " + title);
+			response->set_still_loaded(true);
+		}
+
+	if (!keepActive.empty())
+	{
+		long errors = 0;
+		ATL::CComPtr<IDispatch> activated;
+		swApp->ActivateDoc3(FromUtf8(keepActive), VARIANT_FALSE, swDontRebuildActiveDoc, &errors, &activated);
+	}
+	hr = swApp->get_IActiveDoc2(&active);
+	if (FAILED(hr))
+		return ComError("ISldWorks::IActiveDoc2", hr);
+	return active ? DescribeDocument(active, response->mutable_active()) : grpc::Status::OK;
 }

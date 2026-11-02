@@ -69,10 +69,16 @@ namespace sld_mcp::service
 		{
 			if (IsSubassembly(component) || IsSuppressed(component))
 				continue;
-			VARIANT_BOOL hidden = VARIANT_FALSE;
-			if (visibleOnly && SUCCEEDED(component->IsHidden(VARIANT_TRUE, &hidden)) && hidden)
-				continue;
-			out.push_back(component);
+			// A hidden subassembly hides its parts, whose own state stays "shown"
+			// (seen 2026-11-01).
+			bool hidden = false;
+			for (ATL::CComPtr<IComponent2> c = component; visibleOnly && c && !hidden; c = ParentOf(c))
+			{
+				VARIANT_BOOL flag = VARIANT_FALSE;
+				hidden = SUCCEEDED(c->IsHidden(VARIANT_TRUE, &flag)) && flag;
+			}
+			if (!hidden)
+				out.push_back(component);
 		}
 		return out;
 	}

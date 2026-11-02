@@ -359,6 +359,9 @@ fn feature_json(ids: &mut IdRegistry, f: &proto::FeatureInfo) -> Value {
     if f.suppressed {
         obj.insert("suppressed".into(), json!(true));
     }
+    if f.hidden {
+        obj.insert("hidden".into(), json!(true));
+    }
     if f.error_code != 0 {
         let key = if f.error_is_warning { "warning" } else { "error" };
         obj.insert(key.into(), json!(crate::delete::feature_error_name(f.error_code)));
@@ -410,6 +413,9 @@ fn body_json(ids: &mut IdRegistry, b: &proto::BodyInfo) -> Value {
     obj.insert("name".into(), json!(b.name));
     insert_component(ids, &mut obj, &b.component_persist_id);
     obj.insert("solid".into(), json!(b.solid));
+    if b.hidden {
+        obj.insert("hidden".into(), json!(true));
+    }
     if let Some(bbox) = b.r#box.as_ref().and_then(box_mm) {
         obj.insert("bbox_mm".into(), bbox);
     }

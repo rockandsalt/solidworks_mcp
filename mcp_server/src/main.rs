@@ -36,8 +36,10 @@ mod sketch;
 mod sweep;
 mod table;
 mod tolerance;
+mod undo;
 mod units;
 mod view;
+mod visibility;
 
 use std::sync::{Arc, Mutex};
 
@@ -1053,6 +1055,70 @@ impl SolidWorksTools {
             .map_err(|status| self.addin_error(status))?;
         let text = files::open_reply_text(&request, &reply)?;
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Close an open document: the active one, or `document` by title, file name or \
+                       full path. Saves nothing. A document with unsaved changes is refused unless \
+                       discard_changes=true, which loses them (save_document first to keep them); \
+                       a part an open assembly or drawing uses stays loaded for that document, with \
+                       its changes. The reply says which document is active afterwards: the other \
+                       tools work on that one."
+    )]
+    async fn close_document(
+        &self,
+        Parameters(params): Parameters<files::CloseDocumentParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = files::close_request(&params)?;
+        let reply = self
+            .addin
+            .close_document(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(files::close_reply_text(&reply))]))
+    }
+
+    #[tool(
+        description = "Take back the last steps in the active document, like Ctrl+Z; the reply says \
+                       which features went or came back and how the solid volume changed, so check \
+                       it. `steps` (default 1) counts SolidWorks' own steps: a new feature or a \
+                       change of dimension is 1, a new rectangle sketch comes back whole, and a \
+                       failed call may have left some. An edit of an existing sketch isn't reliable \
+                       to undo: it may change nothing or remove the whole sketch, so use \
+                       delete_sketch_entities for those. There's no redo, and hiding a component \
+                       can't be undone. Requires no sketch open for editing."
+    )]
+    async fn undo(&self, Parameters(params): Parameters<undo::UndoParams>) -> Result<CallToolResult, McpError> {
+        let request = undo::request(&params)?;
+        let reply = self.addin.undo(request).await.map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(undo::reply_text(&reply))]))
+    }
+
+    #[tool(
+        description = "Hide or show things in the active part or assembly (visible=false / true): \
+                       bodies of a part, components of an assembly, sketches and reference \
+                       geometry; `items` = ids from inspect_model, or feature names. Hidden things \
+                       stay in the model and still count in its mass and in features built on \
+                       them; inspect_model marks them `hidden`, and render_views leaves them out. \
+                       To hide a body made by a feature, give the body id, not the feature. A body \
+                       inside an assembly's component goes with its component (or open its part). \
+                       Everything is checked before anything changes, and each is read back. \
+                       Requires no sketch open for editing."
+    )]
+    async fn set_visibility(
+        &self,
+        Parameters(params): Parameters<visibility::SetVisibilityParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            visibility::request(&ids, &params)?
+        };
+        let reply = self
+            .addin
+            .set_visibility(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(visibility::reply_text(&params, &reply))]))
     }
 
     #[tool(
@@ -4892,8 +4958,10 @@ impl ServerHandler for SolidWorksTools {
                  sheet positions; add_drawing_dimensions dimensions those edges, \
                  insert_model_items brings in the model's own dimensions, \
                  set_dimension_tolerance tolerances a dimension (drawing or model), and \
-                 render_drawing shows the sheet as printed to check the layout. To undo or \
-                 rework: delete_features removes features (sketches, extrudes, cuts, holes, \
+                 render_drawing shows the sheet as printed to check the layout. \
+                 set_visibility hides or shows bodies, components, sketches and reference \
+                 geometry; close_document closes a document. To undo or rework: undo takes back \
+                 the last steps; delete_features removes features (sketches, extrudes, cuts, holes, \
                  fillets, planes, mates, ...) by inspect_model id or name, refusing unless told \
                  what to do with features that depend on them; delete_sketch_entities removes \
                  lines, arcs, points, ... from a sketch. Reference geometry: \

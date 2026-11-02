@@ -265,6 +265,18 @@ public:
 		const sld_mcp::v1::OpenDocumentRequest* request,
 		sld_mcp::v1::OpenDocumentResponse* response) override;
 
+	grpc::Status CloseDocument(grpc::ServerContext* context,
+		const sld_mcp::v1::CloseDocumentRequest* request,
+		sld_mcp::v1::CloseDocumentResponse* response) override;
+
+	grpc::Status Undo(grpc::ServerContext* context,
+		const sld_mcp::v1::UndoRequest* request,
+		sld_mcp::v1::UndoResponse* response) override;
+
+	grpc::Status SetVisibility(grpc::ServerContext* context,
+		const sld_mcp::v1::SetVisibilityRequest* request,
+		sld_mcp::v1::SetVisibilityResponse* response) override;
+
 	grpc::Status CreateReferenceGeometry(grpc::ServerContext* context,
 		const sld_mcp::v1::CreateReferenceGeometryRequest* request,
 		sld_mcp::v1::CreateReferenceGeometryResponse* response) override;

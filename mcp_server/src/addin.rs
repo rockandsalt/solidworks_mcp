@@ -665,6 +665,27 @@ impl AddinClient {
         Ok(client.open_document(request).await?.into_inner())
     }
 
+    pub async fn close_document(
+        &self,
+        request: proto::CloseDocumentRequest,
+    ) -> Result<proto::CloseDocumentResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.close_document(request).await?.into_inner())
+    }
+
+    pub async fn undo(&self, request: proto::UndoRequest) -> Result<proto::UndoResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.undo(request).await?.into_inner())
+    }
+
+    pub async fn set_visibility(
+        &self,
+        request: proto::SetVisibilityRequest,
+    ) -> Result<proto::SetVisibilityResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.set_visibility(request).await?.into_inner())
+    }
+
     pub async fn create_reference_geometry(
         &self,
         request: proto::CreateReferenceGeometryRequest,
