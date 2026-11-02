@@ -292,7 +292,8 @@ assert r.is_error and "no column" in r.text, r.text
 assert len(table_named(t["name"])["rows"]) == rows
 mcp.call("render_drawing")
 
-# ---- On a part.
+# ---- On a part. (Scenarios of a run share SolidWorks: nothing stays open.)
+mcp.call("close_document", discard_changes=True)
 mcp.call("open_document", path=model)
 face = plane(2)
 r = mcp.call("add_surface_finish_symbol", roughness="Ra 3.2", on=face)
@@ -308,3 +309,4 @@ finish = [a for a in listed if a["type"] == "surface_finish"][0]
 assert finish["roughness"] == "Ra 3.2", finish
 mcp.call("delete_drawing_annotations", names=[a["name"] for a in listed])
 assert not mcp.call("inspect_annotations").json["annotations"]
+mcp.call("close_document", discard_changes=True)
