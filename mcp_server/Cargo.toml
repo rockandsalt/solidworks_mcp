@@ -25,9 +25,9 @@ glam = "0.33"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 # OpenProcess / QueryFullProcessImageNameW: is an instance file's pid still
-# SolidWorks (discovery.rs).
+# SolidWorks (discovery.rs). EnumWindows & co: closing dialogs a macro opens (macro.rs).
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
 
 [build-dependencies]
 tonic-prost-build = "0.14"

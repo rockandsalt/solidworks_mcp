@@ -188,7 +188,7 @@ function Start-TestSession([switch]$Resume) {
     # from the repo. The window closes with the session, unless claude fails to start.
     $command = @"
 `$Host.UI.RawUI.WindowTitle = 'SolidWorks MCP test session'
-& '$claudeExe' $sessionArg --strict-mcp-config --mcp-config '$testSessionConfig' --debug-file '$testSessionDebugLog' --append-system-prompt '$testSessionPrompt'
+& '$claudeExe' $sessionArg --strict-mcp-config --mcp-config '$testSessionConfig' --debug-file '$testSessionDebugLog' --disallowedTools mcp__solidworks__run_macro --append-system-prompt '$testSessionPrompt'
 if (`$LASTEXITCODE) { Read-Host 'claude exited with an error. Press Enter to close' }
 "@
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))

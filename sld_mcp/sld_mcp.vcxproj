@@ -380,6 +380,7 @@
     <ClCompile Include="service\Rib.cpp" />
     <ClCompile Include="service\Draft.cpp" />
     <ClCompile Include="service\Undo.cpp" />
+    <ClCompile Include="service\Macro.cpp" />
     <ClCompile Include="service\Visibility.cpp" />
     <ClCompile Include="service\Helix.cpp" />
     <ClCompile Include="service\FeatureTreeHelpers.cpp" />

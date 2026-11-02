@@ -593,6 +593,11 @@ service SolidWorks {
   // FAILED_PRECONDITION if nothing is open or a sketch is open for editing.
   rpc Undo(UndoRequest) returns (UndoResponse);
 
+  // Runs a plain-text VBA macro file (.swb) from its main (ISldWorks::RunMacro2)
+  // and unloads it. The call lasts as long as the macro, and a dialog the macro
+  // opens blocks it until someone closes it.
+  rpc RunMacro(RunMacroRequest) returns (RunMacroResponse);
+
   // Hides or shows bodies, sketches and reference geometry of the active part
   // or assembly, and components of the active assembly; each read back.
   // Everything is checked before anything changes. INVALID_ARGUMENT / NOT_FOUND
@@ -829,6 +834,16 @@ message CloseDocumentResponse {
 
 message UndoRequest {
   int32 steps = 1;  // 1..100
+}
+
+message RunMacroRequest {
+  string path = 1;
+}
+
+message RunMacroResponse {
+  // False: it doesn't compile, the file is missing, or it ran and End stopped
+  // it, in which case SolidWorks has run it twice. SolidWorks doesn't say which.
+  bool ran = 1;
 }
 
 message UndoResponse {

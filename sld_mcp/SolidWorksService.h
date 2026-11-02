@@ -273,6 +273,10 @@ public:
 		const sld_mcp::v1::UndoRequest* request,
 		sld_mcp::v1::UndoResponse* response) override;
 
+	grpc::Status RunMacro(grpc::ServerContext* context,
+		const sld_mcp::v1::RunMacroRequest* request,
+		sld_mcp::v1::RunMacroResponse* response) override;
+
 	grpc::Status SetVisibility(grpc::ServerContext* context,
 		const sld_mcp::v1::SetVisibilityRequest* request,
 		sld_mcp::v1::SetVisibilityResponse* response) override;

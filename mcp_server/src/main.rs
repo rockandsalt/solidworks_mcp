@@ -16,6 +16,7 @@ mod hole;
 mod inspect;
 mod interference;
 mod loft;
+mod macro_run;
 mod mirror;
 mod mobility;
 mod motion;
@@ -1092,6 +1093,28 @@ impl SolidWorksTools {
         let request = undo::request(&params)?;
         let reply = self.addin.undo(request).await.map_err(|status| self.addin_error(status))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(undo::reply_text(&reply))]))
+    }
+
+    #[tool(
+        description = "Escape hatch for what no other tool does: run a VBA macro inside SolidWorks, \
+                       with the whole SOLIDWORKS API and full access to this computer. Prefer the \
+                       other tools when one fits. `code` is a VBA module with a `Sub main()`; start \
+                       with `Set swApp = Application.SldWorks`. Early binding (`Dim doc As \
+                       SldWorks.ModelDoc2`), enum names and out parameters all work. The API is in \
+                       meters and radians. Report back with `McpPrint value`, one line per call: \
+                       MsgBox, Debug.Print and return values don't reach you. An error stops the \
+                       macro and the reply gives its message, but not its line, so print along the \
+                       way when hunting one; what it did before that stays in the model. It runs as \
+                       one piece on SolidWorks' main thread: the reply comes back after 60 seconds at \
+                       the latest, a longer macro goes on with other tools waiting, and one that \
+                       never ends hangs SolidWorks until it's killed. Dialogs block SolidWorks, so \
+                       any it opens are closed (End / Cancel / No / OK) and listed in the reply. \
+                       inspect_model ids don't exist in a macro: find things by name (`FeatureByName`, \
+                       `SelectByID2`) or position. Non-ASCII text only through ChrW()."
+    )]
+    async fn run_macro(&self, Parameters(params): Parameters<macro_run::RunMacroParams>) -> Result<CallToolResult, McpError> {
+        let text = macro_run::run(&self.addin, &params).await?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
     #[tool(
@@ -4972,7 +4995,8 @@ impl ServerHandler for SolidWorksTools {
                  degrees, whatever the document's units: for an inch (imperial) part, \
                  assembly or drawing give create_part / create_assembly / create_drawing \
                  units=\"ips\" (or change an open one with document_units) and keep passing \
-                 mm -- SolidWorks then shows dimensions, tolerances and sheets in inches."
+                 mm -- SolidWorks then shows dimensions, tolerances and sheets in inches. \
+                 If no tool does what's needed, run_macro runs VBA inside SolidWorks."
                     .to_string(),
             )
     }

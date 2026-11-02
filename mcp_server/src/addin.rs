@@ -678,6 +678,11 @@ impl AddinClient {
         Ok(client.undo(request).await?.into_inner())
     }
 
+    pub async fn run_macro(&self, request: proto::RunMacroRequest) -> Result<proto::RunMacroResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.run_macro(request).await?.into_inner())
+    }
+
     pub async fn set_visibility(
         &self,
         request: proto::SetVisibilityRequest,

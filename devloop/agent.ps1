@@ -89,6 +89,8 @@ $claudeArgs = @('-p') + $sessionArgs + @(
     '--strict-mcp-config', '--mcp-config', $config,
     '--tools', '""',
     '--allowedTools', 'mcp__solidworks',
+    # A macro would work around exactly what the tester is there to find.
+    '--disallowedTools', 'mcp__solidworks__run_macro',
     '--append-system-prompt', $testerPrompt,
     '--max-budget-usd', $MaxBudgetUsd,
     '--output-format', 'stream-json', '--verbose')

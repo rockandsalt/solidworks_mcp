@@ -180,6 +180,9 @@
     <ClCompile Include="service\Undo.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>
+    <ClCompile Include="service\Macro.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
     <ClCompile Include="service\Visibility.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>
