@@ -492,6 +492,16 @@ service SolidWorks {
   // drawing; NOT_FOUND for an unknown view, component or entity.
   rpc AddBalloons(AddBalloonsRequest) returns (AddBalloonsResponse);
 
+  // Center marks on a view's circles and arcs (IDrawingDoc::InsertCenterMark3:
+  // one each, or a linear / circular group), or on all of them
+  // (IView::AutoInsertCenterMarks2). A circle that has a mark isn't marked
+  // again.
+  rpc AddCenterMarks(AddCenterMarksRequest) returns (AddCenterMarksResponse);
+
+  // Centerlines between pairs of a view's parallel edges or silhouettes, or
+  // on all of its cylinders (IDrawingDoc::InsertCenterLine2).
+  rpc AddCenterlines(AddCenterlinesRequest) returns (AddCenterMarksResponse);
+
   // Draws lines and notes into a sheet's format (the border / title block
   // layer) on one drawing layer, which is made if it's missing; with
   // `clear`, what that layer already has in the format is deleted first,
@@ -2850,6 +2860,16 @@ message AnnotationInfo {
   repeated AnnotationLeader leaders = 19;
   NoteInfo note = 20;  // type 6
   BalloonInfo balloon = 21;  // a note that is a BOM balloon
+  SurfaceFinishSymbol surface_finish = 22;  // type 7
+  WeldSymbolSpec weld = 23;                 // type 8
+  CenterMarkInfo center_mark = 24;          // type 13
+}
+
+message CenterMarkInfo {
+  // swCenterMarkStyle_e: 2 single, 3 linear group, 4 circular group.
+  int32 style = 1;
+  // Each mark's center, in the view's own coordinates (DrawingPoint).
+  repeated Vec3 centers = 2;
 }
 
 message BalloonInfo {
@@ -2984,7 +3004,45 @@ message GdtSymbol {
     // format aren't supported (INVALID_ARGUMENT / ignored).
     AnnotationGtol gtol = 1;
     DatumSymbol datum = 2;
+    SurfaceFinishSymbol surface_finish = 3;
+    // Needs an entity to go on (SolidWorks makes none without).
+    WeldSymbolSpec weld = 4;
   }
+}
+
+// A surface finish (texture) symbol; texts as shown. Written and read in
+// both the slots ISO and ANSI show (ISFSymbol::SetText 8 / 5, 9 / 6).
+message SurfaceFinishSymbol {
+  int32 symbol_type = 1;  // swSFSymType_e: 0 basic, 1 machining required, 2 no machining
+  int32 lay = 2;          // swSFLaySym_e: 0 none, 1 circular, 2 crossed, 3 multi, 4 parallel, 5 perpendicular, 6 radial, 7 particulate
+  string roughness = 3;
+  string roughness_min = 4;
+  string production_method = 5;
+  string sampling_length = 6;
+  string allowance = 7;
+  // Add: stands on the entity at the arrow point, instead of a leader to it.
+  bool no_leader = 8;
+}
+
+// One side of a weld symbol's reference line.
+message WeldSide {
+  // SolidWorks' symbol code, e.g. "<WELD-FILL>", "<AWLD-GV>"; it shows
+  // nothing for an unknown one.
+  string symbol = 1;
+  string size = 2;    // left of the symbol
+  string length = 3;  // right of it
+  int32 contour = 4;  // swWeldSymbolContourTypes_e; 0 = 1 none
+}
+
+// `top` is what SolidWorks calls above: over an ANSI reference line, on the
+// solid line of an ISO one (which then has its dashed line below).
+message WeldSymbolSpec {
+  WeldSide top = 1;
+  WeldSide bottom = 2;
+  bool symmetric = 3;   // no dashed line: `top` on both sides
+  bool all_around = 4;
+  bool field_weld = 5;  // the flag
+  string process = 6;   // in the tail
 }
 
 message DatumSymbol {
@@ -3136,6 +3194,9 @@ message TableInfo {
   // counts it as row 0); it's left out of `rows` / `row_heights`, and row
   // indices (TableCell.row, delete_rows) don't count it either.
   double title_height = 21;
+  // Revision table: the latest revision by SolidWorks' own count (a revision
+  // typed in by hand doesn't change the count's letter).
+  string current_revision = 22;
 }
 
 message TableRow {
@@ -3647,6 +3708,20 @@ enum TableKind {
   TABLE_KIND_HOLE = 2;
   // Rows x columns of text (IDrawingDoc::InsertTableAnnotation2).
   TABLE_KIND_GENERAL = 3;
+  // The sheet's revision table (ISheet::InsertRevisionTable2), one per sheet.
+  TABLE_KIND_REVISION = 4;
+}
+
+// A revision to add (IRevisionTableAnnotation::AddRevision). Empty texts:
+// SolidWorks' next letter, today's date, blank.
+message RevisionEntry {
+  string revision = 1;
+  string zone = 2;
+  string description = 3;
+  string date = 4;
+  string approved = 5;
+  // Revision symbols to place, sheet meters (IDrawingDoc::InsertRevisionSymbol).
+  repeated Vec3 symbols = 6;
 }
 
 message TableCell {
@@ -3702,6 +3777,12 @@ message SetupDrawingTableRequest {
   repeated double column_widths = 18;
   optional string title = 19;  // "" hides the title
   optional string layer = 20;  // "" = none
+  // Revision tables: revisions added at the bottom. delete_rows deletes
+  // revisions (and their symbols).
+  repeated RevisionEntry revisions = 21;
+  // Add, revision table: swRevisionTableSymbolShape_e (1 circle, 2 square,
+  // 3 triangle, 4 hexagon); 0 = triangle.
+  int32 revision_symbol = 22;
 }
 
 message SetupDrawingTableResponse {
@@ -3761,6 +3842,43 @@ message AddBalloonsResponse {
   // Bills of materials of the view's assembly on the drawing (their
   // TableInfo.name); balloons show item numbers from these.
   repeated string boms = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Center marks and centerlines: AddCenterMarks, AddCenterlines
+
+message AddCenterMarksRequest {
+  string view_name = 1;
+  // Circles and arcs seen face-on. Empty: all of the view's of `auto_types`.
+  repeated DrawingEntityRef circles = 2;
+  // swCenterMarkStyle_e: 0 or 2 one mark each, 3 linear group, 4 circular group.
+  int32 style = 3;
+  // swAutoInsertCenterMarkTypes_e flags: 1 holes, 2 fillets, 4 slots; 0 = holes.
+  int32 auto_types = 4;
+}
+
+// Two parallel straight edges or silhouettes.
+message CenterlinePair {
+  repeated DrawingEntityRef entities = 1;
+}
+
+message AddCenterlinesRequest {
+  string view_name = 1;
+  // Empty: what SolidWorks finds in the view, its cylinders.
+  repeated CenterlinePair pairs = 2;
+}
+
+message AddCenterMarksResponse {
+  repeated AnnotationInfo added = 1;
+  // Indices of `circles` / `pairs` that had a mark or line already.
+  repeated int32 already_marked = 2;
+  // Auto: marks SolidWorks made again on circles that had one, deleted.
+  int32 duplicates_removed = 3;
+  // Single marks a group replaced (their annotation names).
+  repeated string replaced = 4;
+  SheetInfo sheet = 5;
+  repeated ComponentInfo components = 6;
+  string active_sheet = 7;
 }
 
 // ---------------------------------------------------------------------------

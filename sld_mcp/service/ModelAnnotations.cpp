@@ -1,5 +1,6 @@
-// ModelAnnotations.cpp : AddModelAnnotation -- feature control frames and
-// datum feature symbols on a part or assembly (PMI; see docs/notes/gdt.md).
+// ModelAnnotations.cpp : AddModelAnnotation -- feature control frames, datum
+// feature, surface finish and weld symbols on a part or assembly (PMI; see
+// docs/notes/gdt.md, docs/notes/drawings.md).
 #include "pch.h"
 #include "Common.h"
 #include "AssemblyHelpers.h"
@@ -120,8 +121,10 @@ namespace
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "say what to add: a feature control frame or a datum symbol");
 		if (grpc::Status status = ValidateGdtSymbol(r.symbol()); !status.ok())
 			return status;
-		if (r.symbol().has_datum() && r.attach_to().empty())
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a datum symbol goes on a face or an edge");
+		if ((r.symbol().has_datum() || r.symbol().has_weld()) && r.attach_to().empty())
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a datum or weld symbol goes on a face or an edge");
+		if (r.symbol().surface_finish().no_leader() && r.attach_to().empty())
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a surface finish symbol without a leader stands on a face or an edge");
 		if (r.has_arrow_at() && r.attach_to().empty())
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "arrow_at goes with a face or edge to point at");
 		if ((r.has_arrow_at() && !FiniteVec3(r.arrow_at())) || (r.has_position() && !FiniteVec3(r.position())))
@@ -170,7 +173,7 @@ grpc::Status SolidWorksService::AddModelAnnotation(grpc::ServerContext* /*contex
 			return status;
 		if (!ATL::CComQIPtr<IFace2>(entity.p) && !ATL::CComQIPtr<IEdge>(entity.p))
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				"a feature control frame or datum symbol goes on a face or an edge");
+				"the symbol goes on a face or an edge");
 	}
 
 	// Selected, then inserted: SolidWorks attaches a new frame / datum
@@ -195,7 +198,8 @@ grpc::Status SolidWorksService::AddModelAnnotation(grpc::ServerContext* /*contex
 	}
 
 	ATL::CComPtr<IAnnotation> annotation;
-	grpc::Status status = InsertGdtSymbol(doc, ext, symbol, annotation);
+	const sld_mcp::v1::Vec3& insertAt = request->has_position() ? request->position() : request->arrow_at();
+	grpc::Status status = InsertGdtSymbol(doc, ext, symbol, Eigen::Vector3d(insertAt.x(), insertAt.y(), insertAt.z()), annotation);
 	doc->ClearSelection2(VARIANT_TRUE);
 	if (!status.ok())
 		return status;
@@ -213,7 +217,7 @@ grpc::Status SolidWorksService::AddModelAnnotation(grpc::ServerContext* /*contex
 	std::optional<Eigen::Vector3d> position;
 	if (request->has_position())
 		position = Eigen::Vector3d(request->position().x(), request->position().y(), request->position().z());
-	else if (symbol.has_gtol() && entity)
+	else if (!symbol.has_datum() && !symbol.surface_finish().no_leader() && entity)
 		if (const auto tip = LeaderTip(annotation); tip)
 			if (const auto out = OutwardAt(entity, docType, *tip, ModelCenter(doc, docType)); out)
 				position = *tip + *out * kTextOffset;

@@ -231,6 +231,14 @@ public:
 		const sld_mcp::v1::AddBalloonsRequest* request,
 		sld_mcp::v1::AddBalloonsResponse* response) override;
 
+	grpc::Status AddCenterMarks(grpc::ServerContext* context,
+		const sld_mcp::v1::AddCenterMarksRequest* request,
+		sld_mcp::v1::AddCenterMarksResponse* response) override;
+
+	grpc::Status AddCenterlines(grpc::ServerContext* context,
+		const sld_mcp::v1::AddCenterlinesRequest* request,
+		sld_mcp::v1::AddCenterMarksResponse* response) override;
+
 	grpc::Status DrawSheetFormat(grpc::ServerContext* context,
 		const sld_mcp::v1::DrawSheetFormatRequest* request,
 		sld_mcp::v1::DrawSheetFormatResponse* response) override;

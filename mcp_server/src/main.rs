@@ -1,5 +1,6 @@
 mod addin;
 mod assembly;
+mod center_mark;
 mod component;
 mod delete;
 mod diagnose;
@@ -2440,6 +2441,111 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "Add a surface finish (surface texture) symbol to the active drawing, part \
+                       or assembly. `kind`: basic (default), machining_required, no_machining. \
+                       Texts are shown as written: `roughness` (\"Ra 3.2\"), `roughness_min`, \
+                       `production_method`, `sampling_length`, `allowance`; `lay` (parallel, \
+                       perpendicular, crossed, multi_directional, circular, radial, particulate). \
+                       `on` -- a view entity from inspect_drawing (\"view_edge:4\"), or a face or \
+                       edge from inspect_model in a part -- for a leader to it, arrow at \
+                       `arrow_at_mm`, the symbol's point at `at_mm` (default: outside the view); \
+                       `no_leader` stands it on the entity at arrow_at_mm instead. Without `on` it \
+                       stands free at `at_mm`, in `view` or on the sheet: a drawing's general \
+                       finish. SolidWorks draws it by the drafting standard (document_units). \
+                       delete_drawing_annotations removes it."
+    )]
+    async fn add_surface_finish_symbol(
+        &self,
+        Parameters(params): Parameters<gdt::AddSurfaceFinishParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let symbol = gdt::surface_finish(&params)?;
+        self.add_gdt(symbol, &params.place, Vec::new()).await
+    }
+
+    #[tool(
+        description = "Add a weld symbol to the active drawing, part or assembly: a leader to the \
+                       joint (`on`: a view entity from inspect_drawing, \"view_edge:4\", or an edge \
+                       or face from inspect_model in a part; arrow at `arrow_at_mm`) and a reference \
+                       line at `at_mm` (its end; default: outside the view). Say the weld by side: \
+                       `arrow_side` and / or `other_side` = {symbol: fillet, square, v, bevel, u, j, \
+                       plug, spot, seam, backing, ...; size and length as shown (\"5\", \"3x50-100\"); \
+                       contour: flat, convex, concave}, or `both_sides` to repeat arrow_side. Each is \
+                       drawn where `standard` says: iso (ISO 2553: arrow side on the solid line) or \
+                       asme (AWS A2.4: arrow side below the line), default by the document's drafting \
+                       standard. Also `all_around`, `field_weld`, `process` (\"GMAW\"). \
+                       delete_drawing_annotations removes it."
+    )]
+    async fn add_weld_symbol(
+        &self,
+        Parameters(params): Parameters<gdt::AddWeldSymbolParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let units = self.active_units();
+        let (symbol, remarks) = gdt::weld(&params, units.as_ref())?;
+        self.add_gdt(symbol, &params.place, remarks).await
+    }
+
+    #[tool(
+        description = "Add center marks to a view of the active drawing. `on`: circles and arcs seen \
+                       face-on, edge ids from inspect_drawing with the view (\"view_edge:3\"), one \
+                       mark each -- one already marked is left alone, and SolidWorks may have marked \
+                       them when the view was made, so look at the view's annotations first -- or \
+                       with `group` one mark over them all, replacing their own: linear (holes in a \
+                       row) or circular (holes on a bolt circle; SolidWorks marks the circle's center \
+                       too). Without `on`: every hole in `view`, \
+                       or what `throughout` says (holes, fillets, slots). The reply gives each mark's \
+                       name and centers in sheet mm. delete_drawing_annotations removes them."
+    )]
+    async fn add_center_marks(
+        &self,
+        Parameters(params): Parameters<center_mark::AddCenterMarksParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            center_mark::marks_request(&ids, &cache, &params)?
+        };
+        let reply = self
+            .addin
+            .add_center_marks(request.clone())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let text = {
+            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            center_mark::reply(&mut ids, "center mark(s)", &request.view_name, &params.on, &reply)
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Add centerlines to a view of the active drawing. `between`: pairs of parallel \
+                       straight edges or silhouettes from inspect_drawing with the view, one line \
+                       midway between each -- [[\"silhouette:1\", \"silhouette:2\"]] for a cylinder \
+                       seen side-on. Without it: SolidWorks' own on the cylinders of `view`. \
+                       delete_drawing_annotations removes them."
+    )]
+    async fn add_centerlines(
+        &self,
+        Parameters(params): Parameters<center_mark::AddCenterlinesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            center_mark::lines_request(&ids, &cache, &params)?
+        };
+        let reply = self
+            .addin
+            .add_centerlines(request.clone())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let asked: Vec<String> = params.between.iter().map(|[a, b]| format!("{a} / {b}")).collect();
+        let text = {
+            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            center_mark::reply(&mut ids, "centerline(s)", &request.view_name, &asked, &reply)
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
         description = "Look at the active drawing (.SLDDRW) without changing it: its sheets \
                        (paper size, scale, first/third-angle projection) and their drawing views \
                        (type, orientation such as *Front, scale, the part or assembly shown, the \
@@ -2897,7 +3003,8 @@ impl SolidWorksTools {
 
     #[tool(
         description = "Delete annotations of the active drawing -- notes, dimensions, balloons, \
-                       feature control frames, datum symbols, sheet format (title block) notes, ... \
+                       feature control frames, datum, surface finish and weld symbols, center marks, \
+                       centerlines, tables, sheet format (title block) notes, ... \
                        -- by the names inspect_drawing_annotations lists; or of the active part or \
                        assembly (frames, datum symbols, ... by the names inspect_annotations \
                        lists). Nothing is deleted if a name isn't found; `sheet` / `view` narrow \
@@ -2946,7 +3053,11 @@ impl SolidWorksTools {
                        table) of `holes` (edge ids of hole circles in `view`, from inspect_drawing) \
                        with their X / Y measured from `origin` (a vertex id of that view) and their \
                        size; SolidWorks tags the holes A1, A2, ... kind=general: a table of `rows` of \
-                       text you give (coordinate lists, notes tables, ...). Position: `at_mm` + \
+                       text you give (coordinate lists, notes tables, ...). kind=revision: the sheet's \
+                       revision table (one per sheet), with `revisions` to start with: {revision \
+                       (default SolidWorks' next letter), description, zone, date (default today), \
+                       approved, symbols_at_mm}, `revision_symbol` their shape; a later sheet's only \
+                       says \"See Sheet1\", so revisions go on the first sheet's. Position: `at_mm` + \
                        `anchor` corner, or a free spot clear of the views, other tables and the \
                        title block. Optional template, column_widths_mm, title, layer."
     )]
@@ -2996,6 +3107,7 @@ impl SolidWorksTools {
                        lists: `cells` [{row, column, text}] (in a BOM, typing over an item number \
                        renumbers it and its balloons follow; computed cells such as quantities or \
                        hole locations may be refused), general tables' add_rows / delete_rows, \
+                       revision tables' add_revisions / delete_rows (the revision and its symbols), \
                        column_widths_mm, title (row indices never count it), layer, at_mm / \
                        move_by_mm (the anchor corner), anchor. All or nothing. \
                        Delete a table with delete_drawing_annotations."

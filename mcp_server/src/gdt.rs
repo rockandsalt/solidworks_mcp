@@ -1,7 +1,8 @@
 //! The geometric tolerancing tools: add_geometric_tolerance (a feature
 //! control frame) and add_datum_symbol (a datum feature symbol), on a part
 //! or assembly (PMI: AddModelAnnotation) or in a drawing
-//! (SetupDrawingAnnotation with `gdt`).
+//! (SetupDrawingAnnotation with `gdt`). add_surface_finish_symbol and
+//! add_weld_symbol go the same way.
 //!
 //! Characteristics and modifiers take the names inspect_annotations prints,
 //! so a frame read can be written back; they're turned into SolidWorks'
@@ -17,7 +18,7 @@
 use glam::{DVec2, DVec3};
 use rmcp::{ErrorData as McpError, schemars};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Map, Value, json};
 
 use crate::addin::proto;
 use crate::drawing::Cache;
@@ -30,6 +31,10 @@ use crate::units;
 const MAX_TOLERANCE_TEXT: usize = 64;
 /// Arrows further than this from where they were asked to go are reported.
 const ARROW_SLACK: f64 = 5e-4;
+/// About how much sheet a symbol takes when it's placed by default: from
+/// renders, 2026-11-01 (a weld symbol with its sizes on both sides).
+const SURFACE_FINISH_SIZE: DVec2 = DVec2::new(0.015, 0.012);
+const WELD_SYMBOL_SIZE: DVec2 = DVec2::new(0.040, 0.012);
 
 fn invalid(message: impl Into<String>) -> McpError {
     McpError::invalid_params(message.into(), None)
@@ -346,6 +351,225 @@ pub struct AddDatumSymbolParams {
     pub place: PlaceParams,
 }
 
+/// What a surface finish symbol says about machining.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SurfaceFinishKind {
+    /// Any process allowed (the open check mark).
+    Basic,
+    /// Material removal required (a bar across the mark).
+    MachiningRequired,
+    /// Material removal not allowed (a circle in the mark).
+    NoMachining,
+}
+
+impl SurfaceFinishKind {
+    /// swSFSymType_e
+    fn sw(self) -> i32 {
+        match self {
+            SurfaceFinishKind::Basic => 0,
+            SurfaceFinishKind::MachiningRequired => 1,
+            SurfaceFinishKind::NoMachining => 2,
+        }
+    }
+
+    fn name_of(sw: i32) -> Option<&'static str> {
+        Some(match sw {
+            0 => "basic",
+            1 => "machining_required",
+            2 => "no_machining",
+            _ => return None,
+        })
+    }
+}
+
+/// The direction of a surface's lay.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Lay {
+    Circular,
+    Crossed,
+    MultiDirectional,
+    Parallel,
+    Perpendicular,
+    Radial,
+    Particulate,
+}
+
+impl Lay {
+    /// swSFLaySym_e
+    fn sw(self) -> i32 {
+        match self {
+            Lay::Circular => 1,
+            Lay::Crossed => 2,
+            Lay::MultiDirectional => 3,
+            Lay::Parallel => 4,
+            Lay::Perpendicular => 5,
+            Lay::Radial => 6,
+            Lay::Particulate => 7,
+        }
+    }
+
+    fn name_of(sw: i32) -> Option<&'static str> {
+        Some(match sw {
+            1 => "circular",
+            2 => "crossed",
+            3 => "multi_directional",
+            4 => "parallel",
+            5 => "perpendicular",
+            6 => "radial",
+            7 => "particulate",
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+pub struct AddSurfaceFinishParams {
+    /// basic (any process; default), machining_required, no_machining.
+    #[serde(default)]
+    pub kind: Option<SurfaceFinishKind>,
+    /// The roughness, as shown: "Ra 3.2", "3.2", "125".
+    #[serde(default)]
+    pub roughness: Option<String>,
+    /// A lower limit under `roughness`, as shown.
+    #[serde(default)]
+    pub roughness_min: Option<String>,
+    /// The production method, as shown: "ground", "milled".
+    #[serde(default)]
+    pub production_method: Option<String>,
+    /// The sampling length, as shown.
+    #[serde(default)]
+    pub sampling_length: Option<String>,
+    /// The machining allowance, as shown.
+    #[serde(default)]
+    pub allowance: Option<String>,
+    /// The direction of the lay.
+    #[serde(default)]
+    pub lay: Option<Lay>,
+    /// Stand the symbol on `on` at arrow_at_mm rather than on a leader to it. It then rises from
+    /// that point, over whatever is above it; at_mm doesn't apply.
+    #[serde(default)]
+    pub no_leader: bool,
+    #[serde(flatten)]
+    pub place: PlaceParams,
+}
+
+/// A weld's symbol. Which exist depends on the standard: fillet, square, v, bevel, u, j, plug,
+/// spot, seam and backing in both; v_with_root and bevel_with_root ISO; the others ASME.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WeldKind {
+    Fillet,
+    Square,
+    V,
+    Bevel,
+    U,
+    J,
+    Plug,
+    Spot,
+    Seam,
+    Backing,
+    VWithRoot,
+    BevelWithRoot,
+    Scarf,
+    FlareV,
+    FlareBevel,
+    Stud,
+    MeltThrough,
+    Surfacing,
+    EdgeFlange,
+    CornerFlange,
+}
+
+/// Each symbol's codes in SolidWorks' symbol library (gtol97.sym): ISO, ANSI.
+const WELD_CODES: &[(WeldKind, &str, Option<&str>, Option<&str>)] = &[
+    (WeldKind::Fillet, "fillet", Some("<WELD-FILL>"), Some("<AWLD-FILL>")),
+    (WeldKind::Square, "square", Some("<WELD-BUSQ>"), Some("<AWLD-GSQ>")),
+    (WeldKind::V, "v", Some("<WELD-BUSV>"), Some("<AWLD-GV>")),
+    (WeldKind::Bevel, "bevel", Some("<WELD-BUSB>"), Some("<AWLD-GBVL>")),
+    (WeldKind::U, "u", Some("<WELD-BUSU>"), Some("<AWLD-GU>")),
+    (WeldKind::J, "j", Some("<WELD-BUSJ>"), Some("<AWLD-GJ>")),
+    (WeldKind::Plug, "plug", Some("<WELD-PLUG>"), Some("<AWLD-PLUG>")),
+    (WeldKind::Spot, "spot", Some("<WELD-SPOT>"), Some("<AWLD-SPOT>")),
+    (WeldKind::Seam, "seam", Some("<WELD-SEAM>"), Some("<AWLD-SEAM>")),
+    (WeldKind::Backing, "backing", Some("<WELD-BACK>"), Some("<AWLD-BACK>")),
+    (WeldKind::VWithRoot, "v_with_root", Some("<WELD-BUSVBR>"), None),
+    (WeldKind::BevelWithRoot, "bevel_with_root", Some("<WELD-BUSBR>"), None),
+    (WeldKind::Scarf, "scarf", None, Some("<AWLD-GSCR>")),
+    (WeldKind::FlareV, "flare_v", None, Some("<AWLD-GFLV>")),
+    (WeldKind::FlareBevel, "flare_bevel", None, Some("<AWLD-GFLB>")),
+    (WeldKind::Stud, "stud", None, Some("<AWLD-STUD>")),
+    (WeldKind::MeltThrough, "melt_through", None, Some("<AWLD-MELT>")),
+    (WeldKind::Surfacing, "surfacing", None, Some("<AWLD-SURF>")),
+    (WeldKind::EdgeFlange, "edge_flange", None, Some("<AWLD-FEDG>")),
+    (WeldKind::CornerFlange, "corner_flange", None, Some("<AWLD-FCOR>")),
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WeldContour {
+    Flat,
+    Convex,
+    Concave,
+}
+
+impl WeldContour {
+    /// swWeldSymbolContourTypes_e
+    fn sw(self) -> i32 {
+        match self {
+            WeldContour::Flat => 2,
+            WeldContour::Convex => 3,
+            WeldContour::Concave => 4,
+        }
+    }
+}
+
+/// One side of a weld.
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+pub struct WeldSideParams {
+    /// The weld's symbol.
+    #[serde(default)]
+    pub symbol: Option<WeldKind>,
+    /// Left of the symbol, as shown, in the drawing's terms: "5", "a5", "z6".
+    #[serde(default)]
+    pub size: Option<String>,
+    /// Right of the symbol, as shown: "50", "3x50-100" (intermittent).
+    #[serde(default)]
+    pub length: Option<String>,
+    /// The weld face's contour.
+    #[serde(default)]
+    pub contour: Option<WeldContour>,
+}
+
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+pub struct AddWeldSymbolParams {
+    /// The weld on the side the arrow points at.
+    #[serde(default)]
+    pub arrow_side: Option<WeldSideParams>,
+    /// The weld on the far side of the joint.
+    #[serde(default)]
+    pub other_side: Option<WeldSideParams>,
+    /// The same weld on both sides: give arrow_side only.
+    #[serde(default)]
+    pub both_sides: bool,
+    /// Weld all around (the circle at the bend).
+    #[serde(default)]
+    pub all_around: bool,
+    /// Weld on site (the flag).
+    #[serde(default)]
+    pub field_weld: bool,
+    /// The process in the tail: "GMAW", "135".
+    #[serde(default)]
+    pub process: Option<String>,
+    /// "iso" (ISO 2553: the arrow side on the solid line, the other on the dashed one) or "asme"
+    /// (AWS A2.4: the arrow side below the line). Default: the document's drafting standard's.
+    #[serde(default)]
+    pub standard: Option<GdtStandard>,
+    #[serde(flatten)]
+    pub place: PlaceParams,
+}
+
 // ---- Symbols ----------------------------------------------------------------------
 
 /// The document's units for the values a frame writes as text, the
@@ -542,11 +766,171 @@ pub fn datum(
     Ok((proto::GdtSymbol { kind: Some(proto::gdt_symbol::Kind::Datum(proto::DatumSymbol { label })) }, remarks))
 }
 
+/// The symbol add_surface_finish_symbol asks for.
+pub fn surface_finish(params: &AddSurfaceFinishParams) -> Result<proto::GdtSymbol, McpError> {
+    if params.no_leader {
+        if text(params.place.on.as_deref()).is_empty() {
+            return Err(invalid("no_leader stands the symbol on an entity: give on"));
+        }
+        if params.place.at_mm.is_some() || params.place.at_view_mm.is_some() {
+            return Err(invalid("with no_leader the symbol stands on its entity at arrow_at_mm: at_mm doesn't apply"));
+        }
+    }
+    if !text(params.place.dimension.as_deref()).is_empty() {
+        return Err(invalid("a surface finish symbol goes on an entity (on), not a dimension"));
+    }
+    Ok(proto::GdtSymbol {
+        kind: Some(proto::gdt_symbol::Kind::SurfaceFinish(proto::SurfaceFinishSymbol {
+            symbol_type: params.kind.unwrap_or(SurfaceFinishKind::Basic).sw(),
+            lay: params.lay.map(Lay::sw).unwrap_or(0),
+            roughness: text(params.roughness.as_deref()),
+            roughness_min: text(params.roughness_min.as_deref()),
+            production_method: text(params.production_method.as_deref()),
+            sampling_length: text(params.sampling_length.as_deref()),
+            allowance: text(params.allowance.as_deref()),
+            no_leader: params.no_leader,
+        })),
+    })
+}
+
+fn weld_side(side: &WeldSideParams, standard: GdtStandard) -> Result<proto::WeldSide, McpError> {
+    let symbol = match side.symbol {
+        None => String::new(),
+        Some(kind) => {
+            let (_, name, iso, asme) = WELD_CODES.iter().find(|c| c.0 == kind).expect("every weld kind has codes");
+            let code = if standard == GdtStandard::Iso { iso } else { asme };
+            code.ok_or_else(|| invalid(format!("{name} isn't a weld symbol of {}", weld_standard_name(standard))))?.to_string()
+        }
+    };
+    Ok(proto::WeldSide {
+        symbol,
+        size: text(side.size.as_deref()),
+        length: text(side.length.as_deref()),
+        contour: side.contour.map(WeldContour::sw).unwrap_or(0),
+    })
+}
+
+fn weld_standard_name(standard: GdtStandard) -> &'static str {
+    match standard {
+        GdtStandard::Iso => "ISO 2553",
+        GdtStandard::Asme => "AWS A2.4",
+    }
+}
+
+/// The symbol add_weld_symbol asks for, in a document with `units`, and
+/// remarks on it. SolidWorks' "above" is the upper side of an ANSI line
+/// (the other side: the arrow side goes below) and the solid line of an
+/// ISO one (the arrow side), rendered 2026-11-01.
+pub fn weld(
+    params: &AddWeldSymbolParams,
+    units: Option<&proto::DocumentUnits>,
+) -> Result<(proto::GdtSymbol, Vec<String>), McpError> {
+    if text(params.place.on.as_deref()).is_empty() {
+        return Err(invalid("a weld symbol points at the joint: give on (a view entity in a drawing, an edge or face in a part)"));
+    }
+    if !text(params.place.dimension.as_deref()).is_empty() {
+        return Err(invalid("a weld symbol goes on an entity (on), not a dimension"));
+    }
+    if params.arrow_side.is_none() && params.other_side.is_none() {
+        return Err(invalid("say what the weld is: arrow_side and / or other_side"));
+    }
+    if params.both_sides && (params.other_side.is_some() || params.arrow_side.is_none()) {
+        return Err(invalid("both_sides repeats arrow_side: give arrow_side only"));
+    }
+    let (standard, remarks) = standard(params.standard, units);
+    let side = |s: &Option<WeldSideParams>| s.as_ref().map(|s| weld_side(s, standard)).transpose().map(Option::unwrap_or_default);
+    let arrow = side(&params.arrow_side)?;
+    let other = side(&params.other_side)?;
+    let (top, bottom, symmetric) = match standard {
+        GdtStandard::Iso if params.both_sides => (arrow, proto::WeldSide::default(), true),
+        GdtStandard::Iso => (arrow, other, false),
+        // ANSI has no symmetric line: the same weld is drawn on both sides.
+        GdtStandard::Asme if params.both_sides => (arrow.clone(), arrow, false),
+        GdtStandard::Asme => (other, arrow, false),
+    };
+    Ok((
+        proto::GdtSymbol {
+            kind: Some(proto::gdt_symbol::Kind::Weld(proto::WeldSymbolSpec {
+                top: Some(top),
+                bottom: Some(bottom),
+                symmetric,
+                all_around: params.all_around,
+                field_weld: params.field_weld,
+                process: text(params.process.as_deref()),
+            })),
+        },
+        remarks,
+    ))
+}
+
+/// A surface finish symbol's fields, for the annotation tools' JSON.
+pub fn surface_finish_json(s: &proto::SurfaceFinishSymbol, obj: &mut Map<String, Value>) {
+    if let Some(kind) = SurfaceFinishKind::name_of(s.symbol_type) {
+        obj.insert("finish".into(), json!(kind));
+    }
+    if let Some(lay) = Lay::name_of(s.lay) {
+        obj.insert("lay".into(), json!(lay));
+    }
+    for (key, value) in [
+        ("roughness", &s.roughness),
+        ("roughness_min", &s.roughness_min),
+        ("production_method", &s.production_method),
+        ("sampling_length", &s.sampling_length),
+        ("allowance", &s.allowance),
+    ] {
+        if !value.is_empty() {
+            obj.insert(key.into(), json!(value));
+        }
+    }
+}
+
+fn weld_side_json(side: &proto::WeldSide) -> Option<Value> {
+    let mut obj = Map::new();
+    if !side.symbol.is_empty() {
+        let name = WELD_CODES.iter().find(|c| c.2 == Some(side.symbol.as_str()) || c.3 == Some(side.symbol.as_str()));
+        obj.insert("symbol".into(), json!(name.map_or(side.symbol.as_str(), |c| c.1)));
+    }
+    if !side.size.is_empty() {
+        obj.insert("size".into(), json!(side.size));
+    }
+    if !side.length.is_empty() {
+        obj.insert("length".into(), json!(side.length));
+    }
+    match side.contour {
+        2 => obj.insert("contour".into(), json!("flat")),
+        3 => obj.insert("contour".into(), json!("convex")),
+        4 => obj.insert("contour".into(), json!("concave")),
+        _ => None,
+    };
+    (!obj.is_empty()).then_some(Value::Object(obj))
+}
+
+/// A weld symbol's fields, for the annotation tools' JSON. "above" is the
+/// other side in ANSI, the arrow side (the solid line) in ISO.
+pub fn weld_json(w: &proto::WeldSymbolSpec, obj: &mut Map<String, Value>) {
+    if let Some(side) = w.top.as_ref().and_then(weld_side_json) {
+        obj.insert("above_line".into(), side);
+    }
+    if let Some(side) = w.bottom.as_ref().and_then(weld_side_json) {
+        obj.insert("below_line".into(), side);
+    }
+    for (key, on) in [("both_sides", w.symmetric), ("all_around", w.all_around), ("field_weld", w.field_weld)] {
+        if on {
+            obj.insert(key.into(), json!(true));
+        }
+    }
+    if !w.process.is_empty() {
+        obj.insert("process".into(), json!(w.process));
+    }
+}
+
 /// The callout of a frame row as asked, for the reply text.
 fn callout_of(symbol: &proto::GdtSymbol) -> String {
     match &symbol.kind {
         Some(proto::gdt_symbol::Kind::Gtol(g)) => g.frames.iter().map(pmi::frame_callout).collect::<Vec<_>>().join(" / "),
         Some(proto::gdt_symbol::Kind::Datum(d)) => format!("datum {}", if d.label.is_empty() { "?" } else { &d.label }),
+        Some(proto::gdt_symbol::Kind::SurfaceFinish(s)) => format!("surface finish {}", s.roughness),
+        Some(proto::gdt_symbol::Kind::Weld(_)) => "weld".to_string(),
         None => String::new(),
     }
 }
@@ -573,6 +957,9 @@ pub fn model_request(
 ) -> Result<(proto::AddModelAnnotationRequest, Vec<String>), McpError> {
     if place.view.is_some() || place.sheet.is_some() || place.at_view_mm.is_some() {
         return Err(invalid("view, sheet and at_view_mm are for drawings; the active document is a part or assembly"));
+    }
+    if matches!(&symbol.kind, Some(proto::gdt_symbol::Kind::SurfaceFinish(s)) if s.no_leader) && place.arrow_at_mm.is_none() {
+        return Err(invalid("no_leader in a part or assembly: say where it stands with arrow_at_mm"));
     }
     let mut request = proto::AddModelAnnotationRequest { symbol: Some(symbol), ..Default::default() };
     let on = text(place.on.as_deref());
@@ -704,6 +1091,7 @@ pub fn drawing_request(
         )));
     }
     let is_datum = matches!(symbol.kind, Some(proto::gdt_symbol::Kind::Datum(_)));
+    let standing = matches!(&symbol.kind, Some(proto::gdt_symbol::Kind::SurfaceFinish(s)) if s.no_leader);
     if is_datum && !dimension.is_empty() {
         // SolidWorks makes it attached to nothing, off the view (seen
         // 2026-10-24).
@@ -736,6 +1124,9 @@ pub fn drawing_request(
     if (!on.is_empty() || !dimension.is_empty()) && place.sheet.is_some() {
         return Err(invalid("sheet is for a free frame; one on an entity or dimension goes on that view's sheet"));
     }
+    if standing && leaders.tips.is_empty() {
+        return Err(invalid("no_leader: say where it stands (arrow_at_mm), or inspect_drawing the view first for the edge's middle"));
+    }
     let owner_view = leaders.view.clone().unwrap_or(view.clone());
     let position = match (&place.at_mm, place.at_view_mm) {
         (Some(_), Some(_)) => return Err(invalid("give at_mm (sheet) or at_view_mm (view), not both")),
@@ -751,14 +1142,27 @@ pub fn drawing_request(
             let p = note::point(at, "at_view_mm")?;
             Some(proto::DrawingPoint { x: p.x, y: p.y, view_name: v })
         }
+        (None, None) if standing => None,
         (None, None) if !is_datum => match leaders.tips.first() {
-            // A frame with a leader: outside the view, next to its arrow.
+            // With a leader: outside the view, next to its arrow.
             Some(tip) => {
-                let size = note::text_size(&callout_of(&symbol), note::DEFAULT_TEXT_HEIGHT);
-                // A frame's cells are wider than the callout's letters.
-                let size = DVec2::new(size.x * 1.3, size.y);
-                remarks.push("the frame was placed next to its arrow, outside the view; pass at_mm to choose".into());
-                Some(note::sheet_point(note::text_spot(*tip, cache.outline(&owner_view), size)))
+                let (size, what) = match &symbol.kind {
+                    Some(proto::gdt_symbol::Kind::SurfaceFinish(_)) => (SURFACE_FINISH_SIZE, "surface finish symbol"),
+                    Some(proto::gdt_symbol::Kind::Weld(_)) => (WELD_SYMBOL_SIZE, "weld symbol"),
+                    _ => {
+                        let size = note::text_size(&callout_of(&symbol), note::DEFAULT_TEXT_HEIGHT);
+                        // A frame's cells are wider than the callout's letters.
+                        (DVec2::new(size.x * 1.3, size.y), "frame")
+                    }
+                };
+                remarks.push(format!("the {what} was placed next to its arrow, outside the view; pass at_mm to choose"));
+                let mut spot = note::text_spot(*tip, cache.outline(&owner_view), size);
+                // A surface finish symbol's position is its point, with the
+                // symbol above it: below the arrow it needs room to stand.
+                if matches!(symbol.kind, Some(proto::gdt_symbol::Kind::SurfaceFinish(_))) && spot.y < tip.y {
+                    spot.y -= size.y;
+                }
+                Some(note::sheet_point(spot))
             }
             None => None,
         },
@@ -959,6 +1363,95 @@ mod tests {
         assert!(d("I", GdtStandard::Asme)[0].contains("ASME Y14.5 doesn't use I, O and Q"));
         assert!(d("O", GdtStandard::Iso)[0].contains("misread"));
         assert!(d("B", GdtStandard::Asme).is_empty());
+    }
+
+    #[test]
+    fn weld_sides_follow_the_standard() {
+        let fillet = WeldSideParams { symbol: Some(WeldKind::Fillet), size: Some("5".into()), ..Default::default() };
+        let v = WeldSideParams { symbol: Some(WeldKind::V), ..Default::default() };
+        let on = PlaceParams { on: Some("view_edge:1".into()), ..Default::default() };
+        let params = |standard| AddWeldSymbolParams {
+            arrow_side: Some(fillet.clone()),
+            other_side: Some(v.clone()),
+            standard: Some(standard),
+            place: PlaceParams { on: on.on.clone(), ..Default::default() },
+            ..Default::default()
+        };
+        let spec = |s: proto::GdtSymbol| match s.kind {
+            Some(proto::gdt_symbol::Kind::Weld(w)) => w,
+            _ => panic!("not a weld"),
+        };
+        // ISO: the arrow side on the solid line, SolidWorks' "above".
+        let w = spec(weld(&params(GdtStandard::Iso), None).unwrap().0);
+        assert_eq!(w.top.as_ref().unwrap().symbol, "<WELD-FILL>");
+        assert_eq!(w.bottom.as_ref().unwrap().symbol, "<WELD-BUSV>");
+        // ANSI: the arrow side below the line.
+        let w = spec(weld(&params(GdtStandard::Asme), None).unwrap().0);
+        assert_eq!(w.top.as_ref().unwrap().symbol, "<AWLD-GV>");
+        assert_eq!(w.bottom.as_ref().unwrap().symbol, "<AWLD-FILL>");
+        assert_eq!(w.bottom.as_ref().unwrap().size, "5");
+    }
+
+    #[test]
+    fn weld_refusals() {
+        let on = || PlaceParams { on: Some("view_edge:1".into()), ..Default::default() };
+        let side = |kind| Some(WeldSideParams { symbol: Some(kind), ..Default::default() });
+        // No entity, nothing said, a symbol of the other standard.
+        assert!(weld(&AddWeldSymbolParams { arrow_side: side(WeldKind::Fillet), ..Default::default() }, None).is_err());
+        assert!(weld(&AddWeldSymbolParams { place: on(), ..Default::default() }, None).is_err());
+        let stud = AddWeldSymbolParams { arrow_side: side(WeldKind::Stud), standard: Some(GdtStandard::Iso), place: on(), ..Default::default() };
+        assert!(weld(&stud, None).unwrap_err().message.contains("ISO 2553"));
+        // Both sides: symmetric in ISO, drawn twice in ANSI.
+        let both = |standard| AddWeldSymbolParams {
+            arrow_side: side(WeldKind::Fillet),
+            both_sides: true,
+            standard: Some(standard),
+            place: on(),
+            ..Default::default()
+        };
+        let Some(proto::gdt_symbol::Kind::Weld(w)) = weld(&both(GdtStandard::Iso), None).unwrap().0.kind else { panic!() };
+        assert!(w.symmetric);
+        let Some(proto::gdt_symbol::Kind::Weld(w)) = weld(&both(GdtStandard::Asme), None).unwrap().0.kind else { panic!() };
+        assert!(!w.symmetric && w.top == w.bottom);
+    }
+
+    #[test]
+    fn every_weld_kind_has_a_code() {
+        for kind in [
+            WeldKind::Fillet, WeldKind::Square, WeldKind::V, WeldKind::Bevel, WeldKind::U, WeldKind::J, WeldKind::Plug,
+            WeldKind::Spot, WeldKind::Seam, WeldKind::Backing, WeldKind::VWithRoot, WeldKind::BevelWithRoot, WeldKind::Scarf,
+            WeldKind::FlareV, WeldKind::FlareBevel, WeldKind::Stud, WeldKind::MeltThrough, WeldKind::Surfacing,
+            WeldKind::EdgeFlange, WeldKind::CornerFlange,
+        ] {
+            let name: &str = WELD_CODES.iter().find(|c| c.0 == kind).expect("in the table").1;
+            assert_eq!(serde_json::to_value(name).unwrap(), json!(name));
+            let parsed: WeldKind = serde_json::from_value(json!(name)).unwrap();
+            assert_eq!(parsed, kind);
+        }
+    }
+
+    #[test]
+    fn surface_finish_refusals() {
+        let no_on = AddSurfaceFinishParams { no_leader: true, ..Default::default() };
+        assert!(surface_finish(&no_on).is_err());
+        let placed = AddSurfaceFinishParams {
+            no_leader: true,
+            place: PlaceParams { on: Some("view_edge:1".into()), at_mm: Some(vec![1.0, 2.0]), ..Default::default() },
+            ..Default::default()
+        };
+        assert!(surface_finish(&placed).unwrap_err().message.contains("at_mm"));
+        let Some(proto::gdt_symbol::Kind::SurfaceFinish(s)) = surface_finish(&AddSurfaceFinishParams {
+            kind: Some(SurfaceFinishKind::MachiningRequired),
+            lay: Some(Lay::Perpendicular),
+            roughness: Some(" Ra 3.2 ".into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .kind
+        else {
+            panic!()
+        };
+        assert_eq!((s.symbol_type, s.lay, s.roughness.as_str()), (1, 5, "Ra 3.2"));
     }
 
     #[test]

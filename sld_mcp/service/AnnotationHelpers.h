@@ -81,8 +81,8 @@ namespace sld_mcp::service
 	bool DeleteAnnotations(IModelDoc2* doc, IModelDocExtension* ext,
 		const std::vector<ATL::CComPtr<IAnnotation>>& annotations);
 
-	// A feature control frame or datum feature symbol to add: what can be
-	// checked without SolidWorks.
+	// A feature control frame, datum feature, surface finish or weld symbol
+	// to add: what can be checked without SolidWorks.
 	grpc::Status ValidateGdtSymbol(const sld_mcp::v1::GdtSymbol& symbol);
 
 	// The letters of the datum feature symbols among `annotations`.
@@ -94,11 +94,13 @@ namespace sld_mcp::service
 
 	// Inserts the symbol for what's selected -- IModelDoc2::InsertGtol /
 	// InsertDatumTag2 give it a leader to a selected entity, or put it on a
-	// selected dimension -- in the active (drawing) view, and gives it the
-	// frames / letter `symbol` asks for, each read back. On failure the
-	// new annotation is deleted again.
+	// selected dimension; a surface finish or weld symbol gets a leader the
+	// same way -- in the active (drawing) view, and gives it the frames /
+	// letter / texts `symbol` asks for, each read back. `at`: where a surface
+	// finish symbol's point goes. On failure the new annotation is deleted
+	// again.
 	grpc::Status InsertGdtSymbol(IModelDoc2* doc, IModelDocExtension* ext, const sld_mcp::v1::GdtSymbol& symbol,
-		ATL::CComPtr<IAnnotation>& out);
+		const Eigen::Vector3d& at, ATL::CComPtr<IAnnotation>& out);
 
 	// Whether a feature control frame or datum symbol is attached to an
 	// entity (a leader to it) or a drawing dimension (it sits on it):

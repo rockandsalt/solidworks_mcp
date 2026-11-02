@@ -966,12 +966,20 @@ namespace sld_mcp::service
 		value = 0;
 		if (SUCCEEDED(table->get_AnchorType(&value)))
 			info->set_anchor(static_cast<int32_t>(value));
-		value = 0;
-		if (SUCCEEDED(table->GetHeaderCount(&value)))
-			info->set_header_rows(static_cast<int32_t>(value));
 		VARIANT_BOOL flag = VARIANT_FALSE;
 		ATL::CComBSTR title;
 		const long titleRows = TitleRows(table);
+		value = 0;
+		// A revision table's count takes in its shown title (2 with the column
+		// titles, seen 2026-11-01), which `rows` leaves out.
+		if (SUCCEEDED(table->GetHeaderCount(&value)))
+			info->set_header_rows(static_cast<int32_t>(std::max(0L, value - titleRows)));
+		if (ATL::CComQIPtr<IRevisionTableAnnotation> revisions(table); revisions)
+		{
+			ATL::CComBSTR current;
+			if (SUCCEEDED(revisions->get_CurrentRevision(&current)))
+				info->set_current_revision(ToUtf8(current));
+		}
 		if (titleRows > 0 && SUCCEEDED(table->get_Title(&title)))
 		{
 			info->set_title(ToUtf8(title));

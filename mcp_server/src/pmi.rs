@@ -495,6 +495,16 @@ pub fn annotation_fields(a: &proto::AnnotationInfo) -> Map<String, Value> {
         sw::DATUM_TAG if !a.datum_label.trim().is_empty() => {
             obj.insert("label".into(), json!(a.datum_label.trim()));
         }
+        sw::SF_SYMBOL => {
+            if let Some(s) = &a.surface_finish {
+                crate::gdt::surface_finish_json(s, &mut obj);
+            }
+        }
+        8 => {
+            if let Some(w) = &a.weld {
+                crate::gdt::weld_json(w, &mut obj);
+            }
+        }
         _ => {}
     }
     // Raw display text: for notes it's the content; for the rest it fills

@@ -567,20 +567,26 @@ namespace
 		if (r.has_gdt())
 		{
 			if (!create)
-				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a feature control frame or datum symbol can only be added");
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a symbol can only be added");
 			const bool styled = s.has_text_height() || s.has_font() || s.has_bold() || s.has_italic() ||
 				s.has_underline() || s.document_font() || s.has_justification() || s.has_angle() || s.has_border();
 			if (r.has_text() || r.has_leader_style() || r.has_arrow() || styled)
 				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-					"text, style and leader settings are for notes, not feature control frames or datum symbols");
+					"text, style and leader settings are for notes, not symbols");
 			if (r.leader_to_size() > 1)
-				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a feature control frame or datum symbol goes on one entity");
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a symbol goes on one entity");
 			if (r.leader_to_size() > 0 && !r.attach_to_dimension().empty())
 				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "attach it to an entity or a dimension, not both");
 			// InsertDatumTag2 with a dimension selected makes a datum symbol
 			// attached to nothing, off the view (seen 2026-10-24).
 			if (r.gdt().has_datum() && (r.leader_to_size() == 0 || !r.attach_to_dimension().empty()))
 				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a datum symbol goes on a view entity");
+			if (r.gdt().has_weld() && r.leader_to_size() == 0)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a weld symbol goes on a view entity");
+			if (r.gdt().surface_finish().no_leader() && r.leader_to_size() == 0)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a surface finish symbol without a leader stands on a view entity");
+			if (!r.gdt().has_gtol() && !r.attach_to_dimension().empty())
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "only feature control frames go on dimensions");
 			if (!r.attach_to_dimension().empty() && r.owner() != sld_mcp::v1::ANNOTATION_OWNER_UNSPECIFIED &&
 				r.owner() != sld_mcp::v1::ANNOTATION_OWNER_VIEW)
 				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "on a dimension it belongs to the dimension's view");
@@ -908,7 +914,11 @@ grpc::Status SolidWorksService::SetupDrawingAnnotation(grpc::ServerContext* /*co
 			{
 				// A frame / datum symbol goes on what's selected, like a note's
 				// leaders.
-				grpc::Status status = InsertGdtSymbol(doc, ext, request->gdt(), annotation);
+				// A surface finish symbol is made where it goes; standing on its
+				// entity (no position) that's the arrow point.
+				const Eigen::Vector2d insertAt = change.position ? *change.position
+					: !tips.empty() ? tips[0] : Eigen::Vector2d(Eigen::Vector2d::Zero());
+				grpc::Status status = InsertGdtSymbol(doc, ext, request->gdt(), Eigen::Vector3d(insertAt.x(), insertAt.y(), 0.0), annotation);
 				doc->ClearSelection2(VARIANT_TRUE);
 				if (!status.ok())
 					return status;

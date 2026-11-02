@@ -1,5 +1,5 @@
-// DrawingTables.cpp : Drawing tables and balloons: SetupDrawingTable (add a BOM, hole table or general
-// table, change a table), AddBalloons (see docs/notes/drawings.md, "Tables and balloons").
+// DrawingTables.cpp : Drawing tables and balloons: SetupDrawingTable (add a BOM, hole table, general or
+// revision table, change a table), AddBalloons (see docs/notes/drawings.md, "Tables and balloons").
 #include "pch.h"
 #include "Common.h"
 #include "AssemblyHelpers.h"
@@ -44,6 +44,8 @@ namespace
 			return "bill of materials";
 		case sld_mcp::v1::TABLE_KIND_HOLE:
 			return "hole table";
+		case sld_mcp::v1::TABLE_KIND_REVISION:
+			return "revision table";
 		default:
 			return "table";
 		}
@@ -139,7 +141,8 @@ namespace
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "say which kind of table to add (bom, hole, general)");
 		if (!create && r.kind() != sld_mcp::v1::TABLE_KIND_UNSPECIFIED)
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a table's kind can't be changed");
-		if (create && r.kind() != sld_mcp::v1::TABLE_KIND_GENERAL && r.view_name().empty())
+		const bool ofView = r.kind() == sld_mcp::v1::TABLE_KIND_BOM || r.kind() == sld_mcp::v1::TABLE_KIND_HOLE;
+		if (create && ofView && r.view_name().empty())
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, std::string("say which view the ") +
 				KindWord(r.kind()) + " is of");
 		if (create && r.kind() == sld_mcp::v1::TABLE_KIND_GENERAL &&
@@ -160,11 +163,16 @@ namespace
 		}
 		if (r.kind() == sld_mcp::v1::TABLE_KIND_BOM && (r.bom_type() < 0 || r.bom_type() > swBomType_Indented))
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "unknown BOM type " + std::to_string(r.bom_type()));
+		if (create && r.kind() != sld_mcp::v1::TABLE_KIND_REVISION && r.revisions_size() > 0)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "revisions go in a revision table");
+		if (r.revision_symbol() < 0 || r.revision_symbol() > swRevisionTable_HexagonSymbol)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "unknown revision symbol " + std::to_string(r.revision_symbol()));
 		if (r.anchor() < 0 || r.anchor() > swBOMConfigurationAnchor_BottomRight)
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "unknown anchor " + std::to_string(r.anchor()));
 		if (r.has_position() && (!std::isfinite(r.position().x()) || !std::isfinite(r.position().y())))
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "the position must be finite");
-		if (r.cells_size() > kMaxTableEdits || r.add_rows_size() > kMaxTableRows || r.delete_rows_size() > kMaxTableRows)
+		if (r.cells_size() > kMaxTableEdits || r.add_rows_size() > kMaxTableRows || r.delete_rows_size() > kMaxTableRows ||
+			r.revisions_size() > kMaxTableRows)
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "too many cells or rows in one call");
 		for (const auto& w : r.column_widths())
 			if (!std::isfinite(w) || w < 0.0 || w > 1.0)
@@ -235,11 +243,69 @@ namespace
 		}
 	}
 
+	// The first column of a revision table of swTableColumnTypes_e `type`, -1 if none.
+	long RevisionColumn(ITableAnnotation* table, long type)
+	{
+		long columns = 0;
+		table->get_TotalColumnCount(&columns);
+		for (long c = 0; c < columns; ++c)
+		{
+			ATL::CComVariant propertyData;
+			long status = 0, now = 0;
+			if (SUCCEEDED(table->GetColumnType3(c, VARIANT_TRUE, &propertyData, &status, &now)) && now == type)
+				return c;
+		}
+		return -1;
+	}
+
+	// Adds a revision at the bottom, its cells and its symbols; `added` gets
+	// its id as soon as there is one, to take it back on a later failure.
+	grpc::Status AddRevisionRow(IDrawingDoc* drawing, ITableAnnotation* table, IRevisionTableAnnotation* revisions,
+		const sld_mcp::v1::RevisionEntry& entry, std::vector<long>& added)
+	{
+		const std::string name = TableName(table);
+		long id = -1;
+		// Typed in: the row shows it, but SolidWorks' count goes on by its own
+		// letters (seen 2026-11-01).
+		if (FAILED(revisions->AddRevision(FromUtf8(entry.revision()), &id)) || id <= 0)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't add a revision to " + name);
+		added.push_back(id);
+		long row = -1;
+		if (FAILED(revisions->GetRowNumberForId(id, &row)) || row < 0)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't add the revision's row to " + name);
+		const std::pair<const std::string*, long> texts[] = {
+			{ &entry.zone(), swRevisionTableColumnType_Zone },
+			{ &entry.description(), swRevisionTableColumnType_Description },
+			{ &entry.date(), swRevisionTableColumnType_Date },
+			{ &entry.approved(), swRevisionTableColumnType_Approved },
+		};
+		for (const auto& [text, type] : texts)
+		{
+			if (text->empty())
+				continue;
+			const long column = RevisionColumn(table, type);
+			if (column < 0)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, name + " has no column for \"" + *text +
+					"\" (its template leaves that column out)");
+			table->put_Text2(row, column, VARIANT_TRUE, FromUtf8(*text));
+			if (CellText(table, row, column) != *text)
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't take \"" + *text + "\" in " + name);
+		}
+		// Each shows the latest revision, this one.
+		for (const auto& at : entry.symbols())
+		{
+			ATL::CComPtr<INote> symbol;
+			if (FAILED(drawing->InsertRevisionSymbol(at.x(), at.y(), &symbol)) || !symbol)
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't place the revision's symbol");
+		}
+		return grpc::Status::OK;
+	}
+
 	// Applies the edits of `r` to a table, each read back; stops at the
-	// first that fails. Rows are added, deleted, then cells set, widths,
-	// title, layer, anchor, position.
-	grpc::Status ApplyTableChange(ITableAnnotation* table, IAnnotation* annotation, IModelDoc2* doc,
-		const sld_mcp::v1::SetupDrawingTableRequest& r, bool create)
+	// first that fails. Rows and revisions are added, rows deleted, then
+	// cells set, widths, title, layer, anchor, position.
+	grpc::Status ApplyTableChange(ITableAnnotation* table, IAnnotation* annotation, IModelDoc2* doc, IDrawingDoc* drawing,
+		const sld_mcp::v1::SetupDrawingTableRequest& r, bool create, std::vector<long>& addedRevisions)
 	{
 		long type = 0;
 		table->get_Type(&type);
@@ -251,10 +317,15 @@ namespace
 		// Indices on the wire leave a shown title's row out.
 		const long t = TitleRows(table);
 		rows -= t;
+		ATL::CComQIPtr<IRevisionTableAnnotation> revisions(table);
 
 		if (generated && (r.add_rows_size() > 0 || r.delete_rows_size() > 0))
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, name +
 				"'s rows come from the model (a BOM's components, a hole table's holes): they can't be added or deleted");
+		if (revisions && r.add_rows_size() > 0)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, name + " is a revision table: add revisions, not plain rows");
+		if (!revisions && r.revisions_size() > 0)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, name + " isn't a revision table");
 		// Row indices are checked against the table as it is before
 		// anything changes; cells against the table after the rows.
 		std::set<long> doomed;
@@ -265,13 +336,26 @@ namespace
 					" (rows 0.." + std::to_string(rows - 1) + ")");
 			doomed.insert(row);
 		}
-		if (!doomed.empty() && static_cast<long>(doomed.size()) >= rows + r.add_rows_size())
+		// DeleteRevision of a header row's id, 0, deletes the title row (seen
+		// 2026-11-01), so the ids are looked up and checked first.
+		std::map<long, long> revisionIds;
+		if (revisions)
+			for (const long row : doomed)
+			{
+				long id = 0;
+				revisions->GetIdForRowNumber(row + t, &id);
+				if (id <= 0)
+					return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "row " + std::to_string(row) + " of " + name +
+						" is its header, not a revision");
+				revisionIds[row] = id;
+			}
+		if (!doomed.empty() && static_cast<long>(doomed.size()) >= rows + r.add_rows_size() + r.revisions_size())
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a table keeps at least one row: delete the table instead");
 		for (const auto& row : r.add_rows())
 			if (row.cells_size() > columns)
 				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a new row has " + std::to_string(row.cells_size()) +
 					" cells; " + name + " has " + std::to_string(columns) + " columns");
-		const long rowsAfter = rows + r.add_rows_size() - static_cast<long>(doomed.size());
+		const long rowsAfter = rows + r.add_rows_size() + r.revisions_size() - static_cast<long>(doomed.size());
 		for (const auto& cell : r.cells())
 			if (cell.row() < 0 || cell.row() >= rowsAfter || cell.column() < 0 || cell.column() >= columns)
 				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "cell [" + std::to_string(cell.row()) + ", " +
@@ -283,7 +367,7 @@ namespace
 		// Cells SolidWorks fills itself (a BOM's item numbers, quantities,
 		// part numbers; a hole table's locations) are refused up front where
 		// it says so.
-		if (r.add_rows_size() == 0 && r.delete_rows_size() == 0)
+		if (r.add_rows_size() == 0 && r.delete_rows_size() == 0 && r.revisions_size() == 0)
 			for (const auto& cell : r.cells())
 			{
 				VARIANT_BOOL editable = VARIANT_TRUE;
@@ -306,10 +390,19 @@ namespace
 			for (int c = 0; c < row.cells_size(); ++c)
 				table->put_Text2(count, c, VARIANT_TRUE, FromUtf8(row.cells(c)));
 		}
+		for (const auto& entry : r.revisions())
+			if (grpc::Status status = AddRevisionRow(drawing, table, revisions, entry, addedRevisions); !status.ok())
+				return status;
 		for (auto it = doomed.rbegin(); it != doomed.rend(); ++it)
 		{
 			VARIANT_BOOL ok = VARIANT_FALSE;
-			if (FAILED(table->DeleteRow2(*it + t, VARIANT_TRUE, &ok)) || !ok)
+			if (revisions)
+			{
+				if (FAILED(revisions->DeleteRevision(revisionIds[*it], VARIANT_TRUE, &ok)) || !ok)
+					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't delete row " +
+						std::to_string(*it) + " of " + name);
+			}
+			else if (FAILED(table->DeleteRow2(*it + t, VARIANT_TRUE, &ok)) || !ok)
 				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't delete row " +
 					std::to_string(*it) + " of " + name);
 		}
@@ -348,7 +441,9 @@ namespace
 			if (ToUtf8(now) != r.layer())
 				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "the drawing has no layer \"" + r.layer() + "\"");
 		}
-		if (r.anchor() > 0 && !create)
+		// (InsertRevisionTable2 keeps its template's corner, top right, whatever
+		// it's told; seen 2026-11-01.)
+		if (r.anchor() > 0 && (!create || revisions))
 			table->put_AnchorType(r.anchor());
 		if (r.has_position())
 		{
@@ -398,7 +493,7 @@ grpc::Status SolidWorksService::SetupDrawingTable(grpc::ServerContext* /*context
 	const auto kind = request->kind();
 	if (create)
 	{
-		if (kind == sld_mcp::v1::TABLE_KIND_GENERAL)
+		if (kind == sld_mcp::v1::TABLE_KIND_GENERAL || kind == sld_mcp::v1::TABLE_KIND_REVISION)
 		{
 			const std::string& wanted = request->sheet_name().empty() ? original : request->sheet_name();
 			const DrawingSheet* sheet = FindSheet(sheets, wanted);
@@ -418,11 +513,14 @@ grpc::Status SolidWorksService::SetupDrawingTable(grpc::ServerContext* /*context
 		if (!request->template_file().empty() || kind != sld_mcp::v1::TABLE_KIND_GENERAL)
 		{
 			const auto pref = kind == sld_mcp::v1::TABLE_KIND_BOM ? swFileLocationsBOMTemplates
-				: kind == sld_mcp::v1::TABLE_KIND_HOLE ? swFileLocationsHoleTableTemplates : swFileLocationsGeneralTablesTemplate;
+				: kind == sld_mcp::v1::TABLE_KIND_HOLE ? swFileLocationsHoleTableTemplates
+				: kind == sld_mcp::v1::TABLE_KIND_REVISION ? swFileLocationsRevisionTableTemplates : swFileLocationsGeneralTablesTemplate;
 			const std::wstring extension = kind == sld_mcp::v1::TABLE_KIND_BOM ? L".sldbomtbt"
-				: kind == sld_mcp::v1::TABLE_KIND_HOLE ? L".sldholtbt" : L".sldtbt";
+				: kind == sld_mcp::v1::TABLE_KIND_HOLE ? L".sldholtbt"
+				: kind == sld_mcp::v1::TABLE_KIND_REVISION ? L".sldrevtbt" : L".sldtbt";
 			const std::string name = !request->template_file().empty() ? request->template_file()
-				: kind == sld_mcp::v1::TABLE_KIND_BOM ? "bom-standard" : "standard hole table--letters";
+				: kind == sld_mcp::v1::TABLE_KIND_BOM ? "bom-standard"
+				: kind == sld_mcp::v1::TABLE_KIND_REVISION ? "standard revision block" : "standard hole table--letters";
 			if (grpc::Status status = FindTemplateFile(swApp, pref, name, extension, std::string(KindWord(kind)) + " template",
 				templatePath); !status.ok())
 				return status;
@@ -433,6 +531,18 @@ grpc::Status SolidWorksService::SetupDrawingTable(grpc::ServerContext* /*context
 		if (grpc::Status status = FindTable(sheets, request->name(), request->sheet_name(), found); !status.ok())
 			return status;
 		sheetName = found.sheetName;
+	}
+
+	// Unless each sheet's table stands alone, a later sheet's says "See
+	// Sheet1" and AddRevision adds to the first sheet's, or fails without
+	// one (seen 2026-11-01).
+	if (request->revisions_size() > 0 && !sheets.empty() && sheetName != sheets[0].name)
+	{
+		long style = swRevisionTable_SeeSheet1;
+		ext->GetUserPreferenceInteger(swRevisionTableMultipleSheetStyle, swDetailingNoOptionSpecified, &style);
+		if (style != swRevisionTable_Independent)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "this drawing keeps its revisions on the first sheet, " +
+				sheets[0].name + " (a later sheet's table only says \"See Sheet1\"): add them to that sheet's table");
 	}
 
 	std::unique_ptr<DrawingViewContext> ctx;
@@ -453,8 +563,10 @@ grpc::Status SolidWorksService::SetupDrawingTable(grpc::ServerContext* /*context
 			SheetSetup setup;
 			if (const DrawingSheet* sheet = FindSheet(sheets, sheetName); sheet)
 				ReadSheetSetup(sheet->sheet, setup);
-			const long anchor = request->anchor() > 0 ? request->anchor() : swBOMConfigurationAnchor_TopLeft;
-			const double x = request->has_position() ? request->position().x() : kDefaultTableMargin;
+			const long anchor = request->anchor() > 0 ? request->anchor()
+				: kind == sld_mcp::v1::TABLE_KIND_REVISION ? swBOMConfigurationAnchor_TopRight : swBOMConfigurationAnchor_TopLeft;
+			const double x = request->has_position() ? request->position().x()
+				: kind == sld_mcp::v1::TABLE_KIND_REVISION ? std::max(setup.width - kDefaultTableMargin, kDefaultTableMargin) : kDefaultTableMargin;
 			const double y = request->has_position() ? request->position().y()
 				: std::max(setup.height - kDefaultTableMargin, kDefaultTableMargin);
 			const ATL::CComBSTR templateBstr(templatePath.c_str());
@@ -554,6 +666,28 @@ grpc::Status SolidWorksService::SetupDrawingTable(grpc::ServerContext* /*context
 						"edges holes' circles seen face-on, and the origin a vertex of the same view?)");
 				}
 			}
+			else if (kind == sld_mcp::v1::TABLE_KIND_REVISION)
+			{
+				const DrawingSheet* sheet = FindSheet(sheets, sheetName);
+				if (!sheet || !sheet->sheet)
+					return grpc::Status(grpc::StatusCode::NOT_FOUND, "the drawing has no sheet named \"" + sheetName + "\"");
+				ATL::CComPtr<IRevisionTableAnnotation> existing;
+				if (SUCCEEDED(sheet->sheet->get_RevisionTable(&existing)) && existing)
+					if (ATL::CComQIPtr<ITableAnnotation> other(existing.p); other)
+						return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, sheetName + " has a revision table already (" +
+							TableName(other) + "): add revisions to it with edit_drawing_table");
+				VARIANT_BOOL ok = VARIANT_FALSE;
+				drawing->ActivateView(ATL::CComBSTR(L""), &ok);
+				ATL::CComPtr<IRevisionTableAnnotation> made;
+				HRESULT hr = sheet->sheet->InsertRevisionTable2(VARIANT_FALSE, x, y, anchor, templateBstr,
+					request->revision_symbol() > 0 ? request->revision_symbol() : static_cast<long>(swRevisionTable_TriangleSymbol),
+					VARIANT_FALSE, &made);
+				if (FAILED(hr))
+					return ComError("ISheet::InsertRevisionTable2", hr);
+				table = ATL::CComQIPtr<ITableAnnotation>(made.p);
+				if (!table)
+					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't add the revision table");
+			}
 			else
 			{
 				VARIANT_BOOL ok = VARIANT_FALSE;
@@ -574,9 +708,16 @@ grpc::Status SolidWorksService::SetupDrawingTable(grpc::ServerContext* /*context
 		TableState before;
 		if (!create)
 			before = ReadTableState(table, annotation, *request);
-		grpc::Status status = ApplyTableChange(table, annotation, doc, *request, create);
+		std::vector<long> addedRevisions;
+		grpc::Status status = ApplyTableChange(table, annotation, doc, drawing, *request, create, addedRevisions);
 		if (!status.ok())
 		{
+			if (ATL::CComQIPtr<IRevisionTableAnnotation> revisions(table.p); revisions && !create)
+				for (const long id : addedRevisions)
+				{
+					VARIANT_BOOL ok = VARIANT_FALSE;
+					revisions->DeleteRevision(id, VARIANT_TRUE, &ok);
+				}
 			if (create)
 			{
 				DeleteTable(doc, ext, table);

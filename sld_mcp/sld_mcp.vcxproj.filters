@@ -162,6 +162,9 @@
     <ClCompile Include="service\DrawingViews.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>
+    <ClCompile Include="service\DrawingCenterMarks.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
     <ClCompile Include="service\Editing.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>

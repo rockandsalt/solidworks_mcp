@@ -879,6 +879,23 @@ pub fn annotation_entry(ids: &mut IdRegistry, frames: &HashMap<String, ViewFrame
     if let Some((lo, hi)) = extent(a) {
         obj.insert("box_mm".into(), json!([sheet_mm(lo), sheet_mm(hi)]));
     }
+    if let Some(m) = &a.center_mark {
+        // Its annotation position is only where it was picked.
+        obj.remove("at_mm");
+        obj.remove("at_view_mm");
+        obj.insert(
+            "group".into(),
+            json!(match m.style {
+                3 => "linear",
+                4 => "circular",
+                _ => "single",
+            }),
+        );
+        if let Some(f) = frame {
+            let centers: Vec<Value> = m.centers.iter().map(|c| sheet_mm(f.to_sheet(DVec2::new(c.x, c.y)))).collect();
+            obj.insert("centers_mm".into(), Value::Array(centers));
+        }
+    }
     if let Some(n) = &a.note {
         let mut s = Map::new();
         if n.document_font {
@@ -1044,7 +1061,12 @@ pub fn setup_reply(
     };
     if let Some(p) = &a.position {
         let p = DVec2::new(p.x, p.y);
-        text += &format!(": text's upper-left corner at {} sheet mm", mm2(p));
+        let what = match a.r#type {
+            7 => "the symbol's point",
+            8 => "the reference line's end",
+            _ => "text's upper-left corner",
+        };
+        text += &format!(": {what} at {} sheet mm", mm2(p));
         if a.owner() == proto::AnnotationOwner::View
             && let Some(f) = frames.get(&a.owner_name)
         {
@@ -1084,9 +1106,10 @@ pub fn setup_reply(
     }
     // Arrows go where their entity was picked (SolidWorks numbers the
     // leaders in its own order, so they're matched by place). A datum
-    // symbol has no leader: its triangle sits where it was picked.
+    // symbol has no leader: its triangle sits where it was picked; so does
+    // a surface finish symbol's point with no_leader.
     let tips: Vec<DVec2> = a.leaders.iter().filter_map(|l| l.points.last()).map(|p| DVec2::new(p.x, p.y)).collect();
-    let datum = a.r#type == 2;
+    let datum = a.r#type == 2 || a.leaders.is_empty();
     for (i, asked) in request.arrow_points.iter().enumerate().filter(|_| !datum) {
         let asked = DVec2::new(asked.x, asked.y);
         if !tips.iter().any(|t| t.distance(asked) <= TIP_SLACK) {

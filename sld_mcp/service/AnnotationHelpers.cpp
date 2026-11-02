@@ -388,6 +388,88 @@ namespace sld_mcp::service
 			}
 	}
 
+	namespace
+	{
+		std::string SurfaceFinishText(ISFSymbol* symbol, long which)
+		{
+			ATL::CComBSTR text;
+			symbol->GetText(which, &text);
+			return ToUtf8(text);
+		}
+
+		// ISO shows a roughness from the value slots and ANSI from the
+		// maximum / minimum ones (rendered 2026-11-01), so both are written.
+		std::string SurfaceFinishText(ISFSymbol* symbol, long first, long second)
+		{
+			const std::string text = SurfaceFinishText(symbol, first);
+			return text.empty() ? SurfaceFinishText(symbol, second) : text;
+		}
+
+		void DescribeSurfaceFinish(ISFSymbol* symbol, sld_mcp::v1::SurfaceFinishSymbol* out)
+		{
+			long value = 0;
+			if (SUCCEEDED(symbol->GetSymbolType(&value)))
+				out->set_symbol_type(static_cast<int32_t>(value));
+			value = 0;
+			if (SUCCEEDED(symbol->GetDirectionOfLay(&value)))
+				out->set_lay(static_cast<int32_t>(value));
+			out->set_roughness(SurfaceFinishText(symbol, swSFSymbolRoughnessValue1, swSFSymbolMaximumRoughness));
+			out->set_roughness_min(SurfaceFinishText(symbol, swSFSymbolRoughnessValue2, swSFSymbolMinimumRoughness));
+			out->set_production_method(SurfaceFinishText(symbol, swSFSymbolProductionMethod));
+			out->set_sampling_length(SurfaceFinishText(symbol, swSFSymbolSamplingLength));
+			out->set_allowance(SurfaceFinishText(symbol, swSFSymbolMaterialRemovalAllowance));
+		}
+
+		std::string WeldText(IWeldSymbol* symbol, long which)
+		{
+			ATL::CComBSTR text;
+			symbol->GetText(which, &text);
+			return ToUtf8(text);
+		}
+
+		void DescribeWeldSide(IWeldSymbol* symbol, bool top, sld_mcp::v1::WeldSide* out)
+		{
+			out->set_size(WeldText(symbol, top ? swWeldLeftTextAbove : swWeldLeftTextBelow));
+			out->set_symbol(WeldText(symbol, top ? swWeldSymbolTextAbove : swWeldSymbolTextBelow));
+			out->set_length(WeldText(symbol, top ? swWeldRightTextAbove : swWeldRightTextBelow));
+			long contour = 0;
+			if (SUCCEEDED(symbol->GetContour(top ? VARIANT_TRUE : VARIANT_FALSE, &contour)))
+				out->set_contour(static_cast<int32_t>(contour));
+		}
+
+		void DescribeWeld(IWeldSymbol* symbol, sld_mcp::v1::WeldSymbolSpec* out)
+		{
+			DescribeWeldSide(symbol, true, out->mutable_top());
+			DescribeWeldSide(symbol, false, out->mutable_bottom());
+			long value = 0;
+			out->set_symmetric(SUCCEEDED(symbol->GetSymmetric(&value)) && value == swWeldSymmetric);
+			VARIANT_BOOL flag = VARIANT_FALSE;
+			out->set_all_around(SUCCEEDED(symbol->GetPeripheral(&flag)) && flag != VARIANT_FALSE);
+			value = 0;
+			out->set_field_weld(SUCCEEDED(symbol->GetFieldWeld(&value)) && value != swFieldWeldNone);
+			flag = VARIANT_FALSE;
+			if (SUCCEEDED(symbol->GetProcess(&flag)) && flag != VARIANT_FALSE)
+				out->set_process(WeldText(symbol, swWeldProcessText));
+		}
+
+		void DescribeCenterMark(ICenterMark* mark, sld_mcp::v1::CenterMarkInfo* out)
+		{
+			long value = 0;
+			if (SUCCEEDED(mark->get_Style(&value)))
+				out->set_style(static_cast<int32_t>(value));
+			long count = 0;
+			mark->get_GroupCount(&count);
+			for (long i = 0; i < count; ++i)
+			{
+				ATL::CComVariant position;
+				if (FAILED(mark->GetPosition(i, &position)))
+					continue;
+				if (const std::vector<double> p = comvariant::ToDoubles(position); p.size() >= 3)
+					SetVec3(out->add_centers(), p.data());
+			}
+		}
+	}
+
 	void DescribeAnnotation(IAnnotation* annotation, PersistIds& ids, ComponentList* components,
 		sld_mcp::v1::AnnotationInfo* info)
 	{
@@ -497,7 +579,18 @@ namespace sld_mcp::service
 			break;
 		case swSFSymbol:
 			if (ATL::CComQIPtr<ISFSymbol> finish(specific.p); finish)
+			{
 				AddIndexedTexts(finish.p, info);
+				DescribeSurfaceFinish(finish, info->mutable_surface_finish());
+			}
+			break;
+		case swWeldSymbol:
+			if (ATL::CComQIPtr<IWeldSymbol> weld(specific.p); weld)
+				DescribeWeld(weld, info->mutable_weld());
+			break;
+		case swCenterMarkSym:
+			if (ATL::CComQIPtr<ICenterMark> mark(specific.p); mark)
+				DescribeCenterMark(mark, info->mutable_center_mark());
 			break;
 		case swNote:
 			if (ATL::CComQIPtr<INote> note(specific.p); note)
@@ -685,6 +778,23 @@ namespace sld_mcp::service
 				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a datum letter is a short text such as \"A\"");
 			return grpc::Status::OK;
 		}
+		if (symbol.has_surface_finish())
+		{
+			const sld_mcp::v1::SurfaceFinishSymbol& s = symbol.surface_finish();
+			if (s.symbol_type() < swSFBasic || s.symbol_type() > swSFJIS_Machining_Req)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "unknown surface finish symbol " + std::to_string(s.symbol_type()));
+			if (s.lay() < swSFNone || s.lay() > swSFParticulate)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "unknown lay " + std::to_string(s.lay()));
+			return grpc::Status::OK;
+		}
+		if (symbol.has_weld())
+		{
+			const sld_mcp::v1::WeldSymbolSpec& w = symbol.weld();
+			for (const auto* side : { &w.top(), &w.bottom() })
+				if (side->contour() < 0 || side->contour() > swWeldContourConcave)
+					return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "unknown weld contour " + std::to_string(side->contour()));
+			return grpc::Status::OK;
+		}
 		if (!symbol.has_gtol())
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "say what to add: a feature control frame or a datum symbol");
 		const sld_mcp::v1::AnnotationGtol& g = symbol.gtol();
@@ -748,9 +858,128 @@ namespace sld_mcp::service
 		return grpc::Status::OK;
 	}
 
-	grpc::Status InsertGdtSymbol(IModelDoc2* doc, IModelDocExtension* ext, const sld_mcp::v1::GdtSymbol& symbol,
-		ATL::CComPtr<IAnnotation>& out)
+	namespace
 	{
+		// A logical text and the slots it goes in: fine if one of them takes it.
+		bool SetSurfaceFinishText(ISFSymbol* symbol, const std::string& text, std::initializer_list<long> slots)
+		{
+			if (text.empty())
+				return true;
+			bool any = false;
+			for (const long slot : slots)
+			{
+				VARIANT_BOOL ok = VARIANT_FALSE;
+				symbol->SetText(slot, FromUtf8(text), &ok);
+				any = any || SurfaceFinishText(symbol, slot) == text;
+			}
+			return any;
+		}
+
+		grpc::Status InsertSurfaceFinish(IModelDoc2* doc, IModelDocExtension* ext, const sld_mcp::v1::SurfaceFinishSymbol& s,
+			const Eigen::Vector3d& at, ATL::CComPtr<IAnnotation>& out)
+		{
+			const ATL::CComBSTR none(L"");
+			ATL::CComPtr<ISFSymbol> symbol;
+			HRESULT hr = ext->InsertSurfaceFinishSymbol3(s.symbol_type(), s.no_leader() ? swNO_LEADER : swSTRAIGHT, at.x(), at.y(), at.z(),
+				s.lay(), swCLOSED_ARROWHEAD, none, none, none, none, none, none, none, &symbol);
+			if (FAILED(hr))
+				return ComError("IModelDocExtension::InsertSurfaceFinishSymbol3", hr);
+			ATL::CComPtr<IAnnotation> annotation;
+			if (!symbol || FAILED(symbol->IGetAnnotation(&annotation)) || !annotation)
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't add the surface finish symbol");
+			long type = -1, lay = -1;
+			symbol->GetSymbolType(&type);
+			symbol->GetDirectionOfLay(&lay);
+			grpc::Status status = grpc::Status::OK;
+			if (type != s.symbol_type() || lay != s.lay())
+				status = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't take the symbol's type or lay");
+			else if (!SetSurfaceFinishText(symbol, s.roughness(), { swSFSymbolRoughnessValue1, swSFSymbolMaximumRoughness }) ||
+				!SetSurfaceFinishText(symbol, s.roughness_min(), { swSFSymbolRoughnessValue2, swSFSymbolMinimumRoughness }) ||
+				!SetSurfaceFinishText(symbol, s.production_method(), { swSFSymbolProductionMethod }) ||
+				!SetSurfaceFinishText(symbol, s.sampling_length(), { swSFSymbolSamplingLength }) ||
+				!SetSurfaceFinishText(symbol, s.allowance(), { swSFSymbolMaterialRemovalAllowance }))
+				status = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't take the symbol's texts");
+			if (!status.ok())
+			{
+				DeleteAnnotations(doc, ext, { annotation });
+				return status;
+			}
+			out = annotation;
+			return grpc::Status::OK;
+		}
+
+		bool SetWeldSide(IWeldSymbol* symbol, bool top, const sld_mcp::v1::WeldSide& side)
+		{
+			VARIANT_BOOL ok = VARIANT_FALSE;
+			const long contour = side.contour() > 0 ? side.contour() : static_cast<long>(swWeldContourNone);
+			symbol->SetText(top ? VARIANT_TRUE : VARIANT_FALSE, FromUtf8(side.size()), FromUtf8(side.symbol()), FromUtf8(side.length()),
+				ATL::CComBSTR(L""), contour, &ok);
+			long now = 0;
+			symbol->GetContour(top ? VARIANT_TRUE : VARIANT_FALSE, &now);
+			return ok && now == contour && WeldText(symbol, top ? swWeldLeftTextAbove : swWeldLeftTextBelow) == side.size() &&
+				WeldText(symbol, top ? swWeldSymbolTextAbove : swWeldSymbolTextBelow) == side.symbol() &&
+				WeldText(symbol, top ? swWeldRightTextAbove : swWeldRightTextBelow) == side.length();
+		}
+
+		grpc::Status SetUpWeld(IWeldSymbol* symbol, const sld_mcp::v1::WeldSymbolSpec& w)
+		{
+			if (!SetWeldSide(symbol, true, w.top()) || !SetWeldSide(symbol, false, w.bottom()))
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't take the weld symbol's texts");
+			// The dashed line below the solid one, so `top` is on the solid
+			// line (SolidWorks swaps the sides with it above; rendered 2026-11-01).
+			VARIANT_BOOL ok = VARIANT_FALSE;
+			const long wanted = w.symmetric() ? swWeldSymmetric : swWeldDashedLineOnBottom;
+			symbol->SetSymmetric(wanted, &ok);
+			long now = 0;
+			if (FAILED(symbol->GetSymmetric(&now)) || now != wanted)
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't take the weld symbol's reference line");
+			symbol->SetPeripheral(w.all_around() ? VARIANT_TRUE : VARIANT_FALSE, &ok);
+			VARIANT_BOOL flag = VARIANT_FALSE;
+			if (FAILED(symbol->GetPeripheral(&flag)) || (flag != VARIANT_FALSE) != w.all_around())
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't take the all-around circle");
+			symbol->SetFieldWeld(w.field_weld() ? swFieldWeldUp : swFieldWeldNone, &ok);
+			now = 0;
+			if (FAILED(symbol->GetFieldWeld(&now)) || (now != swFieldWeldNone) != w.field_weld())
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't take the field weld flag");
+			if (!w.process().empty())
+			{
+				symbol->SetProcess(VARIANT_TRUE, FromUtf8(w.process()), VARIANT_FALSE, &ok);
+				if (WeldText(symbol, swWeldProcessText) != w.process())
+					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't take the weld process");
+			}
+			return grpc::Status::OK;
+		}
+
+		grpc::Status InsertWeld(IModelDoc2* doc, IModelDocExtension* ext, const sld_mcp::v1::WeldSymbolSpec& w,
+			ATL::CComPtr<IAnnotation>& out)
+		{
+			ATL::CComPtr<IDispatch> made;
+			HRESULT hr = doc->InsertWeldSymbol3(&made);
+			if (FAILED(hr))
+				return ComError("IModelDoc2::InsertWeldSymbol3", hr);
+			ATL::CComQIPtr<IWeldSymbol> symbol(made.p);
+			ATL::CComPtr<IAnnotation> annotation;
+			if (!symbol || FAILED(symbol->IGetAnnotation(&annotation)) || !annotation)
+				// Null with nothing selected (seen 2026-11-01).
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+					"SolidWorks didn't add the weld symbol (it needs an edge or face to go on)");
+			if (grpc::Status status = SetUpWeld(symbol, w); !status.ok())
+			{
+				DeleteAnnotations(doc, ext, { annotation });
+				return status;
+			}
+			out = annotation;
+			return grpc::Status::OK;
+		}
+	}
+
+	grpc::Status InsertGdtSymbol(IModelDoc2* doc, IModelDocExtension* ext, const sld_mcp::v1::GdtSymbol& symbol,
+		const Eigen::Vector3d& at, ATL::CComPtr<IAnnotation>& out)
+	{
+		if (symbol.has_surface_finish())
+			return InsertSurfaceFinish(doc, ext, symbol.surface_finish(), at, out);
+		if (symbol.has_weld())
+			return InsertWeld(doc, ext, symbol.weld(), out);
 		ATL::CComPtr<IDispatch> made;
 		HRESULT hr = symbol.has_datum() ? doc->InsertDatumTag2(&made) : doc->InsertGtol(&made);
 		if (FAILED(hr))

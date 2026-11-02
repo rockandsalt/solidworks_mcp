@@ -2,9 +2,10 @@
 //! add_drawing_table, edit_drawing_table and add_balloons.
 //!
 //! SolidWorks makes the tables (a bill of materials from an assembly view,
-//! a hole table from holes picked in a view, a general table of text) and
-//! keeps a BOM's rows and a hole table's locations up to date with the
-//! model; balloons point at components and show their BOM item numbers.
+//! a hole table from holes picked in a view, a general table of text, a
+//! sheet's revision table) and keeps a BOM's rows and a hole table's
+//! locations up to date with the model; balloons point at components and
+//! show their BOM item numbers.
 //! What happens here: turning ids and names into requests, a table's box on
 //! the sheet from its anchor corner and row / column sizes, a free spot for
 //! a new table clear of the views, the other tables and the sheet format's
@@ -67,8 +68,10 @@ pub enum TableKindParam {
     Bom,
     /// Hole table: the holes picked in a view with their X / Y from an origin vertex.
     Hole,
-    /// Rows and columns of text (a coordinate list, a revision list, ...).
+    /// Rows and columns of text (a coordinate list, ...).
     General,
+    /// The sheet's revision table: one row per revision, lettered by SolidWorks.
+    Revision,
 }
 
 impl TableKindParam {
@@ -77,6 +80,7 @@ impl TableKindParam {
             TableKindParam::Bom => proto::TableKind::Bom,
             TableKindParam::Hole => proto::TableKind::Hole,
             TableKindParam::General => proto::TableKind::General,
+            TableKindParam::Revision => proto::TableKind::Revision,
         }
     }
 }
@@ -202,6 +206,11 @@ fn column_type_name(t: i32) -> Option<&'static str> {
         205 => "unit_of_measure",
         206 => "equation",
         207 => "component_reference",
+        301 => "zone",
+        302 => "revision",
+        303 => "description",
+        304 => "date",
+        305 => "approved",
         _ => return None,
     })
 }
@@ -304,31 +313,104 @@ pub struct InspectDrawingTablesParams {
     pub include_format_lines: bool,
 }
 
+/// The shape of a revision table's symbols.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RevisionSymbolShape {
+    Circle,
+    Square,
+    Triangle,
+    Hexagon,
+}
+
+impl RevisionSymbolShape {
+    /// swRevisionTableSymbolShape_e
+    fn sw(self) -> i32 {
+        match self {
+            RevisionSymbolShape::Circle => 1,
+            RevisionSymbolShape::Square => 2,
+            RevisionSymbolShape::Triangle => 3,
+            RevisionSymbolShape::Hexagon => 4,
+        }
+    }
+}
+
+/// A revision to add at the bottom of a revision table.
+#[derive(Debug, Default, Clone, Deserialize, schemars::JsonSchema)]
+pub struct RevisionParams {
+    /// The revision's name. Default: SolidWorks' next letter (A, B, ...), which is what its own
+    /// count goes on with whatever is typed here.
+    #[serde(default)]
+    pub revision: Option<String>,
+    /// What changed.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// The zone, e.g. "B3". The stock "no zone column" template has none.
+    #[serde(default)]
+    pub zone: Option<String>,
+    /// Default: today.
+    #[serde(default)]
+    pub date: Option<String>,
+    #[serde(default)]
+    pub approved: Option<String>,
+    /// Revision symbols to place near what changed, [x, y] sheet mm each: they show this
+    /// revision, on the table's shape, and are notes (edit_drawing_annotation moves them).
+    #[serde(default)]
+    pub symbols_at_mm: Vec<[f64; 2]>,
+}
+
+fn revision_entries(revisions: &[RevisionParams]) -> Result<Vec<proto::RevisionEntry>, McpError> {
+    if revisions.len() > MAX_ROWS {
+        return Err(invalid(format!("at most {MAX_ROWS} revisions per call")));
+    }
+    revisions
+        .iter()
+        .map(|r| {
+            Ok(proto::RevisionEntry {
+                revision: text(r.revision.as_deref()),
+                zone: text(r.zone.as_deref()),
+                description: text(r.description.as_deref()),
+                date: text(r.date.as_deref()),
+                approved: text(r.approved.as_deref()),
+                symbols: r.symbols_at_mm.iter().map(|at| point(*at, "symbols_at_mm").map(vec3)).collect::<Result<_, _>>()?,
+            })
+        })
+        .collect()
+}
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct AddDrawingTableParams {
     /// bom (bill of materials of an assembly view), hole (hole table: holes of a view with
-    /// their X / Y from an origin vertex and their size) or general (rows of text you give).
+    /// their X / Y from an origin vertex and their size), general (rows of text you give) or
+    /// revision (the sheet's revision table).
     pub kind: TableKindParam,
     /// bom / hole: the view it's of, e.g. "Drawing View1". The table goes on its sheet.
     #[serde(default)]
     pub view: Option<String>,
-    /// general: the sheet it goes on. Default: the active sheet.
+    /// general / revision: the sheet it goes on. Default: the active sheet.
     #[serde(default)]
     pub sheet: Option<String>,
     /// Where the table's `anchor` corner goes, [x, y] sheet mm from the sheet's lower-left
     /// corner. Default: a free spot clear of the views, other tables and the title block (a BOM
-    /// toward the top right, a hole table near its view, a general table toward the top left).
+    /// or revision table toward the top right, a hole table near its view, a general table toward
+    /// the top left).
     #[serde(default)]
     pub at_mm: Option<[f64; 2]>,
-    /// Which corner at_mm is: top_left (default), top_right, bottom_left, bottom_right. The
-    /// table grows away from it as rows are added.
+    /// Which corner at_mm is: top_left (default; revision: top_right), top_right, bottom_left,
+    /// bottom_right. The table grows away from it as rows are added.
     #[serde(default)]
     pub anchor: Option<Anchor>,
     /// A table template file: an absolute path or a name in SolidWorks' table template folder
-    /// (e.g. "bom-material", "standard hole table--numbers"). Default: bom-standard, standard
-    /// hole table--letters, none (general).
+    /// (e.g. "bom-material", "standard hole table--numbers", "no zone column"). Default:
+    /// bom-standard, standard hole table--letters, none (general), standard revision block.
     #[serde(default)]
     pub template: Option<String>,
+    /// revision: revisions to start with, from the top.
+    #[serde(default)]
+    pub revisions: Vec<RevisionParams>,
+    /// revision: the shape of its symbols: circle, square, triangle (default), hexagon.
+    #[serde(default)]
+    pub revision_symbol: Option<RevisionSymbolShape>,
     /// bom: top_level (default; a subassembly is one row), parts_only, indented.
     #[serde(default)]
     pub bom_type: Option<BomType>,
@@ -386,9 +468,13 @@ pub struct EditDrawingTableParams {
     /// General tables: rows to add at the bottom, with their text.
     #[serde(default)]
     pub add_rows: Vec<Vec<String>>,
-    /// General tables: rows to delete, by their index before this change.
+    /// General tables: rows to delete, by their index before this change. Revision tables:
+    /// revisions to delete with their symbols, by their row (the column titles are row 0).
     #[serde(default)]
     pub delete_rows: Vec<i32>,
+    /// Revision tables: revisions to add at the bottom, one row each.
+    #[serde(default)]
+    pub add_revisions: Vec<RevisionParams>,
     /// Column widths in mm from the first column; 0 keeps one.
     #[serde(default)]
     pub column_widths_mm: Vec<f64>,
@@ -603,7 +689,7 @@ impl Obstacles {
 fn placement_goal(sheet: &proto::SheetInfo, kind: TableKindParam, view: Option<&str>) -> (Anchor, DVec2) {
     let size = DVec2::new(sheet.width, sheet.height);
     match kind {
-        TableKindParam::Bom => (Anchor::TopRight, size),
+        TableKindParam::Bom | TableKindParam::Revision => (Anchor::TopRight, size),
         TableKindParam::Hole => {
             let outline = view.and_then(|v| sheet.views.iter().find(|x| x.name == v)).and_then(note::outline);
             match outline {
@@ -670,12 +756,12 @@ pub fn add_request(ids: &IdRegistry, params: &AddDrawingTableParams) -> Result<p
     if let Some(at) = params.at_mm {
         request.position = Some(vec3(point(at, "at_mm")?));
     }
-    let needs_view = params.kind != TableKindParam::General;
+    let needs_view = matches!(params.kind, TableKindParam::Bom | TableKindParam::Hole);
     if needs_view && view.is_empty() {
         return Err(invalid("say which view the table is of (`view`)"));
     }
     if !needs_view && !view.is_empty() {
-        return Err(invalid("a general table isn't of a view: give `sheet` (or nothing for the active sheet)"));
+        return Err(invalid("a general or revision table isn't of a view: give `sheet` (or nothing for the active sheet)"));
     }
     if needs_view && !request.sheet_name.is_empty() {
         return Err(invalid("a BOM / hole table goes on its view's sheet; leave `sheet` out"));
@@ -690,7 +776,12 @@ pub fn add_request(ids: &IdRegistry, params: &AddDrawingTableParams) -> Result<p
         "hole",
     )?;
     only(params.rows.is_empty() && params.columns.is_none() || params.kind == TableKindParam::General, "rows / columns", "general")?;
+    only(params.revisions.is_empty() && params.revision_symbol.is_none() || params.kind == TableKindParam::Revision, "revisions / revision_symbol", "revision")?;
     match params.kind {
+        TableKindParam::Revision => {
+            request.revisions = revision_entries(&params.revisions)?;
+            request.revision_symbol = params.revision_symbol.map(RevisionSymbolShape::sw).unwrap_or(0);
+        }
         TableKindParam::Bom => {
             request.bom_type = params.bom_type.map(BomType::sw).unwrap_or(0);
             request.configuration = text(params.configuration.as_deref());
@@ -748,6 +839,7 @@ pub fn edit_request(params: &EditDrawingTableParams) -> Result<proto::SetupDrawi
             .collect(),
         add_rows: params.add_rows.iter().map(|r| proto::TableRowText { cells: r.clone() }).collect(),
         delete_rows: params.delete_rows.clone(),
+        revisions: revision_entries(&params.add_revisions)?,
         column_widths: widths(&params.column_widths_mm)?,
         title: params.title.clone(),
         layer: params.layer.clone(),
@@ -758,6 +850,7 @@ pub fn edit_request(params: &EditDrawingTableParams) -> Result<proto::SetupDrawi
     let changes = !request.cells.is_empty()
         || !request.add_rows.is_empty()
         || !request.delete_rows.is_empty()
+        || !request.revisions.is_empty()
         || !request.column_widths.is_empty()
         || request.title.is_some()
         || request.layer.is_some()
@@ -765,8 +858,8 @@ pub fn edit_request(params: &EditDrawingTableParams) -> Result<proto::SetupDrawi
         || request.position.is_some()
         || params.move_by_mm.is_some();
     if !changes {
-        return Err(invalid("nothing to change: give cells, add_rows, delete_rows, column_widths_mm, title, layer, \
-                            at_mm / move_by_mm or anchor"));
+        return Err(invalid("nothing to change: give cells, add_rows, delete_rows, add_revisions, column_widths_mm, title, \
+                            layer, at_mm / move_by_mm or anchor"));
     }
     if params.add_rows.len() + params.delete_rows.len() > MAX_ROWS {
         return Err(invalid(format!("at most {MAX_ROWS} rows added or deleted per call")));
@@ -896,6 +989,9 @@ pub fn table_json(t: &proto::TableInfo) -> Value {
     }
     if !t.layer.is_empty() {
         obj.insert("layer".into(), json!(t.layer));
+    }
+    if !t.current_revision.is_empty() {
+        obj.insert("current_revision".into(), json!(t.current_revision));
     }
     if t.r#type == 2 {
         let mut bom = Map::new();
@@ -1061,6 +1157,7 @@ pub fn setup_reply(
     let what = match kind {
         "bom" => "bill of materials",
         "hole" => "hole table",
+        "revision" => "revision table",
         _ => "table",
     };
     let rows = t.rows.len().saturating_sub(t.header_rows.max(0) as usize);
@@ -1092,6 +1189,13 @@ pub fn setup_reply(
              \"Description\" property (custom_properties sets it).",
             file_name(&t.bom_model_file),
             t.bom_configuration
+        ));
+    }
+    if kind == "revision" && !request.revisions.is_empty() {
+        lines.push(format!(
+            "Revision {}. A title block's revision is a property of its own, which SolidWorks doesn't update from this \
+             table: drawing_properties revision sets it.",
+            t.current_revision
         ));
     }
     if !reply.hole_tags.is_empty() {
@@ -1270,6 +1374,8 @@ mod tests {
             at_mm: Some([20.0, 100.0]),
             anchor: None,
             template: None,
+            revisions: vec![],
+            revision_symbol: None,
             bom_type: None,
             configuration: None,
             origin: None,

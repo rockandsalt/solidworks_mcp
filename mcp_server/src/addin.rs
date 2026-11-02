@@ -593,6 +593,22 @@ impl AddinClient {
         Ok(client.add_balloons(request).await?.into_inner())
     }
 
+    pub async fn add_center_marks(
+        &self,
+        request: proto::AddCenterMarksRequest,
+    ) -> Result<proto::AddCenterMarksResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.add_center_marks(request).await?.into_inner())
+    }
+
+    pub async fn add_centerlines(
+        &self,
+        request: proto::AddCenterlinesRequest,
+    ) -> Result<proto::AddCenterMarksResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.add_centerlines(request).await?.into_inner())
+    }
+
     pub async fn draw_sheet_format(
         &self,
         request: proto::DrawSheetFormatRequest,
