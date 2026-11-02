@@ -1134,14 +1134,6 @@ namespace
 		}
 	};
 
-	bool SelectDrawingView(IModelDoc2* doc, IModelDocExtension* ext, const std::string& name)
-	{
-		doc->ClearSelection2(VARIANT_TRUE);
-		VARIANT_BOOL selected = VARIANT_FALSE;
-		return SUCCEEDED(ext->SelectByID2(FromUtf8(name), ATL::CComBSTR(L"DRAWINGVIEW"), 0.0, 0.0, 0.0, VARIANT_FALSE,
-			0, nullptr, swSelectOptionDefault, &selected)) && selected;
-	}
-
 	// Applies `c` to `view` step by step, each read back: model,
 	// configuration, orientation, scale, display, position, name. Stops at
 	// the first step that fails, unless `bestEffort` (putting a view back).
@@ -1294,14 +1286,6 @@ namespace
 				return first;
 		}
 		return first;
-	}
-
-	bool DeleteDrawingView(IModelDoc2* doc, IModelDocExtension* ext, const std::string& name)
-	{
-		VARIANT_BOOL deleted = VARIANT_FALSE;
-		const bool ok = SelectDrawingView(doc, ext, name) && SUCCEEDED(ext->DeleteSelection2(0, &deleted)) && deleted;
-		doc->ClearSelection2(VARIANT_TRUE);
-		return ok;
 	}
 }
 

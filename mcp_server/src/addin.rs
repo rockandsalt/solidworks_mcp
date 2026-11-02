@@ -532,6 +532,24 @@ impl AddinClient {
         Ok(client.setup_drawing_view(request).await?.into_inner())
     }
 
+    /// Positions in sheet meters.
+    pub async fn derive_drawing_view(
+        &self,
+        request: proto::DeriveDrawingViewRequest,
+    ) -> Result<proto::SetupDrawingViewResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.derive_drawing_view(request).await?.into_inner())
+    }
+
+    /// Positions in sheet meters.
+    pub async fn shape_drawing_view(
+        &self,
+        request: proto::ShapeDrawingViewRequest,
+    ) -> Result<proto::SetupDrawingViewResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.shape_drawing_view(request).await?.into_inner())
+    }
+
     /// Positions in sheet meters (or a view's own coordinates).
     pub async fn setup_drawing_annotation(
         &self,

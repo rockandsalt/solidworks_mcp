@@ -373,6 +373,7 @@
     <ClCompile Include="service\Properties.cpp" />
     <ClCompile Include="service\DrawingHelpers.cpp" />
     <ClCompile Include="service\Drawings.cpp" />
+    <ClCompile Include="service\DrawingViews.cpp" />
     <ClCompile Include="service\Editing.cpp" />
     <ClCompile Include="service\Extrude.cpp" />
     <ClCompile Include="service\Fillet.cpp" />

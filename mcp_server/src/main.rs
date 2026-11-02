@@ -37,6 +37,7 @@ mod sketch;
 mod sweep;
 mod table;
 mod tolerance;
+mod derived_view;
 mod undo;
 mod units;
 mod view;
@@ -2688,6 +2689,128 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "Add a view projected from another view of the active drawing: a side, top \
+                       or bottom view, aligned with its parent and following its scale and \
+                       display. `view`: the parent (inspect_drawing lists them). `side`: right, \
+                       left, above or below it (default right) -- which face that shows follows \
+                       the sheet's projection (first / third angle). `at_mm`: the view's center, \
+                       [x, y] sheet mm, instead of `side` (it stays aligned, so only one \
+                       coordinate counts). Default placement clears the sheet's other views. \
+                       Reports which model axes point right / up."
+    )]
+    async fn create_projected_view(
+        &self,
+        Parameters(params): Parameters<derived_view::ProjectedViewParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let drawing = self.inspect_views().await?;
+        let plan = derived_view::projected_plan(&drawing, &params)?;
+        self.derive_drawing_view(plan).await
+    }
+
+    #[tool(
+        description = "Add a section view: `view` cut along a straight line, seen from one side, \
+                       with SolidWorks' hatching and the A-A arrows and label. The line: `through` \
+                       (a view entity id from inspect_drawing: a circle's center, a line's middle, \
+                       ...) or `through_mm` ([x, y] sheet mm; default the view's middle), at \
+                       `angle_deg` from the sheet's x axis (default 90, a vertical line; 0 = \
+                       horizontal). `side` (right, left, above, below; or `at_mm`) is where the \
+                       view goes (default the side with more room), and that sets which way it \
+                       looks by the sheet's projection: in third angle a view to the right looks \
+                       left, at what's left of the line; `flip_direction` looks the other way. \
+                       `label` (default the next free letter; it names the view, \"Section View \
+                       A-A\"), `surface_only` (only the cut faces, nothing behind them), `depth_mm` \
+                       (show only this far behind the cut). \
+                       Assembly views cut every component. Follows its parent's scale."
+    )]
+    async fn create_section_view(
+        &self,
+        Parameters(params): Parameters<derived_view::SectionViewParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let drawing = self.inspect_views().await?;
+        let plan = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            derived_view::section_plan(&drawing, &ids, &cache, &params)?
+        };
+        self.derive_drawing_view(plan).await
+    }
+
+    #[tool(
+        description = "Add a detail view: a circled part of `view` shown bigger, with SolidWorks' \
+                       circle and label on the parent. The circle: `center` (a view entity id from \
+                       inspect_drawing) or `center_mm` ([x, y] sheet mm), and `radius_mm` measured \
+                       on the sheet. `scale`: \"4:1\", ... (default twice the parent's). `at_mm`: \
+                       the view's center (default a free spot clear of the other views). `style`: \
+                       standard, broken, leader, no_leader, connected. `outline`: profile (default, \
+                       the circle), full, jagged or none. `label` (default the next free letter; it \
+                       names the view, \"Detail View A (2 : 1)\")."
+    )]
+    async fn create_detail_view(
+        &self,
+        Parameters(params): Parameters<derived_view::DetailViewParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let drawing = self.inspect_views().await?;
+        let plan = {
+            let cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            derived_view::detail_plan(&drawing, &cache, &params)?
+        };
+        self.derive_drawing_view(plan).await
+    }
+
+    #[tool(
+        description = "Add an auxiliary view: `view` seen square onto an inclined edge, which shows \
+                       an inclined face at its true shape, with an arrow and letter on the parent. \
+                       `edge`: a straight edge from inspect_drawing with the view (\"view_edge:3\"), \
+                       not along the sheet's axes (a projected view does those). `flip`: look from \
+                       the edge's other side. `at_mm`: the view's center (it stays aligned with the \
+                       edge's normal; default clear of the other views on the side the projection \
+                       puts it). `label` (default the next free letter), `name`."
+    )]
+    async fn create_auxiliary_view(
+        &self,
+        Parameters(params): Parameters<derived_view::AuxiliaryViewParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let drawing = self.inspect_views().await?;
+        let plan = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            derived_view::auxiliary_plan(&drawing, &ids, &cache, &params)?
+        };
+        self.derive_drawing_view(plan).await
+    }
+
+    #[tool(
+        description = "Crop a view of the active drawing to a circle or rectangle, hiding the rest \
+                       of it. `circle_center_mm` + `circle_radius_mm`, or `rectangle_mm` ([[x1, y1], \
+                       [x2, y2]] opposite corners), all in sheet mm. A crop the view has is replaced. \
+                       `outline`: profile (default), jagged or none. `remove`: take the crop off. A \
+                       detail or broken view can't be cropped."
+    )]
+    async fn crop_view(
+        &self,
+        Parameters(params): Parameters<derived_view::CropViewParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.shape_drawing_view(derived_view::crop_request(&params)?).await
+    }
+
+    #[tool(
+        description = "Break a view of the active drawing: hide a range of a long part and close \
+                       the gap, to show it on less paper; dimensions keep the true lengths. \
+                       `breaks`: ranges to hide, each {along: \"x\" or \"y\" (sheet axis), from_mm, \
+                       to_mm}, in the sheet coordinates inspect_drawing lists for the view's entities \
+                       -- those don't move when a view is broken, also for a view already broken. \
+                       `style`: straight, zigzag (default), curve, small_zigzag, jagged. Adds to the \
+                       breaks it has. `remove`: take all its breaks off. A cropped view can't be \
+                       broken. render_drawing shows the result."
+    )]
+    async fn break_view(
+        &self,
+        Parameters(params): Parameters<derived_view::BreakViewParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.shape_drawing_view(derived_view::break_request(&params)?).await
+    }
+
+    #[tool(
         description = "List the annotations of the active drawing -- notes, dimensions, balloons, \
                        ... -- with what each belongs to (`in`): a view (it moves with the view), \
                        the sheet (stays put on the paper) or the sheet format (the border / title \
@@ -4759,6 +4882,67 @@ impl SolidWorksTools {
             cache.sheet_changed(&sheet.views, rescaled);
         }
         Ok(CallToolResult::success(vec![ContentBlock::text(view::reply_text(&request, &reply, asked_at, moved_to))]))
+    }
+
+    /// The active drawing's sheets and views as they are now, for working
+    /// out where a derived view goes.
+    async fn inspect_views(&self) -> Result<proto::InspectDrawingResponse, McpError> {
+        self.addin
+            .inspect_drawing(proto::InspectDrawingRequest { skip_sheet_format: true, ..Default::default() })
+            .await
+            .map_err(|status| self.addin_error(status))
+    }
+
+    /// create_projected_view & co.: the RPC, then, unless placed by the
+    /// caller, the new view is moved clear of the other views.
+    async fn derive_drawing_view(&self, plan: derived_view::Plan) -> Result<CallToolResult, McpError> {
+        let mut reply = self
+            .addin
+            .derive_drawing_view(plan.request.clone())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let mut moved_to = None;
+        if let Some(spot) = reply.sheet.as_ref().and_then(|s| plan.clear_spot(s, &reply.view_name)) {
+            let moved = self
+                .addin
+                .setup_drawing_view(proto::SetupDrawingViewRequest {
+                    view_name: reply.view_name.clone(),
+                    position: Some(proto::Vec3 { x: spot.x, y: spot.y, z: 0.0 }),
+                    ..Default::default()
+                })
+                .await;
+            // The view is made either way; a failed move leaves it where it
+            // is, and the reply says what it overlaps.
+            match moved {
+                Ok(moved) => {
+                    reply = moved;
+                    moved_to = Some(spot);
+                }
+                Err(status) => tracing::warn!("moving the new view {} clear failed: {status}", reply.view_name),
+            }
+        }
+        if let Some(sheet) = &reply.sheet {
+            let mut cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            cache.sheet_changed(&sheet.views, false);
+        }
+        reply.created = true;
+        let text = view::reply_text(&proto::SetupDrawingViewRequest::default(), &reply, None, moved_to);
+        Ok(CallToolResult::success(vec![ContentBlock::text(plan.finish_text(text, &reply))]))
+    }
+
+    /// crop_view / break_view: the RPC; the view's entity positions are
+    /// asked for again before use.
+    async fn shape_drawing_view(&self, request: proto::ShapeDrawingViewRequest) -> Result<CallToolResult, McpError> {
+        let reply = self
+            .addin
+            .shape_drawing_view(request.clone())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        if let Some(sheet) = &reply.sheet {
+            let mut cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            cache.sheet_changed(&sheet.views, false);
+        }
+        Ok(CallToolResult::success(vec![ContentBlock::text(derived_view::shape_reply_text(&request, &reply))]))
     }
 
     /// add_drawing_note / edit_drawing_annotation: the RPC; the drawing

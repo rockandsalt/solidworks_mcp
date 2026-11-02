@@ -210,6 +210,12 @@ public:
 	grpc::Status SetupDrawingView(grpc::ServerContext* context,
 		const sld_mcp::v1::SetupDrawingViewRequest* request,
 		sld_mcp::v1::SetupDrawingViewResponse* response) override;
+	grpc::Status DeriveDrawingView(grpc::ServerContext* context,
+		const sld_mcp::v1::DeriveDrawingViewRequest* request,
+		sld_mcp::v1::SetupDrawingViewResponse* response) override;
+	grpc::Status ShapeDrawingView(grpc::ServerContext* context,
+		const sld_mcp::v1::ShapeDrawingViewRequest* request,
+		sld_mcp::v1::SetupDrawingViewResponse* response) override;
 	grpc::Status SetupDrawingAnnotation(grpc::ServerContext* context,
 		const sld_mcp::v1::SetupDrawingAnnotationRequest* request,
 		sld_mcp::v1::SetupDrawingAnnotationResponse* response) override;

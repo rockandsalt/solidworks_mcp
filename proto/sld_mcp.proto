@@ -436,6 +436,21 @@ service SolidWorks {
   // name another view has).
   rpc SetupDrawingView(SetupDrawingViewRequest) returns (SetupDrawingViewResponse);
 
+  // Adds a view made from another view of the active drawing: projected,
+  // section, detail or auxiliary. The view goes on its parent's sheet; the
+  // user's active sheet is put back. All or nothing: what the call drew or
+  // made is deleted again if a step fails. FAILED_PRECONDITION if the active
+  // document isn't a drawing or SolidWorks refuses; NOT_FOUND for an unknown
+  // view or an edge no longer visible; INVALID_ARGUMENT for a name another
+  // view has.
+  rpc DeriveDrawingView(DeriveDrawingViewRequest) returns (SetupDrawingViewResponse);
+
+  // Crops a view of the active drawing or breaks it (shortens it by hiding
+  // ranges of it), or takes that off again. FAILED_PRECONDITION for what
+  // SolidWorks can't combine: a cropped view can't be broken, nor a broken
+  // or detail view cropped.
+  rpc ShapeDrawingView(ShapeDrawingViewRequest) returns (SetupDrawingViewResponse);
+
   // Adds a note, feature control frame or datum feature symbol (`gdt`) to
   // the active drawing -- in a view (it moves with the
   // view), on a sheet, or in a sheet's format (the title block layer),
@@ -3196,6 +3211,21 @@ message ViewInfo {
   // counterclockwise. The view's own coordinates (DrawingPoint) are at the
   // model's size from model_origin, along the sheet's x / y turned by this.
   double angle = 26;
+  // Section, detail and auxiliary views: their letter.
+  string label = 27;
+  bool cropped = 28;
+  // Shown shortened. model_origin and the entities' positions stay as if
+  // it weren't.
+  bool broken = 29;
+  repeated ViewBreak breaks = 30;
+}
+
+message ViewBreak {
+  bool along_x = 1;  // the hidden range runs along the sheet's x, else y
+  // Sheet meters, as if the view weren't broken.
+  double from = 2;
+  double to = 3;
+  int32 style = 4;  // swBreakLineStyle_e
 }
 
 // One thing visible in a drawing view.
@@ -3406,6 +3436,97 @@ message SetupDrawingViewResponse {
   ViewScale sheet_scale_before = 4;
   // The sheet SolidWorks shows.
   string active_sheet = 5;
+}
+
+message ProjectedViewSpec {}
+
+message SectionViewSpec {
+  // The section line, sheet meters. The view looks along the line's
+  // direction turned 90 degrees clockwise (a line drawn up the sheet looks
+  // to the right).
+  Vec3 start = 1;
+  Vec3 end = 2;
+  // Only what the cut plane touches, nothing behind it.
+  bool surface_only = 3;
+  // How far behind the cut plane to show (meters); 0 = everything.
+  double depth = 4;
+}
+
+message DetailViewSpec {
+  // The circle on the parent view: center in sheet meters, radius in meters
+  // on the sheet.
+  Vec3 center = 1;
+  double radius = 2;
+  ViewScale scale = 3;
+  // swDetViewStyle_e.
+  int32 style = 4;
+  // Show the whole outline of the detail, a jagged one, or none.
+  bool full_outline = 5;
+  bool jagged_outline = 6;
+  bool no_outline = 7;
+}
+
+message AuxiliaryViewSpec {
+  // A straight edge of the parent view; the new view looks square onto it.
+  DrawingEntityRef edge = 1;
+  // Look from the edge's other side.
+  bool flip = 2;
+}
+
+message DeriveDrawingViewRequest {
+  // The view to make it from.
+  string view_name = 1;
+  // The new view's name; empty = SolidWorks' ("Section View A-A", ...).
+  string new_name = 2;
+  // Section, detail and auxiliary views: the letter on the sheet.
+  string label = 3;
+  // Where its center goes, sheet meters. Views aligned with their parent
+  // only go as far as the alignment lets them.
+  Vec3 position = 4;
+  oneof kind {
+    ProjectedViewSpec projected = 5;
+    SectionViewSpec section = 6;
+    DetailViewSpec detail = 7;
+    AuxiliaryViewSpec auxiliary = 8;
+  }
+}
+
+message CropViewSpec {
+  // A circle (radius > 0: center in sheet meters, radius in meters on the
+  // sheet), else the rectangle between two corners (sheet meters).
+  Vec3 center = 1;
+  double radius = 2;
+  Vec3 corner1 = 3;
+  Vec3 corner2 = 4;
+  bool jagged_outline = 5;
+  bool no_outline = 6;
+}
+
+message ViewBreakSpec {
+  // The range to hide runs along the sheet's x (true: vertical break lines)
+  // or y, sheet meters as InspectDrawing lists the view's entities (which
+  // don't move when the view is broken).
+  bool along_x = 1;
+  double from = 2;
+  double to = 3;
+}
+
+message BreakViewSpec {
+  repeated ViewBreakSpec breaks = 1;  // at least one
+  // swBreakLineStyle_e.
+  int32 style = 2;
+}
+
+message ShapeDrawingViewRequest {
+  string view_name = 1;
+  oneof change {
+    // Takes the place of a crop the view has.
+    CropViewSpec crop = 2;
+    // Added to the breaks the view has.
+    BreakViewSpec breaks = 3;
+    bool remove_crop = 4;
+    bool remove_breaks = 5;
+  }
 }
 
 // ---------------------------------------------------------------------------

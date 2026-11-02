@@ -102,6 +102,11 @@ namespace sld_mcp::service
 	grpc::Status FindDrawingView(const std::vector<DrawingSheet>& sheets, const std::string& name,
 		ATL::CComPtr<IView>& view, std::string& sheetName);
 
+	// Selects the view by name, on the active sheet, and nothing else.
+	bool SelectDrawingView(IModelDoc2* doc, IModelDocExtension* ext, const std::string& name);
+
+	bool DeleteDrawingView(IModelDoc2* doc, IModelDocExtension* ext, const std::string& name);
+
 	bool EqualsIgnoringCase(const std::string& a, const std::string& b);
 
 	// SolidWorks refuses a sheet name another sheet has in any case.

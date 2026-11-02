@@ -346,6 +346,22 @@ namespace sld_mcp::service
 			(known.empty() ? std::string(" (it has no views)") : " (its views: " + known + ")"));
 	}
 
+	bool SelectDrawingView(IModelDoc2* doc, IModelDocExtension* ext, const std::string& name)
+	{
+		doc->ClearSelection2(VARIANT_TRUE);
+		VARIANT_BOOL selected = VARIANT_FALSE;
+		return SUCCEEDED(ext->SelectByID2(FromUtf8(name), ATL::CComBSTR(L"DRAWINGVIEW"), 0.0, 0.0, 0.0, VARIANT_FALSE,
+			0, nullptr, swSelectOptionDefault, &selected)) && selected;
+	}
+
+	bool DeleteDrawingView(IModelDoc2* doc, IModelDocExtension* ext, const std::string& name)
+	{
+		VARIANT_BOOL deleted = VARIANT_FALSE;
+		const bool ok = SelectDrawingView(doc, ext, name) && SUCCEEDED(ext->DeleteSelection2(0, &deleted)) && deleted;
+		doc->ClearSelection2(VARIANT_TRUE);
+		return ok;
+	}
+
 	ViewModel ViewModelOf(IView* view)
 	{
 		ViewModel model;
@@ -577,6 +593,59 @@ namespace sld_mcp::service
 			}
 		}
 
+		// The letter of a section, detail or auxiliary view, its crop and its breaks.
+		void DescribeViewShape(IView* view, const Eigen::Vector2d& viewPosition, sld_mcp::v1::ViewInfo* info)
+		{
+			ATL::CComBSTR label;
+			const long type = ViewType(view);
+			ATL::CComPtr<IDispatch> disp;
+			if (type == swDrawingSectionView && SUCCEEDED(view->GetSection(&disp)) && disp)
+			{
+				if (ATL::CComQIPtr<IDrSection> section(disp.p); section)
+					section->GetLabel(&label);
+			}
+			else if (type == swDrawingDetailView && SUCCEEDED(view->GetDetail(&disp)) && disp)
+			{
+				if (ATL::CComQIPtr<IDetailCircle> detail(disp.p); detail)
+					detail->GetLabel(&label);
+			}
+			else if (type == swDrawingAuxiliaryView && SUCCEEDED(view->GetProjectionArrow(&disp)) && disp)
+			{
+				if (ATL::CComQIPtr<IProjectionArrow> arrow(disp.p); arrow)
+					arrow->GetLabel(&label);
+			}
+			info->set_label(ToUtf8(label));
+
+			VARIANT_BOOL flag = VARIANT_FALSE;
+			if (SUCCEEDED(view->IsCropped(&flag)))
+				info->set_cropped(flag != VARIANT_FALSE);
+			flag = VARIANT_FALSE;
+			if (SUCCEEDED(view->IsBroken(&flag)))
+				info->set_broken(flag != VARIANT_FALSE);
+			ATL::CComVariant lines;
+			if (FAILED(view->GetBreakLines(&lines)))
+				return;
+			for (const auto& line : comvariant::ToDispatches(lines))
+			{
+				ATL::CComQIPtr<IBreakLine> breakLine(line.p);
+				if (!breakLine)
+					continue;
+				long orientation = 0, style = 0;
+				double first = 0.0, second = 0.0;
+				breakLine->get_Orientation(&orientation);
+				breakLine->get_Style(&style);
+				breakLine->GetPosition(0, &first);
+				breakLine->GetPosition(1, &second);
+				auto* out = info->add_breaks();
+				const bool alongX = orientation == swBreakLineVertical;
+				const double origin = alongX ? viewPosition.x() : viewPosition.y();
+				out->set_along_x(alongX);
+				out->set_from(origin + first);
+				out->set_to(origin + second);
+				out->set_style(static_cast<int32_t>(style));
+			}
+		}
+
 		void DescribeView(IView* view, IModelDocExtension* drawingExt, IMathUtility* math, bool listEntities,
 			bool includeVertices, bool includeAnnotations, DrawingBudget& budget, sld_mcp::v1::ViewInfo* info)
 		{
@@ -639,6 +708,7 @@ namespace sld_mcp::service
 				if (ATL::CComQIPtr<IView> base(baseDisp.p); base)
 					info->set_base_view(ViewName(base));
 			DescribeViewTransform(view, math, info);
+			DescribeViewShape(view, viewPosition, info);
 
 			const ViewModel model = ViewModelOf(view);
 			if (model.doc)

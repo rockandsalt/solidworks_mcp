@@ -86,6 +86,16 @@ impl ViewXform {
     pub fn scale(&self) -> f64 {
         self.axes[0].length()
     }
+
+    /// The model direction pointing out of the sheet at the viewer.
+    pub fn toward_viewer_in_model(&self) -> DVec3 {
+        DVec3::new(self.axes[0].z, self.axes[1].z, self.axes[2].z)
+    }
+
+    /// A model direction as it runs on the sheet.
+    pub fn direction_on_sheet(&self, v: DVec3) -> DVec2 {
+        self.vector(v).truncate()
+    }
 }
 
 /// What an entity looks like on the sheet, in sheet meters.
@@ -172,6 +182,11 @@ impl Cache {
     /// The sheet geometry inspect_drawing gave for a view entity id.
     pub fn entity(&self, id: &str) -> Option<&EntityGeom> {
         self.entities.get(id.trim())
+    }
+
+    /// A point to go through for `id`: a circle's center, a line's middle, ...
+    pub fn entity_anchor(&self, id: &str) -> Option<DVec2> {
+        self.entity(id).map(|g| g.shape.anchor())
     }
 
     /// The other entities of `view` inspect_drawing gave geometry for.
@@ -597,6 +612,18 @@ fn view_json(
     }
     if !view.base_view.is_empty() {
         obj.insert("from_view".into(), json!(view.base_view));
+    }
+    if !view.label.is_empty() {
+        obj.insert("label".into(), json!(view.label));
+    }
+    if view.cropped {
+        obj.insert("cropped".into(), json!(true));
+    }
+    if !view.breaks.is_empty() {
+        obj.insert("breaks".into(), crate::derived_view::breaks_json(view));
+    }
+    if view.broken {
+        obj.insert("broken_note".into(), json!(crate::derived_view::BROKEN_NOTE));
     }
     if !view.model_file.is_empty() {
         obj.insert("model".into(), json!(file_name(&view.model_file)));

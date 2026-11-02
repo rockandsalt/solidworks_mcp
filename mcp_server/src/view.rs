@@ -270,19 +270,19 @@ pub fn redraws(request: &proto::SetupDrawingViewRequest) -> bool {
 // ---- Placement ----------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct Rect {
-    lo: DVec2,
-    hi: DVec2,
+pub(crate) struct Rect {
+    pub lo: DVec2,
+    pub hi: DVec2,
 }
 
 impl Rect {
-    fn of(view: &proto::ViewInfo) -> Option<Rect> {
+    pub fn of(view: &proto::ViewInfo) -> Option<Rect> {
         let b = view.outline.as_ref()?;
         let (lo, hi) = (b.min.as_ref()?, b.max.as_ref()?);
         Some(Rect { lo: DVec2::new(lo.x, lo.y), hi: DVec2::new(hi.x, hi.y) })
     }
 
-    fn overlaps(&self, other: &Rect, gap: f64) -> bool {
+    pub fn overlaps(&self, other: &Rect, gap: f64) -> bool {
         self.lo.x < other.hi.x + gap
             && other.lo.x < self.hi.x + gap
             && self.lo.y < other.hi.y + gap
@@ -293,12 +293,18 @@ impl Rect {
         self.hi - self.lo
     }
 
-    fn center(&self) -> DVec2 {
+    pub fn center(&self) -> DVec2 {
         (self.lo + self.hi) / 2.0
+    }
+
+    /// Moved so that its center is at `center`.
+    pub fn centered_at(&self, center: DVec2) -> Rect {
+        let half = self.size() / 2.0;
+        Rect { lo: center - half, hi: center + half }
     }
 }
 
-fn find_view<'a>(sheet: &'a proto::SheetInfo, name: &str) -> Option<&'a proto::ViewInfo> {
+pub(crate) fn find_view<'a>(sheet: &'a proto::SheetInfo, name: &str) -> Option<&'a proto::ViewInfo> {
     sheet.views.iter().find(|v| v.name == name)
 }
 
@@ -350,6 +356,41 @@ pub fn free_spot(sheet: &proto::SheetInfo, name: &str) -> Option<DVec2> {
     best.map(|(_, c)| c - offset)
 }
 
+/// `spot` slid along `direction` (a unit vector, the only way an aligned view
+/// moves) until the outline clears the sheet's other views and edges: the
+/// nearest such place on the far side of `parent` from where it starts, or
+/// failing that the nearest that clears `parent` alone. The view's position
+/// for that, sheet meters; None if it's already fine or nothing works.
+pub fn slide_clear(sheet: &proto::SheetInfo, name: &str, parent: &str, direction: DVec2) -> Option<DVec2> {
+    let view = find_view(sheet, name)?;
+    let rect = Rect::of(view)?;
+    let parent_rect = find_view(sheet, parent).and_then(Rect::of)?;
+    let others: Vec<Rect> = sheet.views.iter().filter(|v| v.name != name).filter_map(Rect::of).collect();
+    let fits = |r: &Rect| {
+        r.lo.x >= EDGE_MARGIN
+            && r.lo.y >= EDGE_MARGIN
+            && r.hi.x <= sheet.width - EDGE_MARGIN
+            && r.hi.y <= sheet.height - EDGE_MARGIN
+            && !others.iter().any(|o| o.overlaps(r, VIEW_GAP))
+    };
+    let side = |c: DVec2| (c - parent_rect.center()).dot(direction) >= 0.0;
+    if side(rect.center()) && fits(&rect) {
+        return None;
+    }
+    let reach = sheet.width.hypot(sheet.height);
+    let steps = (reach / SPOT_STEP) as i64;
+    let places = (-steps..=steps).map(|i| rect.center() + direction * (i as f64 * SPOT_STEP));
+    let nearest = |test: &dyn Fn(&Rect) -> bool| {
+        places
+            .clone()
+            .filter(|c| side(*c) && test(&rect.centered_at(*c)))
+            .min_by(|a, b| a.distance_squared(parent_rect.center()).total_cmp(&b.distance_squared(parent_rect.center())))
+    };
+    let center = nearest(&fits).or_else(|| nearest(&|r| !r.overlaps(&parent_rect, VIEW_GAP)))?;
+    // The position may sit off the outline's middle (a detail view, a crop).
+    Some(center - rect.center() + view_position(view).unwrap_or(rect.center()))
+}
+
 fn view_position(view: &proto::ViewInfo) -> Option<DVec2> {
     view.position.as_ref().map(|p| DVec2::new(p.x, p.y))
 }
@@ -367,10 +408,20 @@ fn file_name(path: &str) -> &str {
 /// "Drawing View1 on Sheet1: *Front of block.SLDPRT (configuration Default), ..."
 fn view_text(sheet: &proto::SheetInfo, view: &proto::ViewInfo) -> String {
     let mut parts = Vec::new();
-    let what = if view.orientation.is_empty() {
+    let model = file_name(&view.model_file);
+    // A section, detail or auxiliary view is what it is whichever orientation
+    // SolidWorks reports for it.
+    let what = if let (2 | 3 | 5, false) = (view.r#type, view.base_view.is_empty()) {
+        let kind = match view.r#type {
+            2 => "section",
+            3 => "detail",
+            _ => "auxiliary view",
+        };
+        format!("{kind} of {} ({model})", view.base_view)
+    } else if view.orientation.is_empty() {
         match view.base_view.as_str() {
-            "" => file_name(&view.model_file).to_string(),
-            base => format!("{} projected from {base}", file_name(&view.model_file)),
+            "" => model.to_string(),
+            base => format!("{model} projected from {base}"),
         }
     } else {
         format!("{} of {}", view.orientation, file_name(&view.model_file))
@@ -394,8 +445,16 @@ fn view_text(sheet: &proto::SheetInfo, view: &proto::ViewInfo) -> String {
         let from = if view.uses_parent_display { format!(" (from {})", view.base_view) } else { String::new() };
         parts.push(format!("{}{from}", mode.replace('_', " ")));
     }
-    if let Some(p) = view_position(view) {
+    // A detail view's position isn't its middle, and a crop or break moves
+    // the middle off it: the outline says where those are.
+    if let (Some(p), false) = (view_position(view), view.r#type == 3 || view.cropped || view.broken) {
         parts.push(format!("centered at {} mm", mm2(p)));
+    }
+    if view.cropped {
+        parts.push("cropped".to_string());
+    }
+    if view.broken {
+        parts.push("broken".to_string());
     }
     if let Some(r) = Rect::of(view) {
         parts.push(format!(
