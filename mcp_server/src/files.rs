@@ -1,6 +1,6 @@
-//! Saving and opening files: the save_document and open_document tools'
-//! params, which file extension is which format (and which document types
-//! it holds), and the text they reply with, naming SolidWorks' save / load
+//! Saving, opening and importing files: the save_document and open_document
+//! tools' params, which file extension is which format (which document types
+//! it holds, whether it imports), and the text they reply with, naming SolidWorks' save / load
 //! error and warning bits (swFileSaveError_e, swFileSaveWarning_e,
 //! swFileLoadError_e, swFileLoadWarning_e) that the add-in passes through.
 //!
@@ -47,9 +47,10 @@ pub struct SaveDocumentParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct OpenDocumentParams {
-    /// The file to open, as an absolute path to a .SLDPRT, .SLDASM or .SLDDRW file.
+    /// The file to open, as an absolute path: a .SLDPRT, .SLDASM or .SLDDRW file, or a STEP
+    /// (.STEP/.STP), IGES (.IGS/.IGES) or Parasolid (.X_T/.X_B) file to import.
     pub path: String,
-    /// Open it read-only. Default false. (Ignored when it's already open.)
+    /// Open it read-only. Default false. (Ignored when it's already open; not for imports.)
     #[serde(default)]
     pub read_only: bool,
 }
@@ -153,6 +154,8 @@ struct Format {
     name: &'static str,
     /// Native formats are a Save As; the others an export.
     native: bool,
+    /// open_document imports it into a new document (verified for these).
+    import: bool,
     types: &'static [DocumentType],
 }
 
@@ -160,18 +163,18 @@ const MODELS: &[DocumentType] = &[DocumentType::Part, DocumentType::Assembly];
 const DRAWINGS: &[DocumentType] = &[DocumentType::Drawing];
 
 const FORMATS: &[Format] = &[
-    Format { extensions: &["sldprt"], name: "part", native: true, types: &[DocumentType::Part] },
-    Format { extensions: &["sldasm"], name: "assembly", native: true, types: &[DocumentType::Assembly] },
-    Format { extensions: &["slddrw"], name: "drawing", native: true, types: DRAWINGS },
-    Format { extensions: &["step", "stp"], name: "STEP", native: false, types: MODELS },
-    Format { extensions: &["igs", "iges"], name: "IGES", native: false, types: MODELS },
-    Format { extensions: &["x_t", "x_b"], name: "Parasolid", native: false, types: MODELS },
-    Format { extensions: &["sat"], name: "ACIS", native: false, types: MODELS },
-    Format { extensions: &["stl"], name: "STL", native: false, types: MODELS },
-    Format { extensions: &["3mf"], name: "3MF", native: false, types: MODELS },
-    Format { extensions: &["pdf"], name: "PDF", native: false, types: DRAWINGS },
-    Format { extensions: &["dxf"], name: "DXF", native: false, types: DRAWINGS },
-    Format { extensions: &["dwg"], name: "DWG", native: false, types: DRAWINGS },
+    Format { extensions: &["sldprt"], name: "part", native: true, import: false, types: &[DocumentType::Part] },
+    Format { extensions: &["sldasm"], name: "assembly", native: true, import: false, types: &[DocumentType::Assembly] },
+    Format { extensions: &["slddrw"], name: "drawing", native: true, import: false, types: DRAWINGS },
+    Format { extensions: &["step", "stp"], name: "STEP", native: false, import: true, types: MODELS },
+    Format { extensions: &["igs", "iges"], name: "IGES", native: false, import: true, types: MODELS },
+    Format { extensions: &["x_t", "x_b"], name: "Parasolid", native: false, import: true, types: MODELS },
+    Format { extensions: &["sat"], name: "ACIS", native: false, import: false, types: MODELS },
+    Format { extensions: &["stl"], name: "STL", native: false, import: false, types: MODELS },
+    Format { extensions: &["3mf"], name: "3MF", native: false, import: false, types: MODELS },
+    Format { extensions: &["pdf"], name: "PDF", native: false, import: false, types: DRAWINGS },
+    Format { extensions: &["dxf"], name: "DXF", native: false, import: false, types: DRAWINGS },
+    Format { extensions: &["dwg"], name: "DWG", native: false, import: false, types: DRAWINGS },
 ];
 
 fn invalid(message: String) -> McpError {
@@ -281,22 +284,33 @@ fn pdf_export(params: &SaveDocumentParams, format: &Format) -> Result<Option<pro
     Ok(Some(proto::PdfExport { sheets, color: params.pdf_color }))
 }
 
-/// The OpenDocument request for `params`: the type comes from the extension.
+/// The OpenDocument request for `params`: the type comes from the extension,
+/// and a STEP / IGES / Parasolid file is imported.
 pub fn open_request(params: &OpenDocumentParams) -> Result<proto::OpenDocumentRequest, McpError> {
     let path = checked_path(&params.path)?;
-    let format = format_of(path).filter(|f| f.native).ok_or_else(|| {
-        invalid(format!(
-            "open_document opens SolidWorks files ({}); {path:?} isn't one",
-            extension_list(true).split(", ").take(3).collect::<Vec<_>>().join(", ")
-        ))
+    let format = format_of(path).filter(|f| f.native || f.import).ok_or_else(|| {
+        let opens = FORMATS
+            .iter()
+            .filter(|f| f.native || f.import)
+            .flat_map(|f| f.extensions.iter().map(|e| format!(".{}", e.to_ascii_uppercase())))
+            .collect::<Vec<_>>()
+            .join(", ");
+        invalid(format!("open_document opens {opens} files; {path:?} isn't one"))
     })?;
+    if format.import && params.read_only {
+        return Err(invalid(format!(
+            "read_only is for SolidWorks files: a {} file is imported into a new document, never saved",
+            format.name
+        )));
+    }
     if !Path::new(path).is_file() {
         return Err(invalid(format!("there's no file {path}")));
     }
     Ok(proto::OpenDocumentRequest {
         path: path.to_string(),
-        r#type: format.types[0] as i32,
+        r#type: if format.import { DocumentType::Unspecified as i32 } else { format.types[0] as i32 },
         read_only: params.read_only,
+        import: format.import,
     })
 }
 
@@ -533,7 +547,23 @@ pub fn open_reply_text(
             None,
         ));
     };
-    let mut text = if reply.already_open {
+    let mut text = if request.import {
+        let mut text = format!(
+            "imported {} as {}; it's now the active document. Its geometry is imported bodies \
+             (feature type BaseBody, e.g. Imported1) with no feature history: \
+             recognize_features finds its holes, bosses, fillets, chamfers and faces, and new \
+             features can be built on its faces.",
+            file_name(&request.path),
+            describe(doc),
+        );
+        if doc.r#type() == DocumentType::Assembly {
+            text += " save_document with a .SLDASM path keeps it; its parts (inspect_model lists them as \
+                     components) are then saved as .SLDPRT files next to it, in the same folder.";
+        } else {
+            text += " save_document with a .SLDPRT path keeps it.";
+        }
+        text
+    } else if reply.already_open {
         format!("{} was already open; it's now the active document", describe(doc))
     } else {
         format!("opened {}; it's now the active document", describe(doc))
@@ -838,11 +868,34 @@ mod tests {
     }
 
     #[test]
-    fn open_takes_native_files_only() {
-        let open = |p: &str| open_request(&OpenDocumentParams { path: p.into(), read_only: false });
-        assert!(open("C:\\x\\block.step").is_err());
-        assert!(open("block.SLDPRT").is_err());
-        assert!(open("C:\\sld_mcp_no_such_dir\\block.SLDPRT").is_err());
+    fn open_takes_native_files_and_imports() {
+        let open = |p: &str, read_only: bool| open_request(&OpenDocumentParams { path: p.into(), read_only });
+        let err = open("C:\\x\\block.stl", false).unwrap_err();
+        assert!(err.message.contains(".X_B") && !err.message.contains(".STL"), "{}", err.message);
+        assert!(open("block.SLDPRT", false).is_err());
+        assert!(open("C:\\sld_mcp_no_such_dir\\block.SLDPRT", false).is_err());
+        assert!(open("C:\\sld_mcp_no_such_dir\\block.step", false).is_err());
+
+        let file = std::env::temp_dir().join("sld_mcp_files_test_import.stp");
+        let path = file.to_str().unwrap();
+        if !is_absolute(path) {
+            return;
+        }
+        std::fs::write(&file, b"ISO-10303-21;").unwrap();
+        let request = open(path, false).unwrap();
+        assert!(request.import && request.r#type == DocumentType::Unspecified as i32, "{request:?}");
+        assert!(open(path, true).unwrap_err().message.contains("read_only"));
+        std::fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn import_reply_points_at_recognition() {
+        let request = proto::OpenDocumentRequest { path: r"C:\in\bracket.STEP".into(), import: true, ..Default::default() };
+        let doc = proto::Document { title: "bracket.SLDPRT".into(), r#type: 1, ..Default::default() };
+        let reply = proto::OpenDocumentResponse { document: Some(doc), opened: true, ..Default::default() };
+        let text = open_reply_text(&request, &reply).unwrap();
+        assert!(text.starts_with("imported bracket.STEP as bracket.SLDPRT (part, never saved)"), "{text}");
+        assert!(text.contains("recognize_features") && text.contains(".SLDPRT path"), "{text}");
     }
 
     #[test]
@@ -865,7 +918,7 @@ mod tests {
 
     #[test]
     fn missing_references_are_explained() {
-        let request = proto::OpenDocumentRequest { path: "C:\\a.SLDASM".into(), r#type: 2, read_only: false };
+        let request = proto::OpenDocumentRequest { path: "C:\\a.SLDASM".into(), r#type: 2, ..Default::default() };
         let doc = proto::Document { title: "a.SLDASM".into(), r#type: 2, path: request.path.clone(), ..Default::default() };
         let reply = proto::OpenDocumentResponse { document: Some(doc), opened: true, errors: 2, ..Default::default() };
         let text = open_reply_text(&request, &reply).unwrap();

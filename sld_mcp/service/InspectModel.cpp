@@ -286,6 +286,13 @@ namespace
 				info->set_minor_radius(p[7]);
 			}
 			break;
+		case SREV_TYPE: // [axis point, axis direction, ...]; the profile is a spline in IGES imports
+			if (SUCCEEDED(surface->GetRevsurfParams(&params)) && (p = comvariant::ToDoubles(params)).size() >= 6)
+			{
+				SetVec3(info->mutable_origin(), &p[0]);
+				SetVec3(info->mutable_axis(), &p[3]);
+			}
+			break;
 		}
 	}
 

@@ -131,8 +131,9 @@ assert x_extent() == 15, x_extent()
 
 r = mcp.call("open_document", path=str(out / "nope.SLDPRT"), expect_error=True)
 assert "no file" in r.text, r.text
+# Importing its STEP would make a second files-block.SLDPRT (importing.py).
 r = mcp.call("open_document", path=str(out / "files-block.STEP"), expect_error=True)
-assert "SolidWorks files" in r.text, r.text
+assert "a document called files-block.SLDPRT is open" in r.text, r.text
 
 # Read-only: opens, but saving in place is refused.
 r = mcp.call("open_document", path=str(copy), read_only=True)

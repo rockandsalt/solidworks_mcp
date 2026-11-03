@@ -1,6 +1,7 @@
 // Files.cpp : Documents: GetActiveDocument, NewPart, NewAssembly, NewDrawing, SetDocumentUnits, SaveDocument, OpenDocument, CloseDocument (see docs/notes/files.md, units.md).
 #include "pch.h"
 #include "Common.h"
+#include "AssemblyHelpers.h"
 #include "DimensionHelpers.h"
 #include "DrawingHelpers.h"
 
@@ -164,6 +165,46 @@ namespace
 		}
 		return grpc::Status(grpc::StatusCode::NOT_FOUND, "no open document is called \"" + name + "\" -- " +
 			(open.empty() ? "nothing is open" : "open: " + open));
+	}
+
+	// SolidWorks' working directory set to `folder` for a scope, then put
+	// back. Imported assemblies' parts take their file names from it, and
+	// Save As writes those never saved into it (seen 2026-11-03).
+	class WorkingDirectory
+	{
+	public:
+		WorkingDirectory(ISldWorks* app, const std::filesystem::path& folder) : m_app(app)
+		{
+			m_app->GetCurrentWorkingDirectory(&m_saved);
+			VARIANT_BOOL set = VARIANT_FALSE;
+			m_app->SetCurrentWorkingDirectory(ATL::CComBSTR((folder.wstring() + L"\\").c_str()), &set);
+		}
+		~WorkingDirectory()
+		{
+			VARIANT_BOOL set = VARIANT_FALSE;
+			if (m_saved.Length() > 0)
+				m_app->SetCurrentWorkingDirectory(m_saved, &set);
+		}
+		WorkingDirectory(const WorkingDirectory&) = delete;
+		WorkingDirectory& operator=(const WorkingDirectory&) = delete;
+
+	private:
+		ISldWorks* m_app;
+		ATL::CComBSTR m_saved;
+	};
+
+	// Files of an assembly's components, each once.
+	std::vector<std::filesystem::path> ComponentFiles(IAssemblyDoc* assembly)
+	{
+		std::vector<std::filesystem::path> files;
+		for (const auto& component : AllComponents(assembly))
+		{
+			ATL::CComBSTR path;
+			if (SUCCEEDED(component->GetPathName(&path)) && path.Length() > 0 &&
+				std::find(files.begin(), files.end(), std::filesystem::path(path.m_str)) == files.end())
+				files.emplace_back(path.m_str);
+		}
+		return files;
 	}
 
 	// This SolidWorks process: its id and start time (process ids get reused).
@@ -461,6 +502,34 @@ grpc::Status SolidWorksService::SaveDocument(grpc::ServerContext* /*context*/,
 			prefs.Set(swPDFExportInColor, request->pdf().color());
 	}
 
+	// An imported assembly's parts have never been saved (there's no file
+	// at their path yet): Save As writes them into the working directory
+	// (seen 2026-11-03), so for the call that's the assembly's folder, and
+	// a file of one's name there is refused rather than overwritten.
+	std::optional<WorkingDirectory> partsFolder;
+	if (!inPlace && !request->copy())
+		if (ATL::CComQIPtr<IAssemblyDoc> assembly(doc.p); assembly)
+		{
+			const std::filesystem::path folder = std::filesystem::path(target.m_str).parent_path();
+			std::string clash;
+			bool unsaved = false;
+			for (const auto& part : ComponentFiles(assembly))
+			{
+				std::error_code ec;
+				if (std::filesystem::exists(part, ec))
+					continue;
+				unsaved = true;
+				if (const std::filesystem::path there = folder / part.filename(); std::filesystem::exists(there, ec))
+					clash += (clash.empty() ? "" : ", ") + ToUtf8(ATL::CComBSTR(there.c_str()));
+			}
+			if (!clash.empty())
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "the assembly has parts that were never "
+					"saved (it was imported), which are saved next to it, and there are files of their names "
+					"already: " + clash + " -- save it to another folder");
+			if (unsaved)
+				partsFolder.emplace(swApp, folder);
+		}
+
 	// Whether the file was written, whatever SolidWorks says: a part with
 	// rebuild errors is saved but reported as failed (diagnosing.md).
 	const std::filesystem::path file(target.m_str);
@@ -502,7 +571,8 @@ grpc::Status SolidWorksService::OpenDocument(grpc::ServerContext* /*context*/,
 	case sld_mcp::v1::DOCUMENT_TYPE_ASSEMBLY: type = swDocASSEMBLY; break;
 	case sld_mcp::v1::DOCUMENT_TYPE_DRAWING: type = swDocDRAWING; break;
 	default:
-		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give the document type");
+		if (!request->import())
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give the document type");
 	}
 	if (request->path().empty())
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give the file to open");
@@ -517,15 +587,78 @@ grpc::Status SolidWorksService::OpenDocument(grpc::ServerContext* /*context*/,
 		return status;
 
 	const ATL::CComBSTR path = FromUtf8(request->path());
-	ATL::CComPtr<IDispatch> open;
-	response->set_already_open(SUCCEEDED(swApp->GetOpenDocumentByName(path, &open)) && open);
-
-	const long options = swOpenDocOptions_Silent | (request->read_only() ? swOpenDocOptions_ReadOnly : 0);
 	long errors = 0, warnings = 0;
 	ATL::CComPtr<IModelDoc2> doc;
-	HRESULT hr = swApp->OpenDoc6(path, type, options, ATL::CComBSTR(L""), &errors, &warnings, &doc);
-	if (FAILED(hr))
-		return ComError("ISldWorks::OpenDoc6", hr);
+	HRESULT hr = S_OK;
+	if (request->import())
+	{
+		// The new document is named after the file ("bracket.STEP" ->
+		// "bracket.SLDPRT"), even next to an open document of that name,
+		// which close_document and ActivateDoc3 then can't tell apart.
+		const std::filesystem::path file(path.m_str);
+		for (const auto& open : LoadedDocuments(swApp))
+		{
+			ATL::CComBSTR title, openPath;
+			open->GetTitle(&title);
+			open->GetPathName(&openPath);
+			const std::wstring name = title.Length() > 0 ? title.m_str : L"";
+			if (_wcsicmp(std::filesystem::path(name).stem().c_str(), file.stem().c_str()) == 0)
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "a document called " + ToUtf8(title) +
+					" is open (" + (openPath.Length() > 0 ? ToUtf8(openPath) : std::string("never saved")) +
+					"), and the import would be called that too -- close it first, or import a copy of the file "
+					"under another name");
+		}
+
+		// OpenDoc6 refuses a STEP file (swFileRequiresRepairError, seen
+		// 2026-11-03). With 3D Interconnect on, STEP and IGES would come in
+		// as a linked MBimport feature; off, they're an Imported1 body like
+		// Parasolid, which features can be built on (files.md). An
+		// assembly's parts get their file names in the working directory,
+		// fixed then: the import's own folder rather than wherever that was
+		// left (an earlier session's folder, seen 2026-11-03).
+		{
+			WorkingDirectory folder(swApp, file.parent_path());
+			PreferenceToggles prefs(swApp);
+			prefs.Set(swMultiCAD_Enable3DInterconnect, false);
+			hr = swApp->LoadFile4(path, ATL::CComBSTR(L"r"), nullptr, &errors, &doc);
+		}
+		if (FAILED(hr))
+			return ComError("ISldWorks::LoadFile4", hr);
+
+		// A part named after a file that's already there (the user's own
+		// part, or an earlier import saved) would be saved over it: as far as
+		// SolidWorks knows, it is that file.
+		if (ATL::CComQIPtr<IAssemblyDoc> assembly(doc.p); assembly)
+		{
+			std::string existing;
+			for (const auto& part : ComponentFiles(assembly))
+			{
+				std::error_code ec;
+				if (std::filesystem::exists(part, ec))
+					existing += (existing.empty() ? "" : ", ") + ToUtf8(ATL::CComBSTR(part.c_str()));
+			}
+			if (!existing.empty())
+			{
+				ATL::CComBSTR title;
+				doc->GetTitle(&title);
+				doc.Release();
+				swApp->CloseDoc(title);
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "the assembly's parts would be saved "
+					"next to " + request->path() + ", but there are files of their names already: " + existing +
+					" -- import a copy of it from a folder of its own (or open the SolidWorks files if they're an "
+					"earlier import of it)");
+			}
+		}
+	}
+	else
+	{
+		ATL::CComPtr<IDispatch> open;
+		response->set_already_open(SUCCEEDED(swApp->GetOpenDocumentByName(path, &open)) && open);
+		const long options = swOpenDocOptions_Silent | (request->read_only() ? swOpenDocOptions_ReadOnly : 0);
+		hr = swApp->OpenDoc6(path, type, options, ATL::CComBSTR(L""), &errors, &warnings, &doc);
+		if (FAILED(hr))
+			return ComError("ISldWorks::OpenDoc6", hr);
+	}
 	response->set_errors(static_cast<int32_t>(errors));
 	response->set_warnings(static_cast<int32_t>(warnings));
 	response->set_opened(doc != nullptr);

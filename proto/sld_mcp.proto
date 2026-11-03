@@ -889,11 +889,16 @@ message SaveDocumentResponse {
 }
 
 message OpenDocumentRequest {
-  // Absolute path of a .SLDPRT, .SLDASM or .SLDDRW file.
+  // Absolute path of a .SLDPRT, .SLDASM or .SLDDRW file, or with `import`
+  // a STEP, IGES or Parasolid file.
   string path = 1;
-  // From the extension.
+  // From the extension; unset with `import`.
   DocumentType type = 2;
   bool read_only = 3;
+  // Import a neutral file (ISldWorks::LoadFile4) into a new, never saved
+  // part or assembly, its geometry plain imported bodies (3D Interconnect
+  // is turned off for the call). `read_only` doesn't apply.
+  bool import = 4;
 }
 
 message OpenDocumentResponse {
@@ -902,7 +907,8 @@ message OpenDocumentResponse {
   bool opened = 2;
   // It was open already; it's only been activated.
   bool already_open = 3;
-  // swFileLoadError_e / swFileLoadWarning_e bits.
+  // swFileLoadError_e / swFileLoadWarning_e bits (an import has no
+  // warnings).
   int32 errors = 4;
   int32 warnings = 5;
 }
@@ -2353,6 +2359,9 @@ message FaceInfo {
   //   CONE:     origin (on the axis), axis, radius, half_angle (radians)
   //   SPHERE:   origin (center), radius
   //   TORUS:    origin (center), axis, radius (major), minor_radius
+  //   REVOLUTION: origin (on the axis), axis; the profile isn't given (IGES
+  //             imports bring cylinders and cones as these, with spline
+  //             profiles)
   Vec3 normal = 9;
   Vec3 origin = 10;
   Vec3 axis = 11;

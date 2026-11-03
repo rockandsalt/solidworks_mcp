@@ -260,11 +260,11 @@ impl Filters {
     }
 }
 
-fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
+pub(crate) fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
-fn norm(a: [f64; 3]) -> f64 {
+pub(crate) fn norm(a: [f64; 3]) -> f64 {
     dot(a, a).sqrt()
 }
 
@@ -356,6 +356,9 @@ fn feature_json(ids: &mut IdRegistry, f: &proto::FeatureInfo) -> Value {
     obj.insert("name".into(), json!(f.name));
     obj.insert("type".into(), json!(f.type_name));
     insert_component(ids, &mut obj, &f.component_persist_id);
+    if is_imported_type(&f.type_name) {
+        obj.insert("imported".into(), json!(true));
+    }
     if f.suppressed {
         obj.insert("suppressed".into(), json!(true));
     }
@@ -379,6 +382,13 @@ fn feature_json(ids: &mut IdRegistry, f: &proto::FeatureInfo) -> Value {
         reference_json(&mut obj, &f.type_name, r);
     }
     Value::Object(obj)
+}
+
+/// Geometry that came from another file, with no feature history: an
+/// imported body ("Imported1": STEP, IGES, Parasolid, ...) or a 3D
+/// Interconnect link to a STEP / IGES file (seen 2026-11-03).
+pub fn is_imported_type(type_name: &str) -> bool {
+    matches!(type_name, "BaseBody" | "MBimport")
 }
 
 /// Where a reference plane / axis / point / coordinate system is, as keys of
@@ -486,6 +496,15 @@ fn face_json(ids: &mut IdRegistry, f: &proto::FaceInfo) -> Value {
             }
         }
         _ => {
+            if surface == S::Revolution
+                && let (Some(a), Some(o)) = (&f.axis, &f.origin)
+            {
+                obj.insert("axis".into(), direction(a));
+                obj.insert("axis_point_mm".into(), point_mm(o));
+                if let Some(hole) = points_at_axis(f) {
+                    obj.insert("hole".into(), json!(hole));
+                }
+            }
             // Freeform faces: give the model a point and outward direction.
             if let (Some(p), Some(n)) = (&f.sample_point, &f.sample_normal) {
                 obj.insert("sample_point_mm".into(), point_mm(p));
@@ -500,18 +519,18 @@ fn face_json(ids: &mut IdRegistry, f: &proto::FaceInfo) -> Value {
     Value::Object(obj)
 }
 
-fn xyz(v: &proto::Vec3) -> [f64; 3] {
+pub(crate) fn xyz(v: &proto::Vec3) -> [f64; 3] {
     [v.x, v.y, v.z]
 }
 
-fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+pub(crate) fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
 /// For a cylinder or cone: whether the face's outward normal points toward
 /// the axis, i.e. the material is around the face (a hole) rather than
 /// inside it (a boss). None without a sample, or if it's degenerate.
-fn points_at_axis(f: &proto::FaceInfo) -> Option<bool> {
+pub(crate) fn points_at_axis(f: &proto::FaceInfo) -> Option<bool> {
     let (p, n) = (xyz(f.sample_point.as_ref()?), xyz(f.sample_normal.as_ref()?));
     let (o, a) = (xyz(f.origin.as_ref()?), xyz(f.axis.as_ref()?));
     let a_len = norm(a);

@@ -31,6 +31,7 @@ mod offset;
 mod pattern;
 mod pmi;
 mod properties;
+mod recognize;
 mod refgeom;
 mod render;
 mod revolve;
@@ -1054,8 +1055,14 @@ impl SolidWorksTools {
         description = "Open a SolidWorks part, assembly or drawing file (.SLDPRT, .SLDASM, \
                        .SLDDRW, by absolute path) and make it the active document, without any \
                        SolidWorks dialogs; a document that's already open is just made active \
-                       again, so this also switches between open documents. Reports problems \
-                       SolidWorks found, e.g. an assembly's missing components. The other tools \
+                       again, so this also switches between open documents. A STEP (.STEP/.STP), \
+                       IGES (.IGS/.IGES) or Parasolid (.X_T/.X_B) file, e.g. a supplier's model, \
+                       is imported into a new part (or assembly) that is never saved: its \
+                       geometry is imported bodies without feature history (feature Imported1), \
+                       which recognize_features reads as holes, bosses, fillets and faces, and \
+                       which new features can be built on; save_document with a .SLDPRT path \
+                       keeps it. Reports problems SolidWorks found, e.g. an assembly's missing \
+                       components. The other tools \
                        then work on it: call inspect_model (or inspect_drawing) first, ids from \
                        another document don't apply to it."
     )]
@@ -2479,6 +2486,52 @@ impl SolidWorksTools {
                 _ => {}
             }
         }
+        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+    }
+
+    #[tool(
+        description = "Recognize what the active part's bodies are made of, from their faces and \
+                       edges, without changing anything: meant for imported geometry (STEP, \
+                       IGES, Parasolid opened with open_document), which has no feature history, \
+                       but works on any body. Finds holes (simple, counterbore, countersink; \
+                       diameter, through or depth, entry point and direction into the material, \
+                       the steps of a stepped hole, drill point angle), cylindrical bosses and \
+                       shafts, fillets and rounds by radius, rounded ends such as slot ends, \
+                       chamfers (legs on each face), and lists the remaining planar faces by \
+                       direction and position (e.g. the faces at x = 0 and x = 10 of a 10 mm \
+                       plate); faces it can't place are listed as other_faces. `summary` says it \
+                       in a few lines. Every item gives its face ids, the same as inspect_model's, \
+                       for sketching on, mating or render_views highlight. Narrow it with \
+                       `within` (a body, a feature such as \"Imported1\", or in an assembly a \
+                       component). Millimeters and degrees, in model space."
+    )]
+    async fn recognize_features(
+        &self,
+        Parameters(params): Parameters<recognize::RecognizeFeaturesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let (scope_persist_id, scope_feature_name) = match params.within.as_deref().map(str::trim) {
+            None | Some("") => (Vec::new(), String::new()),
+            Some(within) if IdRegistry::looks_like_id(within) => (self.resolve_id(within)?, String::new()),
+            Some(feature_name) => (Vec::new(), feature_name.to_string()),
+        };
+        let request = proto::InspectModelRequest {
+            include_features: true,
+            include_faces: true,
+            include_edges: true,
+            scope_persist_id,
+            scope_feature_name,
+            ..Default::default()
+        };
+        let mut reply = self
+            .addin
+            .inspect_model(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        assembly::place_inspect_reply(&mut reply);
+        let json = {
+            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            recognize::render(&mut ids, &reply)
+        };
         Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
     }
 
