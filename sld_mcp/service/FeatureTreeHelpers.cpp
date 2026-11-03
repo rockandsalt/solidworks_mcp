@@ -2,6 +2,7 @@
 #include "pch.h"
 #include "FeatureTreeHelpers.h"
 #include "Common.h"
+#include "DimensionHelpers.h"
 
 namespace sld_mcp::service
 {
@@ -222,5 +223,95 @@ namespace sld_mcp::service
 	bool IsSketchType(const std::string& type)
 	{
 		return type == "ProfileFeature" || type == "3DProfileFeature";
+	}
+
+	void DropProblem(google::protobuf::RepeatedPtrField<sld_mcp::v1::FeatureProblem>* problems,
+		const std::string& name)
+	{
+		for (int i = problems->size() - 1; i >= 0; --i)
+			if (problems->Get(i).name() == name)
+				problems->DeleteSubrange(i, 1);
+	}
+
+	grpc::Status EditDefinition(ISldWorks* swApp, IModelDoc2* doc, IFeature* feature,
+		const std::vector<TreeFeature>& tree, const DefinitionEdit& edit,
+		google::protobuf::RepeatedPtrField<sld_mcp::v1::FeatureProblem>* newErrors)
+	{
+		const std::string name = FeatureName(feature);
+		const auto errorsBefore = FeatureErrors(tree);
+
+		// No "What's Wrong" dialog for features the change breaks.
+		PreferenceToggles toggles(swApp);
+		toggles.Set(swShowErrorsEveryRebuild, false);
+
+		VARIANT_BOOL rebuilt = VARIANT_FALSE;
+		auto putBack = [&]() {
+			edit.restore();
+			doc->EditRebuild3(&rebuilt);
+		};
+
+		bool modified = false;
+		if (grpc::Status status = edit.apply(modified); !status.ok())
+			return status;
+		// A rejected change leaves the definition as it was, but the model
+		// rolled back to the feature (AccessSelections; ReleaseSelectionAccess
+		// doesn't roll it forward, seen 2026-11-03): writing the old
+		// definition back does.
+		if (!modified)
+			putBack();
+		VARIANT_BOOL rolledBack = VARIANT_FALSE;
+		if (!modified && SUCCEEDED(feature->IsRolledBack(&rolledBack)) && rolledBack)
+			return grpc::Status(grpc::StatusCode::INTERNAL,
+				"SolidWorks rejected that change to \"" + name + "\" and left the model rolled back to it -- "
+				"rollback with no feature moves it to the end again");
+		if (!modified)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"SolidWorks rejected that change to \"" + name + "\", so it's unchanged -- " + edit.rejected);
+
+		HRESULT hr = doc->EditRebuild3(&rebuilt);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::EditRebuild3", hr);
+
+		VARIANT_BOOL warning = VARIANT_FALSE;
+		long code = swFeatureErrorNone;
+		long faces = 0;
+		feature->GetErrorCode2(&warning, &code);
+		if (code != swFeatureErrorNone && !warning)
+		{
+			putBack();
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"with that change \"" + name + "\" fails to rebuild (swFeatureError_e " + std::to_string(code) +
+				"), so the old definition was put back -- " + edit.rejected);
+		}
+		if (SUCCEEDED(feature->GetFaceCount(&faces)) && faces == 0)
+		{
+			putBack();
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"with that change \"" + name + "\" makes nothing, so the old definition was put back -- " +
+				edit.rejected);
+		}
+		if (const std::string mismatch = edit.check(); !mismatch.empty())
+		{
+			putBack();
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"SolidWorks accepted the change but \"" + name + "\" came out with " + mismatch +
+				", so it was put back");
+		}
+
+		AddNewErrors(errorsBefore, FeatureErrors(FeatureTree(doc)), newErrors);
+		DropProblem(newErrors, name);  // its own state is in the reply's `after`
+		doc->GraphicsRedraw2();
+		return grpc::Status::OK;
+	}
+
+	void SetFeatureError(IFeature* feature, int32_t& code, bool& warning)
+	{
+		VARIANT_BOOL isWarning = VARIANT_FALSE;
+		long error = swFeatureErrorNone;
+		if (SUCCEEDED(feature->GetErrorCode2(&isWarning, &error)))
+		{
+			code = static_cast<int32_t>(error);
+			warning = error != swFeatureErrorNone && isWarning != VARIANT_FALSE;
+		}
 	}
 }

@@ -198,7 +198,7 @@ fn spacing(spacing_mm: Option<f64>, what: &str) -> Result<f64, McpError> {
 }
 
 /// A linear pattern's direction string -> its wire ref. Points and arcs can't be directions.
-fn direction_ref(ids: &IdRegistry, direction: &str, what: &str) -> Result<proto::GeometryRef, McpError> {
+pub(crate) fn direction_ref(ids: &IdRegistry, direction: &str, what: &str) -> Result<proto::GeometryRef, McpError> {
     let (r, shape) = refgeom::geometry_ref(ids, direction, what)?;
     match shape {
         Shape::Edge | Shape::Segment | Shape::Feature | Shape::Surface => Ok(r),
@@ -212,7 +212,7 @@ fn direction_ref(ids: &IdRegistry, direction: &str, what: &str) -> Result<proto:
 
 /// A circular pattern's axis string -> its wire ref. Points, planes and sketch arcs can't be
 /// axes.
-fn axis_ref(ids: &IdRegistry, axis: &str) -> Result<proto::GeometryRef, McpError> {
+pub(crate) fn axis_ref(ids: &IdRegistry, axis: &str) -> Result<proto::GeometryRef, McpError> {
     let (r, shape) = refgeom::geometry_ref(ids, axis, "axis")?;
     match (&r.target, shape) {
         (Some(proto::geometry_ref::Target::StandardPlane(_)), _) => Err(invalid(format!(
@@ -338,7 +338,7 @@ fn named(given: &str, described: &str) -> String {
 }
 
 /// A length in mm or an angle in degrees for the reply, without float noise.
-fn number(v: f64) -> String {
+pub(crate) fn number(v: f64) -> String {
     format!("{}", (v * 1e6).round() / 1e6)
 }
 

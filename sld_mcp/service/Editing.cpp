@@ -10,15 +10,6 @@ using namespace sld_mcp::service;
 
 namespace
 {
-	// Removes the entries for feature `name` from a list of problems.
-	void DropProblem(google::protobuf::RepeatedPtrField<sld_mcp::v1::FeatureProblem>* problems,
-		const std::string& name)
-	{
-		for (int i = problems->size() - 1; i >= 0; --i)
-			if (problems->Get(i).name() == name)
-				problems->DeleteSubrange(i, 1);
-	}
-
 	// One direction of an extrude, as IExtrudeFeatureData2 has it.
 	struct ExtrudeSide
 	{

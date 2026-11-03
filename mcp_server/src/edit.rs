@@ -239,7 +239,7 @@ fn extrude_label(d: &proto::ExtrudeDefinition) -> String {
     }
 }
 
-fn error_text(code: i32, warning: bool) -> String {
+pub(crate) fn error_text(code: i32, warning: bool) -> String {
     if code == 0 {
         return String::new();
     }

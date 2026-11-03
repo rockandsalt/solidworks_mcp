@@ -238,6 +238,357 @@ namespace
 		const double dx = p.x - c.x, dy = p.y - c.y;
 		return {c.x + dx * std::cos(angle) - dy * std::sin(angle), c.y + dx * std::sin(angle) + dy * std::cos(angle)};
 	}
+
+	// ---- EditPattern -------------------------------------------------------
+
+	// One direction (or the axis) of a feature pattern.
+	struct PatternSideSettings
+	{
+		long count = 1;
+		double spacing = 0.0;
+		bool reverse = false;
+		std::string what;       // for messages
+		std::string persistId;  // the direction / axis entity's, to put it back
+		bool entity = false;    // it's a face or an edge
+	};
+
+	// A linear or circular pattern's settings, as its *PatternFeatureData has
+	// them.
+	struct PatternSettings
+	{
+		bool circular = false;
+		bool bodyPattern = false;
+		bool equal = false;     // circular
+		bool hasSide2 = false;  // linear
+		std::vector<ATL::CComPtr<IFeature>> seeds;
+		long bodies = 0;
+		PatternSideSettings side[2];
+	};
+
+	// The definition of a linear or a circular feature pattern.
+	struct PatternData
+	{
+		ATL::CComQIPtr<ILinearPatternFeatureData> linear;
+		ATL::CComQIPtr<ICircularPatternFeatureData> circular;
+
+		IDispatch* Get() const { return linear ? static_cast<IDispatch*>(linear.p) : circular.p; }
+
+		HRESULT Access(IModelDoc2* doc) const
+		{
+			VARIANT_BOOL access = VARIANT_FALSE;
+			return linear ? linear->AccessSelections(doc, nullptr, &access)
+						  : circular->AccessSelections(doc, nullptr, &access);
+		}
+
+		void Release() const
+		{
+			if (linear)
+				linear->ReleaseSelectionAccess();
+			else
+				circular->ReleaseSelectionAccess();
+		}
+	};
+
+	grpc::Status PatternDataOf(IFeature* feature, PatternData& data)
+	{
+		ATL::CComPtr<IDispatch> definition;
+		HRESULT hr = feature->GetDefinition(&definition);
+		if (FAILED(hr))
+			return ComError("IFeature::GetDefinition", hr);
+		data.linear = definition.p;
+		data.circular = definition.p;
+		if (!data.linear && !data.circular)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"\"" + FeatureName(feature) + "\" is a " + FeatureTypeName(feature) + " feature, not a linear or "
+				"circular feature pattern");
+		return grpc::Status::OK;
+	}
+
+	void DescribeSide(PersistIds& ids, IDispatch* axis, PatternSideSettings& side)
+	{
+		side.persistId = ids.Get(axis);
+		side.entity = ATL::CComQIPtr<IFace2>(axis) || ATL::CComQIPtr<IEdge>(axis);
+		if (!axis)
+			side.what = "nothing";
+		else if (ATL::CComQIPtr<IFeature> feature(axis); feature)
+			side.what = FeatureName(feature);
+		else if (ATL::CComQIPtr<IFace2>(axis))
+			side.what = "face";
+		else if (ATL::CComQIPtr<IEdge>(axis))
+			side.what = "edge";
+		else if (ATL::CComQIPtr<ISketchSegment>(axis))
+			side.what = "sketch segment";
+		else if (ATL::CComQIPtr<IRefAxis>(axis))
+			side.what = "reference axis";
+		else if (ATL::CComQIPtr<IRefPlane>(axis))
+			side.what = "plane";
+		else
+			side.what = "reference";
+	}
+
+	// Reads the settings; the selections must be accessed.
+	PatternSettings ReadPattern(IModelDocExtension* ext, const PatternData& d)
+	{
+		PatternSettings s;
+		PersistIds ids(ext);
+		VARIANT_BOOL flag = VARIANT_FALSE;
+		ATL::CComVariant seeds;
+		ATL::CComPtr<IDispatch> axis1, axis2;
+		if (d.linear)
+		{
+			ILinearPatternFeatureData* l = d.linear;
+			l->get_D1TotalInstances(&s.side[0].count);
+			l->get_D1Spacing(&s.side[0].spacing);
+			l->get_D1ReverseDirection(&flag);
+			s.side[0].reverse = flag != VARIANT_FALSE;
+			l->get_D1Axis(&axis1);
+			flag = VARIANT_FALSE;
+			l->IsDirection2Specified(&flag);
+			const bool specified = flag != VARIANT_FALSE;
+			l->get_D2TotalInstances(&s.side[1].count);
+			l->get_D2Spacing(&s.side[1].spacing);
+			flag = VARIANT_FALSE;
+			l->get_D2ReverseDirection(&flag);
+			s.side[1].reverse = flag != VARIANT_FALSE;
+			l->get_D2Axis(&axis2);
+			s.hasSide2 = specified && s.side[1].count > 1;
+			flag = VARIANT_FALSE;
+			l->get_BodyPattern(&flag);
+			s.bodyPattern = flag != VARIANT_FALSE;
+			l->get_PatternFeatureArray(&seeds);
+			l->GetPatternBodyCount(&s.bodies);
+		}
+		else
+		{
+			ICircularPatternFeatureData* c = d.circular;
+			s.circular = true;
+			c->get_TotalInstances(&s.side[0].count);
+			c->get_Spacing(&s.side[0].spacing);
+			c->get_ReverseDirection(&flag);
+			s.side[0].reverse = flag != VARIANT_FALSE;
+			flag = VARIANT_FALSE;
+			c->get_EqualSpacing(&flag);
+			s.equal = flag != VARIANT_FALSE;
+			c->get_Axis(&axis1);
+			flag = VARIANT_FALSE;
+			c->get_BodyPattern(&flag);
+			s.bodyPattern = flag != VARIANT_FALSE;
+			c->get_PatternFeatureArray(&seeds);
+			c->GetPatternBodyCount(&s.bodies);
+		}
+		DescribeSide(ids, axis1, s.side[0]);
+		if (s.hasSide2)
+			DescribeSide(ids, axis2, s.side[1]);
+		if (!s.bodyPattern)
+			s.seeds = FeatureList(seeds);
+		return s;
+	}
+
+	// Reads the pattern with its selections accessed, then releases them.
+	grpc::Status ReadPatternNow(IModelDoc2* doc, IModelDocExtension* ext, IFeature* feature, PatternSettings& s)
+	{
+		PatternData data;
+		if (grpc::Status status = PatternDataOf(feature, data); !status.ok())
+			return status;
+		if (HRESULT hr = data.Access(doc); FAILED(hr))
+			return ComError("AccessSelections (pattern)", hr);
+		s = ReadPattern(ext, data);
+		data.Release();
+		return grpc::Status::OK;
+	}
+
+	void DescribePatternSide(const PatternSideSettings& s, sld_mcp::v1::PatternSide* out)
+	{
+		out->set_what(s.what);
+		if (s.entity)
+			out->set_persist_id(s.persistId);
+		out->set_count(static_cast<int32_t>(s.count));
+		out->set_spacing(s.spacing);
+		out->set_reverse(s.reverse);
+	}
+
+	grpc::Status DescribePattern(IModelDoc2* doc, IModelDocExtension* ext, IFeature* feature,
+		sld_mcp::v1::PatternDefinition* out, PatternSettings* settings)
+	{
+		PatternSettings s;
+		if (grpc::Status status = ReadPatternNow(doc, ext, feature, s); !status.ok())
+			return status;
+		out->set_name(FeatureName(feature));
+		out->set_type_name(FeatureTypeName(feature));
+		out->set_circular(s.circular);
+		for (const auto& seed : s.seeds)
+			out->add_features(FeatureName(seed));
+		if (s.bodyPattern)
+			out->set_bodies(static_cast<int32_t>(s.bodies));
+		DescribePatternSide(s.side[0], out->mutable_direction1());
+		if (s.hasSide2)
+			DescribePatternSide(s.side[1], out->mutable_direction2());
+		out->set_equal_spacing(s.circular && s.equal);
+		for (const auto& display : FeatureDimensions(feature))
+			DescribeDimension(display, out->add_dimensions());
+		int32_t code = 0;
+		bool warning = false;
+		SetFeatureError(feature, code, warning);
+		out->set_error_code(code);
+		out->set_error_is_warning(warning);
+		if (settings)
+			*settings = s;
+		return grpc::Status::OK;
+	}
+
+	// A new direction / axis for one side: a reference from the request, or
+	// (putting one back) a persist id. Neither = keep.
+	struct AxisChange
+	{
+		const sld_mcp::v1::GeometryRef* ref = nullptr;
+		std::string persistId;
+	};
+
+	// Resolves an axis change where the pattern is built (the selections
+	// accessed).
+	grpc::Status ResolveAxis(IModelDoc2* doc, IModelDocExtension* ext, const AxisChange& change, bool circular,
+		const std::string& label, ATL::CComPtr<IDispatch>& obj)
+	{
+		if (change.ref)
+		{
+			Pick pick;
+			if (grpc::Status status = ResolvePick(doc, ext, *change.ref, pick); !status.ok())
+				return grpc::Status(status.error_code(), label + ": " + status.error_message() +
+					" (it must exist where the pattern is built)");
+			if (grpc::Status status = circular ? CheckPatternAxis(pick) : CheckDirection(pick, label); !status.ok())
+				return status;
+			if (!pick.obj)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, label + ": " + pick.what + " can't be used here");
+			obj = pick.obj;
+			return grpc::Status::OK;
+		}
+		if (grpc::Status status = ResolvePersistId(ext, change.persistId, obj); !status.ok())
+			return grpc::Status(status.error_code(), label + ": " + status.error_message());
+		return grpc::Status::OK;
+	}
+
+	// Gives the pattern `target`'s counts, spacings and directions, `axes`'
+	// new direction / axis entities and `seeds` (empty: keep) with
+	// IFeature::ModifyDefinition.
+	grpc::Status ApplyPattern(IModelDoc2* doc, IModelDocExtension* ext, IFeature* feature,
+		const PatternSettings& target, const AxisChange (&axes)[2], const std::vector<ATL::CComPtr<IFeature>>& seeds,
+		bool& modified)
+	{
+		modified = false;
+		PatternData data;
+		if (grpc::Status status = PatternDataOf(feature, data); !status.ok())
+			return status;
+		if (HRESULT hr = data.Access(doc); FAILED(hr))
+			return ComError("AccessSelections (pattern)", hr);
+		const PatternSettings current = ReadPattern(ext, data);
+		auto fail = [&](grpc::Status status) {
+			data.Release();
+			return status;
+		};
+
+		ATL::CComPtr<IDispatch> axis[2];
+		for (int i = 0; i < 2; ++i)
+			if (axes[i].ref || !axes[i].persistId.empty())
+				if (grpc::Status status = ResolveAxis(doc, ext, axes[i], target.circular,
+						target.circular ? "axis" : i == 0 ? "direction" : "direction2", axis[i]);
+					!status.ok())
+					return fail(status);
+
+		const auto bit = [](bool b) { return b ? VARIANT_TRUE : VARIANT_FALSE; };
+		const auto differs = [](double a, double b) { return std::abs(a - b) > 1e-12; };
+		const PatternSideSettings& want1 = target.side[0];
+		const PatternSideSettings& have1 = current.side[0];
+		if (data.linear)
+		{
+			ILinearPatternFeatureData* l = data.linear;
+			if (axis[0])
+				l->put_D1Axis(axis[0]);
+			if (want1.count != have1.count)
+				l->put_D1TotalInstances(want1.count);
+			if (differs(want1.spacing, have1.spacing))
+				l->put_D1Spacing(want1.spacing);
+			if (want1.reverse != have1.reverse)
+				l->put_D1ReverseDirection(bit(want1.reverse));
+			const PatternSideSettings& want2 = target.side[1];
+			const PatternSideSettings& have2 = current.side[1];
+			if (target.hasSide2)
+			{
+				if (axis[1])
+					l->put_D2Axis(axis[1]);
+				if (want2.count != have2.count || !current.hasSide2)
+					l->put_D2TotalInstances(want2.count);
+				if (differs(want2.spacing, have2.spacing))
+					l->put_D2Spacing(want2.spacing);
+				if (want2.reverse != have2.reverse)
+					l->put_D2ReverseDirection(bit(want2.reverse));
+			}
+			else if (current.hasSide2)
+				l->put_D2TotalInstances(1);
+		}
+		else
+		{
+			ICircularPatternFeatureData* c = data.circular;
+			if (axis[0])
+				c->put_Axis(axis[0]);
+			if (target.equal != current.equal)
+				c->put_EqualSpacing(bit(target.equal));
+			if (want1.count != have1.count)
+				c->put_TotalInstances(want1.count);
+			if (differs(want1.spacing, have1.spacing) || target.equal != current.equal)
+				c->put_Spacing(want1.spacing);
+			if (want1.reverse != have1.reverse)
+				c->put_ReverseDirection(bit(want1.reverse));
+		}
+		if (!seeds.empty())
+		{
+			std::vector<IDispatch*> list;
+			for (const auto& seed : seeds)
+				list.push_back(seed);
+			const ATL::CComVariant array = comvariant::FromDispatches(list);
+			if (data.linear)
+				data.linear->put_PatternFeatureArray(array);
+			else
+				data.circular->put_PatternFeatureArray(array);
+		}
+
+		VARIANT_BOOL ok = VARIANT_FALSE;
+		HRESULT hr = feature->ModifyDefinition(data.Get(), doc, nullptr, &ok);
+		if (FAILED(hr) || !ok)
+			data.Release();
+		if (FAILED(hr))
+			return ComError("IFeature::ModifyDefinition", hr);
+		modified = ok != VARIANT_FALSE;
+		return grpc::Status::OK;
+	}
+
+	// What differs between the pattern as read and as asked; empty if nothing.
+	std::string PatternMismatch(const PatternSettings& now, const PatternSettings& want, size_t seedCount)
+	{
+		const auto side = [&](int i) -> std::string {
+			const PatternSideSettings& a = now.side[i];
+			const PatternSideSettings& b = want.side[i];
+			const std::string which = i == 0 ? "" : " in the second direction";
+			if (a.count != b.count)
+				return std::to_string(a.count) + " instances" + which;
+			if (std::abs(a.spacing - b.spacing) > 1e-9)
+				return "spacing " + std::to_string(a.spacing) + which;
+			if (a.reverse != b.reverse)
+				return std::string(a.reverse ? "reversed" : "not reversed") + which;
+			return {};
+		};
+		if (std::string s = side(0); !s.empty())
+			return s;
+		if (now.hasSide2 != want.hasSide2)
+			return now.hasSide2 ? "a second direction" : "no second direction";
+		if (want.hasSide2)
+			if (std::string s = side(1); !s.empty())
+				return s;
+		if (now.circular && now.equal != want.equal)
+			return now.equal ? "equal spacing" : "no equal spacing";
+		if (seedCount && now.seeds.size() != seedCount)
+			return std::to_string(now.seeds.size()) + " patterned features";
+		return {};
+	}
 }
 
 grpc::Status SolidWorksService::PatternFeatures(grpc::ServerContext* /*context*/,
@@ -659,4 +1010,170 @@ grpc::Status SolidWorksService::PatternSketchEntities(grpc::ServerContext* /*con
 	ReadSketchState(sketch, sketchPid, response->mutable_state());
 	AddNewErrors(errorsBefore, FeatureErrors(FeatureTree(doc)), response->mutable_new_errors());
 	return grpc::Status::OK;
+}
+
+grpc::Status SolidWorksService::EditPattern(grpc::ServerContext* /*context*/,
+	const sld_mcp::v1::EditPatternRequest* request,
+	sld_mcp::v1::EditPatternResponse* response)
+{
+	// Validate before touching SolidWorks.
+	using Ref = sld_mcp::v1::GeometryRef;
+	const auto countOk = [](int32_t n) { return n >= 2 && n <= kMaxInstances; };
+	const auto spacingOk = [](double s) { return std::isfinite(s) && s > 0.0; };
+	if (request->has_count() && !countOk(request->count()))
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+			"count must be 2 to " + std::to_string(kMaxInstances) + " (the original included)");
+	if (request->has_count2() && !(request->count2() == 1 || countOk(request->count2())))
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+			"count2 must be 2 to " + std::to_string(kMaxInstances) + ", or 1 to remove the second direction");
+	if ((request->has_spacing() && !spacingOk(request->spacing())) ||
+		(request->has_spacing2() && !spacingOk(request->spacing2())))
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a spacing must be more than 0");
+	const bool newAxis = request->direction().target_case() != Ref::TARGET_NOT_SET;
+	const bool newAxis2 = request->direction2().target_case() != Ref::TARGET_NOT_SET;
+	const bool side2Change = request->has_count2() || request->has_spacing2() || request->has_reverse2() || newAxis2;
+	if (request->features_size() > kMaxSeeds)
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+			"at most " + std::to_string(kMaxSeeds) + " features per call");
+	const bool anyChange = request->has_count() || request->has_spacing() || request->has_reverse() ||
+		request->has_equal_spacing() || newAxis || side2Change || request->features_size() > 0;
+
+	std::lock_guard<std::mutex> lock(m_editMutex);
+	ComApartment com;
+	if (!com.Ok())
+		return ComApartmentError();
+
+	ATL::CComPtr<ISldWorks> swApp;
+	if (grpc::Status status = GetSwApp(swApp); !status.ok())
+		return status;
+
+	ATL::CComPtr<IModelDoc2> doc;
+	if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
+		return status;
+	ATL::CComPtr<IModelDocExtension> ext;
+	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+		return status;
+	PersistIds ids(ext);
+
+	const std::vector<TreeFeature> tree = FeatureTree(doc);
+	size_t index = 0;
+	if (grpc::Status status = ResolveFeatureTarget(ext, tree, ids, request->feature(), index); !status.ok())
+		return status;
+	ATL::CComPtr<IFeature> feature = tree[index].feature;
+	const std::string name = tree[index].name;
+
+	PatternSettings before;
+	if (grpc::Status status = DescribePattern(doc, ext, feature, response->mutable_before(), &before); !status.ok())
+		return status;
+	response->set_body_count(SolidBodyCount(doc));
+	if (!anyChange)
+		return grpc::Status::OK;
+
+	// What it should become: the current settings with the request's changes.
+	PatternSettings target = before;
+	PatternSideSettings& side1 = target.side[0];
+	PatternSideSettings& side2 = target.side[1];
+	if (before.circular)
+	{
+		if (side2Change)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"\"" + name + "\" is a circular pattern: it has no second direction");
+		// An angle comes with whether it's the total or the step; a spacing
+		// without (a linear one, in meters) is a mistake.
+		if (request->has_spacing() && !request->has_equal_spacing())
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"\"" + name + "\" is a circular pattern: give its spacing as an angle (angle_deg for the total, "
+				"spacing_deg between neighbours)");
+		if (request->has_spacing() && request->spacing() > 2 * kPi + 1e-9)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "the angle must be at most 360 degrees");
+		if (request->has_equal_spacing())
+			target.equal = request->equal_spacing();
+	}
+	else if (request->has_equal_spacing())
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+			"\"" + name + "\" is a linear pattern: give its spacing as a distance (spacing_mm); angles are for "
+			"circular ones");
+	if (request->has_count())
+		side1.count = request->count();
+	if (request->has_spacing())
+		side1.spacing = request->spacing();
+	if (request->has_reverse())
+		side1.reverse = request->reverse();
+	if (side2Change)
+	{
+		if (request->has_count2())
+			target.hasSide2 = request->count2() > 1;
+		else
+			target.hasSide2 = true;
+		if (!target.hasSide2 && (request->has_spacing2() || request->has_reverse2() || newAxis2))
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"count2 = 1 removes the second direction; give nothing else for it");
+		if (target.hasSide2 && !before.hasSide2)
+		{
+			if (!newAxis2 || !request->has_spacing2() || !request->has_count2())
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"\"" + name + "\" has no second direction yet -- give direction2, count2 and spacing2 to add one");
+			side2.reverse = false;
+		}
+		if (request->has_count2() && target.hasSide2)
+			side2.count = request->count2();
+		if (request->has_spacing2())
+			side2.spacing = request->spacing2();
+		if (request->has_reverse2())
+			side2.reverse = request->reverse2();
+	}
+	if (static_cast<long long>(side1.count) * (target.hasSide2 ? side2.count : 1) > kMaxInstances)
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+			"at most " + std::to_string(kMaxInstances) + " instances in all");
+	if (target.circular && !target.equal && side1.spacing * (side1.count - 1) >= 2 * kPi - 1e-9)
+		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+			std::to_string(side1.count) + " instances " + std::to_string(side1.spacing * 180.0 / kPi) +
+			" degrees apart don't fit in one turn");
+
+	std::vector<ATL::CComPtr<IFeature>> seeds;
+	if (request->features_size() > 0)
+	{
+		if (before.bodyPattern)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"\"" + name + "\" patterns bodies, not features -- delete it and pattern the features instead");
+		std::string names;
+		if (grpc::Status status = ResolveSeedFeatures(doc, ext, request->features(), "patterned",
+				"pattern the feature made from it", seeds, names);
+			!status.ok())
+			return status;
+	}
+
+	AxisChange axes[2];
+	if (newAxis)
+		axes[0].ref = &request->direction();
+	if (newAxis2)
+		axes[1].ref = &request->direction2();
+	// Putting it back: the old direction / axis entities where they changed.
+	AxisChange oldAxes[2];
+	if (newAxis)
+		oldAxes[0].persistId = before.side[0].persistId;
+	if (newAxis2 && before.hasSide2)
+		oldAxes[1].persistId = before.side[1].persistId;
+
+	DefinitionEdit edit;
+	edit.apply = [&](bool& modified) {
+		return ApplyPattern(doc, ext, feature, target, axes, seeds, modified);
+	};
+	edit.restore = [&]() {
+		bool ignored = false;
+		ApplyPattern(doc, ext, feature, before, oldAxes, seeds.empty() ? seeds : before.seeds, ignored);
+	};
+	edit.check = [&]() -> std::string {
+		PatternSettings now;
+		if (!ReadPatternNow(doc, ext, feature, now).ok())
+			return "no definition SolidWorks would hand out";
+		return PatternMismatch(now, target, seeds.size());
+	};
+	edit.rejected = "e.g. copies of a cut or fillet that find no material, copies of a boss that don't touch the "
+		"body, or a direction that doesn't suit";
+	if (grpc::Status status = EditDefinition(swApp, doc, feature, tree, edit, response->mutable_new_errors());
+		!status.ok())
+		return status;
+	response->set_body_count(SolidBodyCount(doc));
+	return DescribePattern(doc, ext, feature, response->mutable_after(), nullptr);
 }

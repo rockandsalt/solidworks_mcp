@@ -12,6 +12,7 @@ mod drawing;
 mod drawing_image;
 mod edit;
 mod equation;
+mod feature_edit;
 mod feature_order;
 mod files;
 mod fillet;
@@ -2333,8 +2334,8 @@ impl SolidWorksTools {
                        reference axis, or a planar face or plane (\"front\", \"face:3\") to \
                        pattern along its normal; count = instances including the original; \
                        spacing_mm = distance from one to the next. Which way an edge points \
-                       isn't obvious: if the copies go the wrong way, delete the pattern and \
-                       repeat with reverse_direction. To copy round an axis, use \
+                       isn't obvious: if the copies go the wrong way, edit_pattern with \
+                       reverse_direction=true. To copy round an axis, use \
                        circular_pattern_features; to copy sketch geometry inside a sketch, \
                        linear_pattern_sketch_entities. Requires an open part with no sketch being \
                        edited."
@@ -4591,6 +4592,99 @@ impl SolidWorksTools {
         let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = edit::mate_reply_text(&mut ids, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Change an existing constant-radius fillet of the active part, like Edit \
+                       Feature: radius_mm, tangent_propagation, and what it rounds -- edges (all \
+                       new), add_edges or remove_edges. `feature` = \"feature:N\" from \
+                       inspect_model or a name like \"Fillet1\". With only feature it reports the \
+                       fillet, its edges and faces as ids (as the model is before the fillet: \
+                       give those to remove_edges). Edges to round are inspect_model edge/face ids \
+                       that exist before the fillet, not ones it or a later feature made; to pick \
+                       edges the fillet or a later feature hides, rollback before it, \
+                       inspect_model, then rollback to the end. If SolidWorks rejects the change \
+                       or the fillet fails to rebuild with it, the old settings are put back and \
+                       the reason reported. Reports before/after and other features that now \
+                       fail. For just the radius, set_dimension on D1@<fillet> works too. Requires \
+                       no sketch open for editing."
+    )]
+    async fn edit_fillet(
+        &self,
+        Parameters(params): Parameters<feature_edit::EditFilletParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            feature_edit::fillet_request(&ids, &params)?
+        };
+        let reply = self
+            .addin
+            .edit_fillet(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let text = feature_edit::fillet_reply_text(&mut ids, &params, &reply);
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Change an existing linear or circular feature pattern of the active part, \
+                       like Edit Feature: count, spacing_mm (linear) or angle_deg / spacing_deg \
+                       (circular), reverse_direction, a new direction (linear) or axis \
+                       (circular), a linear pattern's second direction (count2 -- 1 removes it \
+                       --, spacing2_mm, reverse_direction2, direction2), or the features it \
+                       copies. `feature` = \"feature:N\" from inspect_model or a name like \
+                       \"LPattern1\". Only what's given changes; with nothing else given it just \
+                       reports the pattern. If SolidWorks rejects the change or the pattern fails \
+                       to rebuild with it (e.g. copies of a cut that find no material), the old \
+                       settings are put back and the reason reported. Reports before/after and \
+                       other features that now fail. Requires no sketch open for editing."
+    )]
+    async fn edit_pattern(
+        &self,
+        Parameters(params): Parameters<feature_edit::EditPatternParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            feature_edit::pattern_request(&ids, &params)?
+        };
+        let features = params.features.clone().unwrap_or_default();
+        let reply = self
+            .addin
+            .edit_pattern(request)
+            .await
+            .map_err(|status| delete::with_legend(self.addin_error(status), "feature", &features))?;
+        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let text = feature_edit::pattern_reply_text(&mut ids, &params, &reply);
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Change an existing sweep or cut-sweep of the active part, like Edit \
+                       Feature: path (the feature-tree name of a sketch, 3D sketch or helix), the \
+                       profile (sketch_name, or circle_diameter_mm for a round section) or \
+                       twist_deg. `feature` = \"feature:N\" from inspect_model or a name like \
+                       \"Sweep1\". Only what's given changes; with nothing else given it just \
+                       reports the sweep. To change the profile's or the path's shape, edit their \
+                       sketches with the sketch tools instead. If SolidWorks rejects the change or \
+                       the sweep fails to rebuild with it, the old settings are put back and the \
+                       reason reported. Reports before/after and other features that now fail. \
+                       Requires no sketch open for editing."
+    )]
+    async fn edit_sweep(
+        &self,
+        Parameters(params): Parameters<feature_edit::EditSweepParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            feature_edit::sweep_request(&ids, &params)?
+        };
+        let reply = self
+            .addin
+            .edit_sweep(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(feature_edit::sweep_reply_text(&params, &reply))]))
     }
     #[tool(
         description = "Add a reference plane to the active part, like Insert > Reference Geometry \

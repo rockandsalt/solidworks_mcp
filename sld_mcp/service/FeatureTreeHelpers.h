@@ -70,4 +70,36 @@ namespace sld_mcp::service
 		PersistIds& ids, const sld_mcp::v1::FeatureTarget& target, size_t& index);
 
 	bool IsSketchType(const std::string& type);
+
+	// Removes the entries for feature `name` from a list of problems.
+	void DropProblem(google::protobuf::RepeatedPtrField<sld_mcp::v1::FeatureProblem>* problems,
+		const std::string& name);
+
+	// One change to a feature's definition (EditFillet, EditPattern,
+	// EditSweep; docs/notes/editing.md).
+	struct DefinitionEdit
+	{
+		// Writes the change through IFeature::ModifyDefinition; `modified` =
+		// what that returned. An error status means nothing was changed.
+		std::function<grpc::Status(bool& modified)> apply;
+		// Puts the old definition back (best effort).
+		std::function<void()> restore;
+		// After the rebuild: what came out differently from what was asked,
+		// e.g. "3 edges"; empty if the change took.
+		std::function<std::string()> check;
+		// For a change SolidWorks rejects: "e.g. ...".
+		std::string rejected;
+	};
+
+	// Runs `edit` all or nothing, with no error dialogs: rebuilds, and puts
+	// the old definition back (FAILED_PRECONDITION saying why) if SolidWorks
+	// rejected the change, the feature fails to rebuild or makes no faces
+	// with it, or `check` finds it didn't take. Then `newErrors` = other
+	// features whose rebuild error is new since `tree` was read.
+	grpc::Status EditDefinition(ISldWorks* swApp, IModelDoc2* doc, IFeature* feature,
+		const std::vector<TreeFeature>& tree, const DefinitionEdit& edit,
+		google::protobuf::RepeatedPtrField<sld_mcp::v1::FeatureProblem>* newErrors);
+
+	// The feature's error as of the last rebuild into `code` / `warning`.
+	void SetFeatureError(IFeature* feature, int32_t& code, bool& warning);
 }

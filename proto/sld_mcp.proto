@@ -589,6 +589,17 @@ service SolidWorks {
   // stay moved). Preconditions as AddMate.
   rpc EditMate(EditMateRequest) returns (EditMateResponse);
 
+  // Change a constant-radius fillet (its edges and faces, radius, tangent
+  // propagation), a linear or circular feature pattern (counts, spacing,
+  // directions / axis, the features it copies) or a sweep (path, profile,
+  // circle diameter, twist) of the active part, through the feature's
+  // definition (IFeature::ModifyDefinition), all or nothing as EditExtrude.
+  // FAILED_PRECONDITION if the active document isn't a part or a sketch is
+  // open; INVALID_ARGUMENT if the feature isn't of that kind.
+  rpc EditFillet(EditFilletRequest) returns (EditFilletResponse);
+  rpc EditPattern(EditPatternRequest) returns (EditPatternResponse);
+  rpc EditSweep(EditSweepRequest) returns (EditSweepResponse);
+
   // Saves the active document, silently (no dialogs): to its own file
   // (IModelDoc2::Save3), or with a path as a new file / an export in the
   // format of the path's extension (IModelDocExtension::SaveAs, with the
@@ -4384,6 +4395,142 @@ message EditMateResponse {
   repeated ComponentInfo components = 4;
   // Other features (mates) whose rebuild error is new or different.
   repeated FeatureProblem new_errors = 5;
+}
+
+// EditFillet, EditPattern, EditSweep: like EditExtrude, unset fields keep
+// their value, nothing set only reports, and the old definition is put
+// back if SolidWorks rejects the change, the feature fails to rebuild or
+// makes nothing with it, or the readback differs.
+
+// An edge or face a fillet rounds, as the model is where the fillet is built
+// (before it: the rounded edges themselves are gone afterwards).
+message FilletItem {
+  bytes persist_id = 1;
+  bool face = 2;  // a face: all its edges
+}
+
+message FilletDefinition {
+  string name = 1;
+  // swFeatureFilletType_e: 0 constant radius (the only kind EditFillet
+  // changes), 1 variable radius, 2 face, 3 full round.
+  int32 fillet_type = 2;
+  double radius = 3;  // meters
+  bool multiple_radius = 4;  // per-edge radii; `radius` is the default one
+  bool tangent_propagation = 5;
+  repeated FilletItem items = 6;
+  // Loops and features it rounds too: kept as they are.
+  int32 other_items = 7;
+  repeated DimensionInfo dimensions = 8;
+  int32 error_code = 9;  // swFeatureError_e as of the last rebuild
+  bool error_is_warning = 10;
+}
+
+message EditFilletRequest {
+  FeatureTarget feature = 1;
+  optional double radius = 2;  // meters, > 0; not with multiple radii
+  optional bool tangent_propagation = 3;
+  // Round these instead of the current items: edges and faces by persist_id
+  // from InspectModel; each must exist where the fillet is built (not made
+  // by the fillet or a later feature).
+  repeated bytes edges = 4;
+  // Round these as well (as `edges`). Not with `edges`.
+  repeated bytes add_edges = 5;
+  // Stop rounding these: persist ids from FilletDefinition.items.
+  repeated bytes remove_edges = 6;
+}
+
+message EditFilletResponse {
+  FilletDefinition before = 1;
+  FilletDefinition after = 2;  // unset when nothing was asked
+  repeated FeatureProblem new_errors = 3;
+}
+
+message PatternSide {
+  // The direction / axis, for messages: "edge", "face", "Axis1", "Front
+  // Plane", "sketch line of Sketch3".
+  string what = 1;
+  bytes persist_id = 2;  // its persist id, when it's a face or an edge
+  int32 count = 3;       // instances, the original included
+  // Linear: meters between instances. Circular: radians, the total angle
+  // with equal_spacing, else between neighbouring instances.
+  double spacing = 4;
+  bool reverse = 5;
+}
+
+message PatternDefinition {
+  string name = 1;
+  string type_name = 2;  // LPattern, CirPattern
+  bool circular = 3;
+  repeated string features = 4;  // what it copies, in SolidWorks' order
+  int32 bodies = 5;              // body patterns: how many bodies it copies
+  PatternSide direction1 = 6;    // circular: the axis
+  PatternSide direction2 = 7;    // linear, when it has a second direction
+  bool equal_spacing = 8;        // circular
+  repeated DimensionInfo dimensions = 9;
+  int32 error_code = 10;
+  bool error_is_warning = 11;
+}
+
+message EditPatternRequest {
+  FeatureTarget feature = 1;
+  optional int32 count = 2;   // >= 2
+  optional double spacing = 3;  // as PatternSide.spacing, > 0
+  optional bool reverse = 4;
+  optional bool equal_spacing = 5;  // circular only
+  // A new direction (linear) or axis (circular), as in PatternFeaturesRequest;
+  // unset keeps it.
+  GeometryRef direction = 6;
+  // Linear only. 1 removes the second direction; adding one takes
+  // direction2, count2 and spacing2.
+  optional int32 count2 = 7;
+  optional double spacing2 = 8;
+  optional bool reverse2 = 9;
+  GeometryRef direction2 = 10;
+  // Copy these features instead (not for body patterns); empty keeps them.
+  repeated FeatureTarget features = 11;
+}
+
+message EditPatternResponse {
+  PatternDefinition before = 1;
+  PatternDefinition after = 2;  // unset when nothing was asked
+  repeated FeatureProblem new_errors = 3;
+  int32 body_count = 4;  // solid bodies in the part afterwards
+}
+
+message SweepDefinition {
+  string name = 1;
+  string type_name = 2;
+  bool cut = 3;
+  string profile = 4;  // the profile sketch; empty for a circular profile
+  double circle_diameter = 5;  // meters, circular profiles
+  string path = 6;
+  // swTwistControlType_e; 8 = constant twist along the path.
+  int32 twist_control = 7;
+  double twist_angle = 8;  // radians, with constant twist
+  int32 guide_curves = 9;
+  repeated DimensionInfo dimensions = 10;
+  int32 error_code = 11;
+  bool error_is_warning = 12;
+}
+
+message EditSweepRequest {
+  FeatureTarget feature = 1;
+  // Feature-tree names; empty keeps. A profile sketch replaces a circular
+  // profile.
+  string path = 2;
+  string sketch_name = 3;
+  // Meters, > 0: sweep a circle of this diameter instead (or resize it).
+  // Not with sketch_name.
+  optional double circle_diameter = 4;
+  // Radians: constant twist from the start of the path to its end; 0 = the
+  // profile follows the path.
+  optional double twist_angle = 5;
+}
+
+message EditSweepResponse {
+  SweepDefinition before = 1;
+  SweepDefinition after = 2;  // unset when nothing was asked
+  repeated FeatureProblem new_errors = 3;
 }
 
 // ---------------------------------------------------------------------------

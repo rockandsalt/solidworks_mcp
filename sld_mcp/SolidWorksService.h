@@ -271,6 +271,18 @@ public:
 		const sld_mcp::v1::EditMateRequest* request,
 		sld_mcp::v1::EditMateResponse* response) override;
 
+	grpc::Status EditFillet(grpc::ServerContext* context,
+		const sld_mcp::v1::EditFilletRequest* request,
+		sld_mcp::v1::EditFilletResponse* response) override;
+
+	grpc::Status EditPattern(grpc::ServerContext* context,
+		const sld_mcp::v1::EditPatternRequest* request,
+		sld_mcp::v1::EditPatternResponse* response) override;
+
+	grpc::Status EditSweep(grpc::ServerContext* context,
+		const sld_mcp::v1::EditSweepRequest* request,
+		sld_mcp::v1::EditSweepResponse* response) override;
+
 	grpc::Status SaveDocument(grpc::ServerContext* context,
 		const sld_mcp::v1::SaveDocumentRequest* request,
 		sld_mcp::v1::SaveDocumentResponse* response) override;

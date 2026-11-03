@@ -683,6 +683,30 @@ impl AddinClient {
         Ok(client.edit_mate(request).await?.into_inner())
     }
 
+    pub async fn edit_fillet(
+        &self,
+        request: proto::EditFilletRequest,
+    ) -> Result<proto::EditFilletResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.edit_fillet(request).await?.into_inner())
+    }
+
+    pub async fn edit_pattern(
+        &self,
+        request: proto::EditPatternRequest,
+    ) -> Result<proto::EditPatternResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.edit_pattern(request).await?.into_inner())
+    }
+
+    pub async fn edit_sweep(
+        &self,
+        request: proto::EditSweepRequest,
+    ) -> Result<proto::EditSweepResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.edit_sweep(request).await?.into_inner())
+    }
+
     pub async fn save_document(
         &self,
         request: proto::SaveDocumentRequest,
