@@ -82,6 +82,20 @@ namespace sld_mcp::service
 		std::vector<std::pair<long, double>> m_savedDoubles;
 	};
 
+	// The left side of an equation without its quotes ("Width" for
+	// "\"Width\" = 50"), or empty.
+	std::string EquationName(const std::string& equation);
+
+	// Whether two names are the same, ignoring case and a trailing
+	// "@<document>" ("D1@Sketch1@block.Part").
+	bool SameDimensionName(const std::string& a, const std::string& b);
+
+	// The document's equations as SolidWorks has them, in its order.
+	std::vector<std::string> ReadEquations(IEquationMgr* equations);
+
+	// The equation that drives the dimension `name`, or empty.
+	std::string EquationDriving(IModelDoc2* doc, const std::string& name);
+
 	const char* DimensionKindName(sld_mcp::v1::DimensionKind kind);
 
 	// Creates the dimension for what's selected, with its text at `at`

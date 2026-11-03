@@ -1172,6 +1172,18 @@ grpc::Status SolidWorksService::SetDimensionValue(grpc::ServerContext* /*context
 	if (paramType == swDimensionParamTypeDoubleLinear && angle)
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "\"" + request->name() + "\" is a length; give millimeters");
 
+	// SetSystemValue3 succeeds on these, and the next rebuild or table
+	// update puts the old value back (seen 2026-11-02).
+	if (const std::string equation = EquationDriving(doc, request->name()); !equation.empty())
+		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+			"\"" + request->name() + "\" is driven by the equation " + equation +
+			" -- change or delete the equation (equations tool) instead");
+	VARIANT_BOOL inTable = VARIANT_FALSE;
+	if (SUCCEEDED(dim->IsDesignTableDimension(&inTable)) && inTable)
+		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+			"\"" + request->name() + "\" is a column of the design table, which sets it in each configuration -- "
+			"change its cells (design_table tool) instead");
+
 	const ConfigurationList configs = ReadConfigurations(doc);
 	std::vector<std::string> targets;
 	if (grpc::Status status = ScopeConfigurations(configs, request->scope(), request->configurations(), targets);

@@ -386,6 +386,7 @@
     <ClCompile Include="service\Macro.cpp" />
     <ClCompile Include="service\Visibility.cpp" />
     <ClCompile Include="service\Configurations.cpp" />
+    <ClCompile Include="service\Equations.cpp" />
     <ClCompile Include="service\ConfigurationHelpers.cpp" />
     <ClCompile Include="service\Helix.cpp" />
     <ClCompile Include="service\FeatureTreeHelpers.cpp" />

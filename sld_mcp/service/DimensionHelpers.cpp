@@ -123,6 +123,49 @@ namespace sld_mcp::service
 		}
 	}
 
+	std::string EquationName(const std::string& equation)
+	{
+		const size_t open = equation.find('"');
+		const size_t close = open == std::string::npos ? open : equation.find('"', open + 1);
+		return close == std::string::npos ? std::string() : equation.substr(open + 1, close - open - 1);
+	}
+
+	bool SameDimensionName(const std::string& a, const std::string& b)
+	{
+		auto trimmed = [](const std::string& name) {
+			const size_t first = name.find('@');
+			const size_t second = first == std::string::npos ? first : name.find('@', first + 1);
+			return second == std::string::npos ? name : name.substr(0, second);
+		};
+		return _stricmp(trimmed(a).c_str(), trimmed(b).c_str()) == 0;
+	}
+
+	std::vector<std::string> ReadEquations(IEquationMgr* equations)
+	{
+		std::vector<std::string> out;
+		long count = 0;
+		if (!equations || FAILED(equations->GetCount(&count)))
+			return out;
+		for (long i = 0; i < count; ++i)
+		{
+			ATL::CComBSTR text;
+			equations->get_Equation(i, &text);
+			out.push_back(ToUtf8(text));
+		}
+		return out;
+	}
+
+	std::string EquationDriving(IModelDoc2* doc, const std::string& name)
+	{
+		ATL::CComPtr<IEquationMgr> equations;
+		if (FAILED(doc->GetEquationMgr(&equations)) || !equations)
+			return {};
+		for (const std::string& equation : ReadEquations(equations))
+			if (SameDimensionName(EquationName(equation), name))
+				return equation;
+		return {};
+	}
+
 	HRESULT CreateDimension(IModelDoc2* doc, sld_mcp::v1::DimensionKind kind, const double at[3],
 		ATL::CComPtr<IDispatch>& created)
 	{

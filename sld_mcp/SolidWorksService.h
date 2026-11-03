@@ -307,6 +307,14 @@ public:
 		const sld_mcp::v1::SetSuppressionRequest* request,
 		sld_mcp::v1::SetSuppressionResponse* response) override;
 
+	grpc::Status Equations(grpc::ServerContext* context,
+		const sld_mcp::v1::EquationsRequest* request,
+		sld_mcp::v1::EquationsResponse* response) override;
+
+	grpc::Status DesignTable(grpc::ServerContext* context,
+		const sld_mcp::v1::DesignTableRequest* request,
+		sld_mcp::v1::DesignTableResponse* response) override;
+
 private:
 	// gRPC runs handlers on its own thread pool, not on SolidWorks' main
 	// STA thread, so ISldWorks can't be used directly. This fetches a

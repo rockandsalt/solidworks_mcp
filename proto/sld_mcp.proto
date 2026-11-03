@@ -662,6 +662,26 @@ service SolidWorks {
   // be; FAILED_PRECONDITION if the active document isn't a part or
   // assembly, a sketch is open, or SolidWorks changed nothing that needed it.
   rpc SetSuppression(SetSuppressionRequest) returns (SetSuppressionResponse);
+
+  // Lists the equations and global variables of the active part or
+  // assembly, after deleting and setting the ones asked for (deletes first,
+  // then sets in order), and rebuilds if anything changed. All or nothing:
+  // after a refusal the equations are as they were. INVALID_ARGUMENT for a
+  // name to delete that has no equation or an equation SolidWorks refuses;
+  // FAILED_PRECONDITION if the active document isn't a part or assembly or
+  // a sketch is open (except to list).
+  rpc Equations(EquationsRequest) returns (EquationsResponse);
+
+  // Reads the design table (the Excel table that drives configurations) of
+  // the active part or assembly, after writing or deleting it if asked.
+  // Writing replaces the table's content, making the table first if there
+  // is none, and SolidWorks creates the configurations its rows name.
+  // Every column is checked first. INVALID_ARGUMENT for a column SolidWorks
+  // can't use; FAILED_PRECONDITION if the active document isn't a part or
+  // assembly, a sketch is open, or SolidWorks can't open the table (it
+  // needs Microsoft Excel). SolidWorks may show error dialogs while
+  // applying the table: the caller closes them.
+  rpc DesignTable(DesignTableRequest) returns (DesignTableResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -4574,4 +4594,73 @@ message SetSuppressionResponse {
   repeated string also_changed = 2;
   string active = 3;  // the active configuration (as before the call)
   repeated FeatureProblem new_errors = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Equations, global variables, design tables
+
+// Sets the equation whose left side is `name`, or adds one.
+message EquationChange {
+  // A global variable ("Width") or a dimension ("D1@Sketch1"), no quotes.
+  string name = 1;
+  // The right side as SolidWorks takes it: "50", "\"Width\" / 2 + 5mm".
+  string expression = 2;
+}
+
+message EquationsRequest {
+  // By name (the left side, case-insensitive).
+  repeated string delete = 1;
+  repeated EquationChange set = 2;
+}
+
+message EquationInfo {
+  string name = 1;      // the left side, without quotes
+  string equation = 2;  // as SolidWorks has it: "\"Width\" = 50"
+  bool global = 3;      // a global variable; else it drives a dimension
+  // As SolidWorks evaluates it: lengths in the document's units, angles in
+  // degrees.
+  double value = 4;
+  // Dimensions, when the name resolves: after the rebuild.
+  DimensionInfo dimension = 5;
+}
+
+message EquationsResponse {
+  repeated EquationInfo equations = 1;  // in SolidWorks' order
+  repeated FeatureProblem new_errors = 2;
+}
+
+message DesignTableRow {
+  string configuration = 1;
+  // One per column, as the cells show them; empty = no value for that
+  // configuration.
+  repeated string values = 2;
+}
+
+message DesignTableContent {
+  // The header row: "D1@Sketch1", "$STATE@Cut-Extrude1",
+  // "$VALUE@Width@equations", "$DESCRIPTION", ...
+  repeated string columns = 1;
+  repeated DesignTableRow rows = 2;
+}
+
+message DesignTableRequest {
+  // None: only read.
+  oneof action {
+    DesignTableContent write = 1;
+    // Configurations stay, with the values they have.
+    bool delete = 2;
+  }
+}
+
+message DesignTableResponse {
+  bool exists = 1;
+  // After the action; as far as the first empty header cell and the first
+  // row without a configuration name (where SolidWorks stops reading).
+  DesignTableContent table = 2;
+  // Write: configurations the table made.
+  repeated string created_configurations = 3;
+  string active = 4;  // the active configuration
+  // swDesignTableErrors_e after writing; 0 = none.
+  int32 table_error = 5;
+  repeated FeatureProblem new_errors = 6;
 }

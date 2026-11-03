@@ -4,12 +4,14 @@ mod center_mark;
 mod component;
 mod configuration;
 mod delete;
+mod design_table;
 mod diagnose;
 mod discovery;
 mod draft;
 mod drawing;
 mod drawing_image;
 mod edit;
+mod equation;
 mod files;
 mod fillet;
 mod gdt;
@@ -1207,6 +1209,42 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(configuration::suppression_text(&params, &reply))]))
+    }
+
+    #[tool(
+        description = "Equations and global variables of the active part or assembly: with no                        arguments, lists them with their values. `set` adds equations or replaces                        the one with the same name: a global variable (name \"Width\", expression                        \"50\") or a dimension driven by an expression (name \"D1@Boss-Extrude1\",                        expression \"\\\"Width\\\" / 2\"). In expressions, names go in double                        quotes; plain numbers are in the document's units (document_units), or                        write them with units (\"25mm\", \"1in\", \"30deg\"); functions such as                        sin, sqr, IIF(cond, a, b) work, trigonometry in degrees. `delete` removes                        equations by name (refused while another equation uses the global                        variable). All or nothing; the model is rebuilt, and the reply lists                        every equation with its value (dimensions in mm / degrees) and features                        that now fail to rebuild. A dimension an equation drives can't be changed                        with set_dimension. Equations apply to all configurations; for values per                        configuration use design_table ($VALUE@<variable>@equations columns).                        Requires no sketch open for editing (except to list)."
+    )]
+    async fn equations(
+        &self,
+        Parameters(params): Parameters<equation::EquationsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let listing = self
+            .addin
+            .equations(proto::EquationsRequest::default())
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let request = equation::request(&params, &listing.equations)?;
+        let reply = if params.changes_anything() {
+            self.addin.equations(request.clone()).await.map_err(|status| self.addin_error(status))?
+        } else {
+            listing
+        };
+        let unit = self.active_units().map_or("millimeters", |u| units::length_name(&u));
+        Ok(CallToolResult::success(vec![ContentBlock::text(equation::equations_text(&params, &request, &reply, unit))]))
+    }
+
+    #[tool(
+        description = "The design table of the active part or assembly: SolidWorks' Excel table with                        a row per configuration and a column per dimension, suppression state,                        global variable or property, which sets each configuration's values (a                        family of parts: lengths of a bolt, sizes of a bracket). action=\"read\"                        (default) gives the table; \"write\" replaces its content with `columns`                        and `rows` (making the table if there is none): SolidWorks creates the                        configurations the rows name and sets their values -- configurations                        without a row keep theirs; \"delete\" removes the table, keeping the                        configurations and their values. Columns are checked before anything is                        written; problems SolidWorks finds while applying the table are in the                        reply. Dimensions a table drives can't be changed with set_dimension:                        change their cells. Needs Microsoft Excel. Requires no sketch open for                        editing (except to read)."
+    )]
+    async fn design_table(
+        &self,
+        Parameters(params): Parameters<design_table::DesignTableParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = design_table::request(&params)?;
+        // SolidWorks reports a column or value it can't use in a modal dialog.
+        let (reply, dialogs) = macro_run::closing_dialogs(self.addin.design_table(request)).await;
+        let reply = reply.map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(design_table::reply_text(&params, &reply, &dialogs))]))
     }
 
     #[tool(
@@ -3905,8 +3943,9 @@ impl SolidWorksTools {
                        for angles. With several configurations: `configurations` (names) or \
                        all_configurations=true says where the value goes; by default SolidWorks \
                        picks (all of them while the dimension has one value for all, else only the \
-                       active one), and the reply gives the value in each. Requires no sketch open \
-                       for editing."
+                       active one), and the reply gives the value in each. A dimension driven by an \
+                       equation or a design table is refused: change those (equations, \
+                       design_table). Requires no sketch open for editing."
     )]
     async fn set_dimension(
         &self,
@@ -5358,7 +5397,9 @@ impl ServerHandler for SolidWorksTools {
                  part or assembly, e.g. lengths of a bolt): the configurations tool lists, \
                  creates, activates and deletes them, set_dimension `configurations` sets a value \
                  in some of them, and set_suppression suppresses features or components per \
-                 configuration. To undo or rework: undo takes back \
+                 configuration. Parameters: the equations tool sets global variables and \
+                 equations that drive dimensions; design_table sets values for many \
+                 configurations at once. To undo or rework: undo takes back \
                  the last steps; delete_features removes features (sketches, extrudes, cuts, holes, \
                  fillets, planes, mates, ...) by inspect_model id or name, refusing unless told \
                  what to do with features that depend on them; delete_sketch_entities removes \

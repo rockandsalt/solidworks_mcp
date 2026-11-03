@@ -253,20 +253,13 @@ async fn run_in(addin: &AddinClient, code: &str, folder: &Path) -> Result<String
     std::fs::write(&files.source, source)
         .map_err(|error| Failure::new(McpError::internal_error(format!("can't write the macro: {error}"), None)))?;
 
-    let mut watcher = dialogs::Watcher::new(discovery::find().ok().and_then(|target| target.pid));
-    let call = addin.run_macro(proto::RunMacroRequest { path: files.source.to_string_lossy().into_owned() });
-    tokio::pin!(call);
-    let mut poll = tokio::time::interval(DIALOG_POLL);
-    let result = loop {
-        tokio::select! {
-            result = &mut call => break result,
-            _ = poll.tick() => watcher.close_new(),
-        }
-    };
+    let (result, closed) =
+        closing_dialogs(addin.run_macro(proto::RunMacroRequest { path: files.source.to_string_lossy().into_owned() }))
+            .await;
 
     let output = read_text(&files.output);
     let failed = |headline: String, still_running: bool| Failure {
-        error: McpError::internal_error(reply_text(&headline, output.clone(), &watcher.closed), None),
+        error: McpError::internal_error(reply_text(&headline, output.clone(), &closed), None),
         still_running,
     };
     let reply = match result {
@@ -302,9 +295,26 @@ async fn run_in(addin: &AddinClient, code: &str, folder: &Path) -> Result<String
     Ok(reply_text(
         "The macro ran. Ids of what it changed may no longer work: inspect_model again before using them.",
         output,
-        &watcher.closed,
+        &closed,
     ))
 }
+
+/// Runs an add-in call while closing the dialogs SolidWorks opens meanwhile
+/// (they would block it), and says which ones were closed.
+pub async fn closing_dialogs<F: std::future::Future>(call: F) -> (F::Output, Vec<Closed>) {
+    let mut watcher = dialogs::Watcher::new(discovery::find().ok().and_then(|target| target.pid));
+    tokio::pin!(call);
+    let mut poll = tokio::time::interval(DIALOG_POLL);
+    let result = loop {
+        tokio::select! {
+            result = &mut call => break result,
+            _ = poll.tick() => watcher.close_new(),
+        }
+    };
+    (result, watcher.closed)
+}
+
+pub use dialogs::Closed;
 
 /// Closing dialogs of SolidWorks: runtime errors the macro's main can't catch,
 /// MsgBox and whatever an API call asks.

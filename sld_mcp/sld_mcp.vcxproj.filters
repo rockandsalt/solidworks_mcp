@@ -198,6 +198,9 @@
     <ClCompile Include="service\Configurations.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>
+    <ClCompile Include="service\Equations.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
     <ClCompile Include="service\ConfigurationHelpers.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>
