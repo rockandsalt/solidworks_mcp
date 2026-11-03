@@ -12,6 +12,7 @@ mod drawing;
 mod drawing_image;
 mod edit;
 mod equation;
+mod feature_order;
 mod files;
 mod fillet;
 mod gdt;
@@ -1209,6 +1210,36 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(configuration::suppression_text(&params, &reply))]))
+    }
+
+    #[tool(
+        description = "Move the rollback bar of the active part or assembly, as dragging it in the                        feature tree: `before` a feature (it and everything below it are rolled                        back), `after` a feature, or neither to roll everything forward again.                        Rolled-back features are left out of the model -- no geometry, mass or                        rebuild -- until the bar moves down, and inspect_model marks them                        rolled_back. New features made while rolled back go in at the bar, above                        the rolled-back ones: the way to add something early in the history. Read                        back; the reply lists what is rolled back. Saving keeps the bar where it is.                        Requires no sketch open for editing."
+    )]
+    async fn rollback(
+        &self,
+        Parameters(params): Parameters<feature_order::RollbackParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            feature_order::rollback_request(&ids, &params)?
+        };
+        let reply = self.addin.rollback(request).await.map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(feature_order::rollback_text(&params, &reply))]))
+    }
+
+    #[tool(
+        description = "Move a feature of the active part or assembly in the feature tree, just                        `before` or just `after` another one (ids from inspect_model or names); what                        it absorbed, such as its sketch, goes with it. Order changes the result: a                        fillet before a cut rounds the edges the cut doesn't remove, a shell after a                        boss hollows that boss too. SolidWorks refuses to put a feature above what it                        is built on (its sketch's plane or face, the edges it uses) or below what is                        built on it; the refusal names those. The model is rebuilt; the reply gives                        the feature's new neighbours and features that now fail to rebuild. Requires                        no sketch open for editing."
+    )]
+    async fn reorder_feature(
+        &self,
+        Parameters(params): Parameters<feature_order::ReorderParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            feature_order::reorder_request(&ids, &params)?
+        };
+        let reply = self.addin.reorder_feature(request).await.map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(feature_order::reorder_text(&reply))]))
     }
 
     #[tool(
@@ -5397,7 +5428,7 @@ impl ServerHandler for SolidWorksTools {
                  part or assembly, e.g. lengths of a bolt): the configurations tool lists, \
                  creates, activates and deletes them, set_dimension `configurations` sets a value \
                  in some of them, and set_suppression suppresses features or components per \
-                 configuration. Parameters: the equations tool sets global variables and \
+                 configuration. The feature tree's history: rollback moves the rollback bar                  (to add a feature early, or look at the model as it was), reorder_feature                  moves a feature before or after another. Parameters: the equations tool sets global variables and \
                  equations that drive dimensions; design_table sets values for many \
                  configurations at once. To undo or rework: undo takes back \
                  the last steps; delete_features removes features (sketches, extrudes, cuts, holes, \

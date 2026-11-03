@@ -81,6 +81,9 @@ namespace
 				VARIANT_BOOL suppressed = VARIANT_FALSE;
 				if (SUCCEEDED(feature->IsSuppressed(&suppressed)))
 					info->set_suppressed(suppressed != VARIANT_FALSE);
+				VARIANT_BOOL rolledBack = VARIANT_FALSE;
+				if (SUCCEEDED(feature->IsRolledBack(&rolledBack)))
+					info->set_rolled_back(rolledBack != VARIANT_FALSE);
 
 				VARIANT_BOOL warning = VARIANT_FALSE;
 				long errorCode = swFeatureErrorNone;

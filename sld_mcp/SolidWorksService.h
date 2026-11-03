@@ -315,6 +315,14 @@ public:
 		const sld_mcp::v1::DesignTableRequest* request,
 		sld_mcp::v1::DesignTableResponse* response) override;
 
+	grpc::Status Rollback(grpc::ServerContext* context,
+		const sld_mcp::v1::RollbackRequest* request,
+		sld_mcp::v1::RollbackResponse* response) override;
+
+	grpc::Status ReorderFeature(grpc::ServerContext* context,
+		const sld_mcp::v1::ReorderFeatureRequest* request,
+		sld_mcp::v1::ReorderFeatureResponse* response) override;
+
 private:
 	// gRPC runs handlers on its own thread pool, not on SolidWorks' main
 	// STA thread, so ISldWorks can't be used directly. This fetches a

@@ -682,6 +682,24 @@ service SolidWorks {
   // needs Microsoft Excel). SolidWorks may show error dialogs while
   // applying the table: the caller closes them.
   rpc DesignTable(DesignTableRequest) returns (DesignTableResponse);
+
+  // Moves the rollback bar of the active part or assembly: just before or
+  // just after a feature, or to the end of the tree (no feature). Features
+  // below the bar are left out of the model until it moves down again, and
+  // new features go in at the bar. Read back with IFeature::IsRolledBack.
+  // NOT_FOUND / INVALID_ARGUMENT for a feature that can't be;
+  // FAILED_PRECONDITION if the active document isn't a part or assembly, a
+  // sketch is open, or SolidWorks didn't move the bar there.
+  rpc Rollback(RollbackRequest) returns (RollbackResponse);
+
+  // Moves a feature of the active part or assembly just before or just
+  // after another one in the feature tree (what it absorbed, e.g. its
+  // sketch, goes with it); the model is rebuilt. Read back from the tree's
+  // order. NOT_FOUND / INVALID_ARGUMENT for features that can't be;
+  // FAILED_PRECONDITION if the active document isn't a part or assembly, a
+  // sketch is open, or SolidWorks refuses (a feature can't go above what it
+  // is built on, or below what is built on it).
+  rpc ReorderFeature(ReorderFeatureRequest) returns (ReorderFeatureResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -2264,6 +2282,8 @@ message FeatureInfo {
   ReferenceGeometry reference = 10;
   // Sketches and reference geometry: hidden (IFeature::Visible).
   bool hidden = 11;
+  // Below the rollback bar (IFeature::IsRolledBack): left out of the model.
+  bool rolled_back = 12;
 }
 
 message BodyInfo {
@@ -4663,4 +4683,38 @@ message DesignTableResponse {
   // swDesignTableErrors_e after writing; 0 = none.
   int32 table_error = 5;
   repeated FeatureProblem new_errors = 6;
+}
+
+// ---------------------------------------------------------------------------
+// Rollback and reordering (docs/notes/editing.md)
+
+message RollbackRequest {
+  // Unset: to the end of the tree (nothing rolled back).
+  FeatureTarget feature = 1;
+  // With feature: just after it instead of just before it.
+  bool after = 2;
+}
+
+message RollbackResponse {
+  // Every feature below the bar now, in tree order (empty: the bar is at
+  // the end).
+  repeated FeatureRef rolled_back = 1;
+  // How many were rolled back before the call.
+  int32 rolled_back_before = 2;
+}
+
+message ReorderFeatureRequest {
+  FeatureTarget feature = 1;  // the feature to move
+  FeatureTarget target = 2;   // where to
+  // Just after target instead of just before it.
+  bool after = 3;
+}
+
+message ReorderFeatureResponse {
+  FeatureRef moved = 1;
+  // Its neighbours in the tree afterwards, leaving out what features absorbed
+  // (their sketches, the mates in the mates folder); empty at an end.
+  string previous = 2;
+  string next = 3;
+  repeated FeatureProblem new_errors = 4;
 }

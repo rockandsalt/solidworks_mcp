@@ -362,6 +362,9 @@ fn feature_json(ids: &mut IdRegistry, f: &proto::FeatureInfo) -> Value {
     if f.hidden {
         obj.insert("hidden".into(), json!(true));
     }
+    if f.rolled_back {
+        obj.insert("rolled_back".into(), json!(true));
+    }
     if f.error_code != 0 {
         let key = if f.error_is_warning { "warning" } else { "error" };
         obj.insert(key.into(), json!(crate::delete::feature_error_name(f.error_code)));
