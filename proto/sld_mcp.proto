@@ -230,7 +230,9 @@ service SolidWorks {
 
   // Changes the value of an existing dimension by its full name, e.g.
   // "D1@Sketch1" or "D1@Boss-Extrude1" (or in an assembly, a distance or
-  // angle mate's "D1@Distance1"), and rebuilds.
+  // angle mate's "D1@Distance1"), in the configurations asked for, and
+  // rebuilds. INVALID_ARGUMENT for a configuration the document doesn't
+  // have (SolidWorks would ignore it silently).
   rpc SetDimensionValue(SetDimensionValueRequest) returns (SetDimensionValueResponse);
 
   // Sets the tolerance of an existing dimension of the active part,
@@ -642,6 +644,24 @@ service SolidWorks {
   // can't make the feature from these references; NOT_FOUND if a
   // reference no longer resolves.
   rpc CreateReferenceGeometry(CreateReferenceGeometryRequest) returns (CreateReferenceGeometryResponse);
+
+  // Lists the configurations of the active part or assembly, after creating,
+  // activating or deleting one if asked: each with its parent (derived
+  // ones), description, what is suppressed in it, and the dimensions whose
+  // values differ between configurations. INVALID_ARGUMENT for a name the
+  // document doesn't have (or already has, to create); FAILED_PRECONDITION
+  // if the active document isn't a part or assembly, a sketch is open, or
+  // the configuration to delete is the active one.
+  rpc Configurations(ConfigurationsRequest) returns (ConfigurationsResponse);
+
+  // Suppresses or unsuppresses features (parts and assemblies) and
+  // top-level components (assemblies) in the active configuration, in all
+  // of them, or in named ones; each read back per configuration, then the
+  // active one rebuilt. Everything is checked before anything changes.
+  // INVALID_ARGUMENT / NOT_FOUND for targets or configurations that can't
+  // be; FAILED_PRECONDITION if the active document isn't a part or
+  // assembly, a sketch is open, or SolidWorks changed nothing that needed it.
+  rpc SetSuppression(SetSuppressionRequest) returns (SetSuppressionResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -2626,10 +2646,18 @@ message SetDimensionValueRequest {
     double length = 2;  // meters
     double angle = 3;   // radians
   }
+  // UNSPECIFIED: SolidWorks' own choice (swSetValue_UseCurrentSetting):
+  // every configuration while the dimension has one value for all, else
+  // only the active one.
+  ConfigurationScope scope = 4;
+  repeated string configurations = 5;  // NAMED: which
 }
 
 message SetDimensionValueResponse {
-  DimensionInfo dimension = 1;
+  DimensionInfo dimension = 1;  // in the active configuration
+  // With more than one configuration: the value in each, in the document's
+  // order, after the change.
+  repeated ConfigurationValue values = 2;
 }
 
 message SetDimensionToleranceRequest {
@@ -4448,4 +4476,102 @@ message CreateReferenceGeometryResponse {
   // The new features (one, or several points along a curve), each with
   // `reference` set.
   repeated FeatureInfo features = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Configurations
+
+// Which configurations of the active document a change goes to.
+enum ConfigurationScope {
+  CONFIGURATION_SCOPE_UNSPECIFIED = 0;  // see the request
+  CONFIGURATION_SCOPE_ACTIVE = 1;
+  CONFIGURATION_SCOPE_ALL = 2;
+  CONFIGURATION_SCOPE_NAMED = 3;        // the request's `configurations`
+}
+
+// A dimension's value in one configuration.
+message ConfigurationValue {
+  string configuration = 1;
+  double value = 2;  // meters, or radians for angles
+}
+
+message CreateConfiguration {
+  string name = 1;
+  string description = 2;  // empty: SolidWorks' (the name)
+  // A configuration to derive the new one from (it then follows its
+  // parent's values until given its own); empty: a top-level one, a copy
+  // of the active configuration.
+  string parent = 3;
+}
+
+message ConfigurationsRequest {
+  // None: only list.
+  oneof action {
+    // Becomes the active configuration (SolidWorks does that).
+    CreateConfiguration create = 1;
+    string activate = 2;
+    // Its derived configurations go with it.
+    string delete = 3;
+  }
+}
+
+// A dimension whose value isn't the same in every configuration.
+message ConfiguredDimension {
+  string name = 1;  // full name, e.g. "D1@Boss-Extrude1"
+  bool angle = 2;
+  // One per configuration, in ConfigurationsResponse's order.
+  repeated double values = 3;  // meters / radians
+}
+
+message ConfigurationInfo {
+  string name = 1;
+  string parent = 2;  // derived configurations: the one it follows
+  string description = 3;
+  // Features of the document's own tree suppressed in it, in tree order.
+  repeated string suppressed_features = 4;
+  // Assemblies: top-level components suppressed in it.
+  repeated string suppressed_components = 5;
+}
+
+message ConfigurationsResponse {
+  // After the action, in the document's order.
+  repeated ConfigurationInfo configurations = 1;
+  string active = 2;
+  // Delete: the configuration and its derived ones.
+  repeated string deleted = 3;
+  repeated ConfiguredDimension dimensions = 4;
+}
+
+message SetSuppressionRequest {
+  // Features by persist_id or name (InspectModel's features and mates),
+  // top-level components of an assembly by persist_id or name ("block-1").
+  // A suppressed one's persist_id still resolves here.
+  repeated FeatureTarget items = 1;  // at least one
+  bool suppressed = 2;
+  ConfigurationScope scope = 3;        // UNSPECIFIED = ACTIVE
+  repeated string configurations = 4;  // NAMED: which
+}
+
+message SuppressionState {
+  string configuration = 1;
+  bool suppressed = 2;  // read back
+  bool changed = 3;     // by this call
+}
+
+message SuppressionChange {
+  string name = 1;
+  string kind = 2;  // "feature" or "component"
+  // The configurations asked for, in the document's order.
+  repeated SuppressionState states = 3;
+}
+
+message SetSuppressionResponse {
+  // In request order, each once.
+  repeated SuppressionChange items = 1;
+  // Other features whose suppression in the active configuration changed
+  // with them (a suppressed feature's children; not its absorbed sketch,
+  // which SolidWorks doesn't mark suppressed).
+  repeated string also_changed = 2;
+  string active = 3;  // the active configuration (as before the call)
+  repeated FeatureProblem new_errors = 4;
 }

@@ -2,6 +2,7 @@
 // FullyDefineSketch, SetDimensionValue.
 #include "pch.h"
 #include "Common.h"
+#include "ConfigurationHelpers.h"
 #include "DimensionHelpers.h"
 #include "SketchHelpers.h"
 
@@ -1171,8 +1172,31 @@ grpc::Status SolidWorksService::SetDimensionValue(grpc::ServerContext* /*context
 	if (paramType == swDimensionParamTypeDoubleLinear && angle)
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "\"" + request->name() + "\" is a length; give millimeters");
 
+	const ConfigurationList configs = ReadConfigurations(doc);
+	std::vector<std::string> targets;
+	if (grpc::Status status = ScopeConfigurations(configs, request->scope(), request->configurations(), targets);
+		!status.ok())
+		return status;
+	long which = swSetValue_UseCurrentSetting;
+	ATL::CComVariant names;
+	switch (request->scope())
+	{
+	case sld_mcp::v1::CONFIGURATION_SCOPE_ACTIVE:
+		which = swSetValue_InThisConfiguration;
+		break;
+	case sld_mcp::v1::CONFIGURATION_SCOPE_ALL:
+		which = swSetValue_InAllConfigurations;
+		break;
+	case sld_mcp::v1::CONFIGURATION_SCOPE_NAMED:
+		which = swSetValue_InSpecificConfigurations;
+		names = ToBstrArray(targets);
+		break;
+	default:
+		break;
+	}
+
 	long result = swSetValue_Failure;
-	hr = dim->SetSystemValue3(value, swSetValue_UseCurrentSetting, ATL::CComVariant(), &result);
+	hr = dim->SetSystemValue3(value, which, names, &result);
 	if (FAILED(hr))
 		return ComError("IDimension::SetSystemValue3", hr);
 	switch (result)
@@ -1198,5 +1222,15 @@ grpc::Status SolidWorksService::SetDimensionValue(grpc::ServerContext* /*context
 	DescribeDimensionValue(dim, info);
 	info->set_type(paramType == swDimensionParamTypeDoubleAngular ? sld_mcp::v1::DIMENSION_TYPE_ANGULAR
 	                                                              : sld_mcp::v1::DIMENSION_TYPE_LINEAR);
+	if (configs.names.size() > 1)
+	{
+		const std::vector<double> values = DimensionValues(dim, configs);
+		for (size_t i = 0; i < values.size(); ++i)
+		{
+			sld_mcp::v1::ConfigurationValue* v = response->add_values();
+			v->set_configuration(configs.names[i]);
+			v->set_value(values[i]);
+		}
+	}
 	return grpc::Status::OK;
 }

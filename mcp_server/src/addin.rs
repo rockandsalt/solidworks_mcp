@@ -732,6 +732,22 @@ impl AddinClient {
         let mut client = self.client()?;
         Ok(client.create_reference_geometry(request).await?.into_inner())
     }
+
+    pub async fn configurations(
+        &self,
+        request: proto::ConfigurationsRequest,
+    ) -> Result<proto::ConfigurationsResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.configurations(request).await?.into_inner())
+    }
+
+    pub async fn set_suppression(
+        &self,
+        request: proto::SetSuppressionRequest,
+    ) -> Result<proto::SetSuppressionResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.set_suppression(request).await?.into_inner())
+    }
 }
 
 /// Largest GetMesh reply accepted: about 5 million triangles with normals.

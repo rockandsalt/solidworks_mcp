@@ -314,6 +314,7 @@
     <ClInclude Include="service\DimensionHelpers.h" />
     <ClInclude Include="service\DrawingHelpers.h" />
     <ClInclude Include="service\FeatureTreeHelpers.h" />
+    <ClInclude Include="service\ConfigurationHelpers.h" />
     <ClInclude Include="service\ReferenceHelpers.h" />
     <ClInclude Include="service\SeedHelpers.h" />
     <ClInclude Include="service\SketchHelpers.h" />
@@ -384,6 +385,8 @@
     <ClCompile Include="service\Undo.cpp" />
     <ClCompile Include="service\Macro.cpp" />
     <ClCompile Include="service\Visibility.cpp" />
+    <ClCompile Include="service\Configurations.cpp" />
+    <ClCompile Include="service\ConfigurationHelpers.cpp" />
     <ClCompile Include="service\Helix.cpp" />
     <ClCompile Include="service\FeatureTreeHelpers.cpp" />
     <ClCompile Include="service\Files.cpp" />

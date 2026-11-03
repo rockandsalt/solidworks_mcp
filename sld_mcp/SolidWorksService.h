@@ -299,6 +299,14 @@ public:
 		const sld_mcp::v1::CreateReferenceGeometryRequest* request,
 		sld_mcp::v1::CreateReferenceGeometryResponse* response) override;
 
+	grpc::Status Configurations(grpc::ServerContext* context,
+		const sld_mcp::v1::ConfigurationsRequest* request,
+		sld_mcp::v1::ConfigurationsResponse* response) override;
+
+	grpc::Status SetSuppression(grpc::ServerContext* context,
+		const sld_mcp::v1::SetSuppressionRequest* request,
+		sld_mcp::v1::SetSuppressionResponse* response) override;
+
 private:
 	// gRPC runs handlers on its own thread pool, not on SolidWorks' main
 	// STA thread, so ISldWorks can't be used directly. This fetches a

@@ -79,6 +79,9 @@
     <ClInclude Include="service\FeatureTreeHelpers.h">
       <Filter>Header Files\service</Filter>
     </ClInclude>
+    <ClInclude Include="service\ConfigurationHelpers.h">
+      <Filter>Header Files\service</Filter>
+    </ClInclude>
     <ClInclude Include="service\ReferenceHelpers.h">
       <Filter>Header Files\service</Filter>
     </ClInclude>
@@ -190,6 +193,12 @@
       <Filter>Source Files\service</Filter>
     </ClCompile>
     <ClCompile Include="service\Visibility.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\Configurations.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\ConfigurationHelpers.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>
     <ClCompile Include="service\Helix.cpp">

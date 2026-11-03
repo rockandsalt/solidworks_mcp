@@ -2,6 +2,7 @@ mod addin;
 mod assembly;
 mod center_mark;
 mod component;
+mod configuration;
 mod delete;
 mod diagnose;
 mod discovery;
@@ -914,6 +915,14 @@ struct SetDimensionParams {
     /// New value in degrees, for angles.
     #[serde(default)]
     value_deg: Option<f64>,
+    /// Only in these configurations (names from the configurations tool). Default: SolidWorks'
+    /// choice -- every configuration while the dimension has one value for all, else only the
+    /// active one.
+    #[serde(default)]
+    configurations: Option<Vec<String>>,
+    /// true: in every configuration.
+    #[serde(default)]
+    all_configurations: Option<bool>,
 }
 
 /// Most entities one dimension takes.
@@ -1144,6 +1153,60 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(visibility::reply_text(&params, &reply))]))
+    }
+
+    #[tool(
+        description = "Configurations (variants) of the active part or assembly: action=\"list\" \
+                       (default) lists them with the active one, what each suppresses and the \
+                       dimensions whose value differs between them; \"create\" makes `name` (a copy \
+                       of the active configuration, or with `parent` a derived one that follows its \
+                       parent until given its own values) and SolidWorks makes it active; \
+                       \"activate\" switches to `name` (every other tool works on the active \
+                       configuration); \"delete\" removes `name` and the configurations derived from \
+                       it (not the active one). Set values per configuration with set_dimension \
+                       `configurations`, and suppress features or components per configuration with \
+                       set_suppression. Replies with the list after the change. Requires no sketch \
+                       open for editing (except to list)."
+    )]
+    async fn configurations(
+        &self,
+        Parameters(params): Parameters<configuration::ConfigurationsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let reply = self
+            .addin
+            .configurations(configuration::request(&params)?)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(configuration::configurations_text(&params, &reply))]))
+    }
+
+    #[tool(
+        description = "Suppress or unsuppress (suppressed=true / false) features and mates of the \
+                       active part or assembly and top-level components of an assembly, in the \
+                       active configuration (default), in named `configurations`, or with \
+                       all_configurations=true in every one. `items` = ids from inspect_model \
+                       (suppressed ones keep theirs) or names. A suppressed feature is left out of \
+                       the model -- no geometry, mass or rebuild -- and SolidWorks suppresses the \
+                       features that depend on it too (the reply names those); a suppressed component is \
+                       unloaded from that configuration, with its mates. Each is read back per \
+                       configuration; the reply also names features that now fail to rebuild. \
+                       Everything is checked before anything changes. Requires no sketch open for \
+                       editing."
+    )]
+    async fn set_suppression(
+        &self,
+        Parameters(params): Parameters<configuration::SetSuppressionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            configuration::suppression_request(&ids, &params)?
+        };
+        let reply = self
+            .addin
+            .set_suppression(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(configuration::suppression_text(&params, &reply))]))
     }
 
     #[tool(
@@ -3839,7 +3902,11 @@ impl SolidWorksTools {
                        or a feature's, like \"D1@Boss-Extrude1\" -- and rebuild. In an assembly, \
                        this changes a distance or angle mate, e.g. \"D1@Distance1\" (inspect_model \
                        lists mates with their dimension names). value_mm for lengths, value_deg \
-                       for angles. Requires no sketch open for editing."
+                       for angles. With several configurations: `configurations` (names) or \
+                       all_configurations=true says where the value goes; by default SolidWorks \
+                       picks (all of them while the dimension has one value for all, else only the \
+                       active one), and the reply gives the value in each. Requires no sketch open \
+                       for editing."
     )]
     async fn set_dimension(
         &self,
@@ -3859,18 +3926,26 @@ impl SolidWorksTools {
                 ));
             }
         };
+        let (scope, configurations) = configuration::scope(
+            params.configurations.as_deref(),
+            params.all_configurations,
+            proto::ConfigurationScope::Unspecified,
+        )?;
         let reply = self
             .addin
             .set_dimension_value(proto::SetDimensionValueRequest {
                 name,
                 value: Some(value),
+                scope,
+                configurations,
             })
             .await
             .map_err(|status| self.addin_error(status))?;
-        let text = match &reply.dimension {
+        let mut text = match &reply.dimension {
             Some(d) => format!("set {}; the model was rebuilt.", sketch::dimension_text(d)),
             None => "set the dimension; the model was rebuilt.".to_string(),
         };
+        text += &configuration::values_text(&reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
@@ -5279,7 +5354,11 @@ impl ServerHandler for SolidWorksTools {
                  set_dimension_tolerance tolerances a dimension (drawing or model), and \
                  render_drawing shows the sheet as printed to check the layout. \
                  set_visibility hides or shows bodies, components, sketches and reference \
-                 geometry; close_document closes a document. To undo or rework: undo takes back \
+                 geometry; close_document closes a document. Configurations (variants of one \
+                 part or assembly, e.g. lengths of a bolt): the configurations tool lists, \
+                 creates, activates and deletes them, set_dimension `configurations` sets a value \
+                 in some of them, and set_suppression suppresses features or components per \
+                 configuration. To undo or rework: undo takes back \
                  the last steps; delete_features removes features (sketches, extrudes, cuts, holes, \
                  fillets, planes, mates, ...) by inspect_model id or name, refusing unless told \
                  what to do with features that depend on them; delete_sketch_entities removes \
