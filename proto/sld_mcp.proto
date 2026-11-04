@@ -711,6 +711,24 @@ service SolidWorks {
   // sketch is open, or SolidWorks refuses (a feature can't go above what it
   // is built on, or below what is built on it).
   rpc ReorderFeature(ReorderFeatureRequest) returns (ReorderFeatureResponse);
+
+  // Read-only: SolidWorks' Measure tool (IModelDocExtension::CreateMeasure)
+  // on entities of the active part or assembly, selected for it and
+  // unselected afterwards. With two entities, also the closest points
+  // between them (IModelDoc2::ClosestDistance). NOT_FOUND / INVALID_ARGUMENT
+  // for entities that can't be; FAILED_PRECONDITION if the active document
+  // isn't a part or assembly, a sketch is open, or SolidWorks measures
+  // nothing.
+  rpc Measure(MeasureRequest) returns (MeasureResponse);
+
+  // Read-only: mass properties of the active part or assembly, or of some of
+  // its bodies / components (IModelDocExtension::CreateMassProperty2, which
+  // honours mass overrides): mass, volume, area, center of mass and the
+  // moments of inertia, in the active configuration. NOT_FOUND /
+  // INVALID_ARGUMENT for items or a coordinate system that can't be;
+  // FAILED_PRECONDITION if the active document isn't a part or assembly, a
+  // sketch is open, or SolidWorks computes nothing.
+  rpc GetMassProperties(GetMassPropertiesRequest) returns (GetMassPropertiesResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -4873,4 +4891,82 @@ message ReorderFeatureResponse {
   string previous = 2;
   string next = 3;
   repeated FeatureProblem new_errors = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Measuring and mass properties (docs/notes/measure.md)
+
+// swMeasureArcCircleOption_e: where an arc or circle is measured from.
+enum ArcMeasure {
+  ARC_MEASURE_CENTER = 0;   // its center (default)
+  ARC_MEASURE_MINIMUM = 1;  // its nearest point
+  ARC_MEASURE_MAXIMUM = 2;  // its farthest point
+}
+
+message MeasureRequest {
+  // One or more. model_persist_id may also be a component's (assemblies).
+  repeated GeometryRef entities = 1;
+  ArcMeasure arc = 2;
+}
+
+message MeasureResponse {
+  // What was measured, per entity: "face", "edge", "Plane1", "bracket-1", ...
+  repeated string measured = 1;
+  // IMeasure's values; unset where it doesn't apply. Meters, m^2, radians.
+  optional double distance = 2;         // minimum (or as `arc` says)
+  optional double center_distance = 3;  // between centers of arcs, circles, ...
+  optional double normal_distance = 4;  // perpendicular, between parallel ones
+  optional double angle = 5;
+  optional double length = 6;           // one edge
+  optional double total_length = 7;     // all edges
+  optional double area = 8;             // one face
+  optional double total_area = 9;       // all faces
+  optional double perimeter = 10;
+  optional double radius = 11;
+  optional double diameter = 12;
+  optional double arc_length = 13;
+  optional double chord_length = 14;
+  bool parallel = 15;
+  bool perpendicular = 16;
+  bool intersect = 17;
+  // Two entities: the closest points on each (model or assembly space) and
+  // their distance. Unset if SolidWorks won't say (e.g. sketch entities).
+  Vec3 closest_point1 = 18;
+  Vec3 closest_point2 = 19;
+  optional double closest_distance = 20;
+}
+
+message GetMassPropertiesRequest {
+  // Only these bodies (parts) or components (assemblies), by persist id.
+  // Empty: the whole model.
+  repeated bytes persist_ids = 1;
+  // A coordinate system feature of the active document by name: the center
+  // of mass and the moments are then relative to it. Empty: the origin.
+  string coordinate_system = 2;
+  // Hidden bodies / components count too (default: left out).
+  bool include_hidden = 3;
+}
+
+message GetMassPropertiesResponse {
+  Document document = 1;  // title and type
+  string configuration = 2;
+  // What was measured with persist_ids: "Boss-Extrude1", "bracket-1", ...
+  repeated string measured = 3;
+  // SI units: kg, m^3, m^2, kg/m^3, m, kg*m^2. Positions and directions
+  // are in the output coordinate system (`coordinate_system`, else the
+  // model's / assembly's own).
+  double mass = 4;
+  double volume = 5;
+  double surface_area = 6;
+  double density = 7;
+  Vec3 center_of_mass = 8;
+  // IMassProperty2::GetMomentOfInertia, 9 values (row by row: xx, xy, xz,
+  // yx, ...): taken at the center of mass, aligned with the output
+  // coordinate system, and taken at the output coordinate system.
+  repeated double inertia_at_center = 9;
+  repeated double inertia_at_origin = 10;
+  // The principal moments at the center of mass (3) and their axes (unit
+  // vectors), in SolidWorks' order.
+  repeated double principal_moments = 11;
+  repeated Vec3 principal_axes = 12;
 }

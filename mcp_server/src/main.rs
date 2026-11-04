@@ -23,6 +23,7 @@ mod inspect;
 mod interference;
 mod loft;
 mod macro_run;
+mod measure;
 mod mirror;
 mod mobility;
 mod motion;
@@ -4336,6 +4337,64 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "Measure in the active part or assembly, like SolidWorks' Measure tool. \
+                       `entities` = inspect_model ids (faces, edges, vertices, components, \
+                       reference geometry), sketch entity ids, \"origin\", a default plane or a \
+                       reference feature's name. One entity gives its size: an edge's length \
+                       (an arc's radius / diameter), a face's area and perimeter. Two or more \
+                       give the minimum distance, center distance (arcs, circles, cylinders: \
+                       `arc` = center / min / max picks where distances to them are taken), \
+                       normal distance and angle between parallel faces / planes, whether they \
+                       are parallel or perpendicular, and with two the closest point on each and \
+                       the X / Y / Z offset between them. Lengths in mm, areas in mm², angles in \
+                       degrees, points in part (or assembly) coordinates. Only values that apply \
+                       are listed. For clearance between two components measure them directly; \
+                       for overlap use check_interference. Changes nothing. Requires no sketch \
+                       open for editing."
+    )]
+    async fn measure(&self, Parameters(params): Parameters<measure::MeasureParams>) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            measure::measure_request(&ids, &params)?
+        };
+        let reply = self.addin.measure(request).await.map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(measure::measure_json(&params, &reply).to_string())]))
+    }
+
+    #[tool(
+        description = "Mass properties of the active part or assembly, like SolidWorks' Mass \
+                       Properties: mass (kg), volume (mm³), surface area (mm²), density, the \
+                       center of mass / center of gravity (mm), and the moments of inertia in \
+                       kg·mm²: the principal moments and axes at the center of mass, the full \
+                       inertia tensor at the center of mass (aligned with the coordinate system) \
+                       and at the coordinate system itself (off the diagonal: the products of \
+                       inertia as SolidWorks shows them, Pxy = +∫xy dm; the inertia tensor has \
+                       their negatives). \
+                       An assembly's total mass and center \
+                       of gravity cover all its components (suppressed ones don't count; hidden \
+                       ones do unless exclude_hidden). `only` narrows it to some components of an \
+                       assembly or bodies of a multibody part (\"component:N\" / \"body:N\" from \
+                       inspect_model), e.g. the moving parts of a mechanism. \
+                       `coordinate_system` gives positions and moments relative to a coordinate \
+                       system feature (create_coordinate_system) instead of the origin. Mass \
+                       comes from each part's material (part_material sets one; without one \
+                       SolidWorks assumes 1000 kg/m³) and honours mass overrides. The active \
+                       configuration's values. Changes nothing. Requires no sketch open for \
+                       editing."
+    )]
+    async fn mass_properties(
+        &self,
+        Parameters(params): Parameters<measure::MassPropertiesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            measure::mass_request(&ids, &params)?
+        };
+        let reply = self.addin.get_mass_properties(request).await.map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(measure::mass_json(&params, &reply).to_string())]))
+    }
+
+    #[tool(
         description = "Delete features of the active part or assembly, like selecting them in \
                        the FeatureManager tree and pressing Delete: sketches, extrudes, cuts, \
                        holes, fillets, chamfers, patterns, reference planes/axes, ..., and in an \
@@ -5558,7 +5617,10 @@ impl ServerHandler for SolidWorksTools {
                  up; inspect_mobility reports each component's remaining degrees of freedom \
                  (what it can still slide along / turn about); check_interference finds \
                  components that overlap (also from a drawing \
-                 of the assembly). Motion: move_component drags a component while its mates \
+                 of the assembly). measure gives distances, angles, lengths and areas of \
+                 faces, edges, vertices, planes or components (like SolidWorks' Measure); \
+                 mass_properties gives a part's or assembly's mass, center of gravity and \
+                 moments of inertia. Motion: move_component drags a component while its mates \
                  solve (check_collisions=true reports what it hits on the way); add_mate \
                  min_mm / max_mm or min_deg / max_deg makes a limit mate, and sweep_mate runs a \
                  limit (or distance / angle) mate through its range checking for collisions. inspect_annotations reads the model's MBD / PMI (DimXpert dimensions, \

@@ -475,6 +475,19 @@ impl AddinClient {
         Ok(client.check_interference(request).await?.into_inner())
     }
 
+    pub async fn measure(&self, request: proto::MeasureRequest) -> Result<proto::MeasureResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.measure(request).await?.into_inner())
+    }
+
+    pub async fn get_mass_properties(
+        &self,
+        request: proto::GetMassPropertiesRequest,
+    ) -> Result<proto::GetMassPropertiesResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.get_mass_properties(request).await?.into_inner())
+    }
+
     /// The active document's 3D annotations (PMI); meters / radians.
     pub async fn inspect_annotations(&self) -> Result<proto::InspectAnnotationsResponse, tonic::Status> {
         let mut client = self.client()?;

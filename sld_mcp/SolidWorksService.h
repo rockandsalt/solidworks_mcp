@@ -335,6 +335,14 @@ public:
 		const sld_mcp::v1::ReorderFeatureRequest* request,
 		sld_mcp::v1::ReorderFeatureResponse* response) override;
 
+	grpc::Status Measure(grpc::ServerContext* context,
+		const sld_mcp::v1::MeasureRequest* request,
+		sld_mcp::v1::MeasureResponse* response) override;
+
+	grpc::Status GetMassProperties(grpc::ServerContext* context,
+		const sld_mcp::v1::GetMassPropertiesRequest* request,
+		sld_mcp::v1::GetMassPropertiesResponse* response) override;
+
 private:
 	// gRPC runs handlers on its own thread pool, not on SolidWorks' main
 	// STA thread, so ISldWorks can't be used directly. This fetches a
