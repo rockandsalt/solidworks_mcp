@@ -525,3 +525,5 @@ Testing/
 installer/out/
 # Dev loop run output (devloop\cycle.ps1, devloop\mcp_client.py)
 devloop/out/
+# Private design notes: a separate repo cloned here (see CLAUDE.md)
+docs/notes/

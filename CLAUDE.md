@@ -11,7 +11,8 @@ An MCP server that lets an AI model drive SOLIDWORKS.
   the Rust side.
 
 Design notes, per area, with "Untested in SolidWorks —
-verify: …" lists where checks are open: `docs/notes/` (architecture.md first; also diagnosing,
+verify: …" lists where checks are open: `docs/notes/`, a separate private git
+repo cloned there and gitignored here, so commit note changes in it (architecture.md first; also diagnosing,
 deleting, editing, drawings, gdt, files, units, reference, configurations, equations, measure, installer, devloop, scenarios). Read the relevant one before changing
 an area, and update it when you change the design or learn how SolidWorks
 actually behaves.
