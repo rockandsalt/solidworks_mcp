@@ -70,6 +70,9 @@
     <ClInclude Include="service\Common.h">
       <Filter>Header Files\service</Filter>
     </ClInclude>
+    <ClInclude Include="service\RequestLock.h">
+      <Filter>Header Files\service</Filter>
+    </ClInclude>
     <ClInclude Include="service\DimensionHelpers.h">
       <Filter>Header Files\service</Filter>
     </ClInclude>

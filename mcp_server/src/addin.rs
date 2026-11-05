@@ -325,6 +325,8 @@ impl AddinClient {
         request: proto::InspectModelRequest,
     ) -> Result<proto::InspectModelResponse, tonic::Status> {
         let mut client = self.client()?;
+        let mut request = tonic::Request::new(request);
+        request.set_timeout(REQUEST_TIMEOUT);
         let response = client.inspect_model(request).await?;
         Ok(response.into_inner())
     }
@@ -751,6 +753,10 @@ impl AddinClient {
 
     pub async fn run_macro(&self, request: proto::RunMacroRequest) -> Result<proto::RunMacroResponse, tonic::Status> {
         let mut client = self.client()?;
+        // Send a deadline to the add-in as well as bounding the transport wait,
+        // so an expired macro can be discarded while it waits for the model lock.
+        let mut request = tonic::Request::new(request);
+        request.set_timeout(REQUEST_TIMEOUT);
         Ok(client.run_macro(request).await?.into_inner())
     }
 
@@ -818,3 +824,7 @@ impl AddinClient {
 
 /// Largest GetMesh reply accepted: about 5 million triangles with normals.
 const MAX_MESH_MESSAGE: usize = 256 * 1024 * 1024;
+
+#[cfg(test)]
+#[path = "addin_live_tests.rs"]
+mod live_tests;

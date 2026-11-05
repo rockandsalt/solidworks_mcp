@@ -53,7 +53,7 @@ namespace
 	// (an assembly's own tree; they're listed separately). With
 	// `referenceExt` (the document's own tree), reference features say where
 	// they are.
-	grpc::Status InspectFeatureList(ATL::CComPtr<IFeature> feature, PersistIds& ids,
+	grpc::Status InspectFeatureList(grpc::ServerContext* context, ATL::CComPtr<IFeature> feature, PersistIds& ids,
 		const std::string& componentPid, bool skipAssemblyItems, IModelDocExtension* referenceExt,
 		sld_mcp::v1::InspectModelResponse* response)
 	{
@@ -61,6 +61,8 @@ namespace
 		bool started = false;
 		while (feature)
 		{
+			if (grpc::Status status = CheckRequest(context); !status.ok())
+				return status;
 			ATL::CComBSTR typeName;
 			hr = feature->GetTypeName2(&typeName);
 			if (FAILED(hr))
@@ -118,14 +120,14 @@ namespace
 		return grpc::Status::OK;
 	}
 
-	grpc::Status InspectFeatures(IModelDoc2* doc, IModelDocExtension* ext, PersistIds& ids, bool skipAssemblyItems,
+	grpc::Status InspectFeatures(grpc::ServerContext* context, IModelDoc2* doc, IModelDocExtension* ext, PersistIds& ids, bool skipAssemblyItems,
 		sld_mcp::v1::InspectModelResponse* response)
 	{
 		ATL::CComPtr<IFeature> feature;
 		HRESULT hr = doc->IFirstFeature(&feature);
 		if (FAILED(hr))
 			return ComError("IModelDoc2::IFirstFeature", hr);
-		return InspectFeatureList(feature, ids, {}, skipAssemblyItems, ext, response);
+		return InspectFeatureList(context, feature, ids, {}, skipAssemblyItems, ext, response);
 	}
 
 	void InspectBody(IBody2* body, PersistIds& ids, sld_mcp::v1::BodyInfo* info)
@@ -359,7 +361,7 @@ namespace
 	}
 
 	// InspectModel for an assembly; see the .proto for what's listed.
-	grpc::Status InspectAssembly(IModelDoc2* doc, IModelDocExtension* ext, PersistIds& ids, IMathUtility* math,
+	grpc::Status InspectAssembly(grpc::ServerContext* context, IModelDoc2* doc, IModelDocExtension* ext, PersistIds& ids, IMathUtility* math,
 		const sld_mcp::v1::InspectModelRequest& request, sld_mcp::v1::InspectModelResponse* response)
 	{
 		if (!request.scope_feature_name().empty())
@@ -373,11 +375,21 @@ namespace
 		ComponentList components(ids, math, response->mutable_components());
 
 		if (request.include_components())
-			for (const auto& component : AllComponents(assembly))
+			for (const auto& component : AllComponents(assembly, context))
+			{
+				if (grpc::Status status = CheckRequest(context); !status.ok())
+					return status;
 				components.Add(component);
+			}
+		if (grpc::Status status = CheckRequest(context); !status.ok())
+			return status;
 		if (request.include_mates())
 			for (const auto& mate : MateFeatures(doc))
+			{
+				if (grpc::Status status = CheckRequest(context); !status.ok())
+					return status;
 				DescribeMate(mate, ids, response->add_mates());
+			}
 
 		// A component scope narrows everything; any other scope (body,
 		// feature, face) only faces/edges, as in a part.
@@ -403,10 +415,10 @@ namespace
 				if (FAILED(hr))
 					return ComError("IComponent2::FirstFeature", hr);
 				const std::string pid = components.Add(scopeComponent);
-				if (grpc::Status status = InspectFeatureList(first, ids, pid, false, nullptr, response); !status.ok())
+				if (grpc::Status status = InspectFeatureList(context, first, ids, pid, false, nullptr, response); !status.ok())
 					return status;
 			}
-			else if (grpc::Status status = InspectFeatures(doc, ext, ids, true, response); !status.ok())
+			else if (grpc::Status status = InspectFeatures(context, doc, ext, ids, true, response); !status.ok())
 				return status;
 		}
 
@@ -424,24 +436,35 @@ namespace
 			else
 			{
 				const std::string scopePid = scopeComponent ? ids.Get(scopeComponent) : std::string();
-				for (const auto& component : GeometryComponents(assembly, false))
-					if (scopePid.empty() || IsWithin(component, scopePid, ids))
+				for (const auto& component : AllComponents(assembly, context))
+				{
+					if (grpc::Status status = CheckRequest(context); !status.ok())
+						return status;
+					if (!IsSubassembly(component) && !IsSuppressed(component) &&
+						(scopePid.empty() || IsWithin(component, scopePid, ids)))
 						owners.push_back(component);
+				}
 			}
 			for (const auto& owner : owners)
+			{
+				if (grpc::Status status = CheckRequest(context); !status.ok())
+					return status;
 				for (const auto& body : ComponentBodies(owner))
 					bodies.emplace_back(body, owner);
+			}
 		}
 		if (listBodies)
 			for (const auto& [body, owner] : bodies)
 			{
+				if (grpc::Status status = CheckRequest(context); !status.ok())
+					return status;
 				sld_mcp::v1::BodyInfo* info = response->add_bodies();
 				InspectBody(body, ids, info);
 				info->set_component_persist_id(components.Add(owner));
 			}
 
 		if (!wantGeometry)
-			return grpc::Status::OK;
+			return CheckRequest(context);
 
 		EntitySet<IFace2> faces;
 		EntitySet<IEdge> edges;
@@ -482,27 +505,35 @@ namespace
 		else
 		{
 			for (const auto& [body, owner] : bodies)
+			{
+				if (grpc::Status status = CheckRequest(context); !status.ok())
+					return status;
 				addBody(body);
+			}
 		}
 
 		for (const auto& face : faces.Items())
 		{
+			if (grpc::Status status = CheckRequest(context); !status.ok())
+				return status;
 			sld_mcp::v1::FaceInfo* info = response->add_faces();
 			InspectFace(face, ids, info);
 			info->set_component_persist_id(components.Add(ComponentOf(face)));
 		}
 		for (const auto& edge : edges.Items())
 		{
+			if (grpc::Status status = CheckRequest(context); !status.ok())
+				return status;
 			sld_mcp::v1::EdgeInfo* info = response->add_edges();
 			InspectEdge(edge, ids, info);
 			info->set_component_persist_id(components.Add(ComponentOf(edge)));
 		}
 		response->set_truncated(faces.Truncated() || edges.Truncated());
-		return grpc::Status::OK;
+		return CheckRequest(context);
 	}
 }
 
-grpc::Status SolidWorksService::InspectModel(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::InspectModel(grpc::ServerContext* context,
 	const sld_mcp::v1::InspectModelRequest* request,
 	sld_mcp::v1::InspectModelResponse* response)
 {
@@ -513,13 +544,17 @@ grpc::Status SolidWorksService::InspectModel(grpc::ServerContext* /*context*/,
 
 	// Read-only, but an edit running at the same time could leave the model
 	// half-built (a sketch open, a feature not yet created) mid-walk.
-	std::lock_guard<std::mutex> lock(m_editMutex);
+	std::unique_lock<std::mutex> lock(m_editMutex, std::defer_lock);
+	if (grpc::Status status = LockForRequest(context, lock); !status.ok())
+		return status;
 	ComApartment com;
 	if (!com.Ok())
 		return ComApartmentError();
 
 	ATL::CComPtr<ISldWorks> swApp;
 	if (grpc::Status status = GetSwApp(swApp); !status.ok())
+		return status;
+	if (grpc::Status status = CheckRequest(context); !status.ok())
 		return status;
 
 	ATL::CComPtr<IModelDoc2> doc;
@@ -544,7 +579,7 @@ grpc::Status SolidWorksService::InspectModel(grpc::ServerContext* /*context*/,
 		ATL::CComQIPtr<IMathUtility> math;
 		if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
 			return status;
-		return InspectAssembly(doc, ext, ids, math, *request, response);
+		return InspectAssembly(context, doc, ext, ids, math, *request, response);
 	}
 	response->mutable_document()->set_type(sld_mcp::v1::DOCUMENT_TYPE_PART);
 	ATL::CComQIPtr<IPartDoc> part(doc.p);
@@ -552,7 +587,7 @@ grpc::Status SolidWorksService::InspectModel(grpc::ServerContext* /*context*/,
 		return grpc::Status(grpc::StatusCode::INTERNAL, "active part has no IPartDoc interface");
 
 	if (request->include_features())
-		if (grpc::Status status = InspectFeatures(doc, ext, ids, false, response); !status.ok())
+		if (grpc::Status status = InspectFeatures(context, doc, ext, ids, false, response); !status.ok())
 			return status;
 
 	// Every body, for the body list and as the default face/edge scope.
@@ -570,10 +605,14 @@ grpc::Status SolidWorksService::InspectModel(grpc::ServerContext* /*context*/,
 	}
 	if (request->include_bodies())
 		for (const auto& body : bodies)
+		{
+			if (grpc::Status status = CheckRequest(context); !status.ok())
+				return status;
 			InspectBody(body, ids, response->add_bodies());
+		}
 
 	if (!wantGeometry)
-		return grpc::Status::OK;
+		return CheckRequest(context);
 
 	// Resolve the scope into the faces and edges to report.
 	EntitySet<IFace2> faces;
@@ -639,13 +678,25 @@ grpc::Status SolidWorksService::InspectModel(grpc::ServerContext* /*context*/,
 	else
 	{
 		for (const auto& body : bodies)
+		{
+			if (grpc::Status status = CheckRequest(context); !status.ok())
+				return status;
 			addBody(body);
+		}
 	}
 
 	for (const auto& face : faces.Items())
+	{
+		if (grpc::Status status = CheckRequest(context); !status.ok())
+			return status;
 		InspectFace(face, ids, response->add_faces());
+	}
 	for (const auto& edge : edges.Items())
+	{
+		if (grpc::Status status = CheckRequest(context); !status.ok())
+			return status;
 		InspectEdge(edge, ids, response->add_edges());
+	}
 	response->set_truncated(faces.Truncated() || edges.Truncated());
-	return grpc::Status::OK;
+	return CheckRequest(context);
 }

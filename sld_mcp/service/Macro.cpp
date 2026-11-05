@@ -4,17 +4,21 @@
 
 using namespace sld_mcp::service;
 
-grpc::Status SolidWorksService::RunMacro(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::RunMacro(grpc::ServerContext* context,
 	const sld_mcp::v1::RunMacroRequest* request,
 	sld_mcp::v1::RunMacroResponse* response)
 {
-	std::lock_guard<std::mutex> lock(m_editMutex);
+	std::unique_lock<std::mutex> lock(m_editMutex, std::defer_lock);
+	if (grpc::Status status = LockForRequest(context, lock); !status.ok())
+		return status;
 	ComApartment com;
 	if (!com.Ok())
 		return ComApartmentError();
 
 	ATL::CComPtr<ISldWorks> swApp;
 	if (grpc::Status status = GetSwApp(swApp); !status.ok())
+		return status;
+	if (grpc::Status status = CheckRequest(context); !status.ok())
 		return status;
 
 	// A .swb always starts at main, whatever the names passed here. Its false

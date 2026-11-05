@@ -311,6 +311,7 @@
     <ClInclude Include="service\AnnotationHelpers.h" />
     <ClInclude Include="service\AssemblyHelpers.h" />
     <ClInclude Include="service\Common.h" />
+    <ClInclude Include="service\RequestLock.h" />
     <ClInclude Include="service\DimensionHelpers.h" />
     <ClInclude Include="service\DrawingHelpers.h" />
     <ClInclude Include="service\FeatureTreeHelpers.h" />

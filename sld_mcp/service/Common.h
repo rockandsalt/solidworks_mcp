@@ -7,8 +7,10 @@
 
 #include "SolidWorksService.h"
 #include "ComVariant.h"
+#include "RequestLock.h"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -27,6 +29,25 @@
 
 namespace sld_mcp::service
 {
+	// Cooperative cancellation only: a COM call already marshaled to SolidWorks
+	// cannot be interrupted here. Check between calls and before launching work.
+	inline grpc::Status CheckRequest(grpc::ServerContext* context)
+	{
+		if (context->IsCancelled() || std::chrono::system_clock::now() >= context->deadline())
+			return grpc::Status(grpc::StatusCode::CANCELLED, "request cancelled or deadline expired; stopped between COM calls");
+		return grpc::Status::OK;
+	}
+
+	// A timed-out request must not sit behind another inspection then launch a
+	// macro after its client has stopped waiting. Other handlers still share the
+	// same mutex; these two handlers can abandon their own wait without acquiring it.
+	inline grpc::Status LockForRequest(grpc::ServerContext* context, std::unique_lock<std::mutex>& lock)
+	{
+		if (!LockUnlessCancelled(lock, [&] { return !CheckRequest(context).ok(); }))
+			return grpc::Status(grpc::StatusCode::CANCELLED, "request cancelled or deadline expired while waiting for the model lock; work not started");
+		return grpc::Status::OK;
+	}
+
 	// Joins the calling gRPC worker thread to the MTA for the duration of one
 	// RPC. COM objects (including the proxy from the GIT) must be released
 	// before this goes out of scope, so declare it first in each handler.

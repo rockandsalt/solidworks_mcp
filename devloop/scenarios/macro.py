@@ -115,17 +115,17 @@ End Sub
 """, expect_error=True)
 assert "error 1000: boom" in r.text, r.text
 
-# Doesn't compile: said so, no dialog.
+# Doesn't compile: startup unobserved (the API cannot prove why), no dialog.
 r = run("""
 Option Explicit
 Sub main()
     nosuchvariable = 1
 End Sub
 """, expect_error=True)
-assert r.is_error and "didn't compile" in r.text, r.text
+assert r.is_error and "startup was not observed" in r.text, r.text
 no_dialogs()
 r = run("Sub main()\n    If Then Then\nEnd Sub", expect_error=True)
-assert "didn't compile" in r.text, r.text
+assert "startup was not observed" in r.text, r.text
 no_dialogs()
 
 # Dialogs: closed and reported, the safest button pressed, the macro goes on.
@@ -162,10 +162,14 @@ for code, expected in [
     r = run(code, expect_error=True)
     assert r.is_error and expected in r.text, r.text
 
-# Nothing left of the runs so far.
+# Failed runs preserve diagnostics. These synchronous runs have all returned;
+# check the source was retained, then remove only this scenario's folders.
+for folder in macro_folders() - before:
+    assert (folder / "macro.swb").exists(), folder
+    shutil.rmtree(folder)
 assert macro_folders() == before, macro_folders() - before
 
-# Outlasts the call: said so, other tools wait for it, and its folder stays.
+# Outlasts the call: observed start, no completion, partial output retained.
 r = run("""
 Sub main()
     McpPrint "started"
@@ -176,7 +180,7 @@ Sub main()
     McpPrint "finished"
 End Sub
 """, expect_error=True)
-assert r.is_error and "hasn't finished" in r.text and "started" in r.text and "finished" not in r.text.split("Output:")[1], r.text
+assert r.is_error and "wrapper started" in r.text and "still running is unknown" in r.text and "finished" not in r.text.split("Output:")[1], r.text
 left = macro_folders() - before
 assert len(left) == 1, left
 mcp.call("get_active_document_name")

@@ -1129,8 +1129,9 @@ impl SolidWorksTools {
                        macro and the reply gives its message, but not its line, so print along the \
                        way when hunting one; what it did before that stays in the model. It runs as \
                        one piece on SolidWorks' main thread: the reply comes back after 60 seconds at \
-                       the latest, a longer macro goes on with other tools waiting, and one that \
-                       never ends hangs SolidWorks until it's killed. Dialogs block SolidWorks, so \
+                       the latest. A timeout reports observed start/completion markers and preserves \
+                       diagnostics; it does not stop an in-flight COM call or prove the macro started. \
+                       Outstanding work may delay other tools. Dialogs block SolidWorks, so \
                        any it opens are closed (End / Cancel / No / OK) and listed in the reply. \
                        inspect_model ids don't exist in a macro: find things by name (`FeatureByName`, \
                        `SelectByID2`) or position. Non-ASCII text only through ChrW()."

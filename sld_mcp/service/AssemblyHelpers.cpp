@@ -38,15 +38,19 @@ namespace sld_mcp::service
 		return found;
 	}
 
-	std::vector<ATL::CComPtr<IComponent2>> AllComponents(IAssemblyDoc* assembly)
+	std::vector<ATL::CComPtr<IComponent2>> AllComponents(IAssemblyDoc* assembly, grpc::ServerContext* context)
 	{
 		std::vector<ATL::CComPtr<IComponent2>> out;
 		ATL::CComVariant all;
 		if (FAILED(assembly->GetComponents(VARIANT_FALSE, &all)))
 			return out;
 		for (const auto& disp : comvariant::ToDispatches(all))
+		{
+			if (context && !CheckRequest(context).ok())
+				break;
 			if (ATL::CComQIPtr<IComponent2> component(disp.p); component)
 				out.push_back(ATL::CComPtr<IComponent2>(component));
+		}
 		return out;
 	}
 

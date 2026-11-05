@@ -20,8 +20,10 @@ namespace sld_mcp::service
 	// leading names are dropped until the assembly knows the rest.
 	ATL::CComPtr<IComponent2> AssemblyComponentOf(IAssemblyDoc* assembly, IComponent2* viewComponent);
 
-	// Every component of the assembly, nested ones included.
-	std::vector<ATL::CComPtr<IComponent2>> AllComponents(IAssemblyDoc* assembly);
+	// Every component of the assembly, nested ones included. With context,
+	// cancellation stops conversion early; callers must check it before using
+	// the (possibly partial) result.
+	std::vector<ATL::CComPtr<IComponent2>> AllComponents(IAssemblyDoc* assembly, grpc::ServerContext* context = nullptr);
 
 	bool IsSubassembly(IComponent2* component);
 

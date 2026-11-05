@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rmcp::{ErrorData as McpError, schemars};
 use serde::Deserialize;
@@ -100,6 +100,7 @@ struct MacroFiles {
     /// time and returns false (seen 2026-11-01), so this keeps it from doing its
     /// work twice, and tells that false from one for a macro that doesn't compile.
     started: PathBuf,
+    completed: PathBuf,
 }
 
 impl MacroFiles {
@@ -109,6 +110,7 @@ impl MacroFiles {
             output: folder.join("output.txt"),
             error: folder.join("error.txt"),
             started: folder.join("started.txt"),
+            completed: folder.join("completed.txt"),
         }
     }
 }
@@ -147,6 +149,7 @@ fn macro_source(code: &str, files: &MacroFiles) -> Result<String, String> {
     let output_file = vba_string(&files.output.to_string_lossy());
     let error_file = vba_string(&files.error.to_string_lossy());
     let started_file = vba_string(&files.started.to_string_lossy());
+    let completed_file = vba_string(&files.completed.to_string_lossy());
     let ours = format!(
         r#"
 Private Sub McpAppend(file As String, text As String)
@@ -172,6 +175,7 @@ Sub main()
     If files.FileExists({started_file}) Then Exit Sub
     files.CreateTextFile({started_file}).Close
     McpUserMain
+    files.CreateTextFile({completed_file}).Close
     Exit Sub
 McpFailed:
     McpReportError "error " & Err.Number & ": " & Err.Description
@@ -216,21 +220,32 @@ fn reply_text(headline: &str, output: String, dialogs: &[dialogs::Closed]) -> St
 
 fn new_folder() -> std::io::Result<PathBuf> {
     static NEXT: AtomicU32 = AtomicU32::new(0);
-    let folder = std::env::temp_dir().join(format!(
-        "sld_mcp-macro-{}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
-    std::fs::create_dir_all(&folder)?;
-    Ok(folder)
+    loop {
+        let folder = std::env::temp_dir().join(format!(
+            "sld_mcp-macro-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        // A reused process id must not reuse an old run's start/completion markers.
+        match std::fs::create_dir(&folder) {
+            Ok(()) => return Ok(folder),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 /// Writes the macro, runs it with an eye on the dialogs, and says how it went.
 pub async fn run(addin: &AddinClient, params: &RunMacroParams) -> Result<String, McpError> {
-    let folder = new_folder().map_err(|error| McpError::internal_error(format!("no temp folder: {error}"), None))?;
+    let folder = new_folder()
+        .map_err(|error| McpError::internal_error(format!("no temp folder: {error}"), None))?;
     let outcome = run_in(addin, &params.code, &folder).await;
-    // A macro that's still running is still writing there, and its output says what it did.
-    if !outcome.as_ref().is_err_and(|failure| failure.still_running) {
+    // On a transport failure it may still be queued or executing. Keep its source,
+    // markers and output both for late execution and for diagnosis.
+    if !outcome
+        .as_ref()
+        .is_err_and(|failure| failure.preserve_files)
+    {
         let _ = std::fs::remove_dir_all(&folder);
     }
     outcome.map_err(|failure| failure.error)
@@ -238,64 +253,118 @@ pub async fn run(addin: &AddinClient, params: &RunMacroParams) -> Result<String,
 
 struct Failure {
     error: McpError,
-    still_running: bool,
+    preserve_files: bool,
 }
 
 impl Failure {
     fn new(error: McpError) -> Self {
-        Self { error, still_running: false }
+        Self {
+            error,
+            preserve_files: false,
+        }
     }
 }
 
 async fn run_in(addin: &AddinClient, code: &str, folder: &Path) -> Result<String, Failure> {
     let files = MacroFiles::in_folder(folder);
-    let source = macro_source(code, &files).map_err(|message| Failure::new(McpError::invalid_params(message, None)))?;
-    std::fs::write(&files.source, source)
-        .map_err(|error| Failure::new(McpError::internal_error(format!("can't write the macro: {error}"), None)))?;
+    let source = macro_source(code, &files)
+        .map_err(|message| Failure::new(McpError::invalid_params(message, None)))?;
+    std::fs::write(&files.source, source).map_err(|error| {
+        Failure::new(McpError::internal_error(
+            format!("can't write the macro: {error}"),
+            None,
+        ))
+    })?;
 
-    let (result, closed) =
-        closing_dialogs(addin.run_macro(proto::RunMacroRequest { path: files.source.to_string_lossy().into_owned() }))
-            .await;
+    let started_at = Instant::now();
+    let (result, closed) = closing_dialogs(addin.run_macro(proto::RunMacroRequest {
+        path: files.source.to_string_lossy().into_owned(),
+    }))
+    .await;
 
+    finish_run(
+        &files,
+        result,
+        &closed,
+        started_at.elapsed(),
+        addin.endpoint().as_deref(),
+    )
+}
+
+/// Interpret filesystem evidence independently of the transport result. No marker
+/// means startup is unconfirmed; a start marker alone cannot prove it still runs.
+fn finish_run(
+    files: &MacroFiles,
+    result: Result<proto::RunMacroResponse, tonic::Status>,
+    closed: &[Closed],
+    elapsed: Duration,
+    endpoint: Option<&str>,
+) -> Result<String, Failure> {
     let output = read_text(&files.output);
-    let failed = |headline: String, still_running: bool| Failure {
-        error: McpError::internal_error(reply_text(&headline, output.clone(), &closed), None),
-        still_running,
+    let error = read_text(&files.error);
+    let started = files.started.exists();
+    let completed = files.completed.exists();
+    let failed = |headline: String| Failure {
+        error: McpError::internal_error(
+            reply_text(
+                &format!(
+                    "{headline}\nDiagnostics preserved in {}",
+                    files.source.parent().unwrap().display()
+                ),
+                output.clone(),
+                closed,
+            ),
+            None,
+        ),
+        preserve_files: true,
     };
     let reply = match result {
         Ok(reply) => reply,
-        // The channel's timeout arrives as Cancelled ("Timeout expired", seen 2026-11-01).
-        Err(status) if matches!(status.code(), tonic::Code::DeadlineExceeded | tonic::Code::Cancelled) => {
-            return Err(failed(
-                format!(
-                    "the macro hasn't finished after a minute. It goes on in SolidWorks, and every other tool waits \
-                     for it; a macro that never ends can only be stopped by ending SolidWorks. It prints to {}.",
-                    files.output.display()
-                ),
-                true,
-            ));
+        Err(status) => {
+            let evidence = if !error.is_empty() {
+                format!("The wrapper reported failure: {error}.")
+            } else if completed {
+                "The wrapper recorded completion.".to_string()
+            } else if started {
+                "The wrapper started, but no completion was recorded. Whether it is still running is unknown.".to_string()
+            } else {
+                "Macro startup was not observed (no started.txt). It may be queued, failed before wrapper entry, or have an unobserved execution state.".to_string()
+            };
+            return Err(failed(format!(
+                "Macro RPC ended after {:.1}s with {:?}: {}. {evidence}\nEndpoint: {}. \
+                 A transport timeout or cancellation does not stop an in-flight COM call. \
+                 Other tools may wait for outstanding work. Do not retry a macro that changes the model until its outcome is known. \
+                 Output is captured only by McpPrint; Debug.Print is not captured.",
+                elapsed.as_secs_f64(),
+                status.code(),
+                status.message(),
+                endpoint.unwrap_or("unavailable")
+            )));
         }
-        Err(status) => return Err(Failure::new(McpError::internal_error(format!("sld_mcp add-in error: {}", status.message()), None))),
     };
-    if !reply.ran && !files.started.exists() {
-        return Err(failed(
-            "the macro didn't compile, so none of it ran; SolidWorks gives no reason or line. Look for a syntax \
-             error, an undeclared variable under Option Explicit, or a misspelled type or enum name."
-                .to_string(),
-            false,
-        ));
-    }
-    let error = read_text(&files.error);
     if !error.is_empty() {
-        return Err(failed(
-            format!("the macro stopped with {error}. What it did before that is still in the model (see undo)."),
-            false,
-        ));
+        return Err(failed(format!(
+            "the macro stopped with {error}. What it did before that is still in the model (see undo)."
+        )));
+    }
+    if !started && !completed {
+        return Err(failed(format!(
+            "Macro startup was not observed (no started.txt); RunMacro2 returned ran={}. \
+             A compile error, missing file, launch failure or wrapper initialization failure is possible; \
+             SolidWorks gives no reason or line. Check macro.swb and use McpPrint for output.",
+            reply.ran
+        )));
     }
     Ok(reply_text(
-        "The macro ran. Ids of what it changed may no longer work: inspect_model again before using them.",
+        if completed {
+            "The macro ran. The wrapper recorded completion. Ids of what it changed may no longer work: inspect_model again before using them."
+        } else {
+            // VBA End stops the wrapper too; RunMacro2 has now returned, so it
+            // is no longer running even though it skipped the completion marker.
+            "The macro ran. RunMacro2 returned without wrapper completion (for example, VBA End). Ids of what it changed may no longer work: inspect_model again before using them."
+        },
         output,
-        &closed,
+        closed,
     ))
 }
 
@@ -481,10 +550,17 @@ mod tests {
     #[test]
     fn main_runs_the_users_code_only_once() {
         let text = source("Sub main()\nEnd Sub").unwrap();
-        let guard = text.find("If files.FileExists(\"C:\\t\\started.txt\") Then Exit Sub").unwrap();
-        let made = text.find("files.CreateTextFile(\"C:\\t\\started.txt\").Close").unwrap();
+        let guard = text
+            .find("If files.FileExists(\"C:\\t\\started.txt\") Then Exit Sub")
+            .unwrap();
+        let made = text
+            .find("files.CreateTextFile(\"C:\\t\\started.txt\").Close")
+            .unwrap();
         let call = text.find("    McpUserMain\r\n").unwrap();
-        assert!(guard < made && made < call, "{text}");
+        let done = text
+            .find("files.CreateTextFile(\"C:\\t\\completed.txt\").Close")
+            .unwrap();
+        assert!(guard < made && made < call && call < done, "{text}");
     }
 
     #[test]
@@ -548,6 +624,163 @@ mod tests {
         std::fs::write(&file, bytes).unwrap();
         assert_eq!(read_text(&file), "x\u{4e2d}\ny");
         assert_eq!(read_text(&folder.join("none.txt")), "");
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    fn write_vba_text(file: &Path, text: &str) {
+        let bytes: Vec<u8> = [0xFEFFu16]
+            .into_iter()
+            .chain(text.encode_utf16())
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        std::fs::write(file, bytes).unwrap();
+    }
+
+    fn transport_failure(files: &MacroFiles, code: tonic::Code) -> Failure {
+        match finish_run(
+            files,
+            Err(tonic::Status::new(code, "test transport failure")),
+            &[],
+            Duration::from_millis(1234),
+            Some("test endpoint"),
+        ) {
+            Err(failure) => failure,
+            Ok(text) => panic!("unexpected success: {text}"),
+        }
+    }
+
+    #[test]
+    fn transport_failure_without_markers_does_not_claim_execution() {
+        let folder = new_folder().unwrap();
+        let files = MacroFiles::in_folder(&folder);
+        for code in [
+            tonic::Code::Cancelled,
+            tonic::Code::DeadlineExceeded,
+            tonic::Code::Unavailable,
+        ] {
+            let failure = transport_failure(&files, code);
+            let text = failure.error.message.to_string();
+            assert!(failure.preserve_files);
+            assert!(
+                text.contains("startup was not observed") && text.contains("may be queued"),
+                "{text}"
+            );
+            assert!(
+                text.contains("1.2s")
+                    && text.contains("test endpoint")
+                    && text.contains(&folder.display().to_string()),
+                "{text}"
+            );
+            assert!(text.contains("Debug.Print is not captured"), "{text}");
+            assert!(
+                !text.contains("ending SolidWorks") && !text.contains("It goes on in SolidWorks"),
+                "{text}"
+            );
+        }
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn timeout_preserves_partial_output_and_reports_start_without_claiming_liveness() {
+        let folder = new_folder().unwrap();
+        let files = MacroFiles::in_folder(&folder);
+        std::fs::write(&files.started, "").unwrap();
+        write_vba_text(&files.output, "title=assembly\r\n");
+        let failure = transport_failure(&files, tonic::Code::Cancelled);
+        let text = failure.error.message.to_string();
+        assert!(failure.preserve_files);
+        assert!(
+            text.contains("wrapper started") && text.contains("still running is unknown"),
+            "{text}"
+        );
+        assert!(text.contains("Output:\ntitle=assembly"), "{text}");
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn terminal_evidence_survives_transport_failure() {
+        let folder = new_folder().unwrap();
+        let files = MacroFiles::in_folder(&folder);
+        std::fs::write(&files.started, "").unwrap();
+        std::fs::write(&files.completed, "").unwrap();
+        let text = transport_failure(&files, tonic::Code::DeadlineExceeded)
+            .error
+            .message
+            .to_string();
+        assert!(text.contains("wrapper recorded completion"), "{text}");
+        write_vba_text(&files.error, "error 11: Division by zero");
+        let text = transport_failure(&files, tonic::Code::Unavailable)
+            .error
+            .message
+            .to_string();
+        assert!(
+            text.contains("wrapper reported failure: error 11"),
+            "{text}"
+        );
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn launch_failure_is_not_assumed_to_be_a_compile_error() {
+        let folder = new_folder().unwrap();
+        let files = MacroFiles::in_folder(&folder);
+        for ran in [false, true] {
+            let failure = finish_run(
+                &files,
+                Ok(proto::RunMacroResponse { ran }),
+                &[],
+                Duration::ZERO,
+                None,
+            )
+            .err()
+            .unwrap();
+            let text = failure.error.message.to_string();
+            assert!(failure.preserve_files);
+            assert!(
+                text.contains("startup was not observed") && text.contains("launch failure"),
+                "{text}"
+            );
+        }
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn returned_macro_distinguishes_completion_end_and_runtime_failure() {
+        let folder = new_folder().unwrap();
+        let files = MacroFiles::in_folder(&folder);
+        std::fs::write(&files.started, "").unwrap();
+        let finish = || {
+            finish_run(
+                &files,
+                Ok(proto::RunMacroResponse { ran: false }),
+                &[],
+                Duration::ZERO,
+                None,
+            )
+        };
+        // VBA End returns false and skips our wrapper's completion marker.
+        assert!(
+            finish()
+                .ok()
+                .unwrap()
+                .contains("without wrapper completion")
+        );
+        std::fs::write(&files.completed, "").unwrap();
+        assert!(
+            finish()
+                .ok()
+                .unwrap()
+                .contains("wrapper recorded completion")
+        );
+        write_vba_text(&files.error, "error 11: Division by zero");
+        let failure = finish().err().unwrap();
+        assert!(failure.preserve_files);
+        assert!(
+            failure
+                .error
+                .message
+                .contains("macro stopped with error 11")
+        );
         std::fs::remove_dir_all(folder).unwrap();
     }
 }
