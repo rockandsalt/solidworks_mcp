@@ -57,6 +57,25 @@ namespace sld_mcp::service
 		}
 	}
 
+	std::string ReferenceWhat(IDispatch* obj)
+	{
+		if (!obj)
+			return "nothing";
+		if (ATL::CComQIPtr<IFeature> feature(obj); feature)
+			return FeatureName(feature);
+		if (ATL::CComQIPtr<IFace2>(obj))
+			return "face";
+		if (ATL::CComQIPtr<IEdge>(obj))
+			return "edge";
+		if (ATL::CComQIPtr<ISketchSegment>(obj))
+			return "sketch segment";
+		if (ATL::CComQIPtr<IRefAxis>(obj))
+			return "reference axis";
+		if (ATL::CComQIPtr<IRefPlane>(obj))
+			return "plane";
+		return "reference";
+	}
+
 	bool IsReferenceType(const std::string& type)
 	{
 		return type == "RefPlane" || type == "RefAxis" || type == "RefPoint" || type == "CoordSys";

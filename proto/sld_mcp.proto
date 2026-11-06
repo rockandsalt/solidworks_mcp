@@ -210,6 +210,16 @@ service SolidWorks {
   // it and each entity are. Doesn't open the sketch for editing.
   rpc InspectSketch(InspectSketchRequest) returns (InspectSketchResponse);
 
+  // Read-only look at one feature of the active part: its definition
+  // (IFeature::GetDefinition) for extrudes, revolves, sweeps, lofts,
+  // fillets, chamfers, shells, drafts, ribs, mirrors, linear / circular
+  // patterns, helixes and Hole Wizard holes, and for every feature its own
+  // dimensions (IFeature::GetFirstDisplayDimension). Edges, faces, axes and
+  // planes it uses are read with the selections accessed, i.e. as the
+  // model is where the feature is built. FAILED_PRECONDITION if the active
+  // document isn't a part or a sketch is open.
+  rpc InspectFeature(InspectFeatureRequest) returns (InspectFeatureResponse);
+
   // Adds dimensions to a sketch, optionally driving each to a new value
   // (which moves the geometry). All or nothing: if any dimension can't be
   // added, would over-define the sketch, or the values can't be solved,
@@ -4558,6 +4568,136 @@ message EditSweepResponse {
   SweepDefinition before = 1;
   SweepDefinition after = 2;  // unset when nothing was asked
   repeated FeatureProblem new_errors = 3;
+}
+
+// ---------------------------------------------------------------------------
+// InspectFeature
+//
+// Meters and radians. Faces and edges by persist_id as the model is where
+// the feature is built (the ones it consumes are gone after it).
+
+// An axis, plane or face a feature uses, as PatternSide names it.
+message DefinitionRef {
+  string what = 1;       // "face", "edge", "Axis1", "Front Plane", "sketch segment", ...
+  bytes persist_id = 2;  // faces and edges
+}
+
+message RevolveDefinition {
+  bool cut = 1;
+  bool thin = 2;
+  string sketch_name = 3;
+  DefinitionRef axis = 4;
+  // swRevolveType_e: 0 one direction, 1 mid plane (angle = the total),
+  // 2 two directions; 3..5 the same, 360 degrees.
+  int32 revolve_type = 5;
+  double angle = 6;
+  double angle2 = 7;  // two directions
+  bool reverse_direction = 8;
+}
+
+message ChamferDefinition {
+  // swChamferType_e: 1 angle-distance, 2 distance-distance, 3 vertex,
+  // 16 equal distance.
+  int32 chamfer_type = 1;
+  double distance = 2;
+  double distance2 = 3;  // distance-distance
+  double angle = 4;      // angle-distance
+  repeated double vertex_distances = 5;  // vertex chamfers: 3
+  bool tangent_propagation = 6;
+  repeated FilletItem items = 7;  // edges and faces
+  bytes vertex_persist_id = 8;    // vertex chamfers
+}
+
+message ShellWall {
+  bytes persist_id = 1;  // the face
+  double thickness = 2;
+}
+
+message ShellDefinition {
+  double thickness = 1;
+  bool outward = 2;
+  repeated bytes removed_faces = 3;  // the openings; none = closed, hollow inside
+  repeated ShellWall walls = 4;      // faces with their own thickness
+}
+
+message DraftDefinition {
+  int32 draft_type = 1;  // swDraftType_e: 0 neutral plane, 1 parting line, 3 step
+  double angle = 2;
+  bool reverse_direction = 3;
+  DefinitionRef neutral_plane = 4;
+  repeated bytes faces = 5;  // the faces drafted
+  int32 propagation = 6;     // swDraftFacePropagationType_e
+}
+
+message RibDefinition {
+  string sketch_name = 1;
+  double thickness = 2;
+  bool two_sided = 3;
+  bool reverse_thickness = 4;  // one side: the other one
+  bool normal_to_sketch = 5;
+  bool flip_material = 6;      // FlipSide: which way the rib grows
+  double draft_angle = 7;      // 0 = no draft
+  bool draft_outward = 8;
+}
+
+message LoftDefinition {
+  bool cut = 1;
+  bool thin = 2;
+  repeated string profiles = 3;  // in order
+  repeated string guide_curves = 4;
+  bool closed = 5;
+  int32 start_tangency = 6;  // swTangencyType_e
+  int32 end_tangency = 7;
+}
+
+message MirrorDefinition {
+  DefinitionRef plane = 1;
+  repeated string features = 2;  // what it mirrors
+  int32 bodies = 3;              // body mirrors: how many bodies
+  int32 faces = 4;               // face mirrors
+  bool geometry_pattern = 5;
+}
+
+message HelixFeatureDefinition {
+  HelixDefinition defined_by = 1;
+  double height = 2;
+  double pitch = 3;
+  double revolutions = 4;
+  double start_angle = 5;
+  bool clockwise = 6;
+  bool reverse_direction = 7;
+  double taper_angle = 8;  // 0 = not tapered
+  bool taper_outward = 9;
+  bool variable_pitch = 10;
+}
+
+message InspectFeatureRequest {
+  FeatureTarget feature = 1;
+}
+
+message InspectFeatureResponse {
+  string name = 1;
+  string type_name = 2;
+  bool suppressed = 3;
+  int32 error_code = 4;  // swFeatureError_e as of the last rebuild
+  bool error_is_warning = 5;
+  repeated DimensionInfo dimensions = 6;
+  // Unset for kinds not read here: they have their dimensions only.
+  oneof definition {
+    ExtrudeDefinition extrude = 10;
+    RevolveDefinition revolve = 11;
+    SweepDefinition sweep = 12;
+    LoftDefinition loft = 13;
+    FilletDefinition fillet = 14;
+    ChamferDefinition chamfer = 15;
+    ShellDefinition shell = 16;
+    DraftDefinition draft = 17;
+    RibDefinition rib = 18;
+    MirrorDefinition mirror = 19;
+    PatternDefinition pattern = 20;
+    HelixFeatureDefinition helix = 21;
+    HoleSpec hole = 22;
+  }
 }
 
 // ---------------------------------------------------------------------------

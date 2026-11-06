@@ -183,7 +183,7 @@ pub fn extrude_request(ids: &IdRegistry, p: &EditExtrudeParams) -> Result<proto:
 }
 
 /// swEndConditions_e values EndCondition doesn't cover.
-fn raw_end_condition_name(raw: i32) -> String {
+pub(crate) fn raw_end_condition_name(raw: i32) -> String {
     match raw {
         3 => "up to vertex".into(),
         4 => "up to surface".into(),

@@ -225,6 +225,29 @@ namespace sld_mcp::service
 		return type == "ProfileFeature" || type == "3DProfileFeature";
 	}
 
+	std::string ProfileSketchName(IFeature* feature)
+	{
+		// A rib absorbs only a hidden copy of its sketch, "Sketch2<2>"; the
+		// sketch itself is a parent (seen 2026-11-05).
+		std::string copy;
+		for (const auto& sub : SubFeatures(feature))
+			if (IsSketchType(FeatureTypeName(sub)))
+			{
+				std::string name = FeatureName(sub);
+				if (name.find('<') == std::string::npos)
+					return name;
+				if (copy.empty())
+					copy = std::move(name);
+			}
+		ATL::CComVariant parents;
+		if (!copy.empty() && SUCCEEDED(feature->GetParents(&parents)))
+			for (const auto& parent : FeatureList(parents))
+				if (IsSketchType(FeatureTypeName(parent)))
+					if (std::string name = FeatureName(parent); name.find('<') == std::string::npos)
+						return name;
+		return copy;
+	}
+
 	void DropProblem(google::protobuf::RepeatedPtrField<sld_mcp::v1::FeatureProblem>* problems,
 		const std::string& name)
 	{

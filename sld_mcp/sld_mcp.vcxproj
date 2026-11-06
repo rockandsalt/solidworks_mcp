@@ -395,6 +395,7 @@
     <ClCompile Include="service\FeatureTreeHelpers.cpp" />
     <ClCompile Include="service\Files.cpp" />
     <ClCompile Include="service\HoleWizard.cpp" />
+    <ClCompile Include="service\InspectFeature.cpp" />
     <ClCompile Include="service\InspectModel.cpp" />
     <ClCompile Include="service\Mates.cpp" />
     <ClCompile Include="service\Mirror.cpp" />

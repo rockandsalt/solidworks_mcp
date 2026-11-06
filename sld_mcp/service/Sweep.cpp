@@ -190,6 +190,12 @@ namespace
 	}
 }
 
+grpc::Status sld_mcp::service::DescribeSweepDefinition(IModelDoc2* doc, IFeature* feature,
+	sld_mcp::v1::SweepDefinition* out)
+{
+	return DescribeSweep(doc, feature, out, nullptr);
+}
+
 grpc::Status SolidWorksService::SweepSketch(grpc::ServerContext* /*context*/,
 	const sld_mcp::v1::SweepSketchRequest* request,
 	sld_mcp::v1::SweepSketchResponse* response)

@@ -219,15 +219,6 @@ namespace
 		return grpc::Status::OK;
 	}
 
-	// The extrude's profile: its first absorbed sketch.
-	std::string ProfileSketchName(IFeature* feature)
-	{
-		for (const auto& sub : SubFeatures(feature))
-			if (IsSketchType(FeatureTypeName(sub)))
-				return FeatureName(sub);
-		return {};
-	}
-
 	void DescribeExtrudeSide(const ExtrudeSide& side, sld_mcp::v1::ExtrudeDirection* out)
 	{
 		out->set_end_condition(ToEndCondition(side.endCondition));
@@ -481,6 +472,11 @@ namespace
 		return SUCCEEDED(feature->SetSuppression2(suppressed ? swSuppressFeature : swUnSuppressFeature,
 			swThisConfiguration, ATL::CComVariant(), &ok)) && ok;
 	}
+}
+
+grpc::Status sld_mcp::service::DescribeExtrudeDefinition(IFeature* feature, sld_mcp::v1::ExtrudeDefinition* out)
+{
+	return DescribeExtrudeNow(feature, out);
 }
 
 grpc::Status SolidWorksService::EditExtrude(grpc::ServerContext* /*context*/,

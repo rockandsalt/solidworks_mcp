@@ -253,6 +253,12 @@ namespace
 	}
 }
 
+grpc::Status sld_mcp::service::DescribeFilletDefinition(IModelDoc2* doc, IModelDocExtension* ext,
+	IFeature* feature, sld_mcp::v1::FilletDefinition* out)
+{
+	return DescribeFillet(doc, ext, feature, out, nullptr);
+}
+
 grpc::Status SolidWorksService::FilletEdges(grpc::ServerContext* /*context*/,
 	const sld_mcp::v1::FilletEdgesRequest* request,
 	sld_mcp::v1::EdgeFeatureResponse* response)

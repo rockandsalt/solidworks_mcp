@@ -308,22 +308,7 @@ namespace
 	{
 		side.persistId = ids.Get(axis);
 		side.entity = ATL::CComQIPtr<IFace2>(axis) || ATL::CComQIPtr<IEdge>(axis);
-		if (!axis)
-			side.what = "nothing";
-		else if (ATL::CComQIPtr<IFeature> feature(axis); feature)
-			side.what = FeatureName(feature);
-		else if (ATL::CComQIPtr<IFace2>(axis))
-			side.what = "face";
-		else if (ATL::CComQIPtr<IEdge>(axis))
-			side.what = "edge";
-		else if (ATL::CComQIPtr<ISketchSegment>(axis))
-			side.what = "sketch segment";
-		else if (ATL::CComQIPtr<IRefAxis>(axis))
-			side.what = "reference axis";
-		else if (ATL::CComQIPtr<IRefPlane>(axis))
-			side.what = "plane";
-		else
-			side.what = "reference";
+		side.what = ReferenceWhat(axis);
 	}
 
 	// Reads the settings; the selections must be accessed.
@@ -589,6 +574,12 @@ namespace
 			return std::to_string(now.seeds.size()) + " patterned features";
 		return {};
 	}
+}
+
+grpc::Status sld_mcp::service::DescribePatternDefinition(IModelDoc2* doc, IModelDocExtension* ext,
+	IFeature* feature, sld_mcp::v1::PatternDefinition* out)
+{
+	return DescribePattern(doc, ext, feature, out, nullptr);
 }
 
 grpc::Status SolidWorksService::PatternFeatures(grpc::ServerContext* /*context*/,

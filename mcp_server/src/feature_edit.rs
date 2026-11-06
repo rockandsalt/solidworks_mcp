@@ -127,7 +127,7 @@ pub fn fillet_request(ids: &IdRegistry, p: &EditFilletParams) -> Result<proto::E
     })
 }
 
-fn fillet_kind(fillet_type: i32) -> &'static str {
+pub(crate) fn fillet_kind(fillet_type: i32) -> &'static str {
     match fillet_type {
         0 => "constant-radius fillet",
         1 => "variable-radius fillet",

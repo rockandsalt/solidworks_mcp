@@ -222,6 +222,8 @@ pub fn type_label(type_name: &str) -> &str {
         // SolidWorks 2026 types both a boss on an existing body and a cut "ICE".
         "ICE" => "extrude",
         "Revolution" | "RevCut" => "revolve",
+        "Sweep" | "SweepCut" => "sweep",
+        "Blend" | "BlendCut" => "loft",
         "HoleWzd" | "AdvHoleWzd" => "hole",
         "Fillet" | "VarFillet" | "FaceFillet" | "FullRoundFillet" => "fillet",
         "Chamfer" => "chamfer",

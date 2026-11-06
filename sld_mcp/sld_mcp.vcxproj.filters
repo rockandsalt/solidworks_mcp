@@ -225,6 +225,9 @@
     <ClCompile Include="service\HoleWizard.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>
+    <ClCompile Include="service\InspectFeature.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
     <ClCompile Include="service\InspectModel.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>

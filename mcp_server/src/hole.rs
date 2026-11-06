@@ -567,6 +567,14 @@ fn spec_text(kind: HoleKind, spec: &proto::HoleSpec) -> String {
     parts.join(", ")
 }
 
+/// "ISO socket head cap screw" for a HoleSpec's standard and fastener type, empty if unknown.
+pub(crate) fn fastener_text(standard: i32, fastener_type: i32) -> String {
+    match Fastener::from_sw(fastener_type) {
+        Some((standard, f)) => format!("{} {}", standard.name(), f.name().replace('_', " ")),
+        None => HoleStandard::from_sw(standard).map_or_else(String::new, |s| s.name().to_string()),
+    }
+}
+
 /// The tool's reply.
 pub fn reply_text(ids: &mut IdRegistry, params: &HoleWizardParams, reply: &proto::HoleWizardResponse) -> String {
     let spec = reply.spec.clone().unwrap_or_default();

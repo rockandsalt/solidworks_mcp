@@ -352,6 +352,14 @@ impl AddinClient {
         Ok(client.inspect_sketch(request).await?.into_inner())
     }
 
+    pub async fn inspect_feature(
+        &self,
+        request: proto::InspectFeatureRequest,
+    ) -> Result<proto::InspectFeatureResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.inspect_feature(request).await?.into_inner())
+    }
+
     /// Values in meters / radians.
     pub async fn add_sketch_dimensions(
         &self,

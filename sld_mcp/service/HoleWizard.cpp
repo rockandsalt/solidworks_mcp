@@ -1,6 +1,7 @@
 // HoleWizard.cpp : HoleWizard.
 #include "pch.h"
 #include "Common.h"
+#include "FeatureTreeHelpers.h"
 #include "SketchHelpers.h"
 
 using namespace sld_mcp::service;
@@ -736,6 +737,11 @@ namespace
 		ReadHoleSpec(result.hole, response->mutable_spec());
 		return grpc::Status::OK;
 	}
+}
+
+void sld_mcp::service::DescribeHoleSpec(IFeature* hole, sld_mcp::v1::HoleSpec* spec)
+{
+	ReadHoleSpec(hole, spec);
 }
 
 grpc::Status SolidWorksService::HoleWizard(grpc::ServerContext* /*context*/,

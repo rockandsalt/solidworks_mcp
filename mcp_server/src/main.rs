@@ -13,6 +13,7 @@ mod drawing_image;
 mod edit;
 mod equation;
 mod feature_edit;
+mod feature_inspect;
 mod feature_order;
 mod files;
 mod fillet;
@@ -3833,6 +3834,29 @@ impl SolidWorksTools {
         let json = {
             let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             sketch::render_inspect(&mut ids, &reply)
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+    }
+
+    #[tool(
+        description = "Look at one feature of the active part without changing it -- what Edit                        Feature would show: extrudes (end conditions, depths, draft, second                        direction), revolves (axis, angles), sweeps (profile, path, twist), lofts                        (profiles, guide curves, end tangency), fillets (radius, edges), chamfers                        (distances / angle, edges), shells (thickness, removed faces, walls of                        their own thickness), drafts (angle, neutral plane, faces), ribs                        (thickness, side, draft), mirrors (plane, what is mirrored), linear /                        circular patterns (counts, spacing, directions, what is copied), helixes                        (pitch, height, revolutions, taper) and Hole Wizard holes (fastener, size,                        diameters, depths). Every feature, of these kinds or any other, comes with                        its dimensions (names like \"D1@Revolve1\" for set_dimension). `feature` =                        \"feature:N\" from inspect_model or a feature-tree name. Edges and faces                        the feature uses come as ids of the model as it is just before the                        feature. Requires no sketch open for editing."
+    )]
+    async fn inspect_feature(
+        &self,
+        Parameters(params): Parameters<feature_inspect::InspectFeatureParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            feature_inspect::request(&ids, &params)?
+        };
+        let reply = self
+            .addin
+            .inspect_feature(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let json = {
+            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            feature_inspect::render(&mut ids, &reply)
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
     }

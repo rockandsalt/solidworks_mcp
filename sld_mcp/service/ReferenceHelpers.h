@@ -17,6 +17,10 @@ namespace sld_mcp::service
 	bool DescribeReferenceGeometry(IModelDocExtension* ext, IFeature* feature, const std::string& type,
 		sld_mcp::v1::ReferenceGeometry* out);
 
+	// What a feature definition's axis, plane or profile is, for messages:
+	// a feature's name, "face", "edge", "sketch segment", ...
+	std::string ReferenceWhat(IDispatch* obj);
+
 	// A GeometryRef resolved to what gets selected.
 	struct Pick
 	{

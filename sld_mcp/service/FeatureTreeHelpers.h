@@ -71,6 +71,9 @@ namespace sld_mcp::service
 
 	bool IsSketchType(const std::string& type);
 
+	// A feature's profile: its first absorbed sketch, or empty.
+	std::string ProfileSketchName(IFeature* feature);
+
 	// Removes the entries for feature `name` from a list of problems.
 	void DropProblem(google::protobuf::RepeatedPtrField<sld_mcp::v1::FeatureProblem>* problems,
 		const std::string& name);
@@ -102,4 +105,17 @@ namespace sld_mcp::service
 
 	// The feature's error as of the last rebuild into `code` / `warning`.
 	void SetFeatureError(IFeature* feature, int32_t& code, bool& warning);
+
+	// Definitions as the edit RPCs report them, for InspectFeature. Each is
+	// defined next to its edit RPC (Editing.cpp, Fillet.cpp, Pattern.cpp,
+	// Sweep.cpp) and holes' next to HoleWizard. INVALID_ARGUMENT if the
+	// feature isn't of that kind.
+	grpc::Status DescribeExtrudeDefinition(IFeature* feature, sld_mcp::v1::ExtrudeDefinition* out);
+	grpc::Status DescribeFilletDefinition(IModelDoc2* doc, IModelDocExtension* ext, IFeature* feature,
+		sld_mcp::v1::FilletDefinition* out);
+	grpc::Status DescribePatternDefinition(IModelDoc2* doc, IModelDocExtension* ext, IFeature* feature,
+		sld_mcp::v1::PatternDefinition* out);
+	grpc::Status DescribeSweepDefinition(IModelDoc2* doc, IFeature* feature, sld_mcp::v1::SweepDefinition* out);
+	// Best effort: what SolidWorks won't report stays 0.
+	void DescribeHoleSpec(IFeature* hole, sld_mcp::v1::HoleSpec* spec);
 }

@@ -125,6 +125,10 @@ public:
 		const sld_mcp::v1::InspectSketchRequest* request,
 		sld_mcp::v1::InspectSketchResponse* response) override;
 
+	grpc::Status InspectFeature(grpc::ServerContext* context,
+		const sld_mcp::v1::InspectFeatureRequest* request,
+		sld_mcp::v1::InspectFeatureResponse* response) override;
+
 	grpc::Status AddSketchDimensions(grpc::ServerContext* context,
 		const sld_mcp::v1::AddSketchDimensionsRequest* request,
 		sld_mcp::v1::AddSketchDimensionsResponse* response) override;
