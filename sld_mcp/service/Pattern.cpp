@@ -12,8 +12,6 @@ using namespace sld_mcp::service;
 
 namespace
 {
-	constexpr double kPi = 3.14159265358979323846;
-
 	// The selection marks FeatureLinearPattern5 / FeatureCircularPattern5 read
 	// their inputs from (the circular pattern's axis is direction 1).
 	constexpr long kDirection1Mark = 1;
@@ -161,9 +159,9 @@ namespace
 		double d = angle - from;
 		if (sweep < 0)
 			d = -d;
-		d = std::fmod(d, 2 * kPi);
+		d = std::fmod(d, 2 * M_PI);
 		if (d < 0)
-			d += 2 * kPi;
+			d += 2 * M_PI;
 		return d <= std::abs(sweep) + 1e-12;
 	}
 
@@ -205,11 +203,11 @@ namespace
 			const double from = std::atan2(s.y - c.y, s.x - c.x);
 			double sweep = std::atan2(e.y - c.y, e.x - c.x) - from;
 			if (direction < 0 && sweep > 0)
-				sweep -= 2 * kPi;
+				sweep -= 2 * M_PI;
 			if (direction >= 0 && sweep < 0)
-				sweep += 2 * kPi;
+				sweep += 2 * M_PI;
 			for (int i = 0; i < 4; ++i)
-				if (OnSweep(from, sweep, i * kPi / 2))
+				if (OnSweep(from, sweep, i * M_PI / 2))
 					add(quadrants[i]);
 			return;
 		}
@@ -607,7 +605,7 @@ grpc::Status SolidWorksService::PatternFeatures(grpc::ServerContext* /*context*/
 		if (c.count() < 2 || c.count() > kMaxInstances)
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
 				"count must be 2 to " + std::to_string(kMaxInstances) + " (the original included)");
-		if (!(std::isfinite(c.angle()) && c.angle() > 0.0 && c.angle() <= 2 * kPi + 1e-9))
+		if (!(std::isfinite(c.angle()) && c.angle() > 0.0 && c.angle() <= 2 * M_PI + 1e-9))
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
 				"the angle must be more than 0 and at most 360 degrees");
 	}
@@ -787,7 +785,7 @@ grpc::Status SolidWorksService::PatternSketchEntities(grpc::ServerContext* /*con
 		if (round.count() < 2 || round.count() > kMaxInstances)
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
 				"count must be 2 to " + std::to_string(kMaxInstances) + " (the originals included)");
-		if (!(std::isfinite(round.spacing()) && round.spacing() != 0.0 && std::abs(round.spacing()) <= 2 * kPi))
+		if (!(std::isfinite(round.spacing()) && round.spacing() != 0.0 && std::abs(round.spacing()) <= 2 * M_PI))
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
 				"the angle between instances must not be 0, nor more than 360 degrees");
 	}
@@ -877,8 +875,8 @@ grpc::Status SolidWorksService::PatternSketchEntities(grpc::ServerContext* /*con
 	const double arcRadius = std::hypot(center.x - boxMiddle.x, center.y - boxMiddle.y);
 	double arcAngle = std::atan2(center.y - boxMiddle.y, center.x - boxMiddle.x);
 	if (arcAngle < 0)
-		arcAngle += 2 * kPi;
-	if (arcAngle >= 2 * kPi)
+		arcAngle += 2 * M_PI;
+	if (arcAngle >= 2 * M_PI)
 		arcAngle = 0.0;
 
 	const auto errorsBefore = FeatureErrors(FeatureTree(doc));
@@ -1075,7 +1073,7 @@ grpc::Status SolidWorksService::EditPattern(grpc::ServerContext* /*context*/,
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
 				"\"" + name + "\" is a circular pattern: give its spacing as an angle (angle_deg for the total, "
 				"spacing_deg between neighbours)");
-		if (request->has_spacing() && request->spacing() > 2 * kPi + 1e-9)
+		if (request->has_spacing() && request->spacing() > 2 * M_PI + 1e-9)
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "the angle must be at most 360 degrees");
 		if (request->has_equal_spacing())
 			target.equal = request->equal_spacing();
@@ -1116,9 +1114,9 @@ grpc::Status SolidWorksService::EditPattern(grpc::ServerContext* /*context*/,
 	if (static_cast<long long>(side1.count) * (target.hasSide2 ? side2.count : 1) > kMaxInstances)
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
 			"at most " + std::to_string(kMaxInstances) + " instances in all");
-	if (target.circular && !target.equal && side1.spacing * (side1.count - 1) >= 2 * kPi - 1e-9)
+	if (target.circular && !target.equal && side1.spacing * (side1.count - 1) >= 2 * M_PI - 1e-9)
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-			std::to_string(side1.count) + " instances " + std::to_string(side1.spacing * 180.0 / kPi) +
+			std::to_string(side1.count) + " instances " + std::to_string(Degrees(side1.spacing)) +
 			" degrees apart don't fit in one turn");
 
 	std::vector<ATL::CComPtr<IFeature>> seeds;

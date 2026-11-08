@@ -437,7 +437,7 @@ namespace sld_mcp::service
 	{
 		char text[64];
 		if (type == swMateANGLE)
-			std::snprintf(text, sizeof(text), "%g deg", value * 180.0 / 3.14159265358979323846);
+			std::snprintf(text, sizeof(text), "%g deg", Degrees(value));
 		else
 			std::snprintf(text, sizeof(text), "%g mm", value * 1000.0);
 		return text;
@@ -445,7 +445,6 @@ namespace sld_mcp::service
 
 	grpc::Status CheckMateLimits(long type, double minimum, double maximum, double value)
 	{
-		constexpr double kPi = 3.14159265358979323846;
 		if (type != swMateDISTANCE && type != swMateANGLE)
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
 				"only distance and angle mates take limits");
@@ -455,7 +454,7 @@ namespace sld_mcp::service
 		if (type == swMateDISTANCE && minimum < 0.0)
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
 				"a distance limit can't be below 0 (flip measures to the other side)");
-		if (type == swMateANGLE && (minimum < 0.0 || maximum > kPi + 1e-9))
+		if (type == swMateANGLE && (minimum < 0.0 || maximum > M_PI + 1e-9))
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "angle limits must be 0 to 180 degrees");
 		const double tolerance = type == swMateANGLE ? 1e-9 : 1e-10;
 		if (value < minimum - tolerance || value > maximum + tolerance)

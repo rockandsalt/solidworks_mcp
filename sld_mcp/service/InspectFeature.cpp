@@ -1,5 +1,5 @@
 // InspectFeature.cpp : InspectFeature (one feature's definition and dimensions, read-only;
-// see docs/notes/inspection-gaps.md).
+// see docs/notes/editing.md).
 #include "pch.h"
 #include "Common.h"
 #include "DimensionHelpers.h"

@@ -481,7 +481,7 @@ grpc::Status SolidWorksService::EditSweep(grpc::ServerContext* /*context*/,
 		if (now.twistControl != target.twistControl ||
 			(target.twistControl == swTwistControlConstantTwistAlongPath && std::abs(now.twist - target.twist) > 1e-9))
 			return "twist control " + std::to_string(now.twistControl) + ", " +
-				std::to_string(now.twist * 180.0 / 3.14159265358979323846) + " degrees";
+				std::to_string(Degrees(now.twist)) + " degrees";
 		return {};
 	};
 	edit.rejected = "e.g. a profile that isn't one closed contour across the path, a path that isn't one chain of "

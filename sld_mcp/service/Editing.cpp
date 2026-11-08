@@ -484,7 +484,6 @@ grpc::Status SolidWorksService::EditExtrude(grpc::ServerContext* /*context*/,
 	sld_mcp::v1::EditExtrudeResponse* response)
 {
 	// Validate before touching SolidWorks.
-	constexpr double kHalfPi = 1.57079632679489661923;
 	int endCondition = swEndCondBlind, endCondition2 = swEndCondBlind;
 	const bool setEnd = request->end_condition() != sld_mcp::v1::END_CONDITION_UNSPECIFIED;
 	const bool setEnd2 = request->end_condition2() != sld_mcp::v1::END_CONDITION_UNSPECIFIED;
@@ -499,7 +498,7 @@ grpc::Status SolidWorksService::EditExtrude(grpc::ServerContext* /*context*/,
 		(request->has_depth2() && !(std::isfinite(request->depth2()) && request->depth2() > 0.0)))
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a depth must be positive");
 	if (request->has_draft_angle() &&
-		!(std::isfinite(request->draft_angle()) && request->draft_angle() >= 0.0 && request->draft_angle() < kHalfPi))
+		!(std::isfinite(request->draft_angle()) && request->draft_angle() >= 0.0 && request->draft_angle() < M_PI_2))
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "the draft angle must be 0 to under 90 degrees");
 	const bool anyChange = setEnd || setEnd2 || request->has_depth() || request->has_depth2() ||
 		request->has_reverse_direction() || request->has_draft_angle() || request->has_draft_outward() ||
@@ -660,7 +659,6 @@ grpc::Status SolidWorksService::EditMate(grpc::ServerContext* /*context*/,
 	sld_mcp::v1::EditMateResponse* response)
 {
 	// Validate before touching SolidWorks.
-	constexpr double kPi = 3.14159265358979323846;
 	long newType = swMateCOINCIDENT;
 	const bool setType = request->type() != sld_mcp::v1::MATE_TYPE_UNSPECIFIED;
 	if (setType && !ToSwMateType(request->type(), newType))
@@ -675,7 +673,7 @@ grpc::Status SolidWorksService::EditMate(grpc::ServerContext* /*context*/,
 	if (request->has_distance() && !(std::isfinite(request->distance()) && request->distance() >= 0.0))
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "the distance must be 0 or more");
 	if (request->has_angle() &&
-		!(std::isfinite(request->angle()) && request->angle() >= 0.0 && request->angle() <= kPi + 1e-9))
+		!(std::isfinite(request->angle()) && request->angle() >= 0.0 && request->angle() <= M_PI + 1e-9))
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "the angle must be 0 to 180 degrees");
 	const bool setLimits = request->has_min_limit() || request->has_max_limit();
 	if (setLimits && request->remove_limits())
@@ -895,7 +893,7 @@ grpc::Status SolidWorksService::EditMate(grpc::ServerContext* /*context*/,
 		if (target.type == swMateDISTANCE && std::abs(after.distance - target.distance) > 1e-9)
 			mismatch = "distance " + std::to_string(after.distance * 1000.0) + " mm";
 		else if (target.type == swMateANGLE && std::abs(after.angle - target.angle) > 1e-7)
-			mismatch = "angle " + std::to_string(after.angle * 180.0 / kPi) + " deg";
+			mismatch = "angle " + std::to_string(Degrees(after.angle)) + " deg";
 		else if (after.limited != target.limited ||
 			(target.limited && (std::abs(after.minimum - target.minimum) > 1e-9 ||
 				std::abs(after.maximum - target.maximum) > 1e-9)))

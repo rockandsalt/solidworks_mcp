@@ -32,7 +32,7 @@ grpc::Status SolidWorksService::AddMate(grpc::ServerContext* /*context*/,
 	if (mateType == swMateANGLE)
 	{
 		angle = request->angle();
-		if (!std::isfinite(angle) || angle < 0.0 || angle > 3.14159265358979323846 + 1e-9)
+		if (!std::isfinite(angle) || angle < 0.0 || angle > M_PI + 1e-9)
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "the angle must be 0 to 180 degrees");
 	}
 	if (request->has_limits())
@@ -129,7 +129,6 @@ grpc::Status SolidWorksService::SweepMate(grpc::ServerContext* /*context*/,
 	const sld_mcp::v1::SweepMateRequest* request,
 	sld_mcp::v1::SweepMateResponse* response)
 {
-	constexpr double kPi = 3.14159265358979323846;
 	constexpr int kMaxSteps = 360;
 	constexpr int kMaxInterferences = 200;
 	if (request->steps() < 1 || request->steps() > kMaxSteps)
@@ -205,7 +204,7 @@ grpc::Status SolidWorksService::SweepMate(grpc::ServerContext* /*context*/,
 	const double to = request->has_to() ? request->to() : maximum;
 	for (double v : { from, to })
 	{
-		if (v < 0.0 || (angular && v > kPi + 1e-9))
+		if (v < 0.0 || (angular && v > M_PI + 1e-9))
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
 				angular ? "an angle mate's value is 0 to 180 degrees" : "a distance mate's value is 0 or more");
 		if (limited && (v < minimum - 1e-10 || v > maximum + 1e-10))

@@ -15,8 +15,6 @@ namespace
 	// 2026-10-19).
 	constexpr long kEdgeMark = 1;
 
-	constexpr double kRightAngle = 3.14159265358979323846 / 2.0;
-
 	// More references than anyone selects by hand.
 	constexpr int kMaxEdges = 500;
 
@@ -327,7 +325,7 @@ grpc::Status SolidWorksService::ChamferEdges(grpc::ServerContext* /*context*/,
 	const double otherDistance = request->other_distance();
 	if (!(std::isfinite(distance) && distance > 0.0))
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "distance must be positive");
-	if (!(std::isfinite(angle) && angle >= 0.0 && angle < kRightAngle))
+	if (!(std::isfinite(angle) && angle >= 0.0 && angle < M_PI_2))
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "angle must be more than 0 and less than 90 degrees");
 	if (!(std::isfinite(otherDistance) && otherDistance >= 0.0))
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "other distance must be positive");
@@ -364,7 +362,7 @@ grpc::Status SolidWorksService::ChamferEdges(grpc::ServerContext* /*context*/,
 		options,
 		type,                        // ChamferType
 		swap ? otherDistance : distance, // Width
-		equal ? kRightAngle / 2.0 : angle, // Angle (angle-distance)
+		equal ? M_PI_4 : angle, // Angle (angle-distance)
 		swap ? distance : otherDistance, // OtherDist (distance-distance)
 		0.0,                         // VertexChamDist1..3 (vertex chamfers)
 		0.0,

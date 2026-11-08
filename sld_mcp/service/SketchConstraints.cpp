@@ -309,7 +309,7 @@ namespace
 			const double v = dim.value();
 			if (!std::isfinite(v) || v <= 0.0)
 				return invalid("a dimension value must be positive");
-			if (dim.kind() == K::DIMENSION_KIND_ANGLE && v >= 2.0 * 3.14159265358979323846)
+			if (dim.kind() == K::DIMENSION_KIND_ANGLE && v >= 2 * M_PI)
 				return invalid("an angle must be less than 360 degrees");
 		}
 		return grpc::Status::OK;

@@ -33,7 +33,7 @@ const PARALLEL_COS: f64 = 0.999_962;
 const FULL_TURN: f64 = std::f64::consts::TAU * 0.99;
 /// Partial cylinders up to this angle are fillets / rounds; wider ones are
 /// rounded ends (a slot's end is half a turn).
-const FILLET_MAX_SPAN: f64 = 179.0 * std::f64::consts::PI / 180.0;
+const FILLET_MAX_SPAN: f64 = 179f64.to_radians();
 /// Faces listed as unrecognized at most.
 const MAX_OTHER: usize = 50;
 

@@ -15,8 +15,6 @@ namespace
 	constexpr long kNeutralPlaneMark = 1;
 	constexpr long kFaceMark = 2;
 
-	constexpr double kRightAngle = 3.14159265358979323846 / 2.0;
-
 	// More references than anyone selects by hand.
 	constexpr int kMaxFaces = 500;
 
@@ -50,7 +48,7 @@ grpc::Status SolidWorksService::DraftFaces(grpc::ServerContext* /*context*/,
 	sld_mcp::v1::DraftFacesResponse* response)
 {
 	const double angle = request->angle();
-	if (!(std::isfinite(angle) && angle > 0.0 && angle < kRightAngle))
+	if (!(std::isfinite(angle) && angle > 0.0 && angle < M_PI_2))
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "angle must be more than 0 and less than 90 degrees");
 	if (request->faces().empty())
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give at least one face to draft");

@@ -167,6 +167,9 @@ namespace sld_mcp::service
 
 	bool IsFinite(const sld_mcp::v1::Vec3& p);
 
+	// SolidWorks angles are in radians; messages report degrees.
+	inline double Degrees(double radians) { return radians * 180.0 / M_PI; }
+
 	void InspectEdge(IEdge* edge, PersistIds& ids, sld_mcp::v1::EdgeInfo* info);
 
 	sld_mcp::v1::DocumentType ToDocumentType(long type);

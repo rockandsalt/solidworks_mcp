@@ -10,8 +10,6 @@ using namespace sld_mcp::service;
 
 namespace
 {
-	constexpr double kRightAngle = 3.14159265358979323846 / 2.0;
-
 	// One try: the sketch selected, InsertRib, which returns nothing: the new
 	// feature is the new last one. A rib that failed to rebuild or added no
 	// volume is deleted again, which leaves the sketch unused. OK with `rib`
@@ -72,7 +70,7 @@ grpc::Status SolidWorksService::RibSketch(grpc::ServerContext* /*context*/,
 	const double draft = request->draft_angle();
 	if (!(std::isfinite(thickness) && thickness > 0.0))
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "thickness must be positive");
-	if (!(std::isfinite(draft) && draft >= 0.0 && draft < kRightAngle))
+	if (!(std::isfinite(draft) && draft >= 0.0 && draft < M_PI_2))
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "draft angle must be 0 or more and less than 90 degrees");
 
 	std::lock_guard<std::mutex> lock(m_editMutex);

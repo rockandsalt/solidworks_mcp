@@ -222,7 +222,7 @@ namespace
 				return Invalid("hole dimensions must be positive");
 		if (request.has_countersink_angle() &&
 			!(std::isfinite(request.countersink_angle()) && request.countersink_angle() > 0.0 &&
-				request.countersink_angle() < 3.14159265358979))
+				request.countersink_angle() < M_PI))
 			return Invalid("the countersink angle must be between 0 and 180 degrees");
 		return grpc::Status::OK;
 	}

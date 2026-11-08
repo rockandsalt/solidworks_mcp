@@ -16,8 +16,6 @@ namespace
 	// Geometry closer than this (meters) hasn't changed.
 	constexpr double kEditTolerance = 1e-9;
 
-	constexpr double kPi = 3.14159265358979323846;
-
 	double Length(const sld_mcp::v1::Vec3& a, const sld_mcp::v1::Vec3& b)
 	{
 		return std::hypot(a.x() - b.x(), a.y() - b.y());
@@ -265,7 +263,7 @@ namespace
 				return invalid("a chamfer with two different sides needs the two segments, to say which is which");
 			if (!(std::isfinite(chamfer.second()) && chamfer.second() > 0.0))
 				return invalid("a chamfer's second distance or angle must be more than 0");
-			if (chamfer.kind() == sld_mcp::v1::SKETCH_CHAMFER_KIND_ANGLE && chamfer.second() >= kPi)
+			if (chamfer.kind() == sld_mcp::v1::SKETCH_CHAMFER_KIND_ANGLE && chamfer.second() >= M_PI)
 				return invalid("a chamfer's angle must be under 180 degrees");
 			return grpc::Status::OK;
 		}

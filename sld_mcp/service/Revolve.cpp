@@ -9,8 +9,6 @@ using namespace sld_mcp::service;
 
 namespace
 {
-	constexpr double kFullTurn = 2.0 * 3.14159265358979323846;
-
 	// The selection mark FeatureRevolve2 takes the axis from; the profile
 	// sketch is selected with mark 0.
 	constexpr long kAxisMark = 4;
@@ -84,9 +82,9 @@ grpc::Status SolidWorksService::RevolveSketch(grpc::ServerContext* /*context*/,
 	// Validate before touching SolidWorks.
 	const bool cut = request->cut();
 	const double angle = request->angle();
-	if (!(std::isfinite(angle) && angle > 0.0 && angle <= kFullTurn + 1e-9))
+	if (!(std::isfinite(angle) && angle > 0.0 && angle <= 2 * M_PI + 1e-9))
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "angle must be more than 0 and at most 360 degrees");
-	const bool fullTurn = angle >= kFullTurn - 1e-9;
+	const bool fullTurn = angle >= 2 * M_PI - 1e-9;
 
 	std::lock_guard<std::mutex> lock(m_editMutex);
 	ComApartment com;

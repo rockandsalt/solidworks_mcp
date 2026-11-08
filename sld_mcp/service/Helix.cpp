@@ -114,7 +114,7 @@ grpc::Status SolidWorksService::CreateHelix(grpc::ServerContext* /*context*/,
 	const bool tapered = taper != 0.0;
 	if (!std::isfinite(request->start_angle()))
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "start angle must be a number");
-	if (tapered && !(std::isfinite(taper) && taper > 0.0 && taper < 3.14159265358979323846 / 2.0))
+	if (tapered && !(std::isfinite(taper) && taper > 0.0 && taper < M_PI_2))
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a taper angle must be between 0 and 90 degrees");
 	if (tapered && definedBy == swHelixDefinedBySpiral)
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a spiral can't be tapered");

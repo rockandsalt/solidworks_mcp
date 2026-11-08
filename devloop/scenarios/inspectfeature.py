@@ -1,7 +1,7 @@
 # inspect_feature against real SolidWorks: one feature of each kind it reads,
 # its definition checked against what made it, with ids of the edges / faces it
 # uses; reading changes nothing and leaves nothing rolled back
-# (docs/notes/inspection-gaps.md).
+# (docs/notes/editing.md).
 # Run with:
 #   py devloop/mcp_client.py run devloop/scenarios/inspectfeature.py
 

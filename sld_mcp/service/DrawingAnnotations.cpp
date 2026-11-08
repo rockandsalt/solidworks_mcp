@@ -15,8 +15,6 @@ namespace
 	// Positions closer than this are where they were asked to go: meters.
 	constexpr double kPositionSlack = 1e-6;
 
-	constexpr double kPi = 3.14159265358979323846;
-
 	const char* OwnerWord(sld_mcp::v1::AnnotationOwner owner)
 	{
 		switch (owner)
@@ -286,7 +284,7 @@ namespace
 		{
 			note->put_Angle(s.angle());
 			double now = 0.0;
-			if (FAILED(note->get_Angle(&now)) || std::abs(std::remainder(now - s.angle(), 2.0 * kPi)) > 1e-6)
+			if (FAILED(note->get_Angle(&now)) || std::abs(std::remainder(now - s.angle(), 2.0 * M_PI)) > 1e-6)
 				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't turn " + name);
 		}
 		if (note && s.has_border())

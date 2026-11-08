@@ -653,7 +653,7 @@ fn push_once<'a>(list: &mut Vec<&'a [u8]>, pid: &'a [u8]) {
 mod tests {
     use super::*;
 
-    const DEG: f64 = std::f64::consts::PI / 180.0;
+    const DEG: f64 = 1f64.to_radians();
 
     /// The finite motion "turn by `angle` about `axis` through `point`, then
     /// translate by `shift`" (mm), applied to a component at `origin` (mm),
