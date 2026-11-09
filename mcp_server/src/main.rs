@@ -164,7 +164,8 @@ enum SketchShape {
     Polygon,
     /// By `center`, major_radius_mm and minor_radius_mm.
     Ellipse,
-    /// width_mm x height_mm round `center`, width along sketch X; always a new 2D sketch.
+    /// width_mm x height_mm round `center`, width along sketch X, with width and height
+    /// dimensions; always a new 2D sketch.
     Rectangle,
 }
 
@@ -1193,7 +1194,8 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Save the active document with no dialogs: to its own file, or Save As an \
+        description = "Save the active document (or `document`, another open one) with no \
+                       dialogs: to its own file, or Save As an \
                        absolute path whose extension decides -- .SLDPRT / .SLDASM / .SLDDRW \
                        (copy=true keeps working on the original), or an export: STEP, IGES, \
                        Parasolid, SAT, STL, 3MF; PDF (a page per sheet), DXF, DWG for drawings. \
@@ -1210,8 +1212,9 @@ impl SolidWorksTools {
             .save_document(request.clone())
             .await
             .map_err(|status| self.addin_error(status))?;
-        // Save As gives the document another file, and so another key.
-        self.track_document(true).await;
+        // Save As gives the document another file, and so another key; another
+        // document saved leaves the active one's alone.
+        self.track_document(request.document.is_empty()).await;
         let text = files::save_reply_text(&request, &reply)?;
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -4110,6 +4113,13 @@ impl SolidWorksTools {
             );
         }
         text.push('.');
+        if sketch.dimensions.len() < 2 {
+            text += " SolidWorks didn't take a width and a height dimension on it.";
+        }
+        if !sketch.dimensions.is_empty() {
+            let dims: Vec<String> = sketch.dimensions.iter().map(sketch::dimension_text).collect();
+            text += &format!(" Dimensions: {}.", dims.join(", "));
+        }
         {
             let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             text += &sketch::items_text(&mut ids, &sketch.items);

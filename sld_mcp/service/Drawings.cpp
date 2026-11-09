@@ -885,24 +885,25 @@ namespace
 		std::string path;
 		std::string title;
 		bool shown = false;  // by a view of the drawing
+		bool assembly = false;
 	};
 
 	std::vector<ModelCandidate> ModelCandidates(ISldWorks* swApp, const std::vector<DrawingSheet>& sheets)
 	{
 		std::vector<ModelCandidate> out;
-		auto add = [&](const std::string& path, const std::string& title, bool shown) {
+		auto add = [&](const std::string& path, const std::string& title, bool shown, bool assembly) {
 			for (auto& c : out)
 				if (path.empty() ? c.path.empty() && c.title == title : EqualsIgnoringCase(c.path, path))
 				{
 					c.shown = c.shown || shown;
 					return;
 				}
-			out.push_back({ path, title, shown });
+			out.push_back({ path, title, shown, assembly });
 		};
 		for (const auto& sheet : sheets)
 			for (const auto& view : sheet.views)
 				if (const std::string path = ViewModelPath(view); !path.empty())
-					add(path, FileNameOf(path), true);
+					add(path, FileNameOf(path), true, false);
 		ATL::CComVariant docs;
 		if (SUCCEEDED(swApp->GetDocuments(&docs)))
 			for (const auto& disp : comvariant::ToDispatches(docs))
@@ -914,7 +915,7 @@ namespace
 				ATL::CComBSTR path, title;
 				doc->GetPathName(&path);
 				doc->GetTitle(&title);
-				add(ToUtf8(path), ToUtf8(title), false);
+				add(ToUtf8(path), ToUtf8(title), false, type == swDocASSEMBLY);
 			}
 		return out;
 	}
@@ -931,7 +932,9 @@ namespace
 	{
 		if (c.path.empty())
 			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, c.title +
-				" was never saved -- save it first (save_document): a drawing view shows a model file");
+				" was never saved, and a drawing view shows a model file -- save it first with save_document "
+				"document=\"" + c.title + "\" path=<an absolute " + (c.assembly ? ".SLDASM" : ".SLDPRT") +
+				" path> (the drawing stays active), then make the view again");
 		path = std::wstring(FromUtf8(c.path));
 		return grpc::Status::OK;
 	}

@@ -43,6 +43,10 @@ pub struct SaveDocumentParams {
     /// own PDF export option.
     #[serde(default)]
     pub pdf_color: Option<bool>,
+    /// Which open document: its title, file name or full path (e.g. the part a drawing view
+    /// needs, saved without leaving the drawing). Default: the active document.
+    #[serde(default)]
+    pub document: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -221,11 +225,12 @@ fn checked_path(path: &str) -> Result<&str, McpError> {
 /// The SaveDocument request for `params`, after checking the path, its
 /// format and its folder, and that it won't overwrite a file unasked.
 pub fn save_request(params: &SaveDocumentParams) -> Result<proto::SaveDocumentRequest, McpError> {
+    let document = params.document.as_deref().map(str::trim).unwrap_or_default().to_string();
     let Some(path) = params.path.as_deref() else {
         if params.pdf_sheets.is_some() || params.pdf_color.is_some() {
             return Err(invalid("pdf_sheets / pdf_color are for exporting a PDF: give a .pdf path".into()));
         }
-        return Ok(proto::SaveDocumentRequest::default());
+        return Ok(proto::SaveDocumentRequest { document, ..Default::default() });
     };
     let path = checked_path(path)?;
     let format = format_of(path).ok_or_else(|| {
@@ -255,6 +260,7 @@ pub fn save_request(params: &SaveDocumentParams) -> Result<proto::SaveDocumentRe
         copy: params.copy || !format.native,
         allowed_types: format.types.iter().map(|&t| t as i32).collect(),
         pdf: pdf_export(params, format)?,
+        document,
     })
 }
 

@@ -66,6 +66,15 @@ impl Side {
             Side::Below => -DVec2::Y,
         }
     }
+
+    fn words(self) -> &'static str {
+        match self {
+            Side::Right => "right of",
+            Side::Left => "left of",
+            Side::Above => "above",
+            Side::Below => "below",
+        }
+    }
 }
 
 /// The outline drawn around a detail or crop.
@@ -114,7 +123,7 @@ pub struct ProjectedViewParams {
     /// Where it goes relative to `view`. Default: right.
     #[serde(default)]
     pub side: Option<Side>,
-    /// Its center, [x, y] sheet mm, instead of `side`. It stays aligned with `view`.
+    /// Its center, [x, y] sheet mm (on `side`, if given). It stays aligned with `view`.
     #[serde(default)]
     pub at_mm: Option<[f64; 2]>,
     /// The view's name. Default: SolidWorks' next "Drawing ViewN".
@@ -140,7 +149,7 @@ pub struct SectionViewParams {
     /// Where the section view goes relative to the line. Default: the side with more room.
     #[serde(default)]
     pub side: Option<Side>,
-    /// Its center, [x, y] sheet mm, instead of `side`. It stays aligned with the cut.
+    /// Its center, [x, y] sheet mm (on `side`, if given). It stays aligned with the cut.
     #[serde(default)]
     pub at_mm: Option<[f64; 2]>,
     /// Look the other way than the sheet's projection says for where the view is.
@@ -624,10 +633,21 @@ pub fn projected_plan(
     let view = params.view.trim();
     let (_, parent) = parent_of(drawing, view)?;
     let rect = Rect::of(parent).ok_or_else(|| invalid(format!("{view} has no outline")))?;
-    if params.at_mm.is_some() && params.side.is_some() {
-        return Err(invalid("give side or at_mm, not both"));
-    }
     let at = params.at_mm.map(|at| sheet_m(at, "at_mm")).transpose()?;
+    // SolidWorks projects toward where the view is put: at_mm decides, side
+    // only has to agree with it.
+    if let (Some(at), Some(side)) = (at, params.side) {
+        let offset = at - rect.center();
+        let along = offset.dot(side.direction());
+        if along <= (offset - side.direction() * along).length() {
+            return Err(invalid(format!(
+                "at_mm {} mm isn't {} {view} (its middle is at {} mm) -- move at_mm or leave side out",
+                sheet_mm(at),
+                side.words(),
+                sheet_mm(rect.center())
+            )));
+        }
+    }
     let direction = params.side.unwrap_or(Side::Right).direction();
     let position = at.unwrap_or_else(|| past_outline(&rect, direction));
     let mut request = new_request(view, params.name.as_deref(), String::new(), position);
@@ -662,9 +682,6 @@ pub fn section_plan(
     if params.through.is_some() && params.through_mm.is_some() {
         return Err(invalid("give through or through_mm, not both"));
     }
-    if params.at_mm.is_some() && params.side.is_some() {
-        return Err(invalid("give side or at_mm, not both"));
-    }
     if let Some(depth) = params.depth_mm
         && !(depth.is_finite() && depth > 0.0)
     {
@@ -686,17 +703,33 @@ pub fn section_plan(
     let normal = DVec2::new(along.y, -along.x);
     let at = params.at_mm.map(|at| sheet_m(at, "at_mm")).transpose()?;
     // Which side of the line the view goes.
-    let wanted = match (at, params.side) {
-        (Some(at), _) => (at - through).dot(normal),
-        (None, Some(side)) => {
+    let side = params
+        .side
+        .map(|side| {
             let d = side.direction().dot(normal);
             if d.abs() < 1e-6 {
                 return Err(invalid(format!(
                     "side: a line at {angle} degrees has nothing {side:?} of it -- pick a side across the line"
                 )));
             }
+            Ok((side, d))
+        })
+        .transpose()?;
+    let wanted = match (at, side) {
+        (Some(at), side) => {
+            let d = (at - through).dot(normal);
+            if let Some((side, s)) = side
+                && d * s <= 0.0
+            {
+                return Err(invalid(format!(
+                    "at_mm {} mm isn't on the line's {} side -- move at_mm or leave side out",
+                    sheet_mm(at),
+                    format!("{side:?}").to_lowercase()
+                )));
+            }
             d
         }
+        (None, Some((_, d))) => d,
         // The side with more room; along +normal when level.
         (None, None) => room(sheet, &rect, normal) - room(sheet, &rect, -normal) + 1e-9,
     };
@@ -1050,12 +1083,30 @@ mod tests {
     }
 
     #[test]
+    fn a_projected_view_takes_side_and_at_mm_that_agree() {
+        let d = drawing(false, vec![view("F", [0.05, 0.1], [0.15, 0.2])]);
+        let plan = |v: serde_json::Value| projected_plan(&d, &serde_json::from_value(v).unwrap());
+        let p = plan(json!({"view": "F", "side": "above", "at_mm": [100, 260]})).unwrap();
+        let at = p.request.position.unwrap();
+        assert!((at.x - 0.1).abs() < 1e-9 && (at.y - 0.26).abs() < 1e-9, "{at:?}");
+        assert!(plan(json!({"view": "F", "side": "right", "at_mm": [300, 160]})).is_ok());
+        for args in [
+            json!({"view": "F", "side": "right", "at_mm": [100, 260]}),
+            json!({"view": "F", "side": "below", "at_mm": [100, 260]}),
+        ] {
+            let error = plan(args.clone()).err().unwrap();
+            assert!(error.message.contains("isn't"), "{args}: {}", error.message);
+        }
+    }
+
+    #[test]
     fn section_refusals() {
         let d = drawing(false, vec![view("F", [0.05, 0.1], [0.15, 0.2])]);
         for args in [
             json!({"view": "Nope"}),
             json!({"view": "F", "side": "above"}),
-            json!({"view": "F", "side": "left", "at_mm": [1, 2]}),
+            json!({"view": "F", "side": "left", "at_mm": [300, 150]}),
+            json!({"view": "F", "angle_deg": 0, "side": "below", "at_mm": [100, 250]}),
             json!({"view": "F", "through": "view_edge:1", "through_mm": [1, 2]}),
             json!({"view": "F", "through": "view_edge:1"}),
             json!({"view": "F", "depth_mm": 0}),

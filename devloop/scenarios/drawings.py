@@ -225,17 +225,21 @@ assert dims_by_name(view_json("Drawing View1")).keys() == d1.keys()
 assert not (open_dialogs := sw_dialogs()), open_dialogs
 
 # ---- insert_model_items --------------------------------------------------------
-# Only the selected view: the box's depth (along X) shows in the Top view.
+# Only the selected view: the box's depth (along X) and the rectangle's width
+# (its sketch's own dimension) show in the Top view.
 r = mcp.call("insert_model_items", views=["Drawing View2"])
 print("    model items View2:", r.text)
-assert r.json["inserted"] == 1 and [v["view"] for v in r.json["views"]] == ["Drawing View2"], r.json
-assert [a["dimension"] for a in r.json["views"][0]["added"]] == ["D1@Boss-Extrude1@drawing-block.Part"], r.json
-# Every view of the active sheet: the boss's height shows in the Front view,
-# the box's depth isn't repeated.
+assert r.json["inserted"] == 2 and [v["view"] for v in r.json["views"]] == ["Drawing View2"], r.json
+assert sorted(a["dimension"] for a in r.json["views"][0]["added"]) == [
+    "D1@Boss-Extrude1@drawing-block.Part", "D1@Sketch1@drawing-block.Part"], r.json
+# Every view of the active sheet: the boss's height and the rectangle's width
+# and height show in the Front view; the box's depth isn't repeated (the
+# rectangle's width is: SolidWorks shows a sketch dimension in both views).
 r = mcp.call("insert_model_items")
 print("    model items all:", r.text)
-added = {v["view"]: [a["dimension"] for a in v["added"]] for v in r.json["views"]}
-assert added == {"Drawing View1": ["D1@Boss-Extrude2@drawing-block.Part"], "Drawing View2": []}, added
+added = {v["view"]: sorted(a["dimension"] for a in v["added"]) for v in r.json["views"]}
+assert added == {"Drawing View1": ["D1@Boss-Extrude2@drawing-block.Part", "D1@Sketch1@drawing-block.Part",
+                                   "D2@Sketch1@drawing-block.Part"], "Drawing View2": []}, added
 # ... and not Sheet2's view.
 final = mcp.call("inspect_drawing", list_annotations=True).json
 dump("final", final)

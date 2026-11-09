@@ -421,8 +421,13 @@ grpc::Status SolidWorksService::SaveDocument(grpc::ServerContext* /*context*/,
 		return status;
 
 	ATL::CComPtr<IModelDoc2> doc;
-	HRESULT hr = swApp->get_IActiveDoc2(&doc);
-	if (FAILED(hr))
+	HRESULT hr = S_OK;
+	if (!request->document().empty())
+	{
+		if (grpc::Status status = FindOpenDocument(swApp, request->document(), doc); !status.ok())
+			return status;
+	}
+	else if (FAILED(hr = swApp->get_IActiveDoc2(&doc)))
 		return ComError("ISldWorks::IActiveDoc2", hr);
 	if (!doc)
 		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "no document is open in SolidWorks");
@@ -440,7 +445,7 @@ grpc::Status SolidWorksService::SaveDocument(grpc::ServerContext* /*context*/,
 		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
 			"that file format doesn't hold a " + std::string(before.type() == sld_mcp::v1::DOCUMENT_TYPE_PART ? "part"
 				: before.type() == sld_mcp::v1::DOCUMENT_TYPE_ASSEMBLY ? "assembly" : "drawing") +
-			" (the active document, " + before.title() + ")");
+			" (" + (request->document().empty() ? "the active document, " : "") + before.title() + ")");
 
 	const ATL::CComBSTR target = inPlace ? FromUtf8(before.path()) : FromUtf8(request->path());
 	if (!inPlace)

@@ -157,6 +157,9 @@ mcp.call("create_part")
 mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)  # line:1..4 sides, 5/6 diagonals
 mcp.call("extrude_sketch", depth_mm=10)
 old = {e["id"] for e in sketch()["segments"]}
+# The rectangle's own width and height dimensions.
+rect_dims = [d["name"] for d in sketch()["dimensions"]]
+assert len(rect_dims) == 2, rect_dims
 mcp.call("sketch", shape="line", sketch_name="Sketch1", points=[[-15, 14], [15, 14]], construction=True)
 line = [e for e in sketch()["segments"] if e["id"] not in old]
 assert len(line) == 1, line
@@ -168,7 +171,8 @@ mcp.call("sketch", shape="point", sketch_name="Sketch1", points=[[0, -14]])
 before = sketch()
 lone = [p["id"] for p in before["points"] if p["id"] not in old_points]
 assert len(lone) == 1, lone
-assert len(before["dimensions"]) == 1, before["dimensions"]
+new_dims = [d for d in before["dimensions"] if d["name"] not in rect_dims]
+assert len(new_dims) == 1, before["dimensions"]
 print("    before:", before)
 
 # A corner is an end point of two sides: refused, naming them. (Looked up:
@@ -180,14 +184,14 @@ assert "end or center point of" in r.text and "Line1" in r.text, r.text
 # The line and its (unshared) end points, dimension and relation go
 # together; its start point given too is skipped, not selected.
 r = mcp.call("delete_sketch_entities", entities=[line["id"], line["start"]])
-dim = before["dimensions"][0]["name"]
+dim = new_dims[0]["name"]
 assert r.text.startswith(f"deleted 2 entities from Sketch1 ({line['id']}, {line['start']}), along with "
                          f"2 end/center points, 1 dimension ({dim}), 1 relation."), r.text
 after = sketch()
 by_id = lambda s: {e["id"]: e for e in s["segments"] + s["points"]}
 gone = set(by_id(before)) - set(by_id(after))
 assert gone == {line["id"], line["start"], line["end"]}, gone
-assert not after["dimensions"], after["dimensions"]
+assert [d["name"] for d in after["dimensions"]] == rect_dims, after["dimensions"]
 # Everything else is still there under the same id: GetID is the same on the
 # closed and the opened sketch (else the wrong entity would have gone).
 for id_, e in by_id(after).items():

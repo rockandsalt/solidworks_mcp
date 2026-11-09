@@ -890,6 +890,9 @@ message SaveDocumentRequest {
   repeated DocumentType allowed_types = 3;
   // Set for a PDF export of a drawing (IExportPdfData).
   PdfExport pdf = 4;
+  // Window title, full path or file name of an open document, in any case.
+  // Empty: the active document. Another one is saved without activating it.
+  string document = 5;
 }
 
 message PdfExport {
@@ -1056,6 +1059,9 @@ message CreateRectangleSketchResponse {
   // The segments the rectangle is made of (sides, plus any construction
   // geometry SolidWorks adds), with their IDs.
   repeated SketchItem items = 4;
+  // The width and height dimensions the add-in put on the top and right
+  // sides (a side that wouldn't take one is missing).
+  repeated DimensionInfo dimensions = 5;
 }
 
 // ---------------------------------------------------------------------------

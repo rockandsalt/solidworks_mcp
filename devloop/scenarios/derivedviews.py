@@ -113,7 +113,7 @@ r = mcp.call("create_drawing_view", type="projected", view="P", at_mm=[390, 170]
 assert near(center(views()["Far"]), [390, 170], 1.0), views()["Far"]
 for args, expected in [
     ({"view": "Nope"}, 'no view named "Nope"'),
-    ({"view": "P", "side": "left", "at_mm": [1, 2]}, "side or at_mm"),
+    ({"view": "P", "side": "left", "at_mm": [1, 2]}, "isn't left of P"),
     ({"view": "P", "name": "Far"}, 'already has a view named "Far"'),
     ({"view": "P", "name": "a@b"}, '"a@b"'),
 ]:

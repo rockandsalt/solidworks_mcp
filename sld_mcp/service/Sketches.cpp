@@ -20,6 +20,49 @@ namespace
 	// chains of entities connect into contours.
 	constexpr double kMergeDistance = 1e-8;
 
+	// Width and height dimensions on a new center rectangle's top and right
+	// sides (CreateCenterRectangle makes none), placed outside it, in the
+	// open sketch. A side that won't take one is left without.
+	void DimensionRectangle(ISldWorks* swApp, IModelDoc2* doc, const SketchSpace& space, const ATL::CComVariant& segments,
+		double cx, double cy, double halfWidth, double halfHeight, sld_mcp::v1::CreateRectangleSketchResponse* response)
+	{
+		PreferenceToggles toggles(swApp);
+		toggles.Set(swInputDimValOnCreate, false);
+		toggles.Set(swSketchOverdefiningDimsPromptToSetState, false);
+		toggles.Set(swSketchOverdefiningDimsSetDrivenByDefault, true);
+		const double gap = std::max(0.005, 0.3 * std::min(halfWidth, halfHeight));
+		struct Side { double x, y; bool horizontal; };
+		for (const Side side : { Side{ cx, cy + halfHeight, true }, Side{ cx + halfWidth, cy, false } })
+			for (const auto& disp : comvariant::ToDispatches(segments))
+			{
+				ATL::CComQIPtr<ISketchSegment> segment(disp.p);
+				ATL::CComQIPtr<ISketchLine> line(disp.p);
+				VARIANT_BOOL construction = VARIANT_TRUE;
+				if (!segment || !line || FAILED(segment->get_ConstructionGeometry(&construction)) || construction)
+					continue;
+				ATL::CComPtr<IDispatch> startDisp, endDisp;
+				line->GetStartPoint2(&startDisp);
+				line->GetEndPoint2(&endDisp);
+				ATL::CComQIPtr<ISketchPoint> start(startDisp.p), end(endDisp.p);
+				double sx = 0, sy = 0, ex = 0, ey = 0;
+				if (!start || !end || FAILED(start->get_X(&sx)) || FAILED(start->get_Y(&sy)) ||
+					FAILED(end->get_X(&ex)) || FAILED(end->get_Y(&ey)) ||
+					std::abs((sx + ex) / 2 - side.x) > 1e-6 || std::abs((sy + ey) / 2 - side.y) > 1e-6)
+					continue;
+				const double textSketch[3] = { side.x + (side.horizontal ? 0.0 : gap), side.y + (side.horizontal ? gap : 0.0), 0.0 };
+				double text[3];
+				VARIANT_BOOL selected = VARIANT_FALSE;
+				ATL::CComPtr<IDispatch> created;
+				doc->ClearSelection2(VARIANT_TRUE);
+				if (space.ToModel(textSketch, text) && SUCCEEDED(segment->Select4(VARIANT_FALSE, nullptr, &selected)) &&
+					selected && SUCCEEDED(doc->AddDimension2(text[0], text[1], text[2], &created)))
+					if (ATL::CComQIPtr<IDisplayDimension> display(created.p); display)
+						DescribeDimension(display, response->add_dimensions());
+				doc->ClearSelection2(VARIANT_TRUE);
+				break;
+			}
+	}
+
 	constexpr int kMinPolygonSides = 3;
 
 	// What SolidWorks' polygon tool goes up to.
@@ -606,6 +649,9 @@ grpc::Status SolidWorksService::CreateRectangleSketch(grpc::ServerContext* /*con
 	}
 
 	sketchManager->put_AddToDB(previousAddToDB);
+
+	if (created)
+		DimensionRectangle(swApp, doc, space, segments, cx, cy, halfWidth, halfHeight, response);
 
 	// Report the frame and where the center actually landed. Purely
 	// informational, so a failure here just leaves them out.

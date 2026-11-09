@@ -365,7 +365,8 @@ pub struct AddDrawingNoteParams {
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub struct EditDrawingAnnotationParams {
     /// The annotation's name as inspect_drawing_annotations lists it, e.g. "DetailItem12" or
-    /// "RD1@Drawing View1".
+    /// "RD1@Drawing View1"; a dimension also by its full name (its `dimension`, e.g.
+    /// "D1@Sketch1"), which tells apart model dimensions sharing a name like "D1".
     pub name: String,
     /// Only look for it on this sheet.
     #[serde(default)]
@@ -410,7 +411,9 @@ pub struct EditDrawingAnnotationParams {
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub struct DeleteDrawingAnnotationsParams {
-    /// Annotation names as inspect_drawing_annotations lists them (notes, dimensions, ...).
+    /// Annotation names as inspect_drawing_annotations lists them (notes, dimensions, ...); a
+    /// dimension also by its full name (its `dimension`, e.g. "D1@Sketch1"), which tells apart
+    /// model dimensions sharing a name like "D1".
     pub names: Vec<String>,
     /// Only look for them on this sheet.
     #[serde(default)]

@@ -37,6 +37,23 @@ namespace
 		return ToUtf8(name);
 	}
 
+	// A dimension's full name ("D1@Sketch1@block.Part"); "" for other
+	// annotations.
+	std::string DimensionFullNameOf(IAnnotation* annotation)
+	{
+		long type = 0;
+		ATL::CComPtr<IDispatch> specific;
+		if (FAILED(annotation->GetType(&type)) || type != swDisplayDimension ||
+			FAILED(annotation->GetSpecificAnnotation(&specific)) || !specific)
+			return {};
+		ATL::CComQIPtr<IDisplayDimension> display(specific.p);
+		ATL::CComPtr<IDimension> dim;
+		ATL::CComBSTR full;
+		if (!display || FAILED(display->GetDimension2(0, &dim)) || !dim || FAILED(dim->get_FullName(&full)))
+			return {};
+		return ToUtf8(full);
+	}
+
 	// An annotation found by name, with the sheet and (for a view's) the
 	// view it's listed under.
 	struct FoundAnnotation
@@ -44,14 +61,18 @@ namespace
 		ATL::CComPtr<IAnnotation> annotation;
 		std::string sheetName;
 		ATL::CComPtr<IView> view;
+		std::string fullName;  // a dimension's
 
 		std::string Where() const
 		{
-			return (view ? ViewName(view) + " on " : std::string()) + sheetName;
+			return (fullName.empty() ? std::string() : fullName + " in ") +
+				(view ? ViewName(view) + " on " : std::string()) + sheetName;
 		}
 	};
 
-	// The annotation called `name` (as IAnnotation::GetName has it), looked
+	// The annotation called `name` (as IAnnotation::GetName has it, or a
+	// dimension's full name, with or without the trailing "@<document>":
+	// model dimensions of two features share short names like "D1"), looked
 	// for in every view and on every sheet (the sheet's own list holds its
 	// sheet format's too), or only those `sheetName` / `viewName` say.
 	grpc::Status FindAnnotation(const std::vector<DrawingSheet>& sheets, const std::string& name,
@@ -63,13 +84,15 @@ namespace
 		auto consider = [&](const DrawingSheet& sheet, IView* view, IView* listedBy) {
 			for (const auto& annotation : ViewAnnotationList(listedBy))
 			{
-				if (AnnotationName(annotation) != name)
+				const std::string fullName = DimensionFullNameOf(annotation);
+				if (AnnotationName(annotation) != name && fullName != name &&
+					fullName.compare(0, name.size() + 1, name + "@") != 0)
 					continue;
 				ATL::CComPtr<IUnknown> identity;
 				if (FAILED(annotation->QueryInterface(IID_PPV_ARGS(&identity))) || !seen.insert(identity.p).second)
 					continue;
 				alive.push_back(identity);
-				hits.push_back({ annotation, sheet.name, view });
+				hits.push_back({ annotation, sheet.name, view, fullName });
 			}
 		};
 		for (const auto& sheet : sheets)
@@ -89,10 +112,18 @@ namespace
 		if (hits.size() > 1)
 		{
 			std::string where;
+			std::set<std::string> fullNames;
 			for (const auto& hit : hits)
+			{
 				where += (where.empty() ? "" : ", ") + hit.Where();
+				fullNames.insert(hit.fullName);
+			}
+			// Dimensions with different full names: the full name tells them
+			// apart; one full name in several views: the view does.
+			const bool byFullName = fullNames.size() == hits.size() && !fullNames.count("");
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "several annotations are named \"" + name +
-				"\" (" + where + ") -- say which sheet or view");
+				"\" (" + where + ") -- " + (byFullName ? "give the dimension's full name (e.g. " + hits[0].fullName + ")"
+					: "say which sheet or view"));
 		}
 		out = hits[0];
 		return grpc::Status::OK;
@@ -1150,19 +1181,40 @@ grpc::Status SolidWorksService::DeleteDrawingAnnotations(grpc::ServerContext* /*
 		if (!activation.Show(sheetName))
 			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "couldn't switch to sheet " + sheetName);
 		const auto& list = bySheet[sheetName];
-		std::vector<std::string> names;
+		// Identities taken now: a deleted annotation's object may not answer
+		// any more. (Not looked up again by name: another annotation of the
+		// same short name, in another view, isn't this one.)
+		std::map<IUnknown*, std::string> deleting;
+		std::vector<ATL::CComPtr<IUnknown>> alive;
 		for (const auto& annotation : list)
-			names.push_back(AnnotationName(annotation));
-		DeleteAnnotations(doc, ext, list);
-		// Gone? (Looked up again by name: a deleted annotation's object may
-		// not answer any more.)
-		const std::vector<DrawingSheet> after = DrawingSheets(drawing);
-		for (const auto& name : names)
 		{
-			FoundAnnotation still;
-			if (!name.empty() && FindAnnotation(after, name, sheetName, "", still).ok())
-				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't delete " + name +
-					" (on " + sheetName + ")" + (sheetOrder.size() > 1 ? "; annotations on the sheets before it are deleted" : ""));
+			ATL::CComPtr<IUnknown> identity;
+			if (SUCCEEDED(annotation->QueryInterface(IID_PPV_ARGS(&identity))))
+			{
+				const std::string fullName = DimensionFullNameOf(annotation);
+				deleting[identity.p] = fullName.empty() ? AnnotationName(annotation) : fullName;
+				alive.push_back(identity);
+			}
+		}
+		DeleteAnnotations(doc, ext, list);
+		// Gone?
+		for (const auto& sheet : DrawingSheets(drawing))
+		{
+			if (sheet.name != sheetName)
+				continue;
+			std::vector<IView*> lists(sheet.views.begin(), sheet.views.end());
+			if (sheet.sheetView)
+				lists.push_back(sheet.sheetView);
+			for (IView* view : lists)
+				for (const auto& annotation : ViewAnnotationList(view))
+				{
+					ATL::CComPtr<IUnknown> identity;
+					if (FAILED(annotation->QueryInterface(IID_PPV_ARGS(&identity))))
+						continue;
+					if (auto it = deleting.find(identity.p); it != deleting.end())
+						return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't delete " + it->second +
+							" (on " + sheetName + ")" + (sheetOrder.size() > 1 ? "; annotations on the sheets before it are deleted" : ""));
+				}
 		}
 	}
 	doc->GraphicsRedraw2();
