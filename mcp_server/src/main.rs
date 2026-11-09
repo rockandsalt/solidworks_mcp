@@ -47,6 +47,7 @@ mod sweep;
 mod table;
 mod tolerance;
 mod tool_schema;
+mod toolsets;
 mod derived_view;
 mod undo;
 mod units;
@@ -1071,7 +1072,8 @@ const MAX_CONSTRAINTS: usize = 200;
 #[derive(Clone)]
 struct SolidWorksTools {
     tool_router: ToolRouter<SolidWorksTools>,
-    /// What tools/list sends: the router's tools with slimmed schemas.
+    /// What tools/list sends: the router's tools the toolsets filter allows,
+    /// with slimmed schemas. Only these can be called.
     tools: Arc<Vec<rmcp::model::Tool>>,
     addin: AddinClient,
     /// Short IDs handed out by inspect_model, shared by every tool call.
@@ -1087,10 +1089,12 @@ struct SolidWorksTools {
 
 #[tool_router]
 impl SolidWorksTools {
-    fn new(addin: AddinClient) -> Self {
+    fn new(addin: AddinClient, filter: &toolsets::Filter) -> Self {
         let tool_router = Self::tool_router();
+        let mut tools = tool_router.list_all();
+        tools.retain(|tool| filter.allows(&tool.name));
         Self {
-            tools: Arc::new(tool_schema::slim_tools(tool_router.list_all())),
+            tools: Arc::new(tool_schema::slim_tools(tools)),
             tool_router,
             addin,
             ids: Arc::default(),
@@ -4573,6 +4577,12 @@ impl ServerHandler for SolidWorksTools {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
+        if !self.tools.iter().any(|tool| tool.name == request.name) {
+            return Err(McpError::invalid_params(
+                format!("tool {} isn't enabled on this server (--modes / --inspect-only)", request.name),
+                None,
+            ));
+        }
         self.track_document(false).await;
         self.tool_router.call(ToolCallContext::new(self, request, context)).await
     }
@@ -4631,8 +4641,9 @@ async fn main() -> anyhow::Result<()> {
         .with_ansi(false)
         .init();
 
+    let filter = toolsets::Filter::from_args(std::env::args().skip(1))?;
     let addin = AddinClient::new();
-    let service = SolidWorksTools::new(addin).serve(stdio()).await?;
+    let service = SolidWorksTools::new(addin, &filter).serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
 }
@@ -4640,6 +4651,16 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_tool_is_in_exactly_one_toolset_entry() {
+        let mut tools: Vec<String> =
+            SolidWorksTools::tool_router().list_all().into_iter().map(|t| t.name.to_string()).collect();
+        let mut grouped: Vec<String> = toolsets::TOOLS.iter().map(|(name, ..)| name.to_string()).collect();
+        tools.sort();
+        grouped.sort();
+        assert_eq!(tools, grouped);
+    }
 
     fn sketch_params(args: serde_json::Value) -> SketchParams {
         serde_json::from_value(args).unwrap()
