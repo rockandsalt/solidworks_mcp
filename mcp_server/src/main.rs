@@ -81,7 +81,8 @@ use tonic::Code;
 use tracing_subscriber::EnvFilter;
 
 /// How long a client may cache the tool list. The list is fixed for the life
-/// of the process, so this only bounds how long a cache outlives a rebuild.
+/// of the process (with --dynamic, list_changed says when it grows), so this
+/// only bounds how long a cache outlives a rebuild.
 const TOOL_LIST_TTL_MS: u64 = 5 * 60 * 1000;
 
 /// How long the active-document check before each tool call may take. It's a
@@ -1072,9 +1073,11 @@ const MAX_CONSTRAINTS: usize = 200;
 #[derive(Clone)]
 struct SolidWorksTools {
     tool_router: ToolRouter<SolidWorksTools>,
-    /// What tools/list sends: the router's tools the toolsets filter allows,
-    /// with slimmed schemas. Only these can be called.
+    /// The router's tools with slimmed schemas and annotations. tools/list
+    /// sends, and calls may use, only those `filter` allows.
     tools: Arc<Vec<rmcp::model::Tool>>,
+    /// Which tools are listed; enable_toolset adds modes (--dynamic).
+    filter: Arc<Mutex<toolsets::Filter>>,
     addin: AddinClient,
     /// Short IDs handed out by inspect_model, shared by every tool call.
     ids: Arc<Mutex<IdRegistry>>,
@@ -1089,12 +1092,15 @@ struct SolidWorksTools {
 
 #[tool_router]
 impl SolidWorksTools {
-    fn new(addin: AddinClient, filter: &toolsets::Filter) -> Self {
+    fn new(addin: AddinClient, filter: toolsets::Filter) -> Self {
         let tool_router = Self::tool_router();
         let mut tools = tool_router.list_all();
-        tools.retain(|tool| filter.allows(&tool.name));
+        for tool in &mut tools {
+            tool.annotations = toolsets::annotations(&tool.name);
+        }
         Self {
             tools: Arc::new(tool_schema::slim_tools(tools)),
+            filter: Arc::new(Mutex::new(filter)),
             tool_router,
             addin,
             ids: Arc::default(),
@@ -1102,6 +1108,37 @@ impl SolidWorksTools {
             drawings: Arc::default(),
             units: Arc::default(),
         }
+    }
+
+    fn filter(&self) -> std::sync::MutexGuard<'_, toolsets::Filter> {
+        self.filter.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    #[tool(
+        description = "Load the tools of SolidWorks modes: modeling (sketches, features, the \
+                       feature tree, measuring), assembly (components, mates, motion, the feature \
+                       tree) or drawing (sheets, views, annotations, tables, title block). \
+                       Documents, units, properties, undo, run_macro and the GD&T symbols are \
+                       always loaded. Load a mode before working in it; its tools are listed \
+                       from the next turn."
+    )]
+    async fn enable_toolset(
+        &self,
+        Parameters(params): Parameters<toolsets::EnableToolsetParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let added = self.filter().enable(&params.modes);
+        if added.is_empty() {
+            return Ok(CallToolResult::success(vec![ContentBlock::text("Already loaded.")]));
+        }
+        if let Err(error) = context.peer.notify_tool_list_changed().await {
+            tracing::warn!("tools/list_changed not sent: {error}");
+        }
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+            "Loaded {} tools: {}.",
+            added.len(),
+            added.join(", ")
+        ))]))
     }
 
     #[tool(
@@ -4577,11 +4614,15 @@ impl ServerHandler for SolidWorksTools {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
-        if !self.tools.iter().any(|tool| tool.name == request.name) {
-            return Err(McpError::invalid_params(
-                format!("tool {} isn't enabled on this server (--modes / --inspect-only)", request.name),
-                None,
-            ));
+        let refused = {
+            let filter = self.filter();
+            (!filter.allows(&request.name)).then(|| match filter.dynamic && !filter.inspect_only {
+                true => "isn't loaded: enable_toolset loads its mode",
+                false => "isn't enabled on this server (--modes / --inspect-only)",
+            })
+        };
+        if let Some(why) = refused {
+            return Err(McpError::invalid_params(format!("tool {} {why}", request.name), None));
         }
         self.track_document(false).await;
         self.tool_router.call(ToolCallContext::new(self, request, context)).await
@@ -4595,20 +4636,39 @@ impl ServerHandler for SolidWorksTools {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        Ok(ListToolsResult::with_all_items(self.tools.as_ref().clone())
-            .with_ttl_ms(TOOL_LIST_TTL_MS)
-            .with_cache_scope(CacheScope::Public))
+        let filter = self.filter();
+        let tools = self.tools.iter().filter(|tool| filter.allows(&tool.name)).cloned().collect();
+        // A dynamic list is this session's own; list_changed tells the client
+        // when to fetch it again.
+        let scope = if filter.dynamic { CacheScope::Private } else { CacheScope::Public };
+        Ok(ListToolsResult::with_all_items(tools).with_ttl_ms(TOOL_LIST_TTL_MS).with_cache_scope(scope))
     }
 
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        let dynamic = self.filter().dynamic;
+        let mut capabilities = ServerCapabilities::builder().enable_tools().build();
+        if let Some(tools) = capabilities.tools.as_mut() {
+            tools.list_changed = Some(dynamic);
+        }
+        let mut instructions = INSTRUCTIONS.to_string();
+        if dynamic {
+            instructions.push_str(
+                " Only the core tools are loaded at first: call enable_toolset with modeling, \
+                 assembly or drawing before working in that mode.",
+            );
+        }
+        ServerInfo::new(capabilities)
             // from_build_env() expands rmcp's own Cargo env vars, so it reports "rmcp".
             .with_server_info(Implementation::new("solidworks-mcp", env!("CARGO_PKG_VERSION")))
             // Only a fallback: rmcp answers with whichever known version the
             // client asks for, currently 2026-07-28 for Claude Code.
             .with_protocol_version(ProtocolVersion::V_2024_11_05)
-            .with_instructions(
-                "Drives a running SolidWorks through its sld_mcp add-in, on localhost. Tools work \
+            .with_instructions(instructions)
+    }
+}
+
+/// Cross-tool guidance, sent once in the initialize result.
+const INSTRUCTIONS: &str = "Drives a running SolidWorks through its sld_mcp add-in, on localhost. Tools work \
                  on the active document; those that change a part or assembly need no sketch open \
                  for editing. Lengths are mm and angles degrees whatever the document's units \
                  (document_units only changes what SolidWorks shows; create_part / create_assembly \
@@ -4625,11 +4685,7 @@ impl ServerHandler for SolidWorksTools {
                  add_mate, then inspect_mobility, move_component, check_interference. Drawings: \
                  create_drawing, create_drawing_view, add_drawing_dimensions or \
                  insert_model_items, then render_drawing. To rework: undo, delete_features, \
-                 diagnose_model. When no tool fits, run_macro runs VBA."
-                    .to_string(),
-            )
-    }
-}
+                 diagnose_model. When no tool fits, run_macro runs VBA.";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -4643,7 +4699,7 @@ async fn main() -> anyhow::Result<()> {
 
     let filter = toolsets::Filter::from_args(std::env::args().skip(1))?;
     let addin = AddinClient::new();
-    let service = SolidWorksTools::new(addin, &filter).serve(stdio()).await?;
+    let service = SolidWorksTools::new(addin, filter).serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
 }
