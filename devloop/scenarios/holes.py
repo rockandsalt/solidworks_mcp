@@ -32,7 +32,7 @@ def sketch_name(text: str) -> str:
 
 
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=60, height_mm=40)  # Sketch1
+mcp.call("sketch", shape="rectangle", width_mm=60, height_mm=40)  # Sketch1
 mcp.call("extrude_sketch", depth_mm=10)  # Boss-Extrude1
 faces = mcp.call("inspect_model", what="faces", surface_type="plane").json["faces"]
 
@@ -89,9 +89,9 @@ assert features() == before, "a refused hole left something behind"
 
 # ---- Sketch mode ------------------------------------------------------------
 # Two points plus a construction line: the line's ends aren't holes.
-r = mcp.call("sketch_point", on=far, points=[[10, -10, 0], [10, 10, 0]])
+r = mcp.call("sketch", shape="point", on=far, points=[[10, -10, 0], [10, 10, 0]])
 points_sketch = sketch_name(r.text)
-mcp.call("sketch_line", sketch_name=points_sketch, points=[[10, -25, -15], [10, 25, -15]], construction=True)
+mcp.call("sketch", shape="line", sketch_name=points_sketch, points=[[10, -25, -15], [10, 25, -15]], construction=True)
 r = mcp.call("hole_wizard", kind="hole", size="M3", sketch_name=points_sketch, depth_mm=4)
 print("    from sketch:", r.text)
 assert "2 M3 holes" in r.text and f"placement sketch {points_sketch}" in r.text, r.text
@@ -104,14 +104,14 @@ for used in ("Sketch1", points_sketch):
     r = mcp.call("hole_wizard", kind="hole", size="M3", sketch_name=used, depth_mm=4, expect_error=True)
     assert "already used by a feature" in r.text, r.text
 # A real (non-construction) line.
-r = mcp.call("sketch_point", on=far, points=[[10, 0, -15]])
+r = mcp.call("sketch", shape="point", on=far, points=[[10, 0, -15]])
 bad = sketch_name(r.text)
-mcp.call("sketch_line", sketch_name=bad, points=[[10, -25, 15], [10, -15, 15]])
+mcp.call("sketch", shape="line", sketch_name=bad, points=[[10, -25, 15], [10, -15, 15]])
 r = mcp.call("hole_wizard", kind="hole", size="M3", sketch_name=bad, depth_mm=4, expect_error=True)
 print("    real line:", r.text)
 assert "construction geometry" in r.text, r.text
 # Only construction geometry: nothing to put holes at.
-r = mcp.call("sketch_line", on=far, points=[[10, -25, 5], [10, 25, 5]], construction=True)
+r = mcp.call("sketch", shape="line", on=far, points=[[10, -25, 5], [10, 25, 5]], construction=True)
 empty = sketch_name(r.text)
 r = mcp.call("hole_wizard", kind="hole", size="M3", sketch_name=empty, depth_mm=4, expect_error=True)
 assert "no sketch points" in r.text, r.text

@@ -1240,10 +1240,10 @@ pub struct InsertModelItemsParams {
     /// Model Items does).
     #[serde(default)]
     pub items: Option<Vec<ModelItem>>,
-    /// Also insert dimensions already shown in another view. Defaults to false.
+    /// Also insert dimensions already shown in another view.
     #[serde(default)]
     pub include_duplicates: bool,
-    /// Also insert dimensions of features hidden in the view. Defaults to false.
+    /// Also insert dimensions of features hidden in the view.
     #[serde(default)]
     pub include_hidden_features: bool,
 }

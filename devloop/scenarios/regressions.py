@@ -7,14 +7,14 @@ import re
 
 # A 60 x 40 x 8 plate on the Front plane: the boss grows along the sketch normal.
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=60, height_mm=40)
+mcp.call("sketch", shape="rectangle", width_mm=60, height_mm=40)
 mcp.call("extrude_sketch", depth_mm=8)
 
 # 1. `equal` takes more than 3 entities (it was capped at 3, like dimensions).
 # Two sizes, so the relation has to change something.
-mcp.call("sketch_circle", plane="front", center=[-22, -12], diameter_mm=6)
+mcp.call("sketch", shape="circle", plane="front", center=[-22, -12], diameter_mm=6)
 for x, y in ((22, -12), (-22, 12), (22, 12)):
-    mcp.call("sketch_circle", sketch_name="Sketch2", center=[x, y], diameter_mm=5)
+    mcp.call("sketch", shape="circle", sketch_name="Sketch2", center=[x, y], diameter_mm=5)
 circles = [e["id"] for e in mcp.call("inspect_sketch", sketch_name="Sketch2").json["segments"]
            if e["id"].startswith("circle:")]
 assert len(circles) == 4, circles
@@ -27,7 +27,7 @@ assert len(dims) == 1 and dims[0]["type"] == "diameter", f"expected one diameter
 
 # 2. A cut from a sketch on the plane the plate grows away from: the default
 # direction (against the normal) removes nothing, so it must flip and say so.
-cut = mcp.call("cut_extrude_sketch", sketch_name="Sketch2", through_all=True)
+cut = mcp.call("extrude_sketch", cut=True, sketch_name="Sketch2", through_all=True)
 # (Cut-Extrude2, not 1: the attempt the default way used up the name.)
 assert "created Cut-Extrude" in cut.text and "reversed" in cut.text, cut.text
 volume = mcp.call("inspect_model").json["bodies"][0]["volume_mm3"]
@@ -40,10 +40,10 @@ far_face = [f for f in mcp.call("inspect_model", what="faces", surface_type="pla
             if abs(f["area_mm2"] - (60 * 40 - 4 * math.pi * 9)) < 0.01
             and max(f["normal"], key=abs) > 0]
 assert len(far_face) == 1, far_face
-mcp.call("sketch_circle", on=far_face[0]["id"], center=[0, 0], diameter_mm=4)
-mcp.call("cut_extrude_sketch", depth_mm=2, reverse_direction=True, expect_error=True)
+mcp.call("sketch", shape="circle", on=far_face[0]["id"], center=[0, 0], diameter_mm=4)
+mcp.call("extrude_sketch", cut=True, depth_mm=2, reverse_direction=True, expect_error=True)
 # Without it, the same sketch cuts into the plate.
-mcp.call("cut_extrude_sketch", depth_mm=2)
+mcp.call("extrude_sketch", cut=True, depth_mm=2)
 
 mcp.call("render_views", views=["right", "isometric"])
 
@@ -52,13 +52,13 @@ mcp.call("render_views", views=["right", "isometric"])
 # ("line:8" for a circle) and resolve in the wrong document.
 first_part_face = far_face[0]["id"]
 mcp.call("create_part")
-mcp.call("sketch_circle", plane="front", center=[0, 0], diameter_mm=6)
-mcp.call("sketch_circle", sketch_name="Sketch1", center=[20, 0], diameter_mm=5)
+mcp.call("sketch", shape="circle", plane="front", center=[0, 0], diameter_mm=6)
+mcp.call("sketch", shape="circle", sketch_name="Sketch1", center=[20, 0], diameter_mm=5)
 new_ids = [e["id"] for e in mcp.call("inspect_sketch", sketch_name="Sketch1").json["segments"]]
 assert len(new_ids) == 2 and all(i.startswith("circle:") for i in new_ids), new_ids
 assert not set(new_ids) & set(circles), (new_ids, circles)
 # The first part's ids are refused here, saying why.
-r = mcp.call("sketch_circle", on=first_part_face, center=[0, 0], diameter_mm=2, expect_error=True)
+r = mcp.call("sketch", shape="circle", on=first_part_face, center=[0, 0], diameter_mm=2, expect_error=True)
 assert "is from another document" in r.text, r.text
 r = mcp.call("add_sketch_relations", relations=[{"kind": "equal", "entities": [circles[0], new_ids[0]]}],
              expect_error=True)
@@ -67,11 +67,11 @@ assert "is from another document" in r.text, r.text
 # A new sketch right after a dimension or relation closed a sketch: the first InsertSketch did
 # nothing, in the same part and in a new one ("SolidWorks didn't open a sketch on the plane").
 mcp.call("create_part")
-r = mcp.call("sketch_line", points=[[0, 0], [10, 0]])
+r = mcp.call("sketch", shape="line", points=[[0, 0], [10, 0]])
 line = re.findall(r"line:\d+", r.text)[0]
 mcp.call("dimension_sketch", dimensions=[{"kind": "length", "entities": [line], "value_mm": 30}])
-r = mcp.call("sketch_line", points=[[0, 0], [10, 0]], plane="top")
+r = mcp.call("sketch", shape="line", points=[[0, 0], [10, 0]], plane="top")
 line = re.findall(r"line:\d+", r.text)[0]
 mcp.call("add_sketch_relations", relations=[{"kind": "horizontal", "entities": [line]}])
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=10, height_mm=10)
+mcp.call("sketch", shape="rectangle", width_mm=10, height_mm=10)

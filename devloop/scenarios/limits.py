@@ -83,9 +83,9 @@ top = out / "lim-top.SLDASM"
 # ---- The part: 40 x 20 on Front, 10 deep along +X (x 0..10, y -20..20, z -10..10),
 # with a hinge axis where Front and Right meet (along Z through the origin) ------------
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
 mcp.call("extrude_sketch", depth_mm=10)
-mcp.call("create_reference_axis", references=["front", "right"], name="Hinge")
+mcp.call("create_reference_geometry", geometry="axis", references=["front", "right"], name="Hinge")
 mcp.call("save_document", path=str(block))
 close_all()
 

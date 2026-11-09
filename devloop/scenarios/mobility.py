@@ -70,12 +70,12 @@ top = out / "mob-top.SLDASM"
 # ---- Parts: a 40 x 20 x 10 block (x 0..10) and a 10 mm pin, 30 long along +X, and
 # a one-block subassembly --------------------------------------------------------------
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
 mcp.call("extrude_sketch", depth_mm=10)
 mcp.call("save_document", path=str(block))
 close_all()
 mcp.call("create_part")
-mcp.call("sketch_circle", center=[0, 0, 0], diameter_mm=10)
+mcp.call("sketch", shape="circle", center=[0, 0, 0], diameter_mm=10)
 mcp.call("extrude_sketch", depth_mm=30)
 mcp.call("save_document", path=str(pin))
 close_all()

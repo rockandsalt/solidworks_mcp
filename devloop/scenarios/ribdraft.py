@@ -72,7 +72,7 @@ def refused(tool, expected_text, **args):
 def block(depth=10):
     """40 x 20 on the Front plane, its depth along +x (this template's planes, see devloop.md)."""
     mcp.call("create_part")
-    mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+    mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
     mcp.call("extrude_sketch", depth_mm=depth)
     [b] = inspect("bodies")
     assert b["bbox_mm"]["min"] == [0.0, -20.0, -10.0] and b["bbox_mm"]["max"] == [depth, 20.0, 10.0], b
@@ -86,7 +86,7 @@ def tray():
 
 
 def plane_at(reference, offset):
-    mcp.call("create_reference_plane", references=[{"entity": reference, "offset_mm": offset}])
+    mcp.call("create_reference_geometry", geometry="plane", references=[{"entity": reference, "offset_mm": offset}])
     return [f["id"] for f in inspect("features") if f["type"] == "RefPlane"][-1]
 
 
@@ -99,7 +99,7 @@ def web_sides():
 # ---- A web across a tray: within the sketch plane ----------------------------------
 
 tray()
-web = sketch_name(mcp.call("sketch_line", plane="top", points=[[6, -5, 0], [6, 5, 0]]))
+web = sketch_name(mcp.call("sketch", shape="line", plane="top", points=[[6, -5, 0], [6, 5, 0]]))
 r = mcp.call("rib_sketch", thickness_mm=2)  # the newest unused sketch; its ends carry on to the walls
 print("    " + r.text)
 no_dialogs("after the first rib")
@@ -143,7 +143,7 @@ mcp.call("delete_features", features=[rib_name(r)])
 # ---- Normal to the sketch: the same web, drawn seen from above -------------------------
 
 above = plane_at("front", 6)
-web2 = sketch_name(mcp.call("sketch_line", on=above, points=[[6, -5, 0], [6, 5, 0]]))
+web2 = sketch_name(mcp.call("sketch", shape="line", on=above, points=[[6, -5, 0], [6, 5, 0]]))
 r = mcp.call("rib_sketch", thickness_mm=2, sketch_name=web2, normal_to_sketch=True)
 print("    " + r.text)
 check_volume(TRAY + WEB * 2, "web, normal to the sketch")
@@ -154,19 +154,19 @@ refused("rib_sketch", "couldn't make a rib", thickness_mm=2, sketch_name=web2, n
 # ---- A gusset: a triangle in an L bracket ----------------------------------------------
 
 mcp.call("create_part")
-mcp.call("sketch_line", plane="top", closed=True, points=[
+mcp.call("sketch", shape="line", plane="top", closed=True, points=[
     [0, -20, 0], [0, 20, 0], [5, 20, 0], [5, -15, 0], [30, -15, 0], [30, -20, 0]])
 mcp.call("extrude_sketch", depth_mm=20)
 bracket = 40 * 5 * 20 + 25 * 5 * 20
 check_volume(bracket, "bracket")
 middle = plane_at("top", 10)
-hypotenuse = sketch_name(mcp.call("sketch_line", on=middle, points=[[5, 5, 10], [25, -15, 10]]))
+hypotenuse = sketch_name(mcp.call("sketch", shape="line", on=middle, points=[[5, 5, 10], [25, -15, 10]]))
 r = mcp.call("rib_sketch", thickness_mm=3, sketch_name=hypotenuse)
 print("    " + r.text)
 check_volume(bracket + 20 * 20 / 2 * 3, "gusset")
 mcp.call("delete_features", features=[rib_name(r)])
 # A line short of both walls makes the same gusset.
-short = sketch_name(mcp.call("sketch_line", on=middle, points=[[10, 0, 10], [20, -10, 10]]))
+short = sketch_name(mcp.call("sketch", shape="line", on=middle, points=[[10, 0, 10], [20, -10, 10]]))
 r = mcp.call("rib_sketch", thickness_mm=3, sketch_name=short)
 check_volume(bracket + 20 * 20 / 2 * 3, "gusset from a short line")
 
@@ -175,21 +175,21 @@ check_volume(bracket + 20 * 20 / 2 * 3, "gusset from a short line")
 block(depth=5)
 plate = 40 * 20 * 5
 r = mcp.call("rib_sketch", thickness_mm=2, sketch_name=sketch_name(
-    mcp.call("sketch_line", plane="top", points=[[5, -20, 0], [15, -20, 0], [15, 20, 0], [5, 20, 0]])))
+    mcp.call("sketch", shape="line", plane="top", points=[[5, -20, 0], [15, -20, 0], [15, 20, 0], [5, 20, 0]])))
 check_volume(plate + 40 * 10 * 2, "a staple on the plate")
 mcp.call("delete_features", features=[rib_name(r)])
-roof = sketch_name(mcp.call("sketch_line", plane="top", points=[[5, -20, 0], [15, 0, 0], [5, 20, 0]]))
+roof = sketch_name(mcp.call("sketch", shape="line", plane="top", points=[[5, -20, 0], [15, 0, 0], [5, 20, 0]]))
 r = mcp.call("rib_sketch", thickness_mm=2, sketch_name=roof)
 check_volume(plate + 40 * 10 / 2 * 2, "a roof on the plate")
 mcp.call("delete_features", features=[rib_name(r)])
 
 # ---- Rib refusals: free ends make nothing, and the sketch stays usable -----------------
 
-free = sketch_name(mcp.call("sketch_line", plane="top", points=[[15, -10, 0], [15, 10, 0]]))
+free = sketch_name(mcp.call("sketch", shape="line", plane="top", points=[[15, -10, 0], [15, 10, 0]]))
 r = refused("rib_sketch", "tried both ways", thickness_mm=2, sketch_name=free)
 print("    " + r.text)
 refused("rib_sketch", "tried both ways", thickness_mm=2, sketch_name=sketch_name(
-    mcp.call("sketch_line", plane="top", points=[[100, 100, 0], [120, 110, 0]])))
+    mcp.call("sketch", shape="line", plane="top", points=[[100, 100, 0], [120, 110, 0]])))
 assert free in features()
 refused("rib_sketch", "more than 0", thickness_mm=0, sketch_name=roof)
 refused("rib_sketch", "under 90", thickness_mm=2, sketch_name=roof, draft_deg=90)
@@ -201,7 +201,7 @@ mcp.call("rib_sketch", thickness_mm=2, sketch_name=roof)
 check_volume(plate + 40 * 10 / 2 * 2, "a roof after the refusals")
 
 mcp.call("create_part")
-mcp.call("sketch_line", plane="top", points=[[5, -20, 0], [15, 0, 0], [5, 20, 0]])
+mcp.call("sketch", shape="line", plane="top", points=[[5, -20, 0], [15, 0, 0], [5, 20, 0]])
 r = mcp.call("rib_sketch", thickness_mm=2, expect_error=True)
 assert r.is_error and "no solid body" in r.text, r.text
 
@@ -243,7 +243,7 @@ assert abs(abs(other_way) - WEDGE) < TOL * WEDGE, other_way
 
 block()
 ends, flats = ends_and_flats()
-mcp.call("create_reference_plane", references=[{"entity": flats[0], "relation": "mid_plane"},
+mcp.call("create_reference_geometry", geometry="plane", references=[{"entity": flats[0], "relation": "mid_plane"},
                                                 {"entity": flats[1], "relation": "mid_plane"}])
 plane = [f["name"] for f in inspect("features") if f["type"] == "RefPlane"][-1]
 r = mcp.call("draft_faces", angle_deg=ANGLE, faces=[ends[0]], neutral_plane=plane)
@@ -271,8 +271,8 @@ HOLE = math.pi * 5 ** 2 * 10
 
 def holed():
     block()
-    mcp.call("sketch_circle", plane="front", center=[0, 0, 0], radius_mm=5)
-    mcp.call("cut_extrude_sketch", through_all=True)
+    mcp.call("sketch", shape="circle", plane="front", center=[0, 0, 0], radius_mm=5)
+    mcp.call("extrude_sketch", cut=True, through_all=True)
     check_volume(BOX - HOLE, "holed box")
     fs = faces()
     return (next(f["id"] for f in fs if f["type"] == "cylinder"),
@@ -344,6 +344,6 @@ mcp.call("render_views")
 # ---- A picture of a web ------------------------------------------------------------------
 
 tray()
-mcp.call("sketch_line", plane="top", points=[[6, -5, 0], [6, 5, 0]])
+mcp.call("sketch", shape="line", plane="top", points=[[6, -5, 0], [6, 5, 0]])
 mcp.call("rib_sketch", thickness_mm=2)
 mcp.call("render_views")

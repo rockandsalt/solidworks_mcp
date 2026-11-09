@@ -47,7 +47,7 @@ def fillet_area(r):
 # ---- The box and its four short edges --------------------------------------
 
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
 mcp.call("extrude_sketch", depth_mm=LENGTH)
 box = 40 * 20 * LENGTH
 check_volume(box, "box")
@@ -164,7 +164,7 @@ assert n == 1, f"unpropagated fillet has {n} faces"
 # ---- A disc's rim rounded through its face (Pappus) -------------------------
 
 mcp.call("create_part")
-mcp.call("sketch_circle", plane="front", center=[0, 0], diameter_mm=40)
+mcp.call("sketch", shape="circle", plane="front", center=[0, 0], diameter_mm=40)
 mcp.call("extrude_sketch", depth_mm=10)
 disc = math.pi * 20 ** 2 * 10
 check_volume(disc, "disc")

@@ -51,7 +51,7 @@ def faces():
 def block():
     """The box. Returns a big face (800 mm2, the "top") and the two ends (200 mm2)."""
     mcp.call("create_part")
-    mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+    mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
     mcp.call("extrude_sketch", depth_mm=10)
     return top_and_ends()
 
@@ -69,9 +69,9 @@ def two_blocks():
     mcp.call("create_part")
     planes = {f["name"]: f for f in mcp.call("inspect_model", what="features").json["features"]}
     right = planes["Right Plane"]["normal"]
-    mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+    mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
     mcp.call("extrude_sketch", depth_mm=10)
-    mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20, center_mm=[100 * c for c in right])
+    mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20, center=[100 * c for c in right])
     mcp.call("extrude_sketch", depth_mm=10)
     assert len(bodies()) == 2
 
@@ -218,7 +218,7 @@ check_volumes([outer - (36 * 16 * 8 - corner(1) * 8)], "filleted box")
 # ---- A disc: flat and curved walls ---------------------------------------------
 
 mcp.call("create_part")
-mcp.call("sketch_circle", plane="front", center=[0, 0], radius_mm=20)
+mcp.call("sketch", shape="circle", plane="front", center=[0, 0], radius_mm=20)
 mcp.call("extrude_sketch", depth_mm=10)
 fs = faces()
 flat = next(f["id"] for f in fs if f["type"] == "plane")

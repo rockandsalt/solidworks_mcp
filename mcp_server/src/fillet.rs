@@ -49,7 +49,7 @@ pub struct ChamferParams {
     #[serde(default)]
     pub distance2_mm: Option<f64>,
     /// Swap the faces distance_mm and the angle / distance2_mm are measured on. Only with
-    /// angle_deg or distance2_mm. Defaults to false.
+    /// angle_deg or distance2_mm.
     #[serde(default)]
     pub flip: bool,
     /// Also bevel the edges that run on tangentially from the given ones (SolidWorks'

@@ -29,13 +29,13 @@ pub struct CheckInterferenceParams {
     /// assembly the drawing's views show.
     #[serde(default)]
     pub view: Option<String>,
-    /// Also report faces that only touch (coincident, volume 0). Default false.
+    /// Also report faces that only touch (coincident, volume 0).
     #[serde(default)]
     pub include_touching: bool,
-    /// Treat each subassembly as one solid: overlaps inside it aren't checked. Default false.
+    /// Treat each subassembly as one solid: overlaps inside it aren't checked.
     #[serde(default)]
     pub treat_subassemblies_as_components: bool,
-    /// Also check the bodies of one multibody part against each other. Default false.
+    /// Also check the bodies of one multibody part against each other.
     #[serde(default)]
     pub include_multibody_parts: bool,
     /// Also check hidden components and bodies. Default false (they're ignored).

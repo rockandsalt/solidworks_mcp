@@ -1,4 +1,4 @@
-# loft_sketch / cut_loft_sketch: a square frustum (two squares), the same
+# loft_sketch, also with cut: a square frustum (two squares), the same
 # with normal tangency at both ends, a pyramid (square to a point), a block
 # with a frustum-shaped pocket cut into it (plain and normal-tangent, both
 # ways round), a cylinder bent along a guide curve, and a closed ring through three planes round an axis, each checked
@@ -66,7 +66,7 @@ def new_part():
     mcp.call("create_part")
     planes = {f["name"]: f for f in mcp.call("inspect_model", what="features").json["features"]}
     u, v, w = (planes[n]["normal"] for n in ("Front Plane", "Right Plane", "Top Plane"))
-    [p] = made(mcp.call("create_reference_plane", references=[{"entity": "front", "offset_mm": 30}]))
+    [p] = made(mcp.call("create_reference_geometry", geometry="plane", references=[{"entity": "front", "offset_mm": 30}]))
     d = dot(p["point_on_plane_mm"], u)
     assert abs(abs(d) - 30) < 1e-6, p
     return p["id"], d
@@ -75,7 +75,7 @@ def new_part():
 def square(a, size, center_v=0.0, center_w=0.0, **target):
     """A closed square at u = a, in a new sketch on `target` (plane= / on=)."""
     h = size / 2
-    return sketch_name(mcp.call("sketch_line", closed=True, points=[
+    return sketch_name(mcp.call("sketch", shape="line", closed=True, points=[
         at(a, center_v - h, center_w - h), at(a, center_v + h, center_w - h),
         at(a, center_v + h, center_w + h), at(a, center_v - h, center_w + h)], **target))
 
@@ -115,7 +115,7 @@ assert abs(extent(u) - 30) < 1e-3 and abs(extent(v) - 20) < 1e-3, (extent(u), ex
 
 far, d = new_part()
 base = square(0, 20, plane="front")
-tip = sketch_name(mcp.call("sketch_point", on=far, points=[at(d)]))
+tip = sketch_name(mcp.call("sketch", shape="point", on=far, points=[at(d)]))
 mcp.call("loft_sketch", profiles=[base, tip])
 check_volume(20 * 20 * 30 / 3, "pyramid")
 
@@ -124,7 +124,7 @@ check_volume(20 * 20 * 30 / 3, "pyramid")
 far, d = new_part()
 mcp.call("loft_sketch", profiles=[square(0, 40, plane="front"), square(d, 40, on=far)])
 block = check_volume(40 * 40 * 30, "block")
-r = mcp.call("cut_loft_sketch", profiles=[square(0, 20, plane="front"), square(d, 10, on=far)])
+r = mcp.call("loft_sketch", cut=True, profiles=[square(0, 20, plane="front"), square(d, 10, on=far)])
 assert r.text.startswith("created Cut-Loft") and "cutting a loft" in r.text, r.text
 check_volume(block - frustum, "block with a pocket")
 
@@ -133,7 +133,7 @@ for reverse in (False, True):
     far, d = new_part()
     mcp.call("loft_sketch", profiles=[square(0, 40, plane="front"), square(d, 40, on=far)])
     profiles = [square(0, 20, plane="front"), square(d, 10, on=far)]
-    mcp.call("cut_loft_sketch", profiles=profiles[::-1] if reverse else profiles, start_normal=True, end_normal=True)
+    mcp.call("loft_sketch", cut=True, profiles=profiles[::-1] if reverse else profiles, start_normal=True, end_normal=True)
     check_volume(block - normal_loft, f"block with a normal-tangent pocket, reversed={reverse}")
 
 # ---- A guide curve: two 20 mm circles joined along an arc bowing 5 mm out ----
@@ -141,9 +141,9 @@ for reverse in (False, True):
 # same volume as the straight cylinder, its centroid the arc's mean offset.
 
 far, d = new_part()
-c1 = sketch_name(mcp.call("sketch_circle", plane="front", center=at(0), radius_mm=10))
-c2 = sketch_name(mcp.call("sketch_circle", on=far, center=at(d), radius_mm=10))
-guide = sketch_name(mcp.call("sketch_arc", plane="top", start=at(0, 10), end=at(d, 10), through=at(d / 2, 15)))
+c1 = sketch_name(mcp.call("sketch", shape="circle", plane="front", center=at(0), radius_mm=10))
+c2 = sketch_name(mcp.call("sketch", shape="circle", on=far, center=at(d), radius_mm=10))
+guide = sketch_name(mcp.call("sketch", shape="arc", plane="top", start=at(0, 10), end=at(d, 10), through=at(d / 2, 15)))
 r = mcp.call("loft_sketch", profiles=[c1, c2], guide_curves=[guide])
 assert f"along guide curve {guide}" in r.text, r.text
 check_volume(math.pi * 10 ** 2 * 30, "cylinder along a guide")
@@ -172,10 +172,10 @@ assert r.is_error and "2D sketch" in r.text, r.text
 r = mcp.call("loft_sketch", profiles=[c1, c2, guide], closed=True, start_normal=True, expect_error=True)
 assert r.is_error and "closed" in r.text, r.text
 # An open line as a profile, and a guide curve that misses the profiles.
-line = sketch_name(mcp.call("sketch_line", on=far, points=[at(d, 30, 30), at(d, 40, 30)]))
+line = sketch_name(mcp.call("sketch", shape="line", on=far, points=[at(d, 30, 30), at(d, 40, 30)]))
 r = mcp.call("loft_sketch", profiles=[c1, line], expect_error=True)
 assert r.is_error and "couldn't loft" in r.text, r.text
-miss = sketch_name(mcp.call("sketch_arc", plane="top", start=at(0, 50), end=at(d, 50), through=at(d / 2, 55)))
+miss = sketch_name(mcp.call("sketch", shape="arc", plane="top", start=at(0, 50), end=at(d, 50), through=at(d / 2, 55)))
 r = mcp.call("loft_sketch", profiles=[c1, c2], guide_curves=[miss], expect_error=True)
 assert r.is_error and "couldn't loft" in r.text, r.text
 after = features()
@@ -188,16 +188,16 @@ assert abs(body()["volume_mm3"] - v0) <= TOL * v0
 mcp.call("create_part")
 planes = {f["name"]: f for f in mcp.call("inspect_model", what="features").json["features"]}
 u, v, w = (planes[n]["normal"] for n in ("Front Plane", "Right Plane", "Top Plane"))
-[axis] = made(mcp.call("create_reference_axis", references=["front", "top"]))
+[axis] = made(mcp.call("create_reference_geometry", geometry="axis", references=["front", "top"]))
 profiles = [square(0, 10, 0, 30, plane="front")]
 for angle in (120, 60):
-    [p] = made(mcp.call("create_reference_plane",
+    [p] = made(mcp.call("create_reference_geometry", geometry="plane",
                         references=[{"entity": "front", "angle_deg": angle}, {"entity": axis["id"]}]))
     e = unit(cross(p["normal"], v))
     if dot(e, w) > 0:
         e = scale(e, -1)  # the side 120 / 240 degrees round from Front's w
     c = scale(e, 30)
-    profiles.append(sketch_name(mcp.call("sketch_line", on=p["id"], closed=True, points=[
+    profiles.append(sketch_name(mcp.call("sketch", shape="line", on=p["id"], closed=True, points=[
         add(c, scale(v, -5), scale(e, -5)), add(c, scale(v, 5), scale(e, -5)),
         add(c, scale(v, 5), scale(e, 5)), add(c, scale(v, -5), scale(e, 5))])))
 r = mcp.call("loft_sketch", profiles=profiles, closed=True)

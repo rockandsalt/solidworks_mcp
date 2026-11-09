@@ -177,16 +177,13 @@ pub fn note_text_units(mut json: Value, units: Option<&proto::DocumentUnits>) ->
 /// The units of a new document, or a change to the active one's.
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub struct UnitsParams {
-    /// Unit system (Tools > Options > Document Properties > Units): "mmgs" (mm), "ips"
-    /// (inch), "cgs" (cm) or "mks" (m). Only what SolidWorks shows: tools still take and report
-    /// mm. Default: as it is (a new document: its template's).
+    /// What SolidWorks shows (tools still take mm). Default: as it is (new: the template's).
     #[serde(default)]
     pub units: Option<UnitSystem>,
-    /// Decimal places lengths show, 0..8 (e.g. 3 for inch drawings: 1.250). Default: as it is.
+    /// Decimal places lengths show, 0..8 (3 for inch drawings: 1.250).
     #[serde(default)]
     pub decimals: Option<u32>,
-    /// Drafting standard -- how dimensions, datums and frames are drawn: "ansi" (usual for inch
-    /// drawings), "iso", "din", "jis", "bsi", "gost", "gb". Default: as it is.
+    /// How dimensions, datums and frames are drawn (ansi for inch drawings).
     #[serde(default)]
     pub drafting_standard: Option<DraftingStandard>,
 }

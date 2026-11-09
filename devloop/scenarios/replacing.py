@@ -72,7 +72,7 @@ top = out / "rep-top.SLDASM"
 # ---- Parts ------------------------------------------------------------------------
 # The block: 40 x 20 on Front, 10 deep along +X (Front faces +X on this machine).
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
 mcp.call("extrude_sketch", depth_mm=10)
 mcp.call("save_document", path=str(block))
 # Its revision: saved under a new name (the same faces inside), then 30 deep.
@@ -81,7 +81,7 @@ mcp.call("edit_extrude", feature="Boss-Extrude1", depth_mm=30)
 mcp.call("save_document")
 # Something else entirely: a disc, 30 across, 10 deep.
 mcp.call("create_part")
-mcp.call("sketch_circle", center=[0, 0], diameter_mm=30)
+mcp.call("sketch", shape="circle", center=[0, 0], diameter_mm=30)
 mcp.call("extrude_sketch", depth_mm=10)
 mcp.call("save_document", path=str(disc))
 close_all()

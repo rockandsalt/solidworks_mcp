@@ -70,11 +70,11 @@ def face_at(axis, value):
 # ---- Sketch: half a profile, mirrored about its centerline, closes ---------
 
 mcp.call("create_part")
-r = mcp.call("sketch_line", points=[[0, 0], [20, 0], [20, 10], [0, 10]])
+r = mcp.call("sketch", shape="line", points=[[0, 0], [20, 0], [20, 10], [0, 10]])
 profile = sketch_name(r)
 half = ids(r.text, "line")
 assert len(half) == 3, r.text
-r = mcp.call("sketch_line", sketch_name=profile, points=[[0, -5], [0, 15]], construction=True)
+r = mcp.call("sketch", shape="line", sketch_name=profile, points=[[0, -5], [0, 15]], construction=True)
 [centerline] = ids(r.text, "line")
 assert sketch(profile)["contours"] == {"closed": 0, "open": 1}
 # The model axes along the Front plane's sketch x and y.
@@ -109,12 +109,12 @@ check_volume(block, "mirrored profile extruded")
 # SolidWorks numbers segments per type, so this circle and line have the
 # same GetID: their ids must still tell them apart (they didn't before
 # 2026-10-20, when segment refs got their type).
-r = mcp.call("sketch_circle", center=[10, 30], radius_mm=3)
+r = mcp.call("sketch", shape="circle", center=[10, 30], radius_mm=3)
 marks = sketch_name(r)
 [circle] = ids(r.text, "circle")
-r = mcp.call("sketch_point", sketch_name=marks, points=[[5, 25]])
+r = mcp.call("sketch", shape="point", sketch_name=marks, points=[[5, 25]])
 [point] = ids(r.text, "point")
-r = mcp.call("sketch_line", sketch_name=marks, points=[[-20, 20], [20, 20]], construction=True)
+r = mcp.call("sketch", shape="line", sketch_name=marks, points=[[-20, 20], [20, 20]], construction=True)
 [horizontal] = ids(r.text, "line")
 before = sketch(marks)
 assert sorted(s["id"] for s in before["segments"]) == sorted([circle, horizontal]), before["segments"]
@@ -143,9 +143,9 @@ assert len(standalone) == 1 and standalone[0]["id"] in new_points, (new_points, 
 
 # ---- Features: a cut mirrored about the Right plane ------------------------
 
-r = mcp.call("sketch_circle", center=[10, 5], radius_mm=2)
+r = mcp.call("sketch", shape="circle", center=[10, 5], radius_mm=2)
 hole_sketch = sketch_name(r)
-r = mcp.call("cut_extrude_sketch", sketch_name=hole_sketch, through_all=True)
+r = mcp.call("extrude_sketch", cut=True, sketch_name=hole_sketch, through_all=True)
 cut = re.search(r"Cut-Extrude\d+", r.text).group(0)
 hole = math.pi * 2 ** 2 * 5
 check_volume(block - hole, "one hole")
@@ -190,7 +190,7 @@ assert abs(b["bbox_mm"]["max"][SX] - b["bbox_mm"]["min"][SX] - 80) < 1e-6, b
 # ---- Bodies: mirrored about faces, kept separate and merged ----------------
 
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=20, height_mm=10)
+mcp.call("sketch", shape="rectangle", width_mm=20, height_mm=10)
 mcp.call("extrude_sketch", depth_mm=10)
 cube = 20 * 10 * 10
 [b] = bodies()

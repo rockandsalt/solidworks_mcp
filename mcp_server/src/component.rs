@@ -530,7 +530,7 @@ pub struct MoveComponentParams {
     /// true: run an interference check before the move and after every step, and report
     /// the components that come to overlap on the way (first contact, how long, the biggest
     /// overlap). Use enough steps to see the contact closely (each check takes about half a
-    /// second; the call stops after 45 s). Default false.
+    /// second; the call stops after 45 s).
     #[serde(default)]
     pub check_collisions: bool,
     /// true (implies check_collisions): stop at the first step where components come to

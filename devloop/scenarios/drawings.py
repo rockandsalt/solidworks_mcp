@@ -31,7 +31,7 @@ def dump(name, value):
 # a 6 mm boss 8 mm tall on the z=10 face at y=0 (axis along Z), and a 6 mm
 # hole through the box along X at y=10.
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
 mcp.call("extrude_sketch", depth_mm=10)
 faces = mcp.call("inspect_model", what="faces", surface_type="plane").json["faces"]
 
@@ -44,10 +44,10 @@ def face_at(axis: int, value: float) -> str:
 
 
 far_cap, top = face_at(0, 10), face_at(2, 10)
-mcp.call("sketch_circle", on=top, center=[5, 0, 10], diameter_mm=6)
+mcp.call("sketch", shape="circle", on=top, center=[5, 0, 10], diameter_mm=6)
 mcp.call("extrude_sketch", depth_mm=8)
-mcp.call("sketch_circle", on=far_cap, center=[10, 10, 0], diameter_mm=6)
-mcp.call("cut_extrude_sketch", through_all=True)
+mcp.call("sketch", shape="circle", on=far_cap, center=[10, 10, 0], diameter_mm=6)
+mcp.call("extrude_sketch", cut=True, through_all=True)
 part = mcp.run_dir / "drawing-block.SLDPRT"
 com(f"""$d = Com $sw ActiveDoc -Get
 $e = Com $d SaveAs3 @('{part}', 0, 1); if ($e -ne 0) {{ throw "SaveAs3: $e" }}""")

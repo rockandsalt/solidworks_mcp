@@ -460,11 +460,10 @@ pub struct AddMateParams {
     /// kind="angle": the limit mate's largest angle, in degrees. Give with min_deg.
     #[serde(default)]
     pub max_deg: Option<f64>,
-    /// kind="distance"/"angle": put the gap/angle on the other side. Defaults to false.
+    /// kind="distance"/"angle": put the gap/angle on the other side.
     #[serde(default)]
     pub flip: bool,
     /// kind="concentric" only: also stop the component spinning about the shared axis.
-    /// Defaults to false.
     #[serde(default)]
     pub lock_rotation: bool,
 }

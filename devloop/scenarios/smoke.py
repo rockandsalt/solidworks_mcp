@@ -3,7 +3,7 @@
 #   py devloop/mcp_client.py run devloop/scenarios/smoke.py
 
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
 mcp.call("extrude_sketch", depth_mm=10)
 
 overview = mcp.call("inspect_model").text
@@ -12,8 +12,8 @@ caps = mcp.call("inspect_model", what="faces", within="Boss-Extrude1", surface_t
 assert len(caps) == 6, f"a rectangular boss has 6 planar faces, got {len(caps)}"
 face_id = caps[0]["id"]
 
-mcp.call("sketch_circle", on=face_id, center=[0, 0], diameter_mm=8)
-mcp.call("cut_extrude_sketch", through_all=True)
+mcp.call("sketch", shape="circle", on=face_id, center=[0, 0], diameter_mm=8)
+mcp.call("extrude_sketch", cut=True, through_all=True)
 
 overview = mcp.call("inspect_model").text
 assert "Cut-Extrude1" in overview, "the cut isn't in the feature tree"

@@ -49,7 +49,7 @@ assert "units IPS (inch, pound, second): lengths in inches, 3 decimals" in r.tex
 units_ips = prefs()
 assert units_ips[:3] == (3, 3, 3), units_ips
 assert "units IPS" in mcp.call("get_active_document_name").text
-mcp.call("create_rectangle_sketch", width_mm=50.8, height_mm=25.4)
+mcp.call("sketch", shape="rectangle", width_mm=50.8, height_mm=25.4)
 mcp.call("extrude_sketch", depth_mm=12.7)
 body = mcp.call("inspect_model", what="bodies").json["bodies"][0]["bbox_mm"]
 size = [round(b - a, 3) for a, b in zip(body["min"], body["max"])]

@@ -381,7 +381,7 @@ namespace
 		}
 		if (centers.empty())
 			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				"\"" + name + "\" has no sketch points to put holes at -- add them with sketch_point");
+				"\"" + name + "\" has no sketch points to put holes at -- add them with the sketch tool (shape point)");
 		if (centers.size() > static_cast<size_t>(kMaxHoleLocations))
 			return Invalid("too many hole points in one sketch (max " + std::to_string(kMaxHoleLocations) + ")");
 		return grpc::Status::OK;

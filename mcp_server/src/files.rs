@@ -29,7 +29,7 @@ pub struct SaveDocumentParams {
     #[serde(default)]
     pub path: Option<String>,
     /// Save As copy: write the file but keep working on the document as it was (exports are
-    /// always copies). Default false.
+    /// always copies).
     #[serde(default)]
     pub copy: bool,
     /// Replace a file that's already there. Default false: an existing file is an error.
@@ -50,7 +50,7 @@ pub struct OpenDocumentParams {
     /// The file to open, as an absolute path: a .SLDPRT, .SLDASM or .SLDDRW file, or a STEP
     /// (.STEP/.STP), IGES (.IGS/.IGES) or Parasolid (.X_T/.X_B) file to import.
     pub path: String,
-    /// Open it read-only. Default false. (Ignored when it's already open; not for imports.)
+    /// Open it read-only. (Ignored when it's already open; not for imports.)
     #[serde(default)]
     pub read_only: bool,
 }

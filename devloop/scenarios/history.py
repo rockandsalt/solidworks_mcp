@@ -46,12 +46,12 @@ SMALL = math.pi * 2**2 * 10
 
 # ---- The part ------------------------------------------------------------------
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
 mcp.call("extrude_sketch", depth_mm=10)
 caps = mcp.call("inspect_model", what="faces", within="Boss-Extrude1", surface_type="plane").json["faces"]
 cap = max(caps, key=lambda f: f["area_mm2"])  # a 40 x 20 face
-mcp.call("sketch_circle", on=cap["id"], center=[0, 0], diameter_mm=8)
-mcp.call("cut_extrude_sketch", through_all=True)
+mcp.call("sketch", shape="circle", on=cap["id"], center=[0, 0], diameter_mm=8)
+mcp.call("extrude_sketch", cut=True, through_all=True)
 assert close(volume(), BLOCK - BIG), volume()
 assert rolled_back() == [], rolled_back()
 
@@ -74,8 +74,8 @@ big_id = feature("Cut-Extrude1")["id"]
 # A feature made while rolled back goes in at the bar.
 caps = mcp.call("inspect_model", what="faces", within="Boss-Extrude1", surface_type="plane").json["faces"]
 cap = max(caps, key=lambda f: f["area_mm2"])  # a 40 x 20 face
-mcp.call("sketch_circle", on=cap["id"], center=[8, 0], diameter_mm=4)
-r = mcp.call("cut_extrude_sketch", through_all=True)
+mcp.call("sketch", shape="circle", on=cap["id"], center=[8, 0], diameter_mm=4)
+r = mcp.call("extrude_sketch", cut=True, through_all=True)
 print("    ", r.text)
 small = next(f["name"] for f in features() if f["name"].startswith("Cut-Extrude") and f["name"] != "Cut-Extrude1")
 assert close(volume(), BLOCK - SMALL), volume()

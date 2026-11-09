@@ -1,4 +1,4 @@
-//! The loft tools (loft_sketch, cut_loft_sketch): their parameters and the
+//! loft_sketch (also the cut): its parameters and the
 //! reply text.
 
 use rmcp::{ErrorData as McpError, schemars};
@@ -13,31 +13,26 @@ fn invalid(message: impl Into<String>) -> McpError {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct LoftParams {
-    /// Feature-tree names of the profile sketches, in the order the loft passes through them,
-    /// e.g. ["Sketch1", "Sketch2"] (at least 2). Each is one closed contour on its own plane,
-    /// e.g. Front and a create_reference_plane offset from it; the first or the last may
-    /// instead be a sketch holding a single sketch_point, to loft to a point (a pyramid, a
-    /// cone, a tip).
+    /// The profile sketches in the order the loft passes through them, e.g. ["Sketch1",
+    /// "Sketch2"] (at least 2), each one closed contour on its own plane. The first or last may
+    /// be a sketch of a single point instead, to loft to a tip.
     pub profiles: Vec<String>,
-    /// Feature-tree names of guide curves that shape the loft between the profiles, e.g.
-    /// ["Sketch3"]: sketches (or a 3D sketch or curve) each touching every profile, usually at
-    /// a corner or on an edge. Defaults to none: the loft blends smoothly from profile to
-    /// profile.
+    /// Sketches (or a 3D sketch or curve) touching every profile, shaping the sides between
+    /// them.
     #[serde(default)]
     pub guide_curves: Vec<String>,
-    /// Loft from the last profile back to the first, making a ring (at least 3 profiles,
-    /// usually on planes round an axis). Defaults to false.
+    /// Loft from the last profile back to the first, making a ring (at least 3 profiles).
     #[serde(default)]
     pub closed: bool,
-    /// Leave the first profile at right angles to it (start tangency "normal to profile"),
-    /// e.g. so the loft continues a straight extrusion smoothly. Not with closed. Defaults to
-    /// false.
+    /// Leave the first profile at right angles to it. Not with closed.
     #[serde(default)]
     pub start_normal: bool,
-    /// Reach the last profile at right angles to it (end tangency "normal to profile"). Not
-    /// with closed. Defaults to false.
+    /// Reach the last profile at right angles to it. Not with closed.
     #[serde(default)]
     pub end_normal: bool,
+    /// Remove material instead (cut-loft); the loft must pass through material.
+    #[serde(default)]
+    pub cut: bool,
 }
 
 /// More than any loft needs (the add-in's limits).
@@ -147,6 +142,7 @@ mod tests {
             closed: false,
             start_normal: false,
             end_normal: false,
+            cut: false,
         }
     }
 

@@ -79,7 +79,7 @@ def rotate(p, c, deg):
 # ---- Sketch: linear ---------------------------------------------------------
 
 mcp.call("create_part")
-r = mcp.call("sketch_circle", center=[10, 10], radius_mm=2)
+r = mcp.call("sketch", shape="circle", center=[10, 10], radius_mm=2)
 grid = sketch_name(r)
 [circle] = ids(r.text, "circle")
 axes = sketch(grid)["sketch_axes"]
@@ -99,9 +99,9 @@ assert f"{grid} now has 6 closed and 0 open contours" in r.text, r.text
 same_points(circle_centers(grid), [[x, y] for x in (10, 20, 30) for y in (10, 18)], "grid")
 
 # A point and a line, leftwards: standalone points are reported, line ends not.
-r = mcp.call("sketch_point", sketch_name=grid, points=[[0, -20]])
+r = mcp.call("sketch", shape="point", sketch_name=grid, points=[[0, -20]])
 [point] = ids(r.text, "point")
-r = mcp.call("sketch_line", sketch_name=grid, points=[[0, -30], [0, -25]])
+r = mcp.call("sketch", shape="line", sketch_name=grid, points=[[0, -30], [0, -25]])
 [line] = ids(r.text, "line")
 r = mcp.call("linear_pattern_sketch_entities", entities=[point, line], count=3, spacing_mm=10, angle_deg=180)
 assert len(new_ids(r.text, "line")) == 2 and len(new_ids(r.text, "point")) == 2 + 4, r.text
@@ -131,13 +131,13 @@ assert len(after["segments"]) == len(before["segments"]) and len(after["points"]
 
 # A circle, an arc (box beyond its ends: it passes a quadrant) and a point,
 # round a center that isn't the origin; the arc runs from 0 to 135 degrees.
-r = mcp.call("sketch_circle", center=[30, 5], radius_mm=3)
+r = mcp.call("sketch", shape="circle", center=[30, 5], radius_mm=3)
 ring = sketch_name(r)
 [c0] = ids(r.text, "circle")
-r = mcp.call("sketch_arc", sketch_name=ring, center=[40, 5], start=[44, 5],
+r = mcp.call("sketch", shape="arc", sketch_name=ring, center=[40, 5], start=[44, 5],
              end=[40 - 4 / math.sqrt(2), 5 + 4 / math.sqrt(2)])
 [arc] = ids(r.text, "arc")
-r = mcp.call("sketch_point", sketch_name=ring, points=[[35, -5]])
+r = mcp.call("sketch", shape="point", sketch_name=ring, points=[[35, -5]])
 [pt] = ids(r.text, "point")
 center = [5, 5]
 r = mcp.call("circular_pattern_sketch_entities", entities=[c0, arc, pt], center=center, count=4)
@@ -151,12 +151,12 @@ for k in range(4):
     assert any(close(p["at_mm"], rotate([35, -5], center, 90 * k)) for p in info["points"]), (k, info["points"])
 
 # Stepped and clockwise, round the origin; spread over 90 degrees.
-r = mcp.call("sketch_circle", center=[20, 0], radius_mm=1)
+r = mcp.call("sketch", shape="circle", center=[20, 0], radius_mm=1)
 fan = sketch_name(r)
 [c1] = ids(r.text, "circle")
 mcp.call("circular_pattern_sketch_entities", entities=[c1], count=3, spacing_deg=30, reverse_direction=True)
 same_points(circle_centers(fan), [rotate([20, 0], [0, 0], -30 * k) for k in range(3)], "clockwise 30")
-r = mcp.call("sketch_circle", center=[0, 20], radius_mm=1)
+r = mcp.call("sketch", shape="circle", center=[0, 20], radius_mm=1)
 spread = sketch_name(r)
 [c2] = ids(r.text, "circle")
 mcp.call("circular_pattern_sketch_entities", entities=[c2], count=3, angle_deg=90)
@@ -174,11 +174,11 @@ assert len(circle_centers(spread)) == 3
 # ---- Features: linear --------------------------------------------------------
 
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=100, height_mm=60)
+mcp.call("sketch", shape="rectangle", width_mm=100, height_mm=60)
 mcp.call("extrude_sketch", depth_mm=10)
 plate = 100 * 60 * 10
-r = mcp.call("sketch_circle", center=[-40, -20], radius_mm=2)
-r = mcp.call("cut_extrude_sketch", sketch_name=sketch_name(r), through_all=True)
+r = mcp.call("sketch", shape="circle", center=[-40, -20], radius_mm=2)
+r = mcp.call("extrude_sketch", cut=True, sketch_name=sketch_name(r), through_all=True)
 cut = re.search(r"Cut-Extrude\d+", r.text).group(0)
 hole = math.pi * 2 ** 2 * 10
 check_volume(plate - hole, "one hole")
@@ -198,8 +198,8 @@ check_volume(plate - 15 * hole, "5 x 3 grid")
 same_points(hole_centers(2), [[x, y] for x in (-40, -20, 0, 20, 40) for y in (-20, 0, 20)], "grid holes")
 
 # Along a straight edge (either way fits) and along a sketch line.
-r = mcp.call("sketch_circle", center=[0, 25], radius_mm=1)
-r = mcp.call("cut_extrude_sketch", sketch_name=sketch_name(r), through_all=True)
+r = mcp.call("sketch", shape="circle", center=[0, 25], radius_mm=1)
+r = mcp.call("extrude_sketch", cut=True, sketch_name=sketch_name(r), through_all=True)
 small = re.search(r"Cut-Extrude\d+", r.text).group(0)
 small_hole = math.pi * 1 ** 2 * 10
 edges = mcp.call("inspect_model", what="edges", curve_type="line", limit=500).json["edges"]
@@ -217,10 +217,10 @@ check_volume(plate - 15 * hole - 2 * small_hole, "small hole along an edge")
 xs = sorted(round(c[0], 6) for c in hole_centers(1))
 assert xs in ([0, 10], [-10, 0]), xs
 
-r = mcp.call("sketch_line", points=[[0, 0], [0, 10]])
+r = mcp.call("sketch", shape="line", points=[[0, 0], [0, 10]])
 [guide] = ids(r.text, "line")
-r = mcp.call("sketch_circle", center=[-25, 0], radius_mm=1.5)
-r = mcp.call("cut_extrude_sketch", sketch_name=sketch_name(r), through_all=True)
+r = mcp.call("sketch", shape="circle", center=[-25, 0], radius_mm=1.5)
+r = mcp.call("extrude_sketch", cut=True, sketch_name=sketch_name(r), through_all=True)
 mid = re.search(r"Cut-Extrude\d+", r.text).group(0)
 mid_hole = math.pi * 1.5 ** 2 * 10
 r = mcp.call("linear_pattern_features", features=[mid], direction=guide, count=2, spacing_mm=20)
@@ -251,11 +251,11 @@ check_volume(plate - 15 * hole - 2 * small_hole - 2 * mid_hole, "after refusals"
 # ---- Features: circular ------------------------------------------------------
 
 mcp.call("create_part")
-r = mcp.call("sketch_circle", center=[0, 0], radius_mm=30)
+r = mcp.call("sketch", shape="circle", center=[0, 0], radius_mm=30)
 mcp.call("extrude_sketch", sketch_name=sketch_name(r), depth_mm=10)
 disc = math.pi * 30 ** 2 * 10
-r = mcp.call("sketch_circle", center=[20, 0], radius_mm=2)
-r = mcp.call("cut_extrude_sketch", sketch_name=sketch_name(r), through_all=True)
+r = mcp.call("sketch", shape="circle", center=[20, 0], radius_mm=2)
+r = mcp.call("extrude_sketch", cut=True, sketch_name=sketch_name(r), through_all=True)
 bolt = re.search(r"Cut-Extrude\d+", r.text).group(0)
 rim = mcp.call("inspect_model", what="faces", surface_type="cylinder", limit=500).json["faces"]
 rim = next(f["id"] for f in rim if abs(f["radius_mm"] - 30) < 1e-6)
@@ -266,8 +266,8 @@ check_volume(disc - 6 * hole, "6 bolt holes")
 same_points(hole_centers(2), [rotate([20, 0], [0, 0], 60 * k) for k in range(6)], "bolt circle")
 
 # Round the rim edge, spread over 90 degrees: 0, 45, 90 one way or the other.
-r = mcp.call("sketch_circle", center=[10, 0], radius_mm=1)
-r = mcp.call("cut_extrude_sketch", sketch_name=sketch_name(r), through_all=True)
+r = mcp.call("sketch", shape="circle", center=[10, 0], radius_mm=1)
+r = mcp.call("extrude_sketch", cut=True, sketch_name=sketch_name(r), through_all=True)
 inner = re.search(r"Cut-Extrude\d+", r.text).group(0)
 rim_edge = next(e["id"] for e in mcp.call("inspect_model", what="edges", curve_type="circle", limit=500).json["edges"]
                 if abs(e["radius_mm"] - 30) < 1e-6)
@@ -278,10 +278,10 @@ got = hole_centers(1)
 assert any(same_set(got, [rotate([10, 0], [0, 0], s * 45 * k) for k in range(3)]) for s in (1, -1)), got
 
 # Round a reference axis (Top and Right planes meet along the disc's axis), stepped.
-r = mcp.call("create_reference_axis", references=["top", "right"])
+r = mcp.call("create_reference_geometry", geometry="axis", references=["top", "right"])
 axis = re.search(r"Axis\d+", r.text).group(0)
-r = mcp.call("sketch_circle", center=[0, -15], radius_mm=1.5)
-r = mcp.call("cut_extrude_sketch", sketch_name=sketch_name(r), through_all=True)
+r = mcp.call("sketch", shape="circle", center=[0, -15], radius_mm=1.5)
+r = mcp.call("extrude_sketch", cut=True, sketch_name=sketch_name(r), through_all=True)
 third = re.search(r"Cut-Extrude\d+", r.text).group(0)
 r = mcp.call("circular_pattern_features", features=[third], axis=axis, count=2, spacing_deg=30)
 assert f"round {axis}, 30 degrees apart." in r.text, r.text
@@ -303,7 +303,7 @@ assert features() == tree, (tree, features())
 # ---- Bodies -------------------------------------------------------------------
 
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=20, height_mm=10)
+mcp.call("sketch", shape="rectangle", width_mm=20, height_mm=10)
 mcp.call("extrude_sketch", depth_mm=10)
 [b] = bodies()
 r = mcp.call("linear_pattern_features", bodies=[b["id"]], direction="right", count=3, spacing_mm=30)

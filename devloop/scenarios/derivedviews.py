@@ -1,5 +1,5 @@
-# create_projected_view, create_section_view, create_detail_view,
-# create_auxiliary_view, crop_view, break_view against real SolidWorks
+# create_drawing_view types projected, section, detail and auxiliary,
+# crop_view and break_view against real SolidWorks
 # (docs/notes/drawings.md, "Derived views"): which way each looks, where each
 # goes, sizes at scales other than 1:1, labels, refusals that leave nothing
 # behind (a stray sketch entity would swell the parent's outline), an assembly
@@ -75,12 +75,12 @@ def hole_of(view):
 # hole through x at y = -20. Seen from the front +Y is right, +Z up, +X toward
 # the viewer: on the sheet the hole is 20 mm left of the view's position.
 mcp.call("create_part")
-mcp.call("sketch_line", plane="front", points=[[-60, -20], [40, -20], [60, 20], [-60, 20]], closed=True)
+mcp.call("sketch", shape="line", plane="front", points=[[-60, -20], [40, -20], [60, 20], [-60, 20]], closed=True)
 mcp.call("extrude_sketch", depth_mm=20)
 faces = mcp.call("inspect_model", what="faces", surface_type="plane").json["faces"]
 side_face = [f["id"] for f in faces if f["normal"][0] > 0.99][0]
-mcp.call("sketch_circle", on=side_face, center=[20, -20, 0], diameter_mm=12)
-mcp.call("cut_extrude_sketch", through_all=True)
+mcp.call("sketch", shape="circle", on=side_face, center=[20, -20, 0], diameter_mm=12)
+mcp.call("extrude_sketch", cut=True, through_all=True)
 part = mcp.run_dir.resolve() / "derived-plate.SLDPRT"
 mcp.call("save_document", path=str(part))
 
@@ -94,7 +94,7 @@ mcp.call("create_drawing", sheet_format="a3 - iso")
 # ---- Projected views go where asked and show what third angle says.
 mcp.call("create_drawing_view", model=str(part), at_mm=[150, 170], scale="1:1", name="P")
 for side, toward in [("right", "+Y"), ("left", "-Y"), ("above", "+Z"), ("below", "-Z")]:
-    r = mcp.call("create_projected_view", view="P", side=side)
+    r = mcp.call("create_drawing_view", type="projected", view="P", side=side)
     new = name_of(r)
     assert "projected from P" in r.text, r.text
     v = views()
@@ -109,7 +109,7 @@ for side, toward in [("right", "+Y"), ("left", "-Y"), ("above", "+Z"), ("below",
         assert abs(x - px) < 1 and ((y > py) == (side == "above")), (side, v[new])
     no_others = [n for n in v if n != new and overlap(v[new], v[n])]
     assert not no_others, (new, no_others)
-r = mcp.call("create_projected_view", view="P", at_mm=[390, 170], name="Far")
+r = mcp.call("create_drawing_view", type="projected", view="P", at_mm=[390, 170], name="Far")
 assert near(center(views()["Far"]), [390, 170], 1.0), views()["Far"]
 for args, expected in [
     ({"view": "Nope"}, 'no view named "Nope"'),
@@ -118,7 +118,7 @@ for args, expected in [
     ({"view": "P", "name": "a@b"}, '"a@b"'),
 ]:
     before = sorted(views())
-    r = mcp.call("create_projected_view", expect_error=True, **args)
+    r = mcp.call("create_drawing_view", type="projected", expect_error=True, **args)
     assert expected in r.text, (args, r.text)
     assert sorted(views()) == before, (args, views().keys())
 
@@ -129,7 +129,7 @@ mcp.call("create_drawing_view", model=str(part), at_mm=[210, 200], scale="2:1", 
 f_outline = views("Sheet2")["F"]["outline"]
 hole = hole_of("F")
 assert near(hole["center"], [170, 200], 0.1), hole
-r = mcp.call("create_section_view", view="F", through=hole["id"], angle_deg=0, side="below")
+r = mcp.call("create_drawing_view", type="section", view="F", through=hole["id"], angle_deg=0, side="below")
 assert "section of F" in r.text and "scale 2:1 (from F)" in r.text, r.text
 a = name_of(r)
 v = views("Sheet2")
@@ -144,19 +144,19 @@ xs = sorted({round(e["start"][0], 1) for e in walls})
 assert any(abs(x - 158) < 0.2 for x in xs) and any(abs(x - 182) < 0.2 for x in xs), walls
 
 # Vertical (the default) through the hole by a point, to each side.
-left = name_of(mcp.call("create_section_view", view="F", through_mm=[170, 200], side="left"))
+left = name_of(mcp.call("create_drawing_view", type="section", view="F", through_mm=[170, 200], side="left"))
 v = views("Sheet2")
 assert left == "Section View B-B" and v[left]["label"] == "B" and v[left]["toward_viewer"] == "-Y", v[left]
 assert center(v[left])[0] < v["F"]["outline"][0][0], v[left]
-flipped = name_of(mcp.call("create_section_view", view="F", through_mm=[170, 200], flip_direction=True, label="K",
+flipped = name_of(mcp.call("create_drawing_view", type="section", view="F", through_mm=[170, 200], flip=True, label="K",
                            at_mm=[20, 200]))
 v = views("Sheet2")
 assert v[flipped]["label"] == "K" and v[flipped]["toward_viewer"] == "+Y", v[flipped]
 # The default side: as much room either way here, so the right; it looks left.
-cut = name_of(mcp.call("create_section_view", view="F", through_mm=[230, 200], surface_only=True))
+cut = name_of(mcp.call("create_drawing_view", type="section", view="F", through_mm=[230, 200], surface_only=True))
 v = views("Sheet2")
 assert center(v[cut])[0] > v["F"]["outline"][1][0] and v[cut]["toward_viewer"] == "+Y", v[cut]
-r = mcp.call("create_section_view", view="F", through_mm=[20, 280], side="right", depth_mm=5)
+r = mcp.call("create_drawing_view", type="section", view="F", through_mm=[20, 280], side="right", depth_mm=5)
 assert "may cut nothing" in r.text, r.text
 for args, expected in [
     ({"view": "F", "side": "above"}, "nothing"),
@@ -165,14 +165,14 @@ for args, expected in [
     ({"view": "F", "depth_mm": -1}, "depth_mm"),
 ]:
     before = sorted(views("Sheet2"))
-    r = mcp.call("create_section_view", expect_error=True, **args)
+    r = mcp.call("create_drawing_view", type="section", expect_error=True, **args)
     assert expected in r.text, (args, r.text)
     after = views("Sheet2")
     assert sorted(after) == before and after["F"]["outline"] == f_outline, (args, after["F"])
 
 # A section of a section (the position isn't the model origin there).
 sx, sy = center(views("Sheet2")[left])
-twice = name_of(mcp.call("create_section_view", view=left, through_mm=[sx, sy], angle_deg=0, side="below"))
+twice = name_of(mcp.call("create_drawing_view", type="section", view=left, through_mm=[sx, sy], angle_deg=0, side="below"))
 assert views("Sheet2")[twice]["from_view"] == left, views("Sheet2")[twice]
 
 # ---- Detail: the circle around the hole at 2:1, the view at 4:1 by default.
@@ -180,7 +180,7 @@ mcp.call("add_sheet")
 mcp.call("create_drawing_view", model=str(part), at_mm=[150, 220], scale="2:1", name="D")
 d_outline = views("Sheet3")["D"]["outline"]
 hole = hole_of("D")
-r = mcp.call("create_detail_view", view="D", center=hole["id"], radius_mm=20)
+r = mcp.call("create_drawing_view", type="detail", view="D", center=hole["id"], radius_mm=20)
 assert "detail of D" in r.text and "scale 4:1" in r.text, r.text
 dv = name_of(r)
 v = views("Sheet3")
@@ -192,7 +192,7 @@ assert all(80 <= s <= 110 for s in size(v[dv])), size(v[dv])
 # The hole is in the middle of it, at its true size.
 circle = hole_of(dv)
 assert abs(circle["diameter_mm"] - 12) < 0.01 and near(circle["center"], center(v[dv]), 1.0), (circle, v[dv])
-second = name_of(mcp.call("create_detail_view", view="D", center_mm=[190, 220], radius_mm=10, scale="3:1",
+second = name_of(mcp.call("create_drawing_view", type="detail", view="D", center_mm=[190, 220], radius_mm=10, scale="3:1",
                           at_mm=[100, 80], style="no_leader", outline="jagged", label="Z"))
 v = views("Sheet3")
 assert v[second]["scale"] == "3:1" and v[second]["label"] == "Z", v[second]
@@ -203,7 +203,7 @@ for args, expected in [
     ({"view": "D", "radius_mm": 5, "center_mm": [150, 220], "label": "Z"}, "already uses"),
 ]:
     before = sorted(views("Sheet3"))
-    r = mcp.call("create_detail_view", expect_error=True, **args)
+    r = mcp.call("create_drawing_view", type="detail", expect_error=True, **args)
     assert expected in r.text, (args, r.text)
     after = views("Sheet3")
     assert sorted(after) == before and after["D"]["outline"] == d_outline, (args, after["D"])
@@ -215,7 +215,7 @@ edges = entities("G")
 inclined = [e for e in edges if e["type"] == "line" and abs(e["length_mm"] - 44.7214) < 0.01][0]
 level = [e for e in edges if e["type"] == "line" and abs(e["length_mm"] - 120) < 0.01][0]
 circle = [e for e in edges if e["type"] == "circle"][0]
-r = mcp.call("create_auxiliary_view", view="G", edge=inclined["id"])
+r = mcp.call("create_drawing_view", type="auxiliary", view="G", edge=inclined["id"])
 assert "auxiliary view of G" in r.text, r.text
 aux = name_of(r)
 v = views("Sheet4")
@@ -229,18 +229,18 @@ assert (ax - gx) * 0.894 - (ay - gy) * 0.447 > 0, (v[aux], v["G"])
 assert abs((ax - gx) * 0.447 + (ay - gy) * 0.894) < 3, (v[aux], v["G"])
 lengths = sorted(round(e["length_mm"], 1) for e in entities(aux) if e["type"] == "line")
 assert 44.7 in lengths and 20.0 in lengths, lengths
-r = mcp.call("create_auxiliary_view", view="G", edge=inclined["id"], flip=True, name="Other")
+r = mcp.call("create_drawing_view", type="auxiliary", view="G", edge=inclined["id"], flip=True, name="Other")
 v = views("Sheet4")
 ax2, ay2 = center(v["Other"])
 assert (ax2 - gx) * 0.894 - (ay2 - gy) * 0.447 < 0, (v["Other"], v["G"])
 for args, expected in [
-    ({"view": "G", "edge": level["id"]}, "create_projected_view"),
+    ({"view": "G", "edge": level["id"]}, "projected view"),
     ({"view": "G", "edge": circle["id"]}, "straight edge"),
     ({"view": "G", "edge": "view_edge:9999"}, "view_edge:9999"),
     ({"view": "P", "edge": inclined["id"]}, "is in G"),
 ]:
     before = sorted(views("Sheet4"))
-    r = mcp.call("create_auxiliary_view", expect_error=True, **args)
+    r = mcp.call("create_drawing_view", type="auxiliary", expect_error=True, **args)
     assert expected in r.text, (args, r.text)
     assert sorted(views("Sheet4")) == before, args
 
@@ -326,14 +326,14 @@ for tool, args, expected in [
 
 # ---- On a sheet in the background: the user's stays.
 mcp.call("activate_sheet", sheet="Sheet1")
-r = mcp.call("create_section_view", view="B", angle_deg=0, side="above")
+r = mcp.call("create_drawing_view", type="section", view="B", angle_deg=0, side="above")
 assert "(Sheet1 stays the active sheet)" in r.text, r.text
 assert sheets()["Sheet1"]["active"]
 
 # ---- Assembly view: every component cut, no dialog.
 mcp.call("add_sheet")
 mcp.call("create_drawing_view", model=str(assembly), at_mm=[120, 200], scale="1:1", name="A1")
-asect = name_of(mcp.call("create_section_view", view="A1", angle_deg=90, through_mm=[100, 200], side="right"))
+asect = name_of(mcp.call("create_drawing_view", type="section", view="A1", angle_deg=90, through_mm=[100, 200], side="right"))
 v = views("Sheet6")
 assert v[asect]["type"] == "section" and v[asect]["toward_viewer"] == "+Y", v[asect]
 assert not (open_dialogs := sw_dialogs()), open_dialogs
@@ -342,11 +342,11 @@ assert not (open_dialogs := sw_dialogs()), open_dialogs
 # the front is seen from the left.
 mcp.call("add_sheet", projection="first_angle")
 mcp.call("create_drawing_view", model=str(part), at_mm=[150, 170], scale="1:1", name="FA")
-fasect = name_of(mcp.call("create_section_view", view="FA", through_mm=[110, 170], side="right"))
+fasect = name_of(mcp.call("create_drawing_view", type="section", view="FA", through_mm=[110, 170], side="right"))
 v = views("Sheet7")
 assert v[fasect]["toward_viewer"] == "-Y", v[fasect]
 assert center(v[fasect])[0] > v["FA"]["outline"][1][0], v[fasect]
-r = mcp.call("create_auxiliary_view", view="FA", edge=[e for e in entities("FA")
+r = mcp.call("create_drawing_view", type="auxiliary", view="FA", edge=[e for e in entities("FA")
              if e["type"] == "line" and abs(e["length_mm"] - 44.7214) < 0.01][0]["id"], name="FAAux")
 v = views("Sheet7")
 ax, ay = center(v["FAAux"])
@@ -359,5 +359,5 @@ assert not (open_dialogs := sw_dialogs()), open_dialogs
 
 # ---- Not a drawing.
 mcp.call("create_part")
-r = mcp.call("create_projected_view", view="P", expect_error=True)
+r = mcp.call("create_drawing_view", type="projected", view="P", expect_error=True)
 assert "isn't a drawing" in r.text, r.text

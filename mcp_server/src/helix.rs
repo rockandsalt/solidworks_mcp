@@ -13,9 +13,8 @@ fn invalid(message: impl Into<String>) -> McpError {
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub struct HelixParams {
-    /// Feature-tree name of a sketch holding one circle, e.g. "Sketch1" (sketch_circle): the
-    /// circle sets the helix's diameter and where it starts, its plane the axis. Omit to use
-    /// the most recently created sketch that no feature uses yet.
+    /// A sketch holding one circle, e.g. "Sketch1": it sets the helix's diameter and start, its
+    /// plane the axis. Defaults to the newest sketch no feature uses yet.
     #[serde(default)]
     pub sketch_name: Option<String>,
     /// Distance between turns, in mm. A helix takes exactly two of pitch_mm, height_mm and
@@ -33,10 +32,10 @@ pub struct HelixParams {
     #[serde(default)]
     pub spiral: bool,
     /// Run to the other side of the sketch plane (a helix goes along the plane's normal by
-    /// default). Defaults to false.
+    /// default).
     #[serde(default)]
     pub reverse_direction: bool,
-    /// Wind clockwise instead of counterclockwise. Defaults to false.
+    /// Wind clockwise instead of counterclockwise.
     #[serde(default)]
     pub clockwise: bool,
     /// Where on the circle the curve starts, in degrees. Defaults to 0. The reply says where
@@ -47,7 +46,7 @@ pub struct HelixParams {
     /// along its length unless taper_outward is set. Not with a spiral.
     #[serde(default)]
     pub taper_deg: Option<f64>,
-    /// With taper_deg: widen along the length instead. Defaults to false.
+    /// With taper_deg: widen along the length instead.
     #[serde(default)]
     pub taper_outward: bool,
 }

@@ -49,12 +49,12 @@ def near(a, b, tol=1e-6):
 # ---- Fixture -------------------------------------------------------------------
 # Plate 60 x 40 x 5 = 12 cm^3; block 20 x 10 x 10.
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=60, height_mm=40)
+mcp.call("sketch", shape="rectangle", width_mm=60, height_mm=40)
 mcp.call("extrude_sketch", depth_mm=5)
 plate = mcp.run_dir / "props-plate.SLDPRT"
 save(plate)
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=20, height_mm=10)
+mcp.call("sketch", shape="rectangle", width_mm=20, height_mm=10)
 mcp.call("extrude_sketch", depth_mm=10)
 block = mcp.run_dir / "props-block.SLDPRT"
 save(block)

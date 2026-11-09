@@ -96,7 +96,7 @@ block = out / "imp-block.SLDPRT"
 # 60 x 40 box 10 deep along X (the Front Plane faces +X on this machine): x 0..10,
 # y -30..30, z -20..20.
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=60, height_mm=40)
+mcp.call("sketch", shape="rectangle", width_mm=60, height_mm=40)
 mcp.call("extrude_sketch", depth_mm=10)
 faces = mcp.call("inspect_model", what="faces", surface_type="plane").json["faces"]
 
@@ -114,8 +114,8 @@ r = mcp.call("hole_wizard", kind="counterbore", size="M4", on=near, through_all=
 print("    counterbore:", r.text)
 mcp.call("hole_wizard", kind="countersink", size="M5", on=far, locations=[[10, 20, -10]], through_all=True,
          countersink_angle_deg=90)
-mcp.call("sketch_circle", on=far, center=[10, -20, -10], diameter_mm=8)
-mcp.call("cut_extrude_sketch", through_all=True)
+mcp.call("sketch", shape="circle", on=far, center=[10, -20, -10], diameter_mm=8)
+mcp.call("extrude_sketch", cut=True, through_all=True)
 edges = mcp.call("inspect_model", what="edges", curve_type="line").json["edges"]
 
 
@@ -186,8 +186,8 @@ for ext in ["STEP", "IGS", "X_T"]:
 x10 = [f["face"] for p in got["planes"] if abs(p["direction"][0]) > 0.99 for f in p["faces"]
        if abs(f["at_mm"] * p["direction"][0] - 10) < 1e-6]
 assert len(x10) == 1, got["planes"]
-mcp.call("sketch_circle", on=x10[0], center=[10, 0, 12], diameter_mm=4)
-mcp.call("cut_extrude_sketch", depth_mm=3)
+mcp.call("sketch", shape="circle", on=x10[0], center=[10, 0, 12], diameter_mm=4)
+mcp.call("extrude_sketch", cut=True, depth_mm=3)
 v = volume()
 assert abs(native_volume - v - math.pi * 4 * 3) < 1e-3, (native_volume, v)
 # The imported feature's own faces don't include the cut's; the body has both.

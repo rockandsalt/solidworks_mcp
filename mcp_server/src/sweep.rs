@@ -1,4 +1,4 @@
-//! The sweep tools (sweep_sketch, cut_sweep_sketch): their parameters and the
+//! sweep_sketch (also the cut): its parameters and the
 //! reply text.
 
 use rmcp::{ErrorData as McpError, schemars};
@@ -13,24 +13,24 @@ fn invalid(message: impl Into<String>) -> McpError {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SweepParams {
-    /// Feature-tree name of the path to sweep along, e.g. "Sketch1": a sketch holding one open
-    /// or closed chain of lines, arcs and splines (a 3D sketch or a helix works too). The
-    /// profile starts where it crosses the path, usually at the path's start.
+    /// The path sketch, e.g. "Sketch1": one open or closed chain of lines, arcs and splines (a
+    /// 3D sketch or a helix too). The profile starts where it crosses the path.
     pub path: String,
-    /// Feature-tree name of the profile sketch, e.g. "Sketch2": one closed contour, usually on
-    /// a plane across the start of the path. Omit to use the most recently created sketch that
-    /// no feature uses yet, other than the path. Leave out with circle_diameter_mm.
+    /// The profile sketch, e.g. "Sketch2": one closed contour, usually on a plane across the
+    /// path's start. Defaults to the newest sketch no feature uses yet, other than the path.
     #[serde(default)]
     pub sketch_name: Option<String>,
-    /// Sweep a circle of this diameter (mm), centered on the path, instead of a profile sketch:
-    /// a rod, wire, spring or pipe along the path in one step.
+    /// Sweep a circle of this diameter centered on the path instead of a profile sketch (a
+    /// rod, wire, spring or pipe).
     #[serde(default)]
     pub circle_diameter_mm: Option<f64>,
-    /// Twist the profile by this many degrees from the start of the path to its end (negative
-    /// for the other way). Not with circle_diameter_mm. Defaults to 0: the profile follows the
-    /// path without turning.
+    /// Turn the profile this much from the path's start to its end (negative: the other way).
+    /// Not with circle_diameter_mm. Defaults to 0.
     #[serde(default)]
     pub twist_deg: Option<f64>,
+    /// Remove material instead (cut-sweep); the profile must overlap the part somewhere.
+    #[serde(default)]
+    pub cut: bool,
 }
 
 /// More turns than anyone means.
@@ -96,7 +96,7 @@ mod tests {
     use super::*;
 
     fn params(path: &str) -> SweepParams {
-        SweepParams { path: path.into(), sketch_name: None, circle_diameter_mm: None, twist_deg: None }
+        SweepParams { path: path.into(), sketch_name: None, circle_diameter_mm: None, twist_deg: None, cut: false }
     }
 
     #[test]

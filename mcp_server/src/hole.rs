@@ -313,7 +313,7 @@ pub struct HoleWizardParams {
     /// (metric screws and taps), "#10" or "1/4" (ANSI inch).
     pub size: String,
     /// Put a hole at every sketch point of this sketch, e.g. "Sketch3" -- typically points
-    /// placed with sketch_point on a face and located with dimension_sketch. The sketch may
+    /// placed with the sketch tool (shape point) on a face and located with dimension_sketch. The sketch may
     /// also hold construction geometry (ignored) but nothing else, and mustn't be used by
     /// another feature. It becomes the hole feature's placement sketch, so its dimensions keep
     /// driving the holes. Give this or `on`.
@@ -345,11 +345,11 @@ pub struct HoleWizardParams {
     /// through_all is set.
     #[serde(default)]
     pub depth_mm: Option<f64>,
-    /// Go through the whole part instead of to a depth. Defaults to false.
+    /// Go through the whole part instead of to a depth.
     #[serde(default)]
     pub through_all: bool,
     /// Drill the other way (away from the material side), e.g. when the sketch is on a
-    /// reference plane or SolidWorks says the holes miss the material. Defaults to false.
+    /// reference plane or SolidWorks says the holes miss the material.
     #[serde(default)]
     pub reverse_direction: bool,
     /// Screw clearance ("close", "normal", "loose") for clearance holes, counterbores and
@@ -374,7 +374,7 @@ pub struct HoleWizardParams {
     /// Tapped holes only: override the thread depth, in millimeters.
     #[serde(default)]
     pub thread_depth_mm: Option<f64>,
-    /// Tapped holes only: show a cosmetic thread (with its callout). Defaults to false.
+    /// Tapped holes only: show a cosmetic thread (with its callout).
     #[serde(default)]
     pub cosmetic_thread: bool,
 }

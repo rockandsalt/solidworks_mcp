@@ -65,7 +65,7 @@ def close(a, b, tol=1e-6):
 
 
 def rectangle(width=40, height=20):
-    r = mcp.call("sketch_line", points=[[-width / 2, -height / 2], [width / 2, -height / 2], [width / 2, height / 2], [-width / 2, height / 2]], closed=True)
+    r = mcp.call("sketch", shape="line", points=[[-width / 2, -height / 2], [width / 2, -height / 2], [width / 2, height / 2], [-width / 2, height / 2]], closed=True)
     return sketch_name(r), ids(r.text, "line")
 
 
@@ -101,8 +101,8 @@ assert close(spans(name), (-22, 22, -12, 12)), spans(name)
 
 # A whole sketch, by name: both contours but not the construction line.
 name, lines = rectangle()
-mcp.call("sketch_circle", sketch_name=name, center=[60, 0], radius_mm=5)
-mcp.call("sketch_line", sketch_name=name, points=[[-30, 30], [30, 30]], construction=True)
+mcp.call("sketch", shape="circle", sketch_name=name, center=[60, 0], radius_mm=5)
+mcp.call("sketch", shape="line", sketch_name=name, points=[[-30, 30], [30, 30]], construction=True)
 r = mcp.call("offset_sketch_entities", sketch_name=name, distance_mm=1)
 assert r.text.startswith(f"offset the whole sketch by 1 mm outward in {name}."), r.text
 assert len(ids(new_part(r.text), "line")) == 4 and len(ids(new_part(r.text), "circle")) == 1, r.text
@@ -110,26 +110,26 @@ circles = sorted(s["radius_mm"] for s in sketch(name)["segments"] if s["type"] =
 assert close(circles, [5, 6]), circles
 
 # An open chain goes to the right of its first entity, in the order given.
-r = mcp.call("sketch_line", points=[[-10, 0], [10, 0]])
+r = mcp.call("sketch", shape="line", points=[[-10, 0], [10, 0]])
 name = sketch_name(r)
 [first] = ids(r.text, "line")
-r = mcp.call("sketch_line", sketch_name=name, points=[[10, 10], [10, 0]])
+r = mcp.call("sketch", shape="line", sketch_name=name, points=[[10, 10], [10, 0]])
 [second] = ids(r.text, "line")
 r = mcp.call("offset_sketch_entities", entities=[first, second], distance_mm=2)
 new = ids(new_part(r.text), "line")
 assert close(spans(name, new), (-10, 12, -2, 10)), spans(name, new)
 
-r = mcp.call("sketch_line", points=[[-10, 0], [10, 0]])
+r = mcp.call("sketch", shape="line", points=[[-10, 0], [10, 0]])
 name = sketch_name(r)
 [first] = ids(r.text, "line")
-r = mcp.call("sketch_line", sketch_name=name, points=[[10, 10], [10, 0]])
+r = mcp.call("sketch", shape="line", sketch_name=name, points=[[10, 10], [10, 0]])
 [second] = ids(r.text, "line")
 r = mcp.call("offset_sketch_entities", entities=[second, first], distance_mm=2)
 new = ids(new_part(r.text), "line")
 assert close(spans(name, new), (-10, 8, 2, 10)), spans(name, new)
 
 # Caps: a line into a closed slot.
-r = mcp.call("sketch_line", points=[[-10, 0], [10, 0]])
+r = mcp.call("sketch", shape="line", points=[[-10, 0], [10, 0]])
 name = sketch_name(r)
 [center] = ids(r.text, "line")
 r = mcp.call("offset_sketch_entities", entities=[center], distance_mm=5, side="both", caps="arcs", base_construction=True)
@@ -147,7 +147,7 @@ new = ids(new_part(r.text), "line")
 assert all(s.get("construction") for s in sketch(name)["segments"] if s["id"] in new), sketch(name)["segments"]
 
 # A spline offsets like the rest.
-r = mcp.call("sketch_spline", points=[[0, 0], [10, 5], [20, 0]])
+r = mcp.call("sketch", shape="spline", points=[[0, 0], [10, 5], [20, 0]])
 name = sketch_name(r)
 [spline] = ids(r.text, "spline")
 r = mcp.call("offset_sketch_entities", entities=[spline], distance_mm=1)
@@ -156,7 +156,7 @@ assert len(ids(new_part(r.text), "spline")) == 1, r.text
 # ---- A ring, and a sketch a feature uses ------------------------------------
 
 mcp.call("create_part")
-r = mcp.call("sketch_circle", center=[0, 0], radius_mm=10)
+r = mcp.call("sketch", shape="circle", center=[0, 0], radius_mm=10)
 ring = sketch_name(r)
 [outer] = ids(r.text, "circle")
 r = mcp.call("offset_sketch_entities", entities=[outer], distance_mm=2, side="inward")
@@ -190,7 +190,7 @@ assert len(after["segments"]) == 4 and len(after["segments"]) == len(before["seg
 assert not after.get("dimensions"), after
 
 # SolidWorks itself would turn these inside out without saying so.
-r = mcp.call("sketch_circle", center=[0, 0], radius_mm=10)
+r = mcp.call("sketch", shape="circle", center=[0, 0], radius_mm=10)
 name = sketch_name(r)
 [circle] = ids(r.text, "circle")
 for side in ("inward", "both"):
@@ -198,22 +198,22 @@ for side in ("inward", "both"):
     assert r.is_error and "inside out" in r.text, r.text
     info = sketch(name)
     assert len(info["segments"]) == 1 and not info.get("dimensions"), info
-r = mcp.call("sketch_point", sketch_name=name, points=[[1, 1]])
+r = mcp.call("sketch", shape="point", sketch_name=name, points=[[1, 1]])
 [point] = ids(r.text, "point")
 r = mcp.call("offset_sketch_entities", entities=[point], distance_mm=1, expect_error=True)
 assert r.is_error and "is a point" in r.text, r.text
 
 # A sketch with only construction geometry.
-r = mcp.call("sketch_line", points=[[0, 0], [10, 0]], construction=True)
+r = mcp.call("sketch", shape="line", points=[[0, 0], [10, 0]], construction=True)
 r = mcp.call("offset_sketch_entities", sketch_name=sketch_name(r), distance_mm=1, expect_error=True)
 assert r.is_error and "nothing to offset" in r.text, r.text
 
 # ---- Model edges and faces --------------------------------------------------
 
 mcp.call("create_part")
-r = mcp.call("sketch_line", points=[[-20, -10], [20, -10], [20, 10], [-20, 10]], closed=True)
+r = mcp.call("sketch", shape="line", points=[[-20, -10], [20, -10], [20, 10], [-20, 10]], closed=True)
 plate = sketch_name(r)
-mcp.call("sketch_circle", sketch_name=plate, center=[0, 0], radius_mm=4)
+mcp.call("sketch", shape="circle", sketch_name=plate, center=[0, 0], radius_mm=4)
 mcp.call("extrude_sketch", sketch_name=plate, depth_mm=10)
 plate_volume = (40 * 20 - math.pi * 16) * 10
 check_volume(plate_volume, "plate")
@@ -232,7 +232,7 @@ assert r.text.startswith(f"offset {face} by 2 mm inward in {lip} (new sketch).")
 assert "outer loop only" in r.text and f"{lip} now has 1 closed" in r.text, r.text
 assert len(ids(new_part(r.text), "line")) == 4, r.text
 assert sketch(lip)["status"] == "fully defined", sketch(lip)["status"]
-r = mcp.call("cut_extrude_sketch", sketch_name=lip, depth_mm=1)
+r = mcp.call("extrude_sketch", cut=True, sketch_name=lip, depth_mm=1)
 check_volume(plate_volume - (36 * 16 - math.pi * 16) * 1, "cut inside the offset face")
 
 # Edges into a new sketch on a plane; the hole's edge grows outward. New edge
@@ -248,7 +248,7 @@ circle = next(s for s in sketch(rim_sketch)["segments"] if s["type"] == "circle"
 assert abs(circle["radius_mm"] - 5) < 1e-6, circle
 
 # Into an existing sketch made after the feature.
-r = mcp.call("sketch_point", plane="front", points=[[50, 50]])
+r = mcp.call("sketch", shape="point", plane="front", points=[[50, 50]])
 later = sketch_name(r)
 r = mcp.call("offset_sketch_entities", entities=[rims[0]["id"]], distance_mm=1, sketch_name=later)
 assert "(new sketch)" not in r.text and len(ids(new_part(r.text), "circle")) == 1, r.text

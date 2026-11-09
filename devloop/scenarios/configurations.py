@@ -38,11 +38,11 @@ def close(a, b, tol=1e-3):
 
 # ---- The part: 40 x 20 block, 10 deep (along +X here), an 8 mm hole through it --
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
 mcp.call("extrude_sketch", depth_mm=10)
 caps = mcp.call("inspect_model", what="faces", within="Boss-Extrude1", surface_type="plane").json["faces"]
-mcp.call("sketch_circle", on=caps[0]["id"], center=[0, 0], diameter_mm=8)
-mcp.call("cut_extrude_sketch", through_all=True)
+mcp.call("sketch", shape="circle", on=caps[0]["id"], center=[0, 0], diameter_mm=8)
+mcp.call("extrude_sketch", cut=True, through_all=True)
 box, volume = body()
 depth_axis = next(i for i in range(3) if close(box["max"][i] - box["min"][i], 10))
 print("    depth runs along axis", depth_axis, "volume", volume)

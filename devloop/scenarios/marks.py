@@ -57,14 +57,14 @@ def table_named(name):
 
 # ---- The fixture: 100 x 60 x 10, x 0..10 in this template.
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=100, height_mm=60)
+mcp.call("sketch", shape="rectangle", width_mm=100, height_mm=60)
 mcp.call("extrude_sketch", depth_mm=10)
 ROW = [[10, -30, 20], [10, 0, 20], [10, 30, 20]]
 BOLTS = [[10, 15, -6], [10, 0, 9], [10, -15, -6], [10, 0, -21]]
 for center in ROW + BOLTS:
-    mcp.call("sketch_circle", on=plane(0), center=center, diameter_mm=4)
-    mcp.call("cut_extrude_sketch", through_all=True)
-mcp.call("sketch_circle", on=plane(0), center=[10, 0, -6], diameter_mm=16)
+    mcp.call("sketch", shape="circle", on=plane(0), center=center, diameter_mm=4)
+    mcp.call("extrude_sketch", cut=True, through_all=True)
+mcp.call("sketch", shape="circle", on=plane(0), center=[10, 0, -6], diameter_mm=16)
 mcp.call("extrude_sketch", depth_mm=15)
 model = str(mcp.run_dir / "marks-plate.SLDPRT")
 mcp.call("save_document", path=model)

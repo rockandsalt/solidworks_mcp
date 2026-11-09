@@ -48,7 +48,7 @@ Com $f Name -Get""")
 # 40 x 20 x 10 box. With this machine's template the box spans x 0..10,
 # y -20..20, z -10..10 (docs/notes/devloop.md: Front Plane faces +X).
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)  # Sketch1
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)  # Sketch1
 mcp.call("extrude_sketch", depth_mm=10)  # Boss-Extrude1
 faces = mcp.call("inspect_model", what="faces", surface_type="plane").json["faces"]
 
@@ -61,9 +61,9 @@ def face_at(axis: int, value: float) -> str:
 
 
 far_cap, top, bottom = face_at(0, 10), face_at(2, 10), face_at(2, -10)
-mcp.call("sketch_circle", on=far_cap, center=[10, 0, 0], diameter_mm=6)  # Sketch2
-mcp.call("cut_extrude_sketch", depth_mm=3)  # Cut-Extrude1
-mcp.call("sketch_circle", on=top, center=[5, 0, 10], diameter_mm=4)  # Sketch3, used by nothing
+mcp.call("sketch", shape="circle", on=far_cap, center=[10, 0, 0], diameter_mm=6)  # Sketch2
+mcp.call("extrude_sketch", cut=True, depth_mm=3)  # Cut-Extrude1
+mcp.call("sketch", shape="circle", on=top, center=[5, 0, 10], diameter_mm=4)  # Sketch3, used by nothing
 hole = mcp.call("hole_wizard", kind="hole", size="M4", on=bottom, locations=[[5, 10, -10]], depth_mm=5)
 print("    hole:", hole.text)
 fillet = fillet_edge([5, 20, 10])  # the edge between the y=20 side and the top
@@ -117,11 +117,11 @@ assert "Kept the features that depended on it (as asked): Sketch3" in r.text, r.
 
 # children="delete" takes the dependents, but not the absorbed sketch.
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
 mcp.call("extrude_sketch", depth_mm=10)
 faces = mcp.call("inspect_model", what="faces", surface_type="plane").json["faces"]
-mcp.call("sketch_circle", on=face_at(0, 10), center=[10, 0, 0], diameter_mm=6)
-mcp.call("cut_extrude_sketch", depth_mm=3)
+mcp.call("sketch", shape="circle", on=face_at(0, 10), center=[10, 0, 0], diameter_mm=6)
+mcp.call("extrude_sketch", cut=True, depth_mm=3)
 r = mcp.call("delete_features", features=["Boss-Extrude1"], children="delete")
 print("    children=delete:", r.text)
 names = feature_names()
@@ -130,10 +130,10 @@ assert {"Boss-Extrude1", "Sketch2", "Cut-Extrude1"}.isdisjoint(names) and "Sketc
 # A hole placed on a sketch of our own: that sketch is the hole's parent, not
 # absorbed (the hole has its own 3D sketch + sketch), and stays.
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
 mcp.call("extrude_sketch", depth_mm=10)
 faces = mcp.call("inspect_model", what="faces", surface_type="plane").json["faces"]
-mcp.call("sketch_point", on=face_at(0, 10), points=[[10, 5, 0]])  # Sketch2
+mcp.call("sketch", shape="point", on=face_at(0, 10), points=[[10, 5, 0]])  # Sketch2
 mcp.call("hole_wizard", kind="hole", size="M4", sketch_name="Sketch2", depth_mm=5)
 hole_name = [f["name"] for f in mcp.call("inspect_model").json["features"] if f["type"] == "HoleWzd"][0]
 r = mcp.call("delete_features", features=[hole_name])
@@ -154,17 +154,17 @@ def sw_dialogs() -> list[str]:
 
 
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)  # line:1..4 sides, 5/6 diagonals
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)  # line:1..4 sides, 5/6 diagonals
 mcp.call("extrude_sketch", depth_mm=10)
 old = {e["id"] for e in sketch()["segments"]}
-mcp.call("sketch_line", sketch_name="Sketch1", points=[[-15, 14], [15, 14]], construction=True)
+mcp.call("sketch", shape="line", sketch_name="Sketch1", points=[[-15, 14], [15, 14]], construction=True)
 line = [e for e in sketch()["segments"] if e["id"] not in old]
 assert len(line) == 1, line
 line = line[0]
 mcp.call("dimension_sketch", dimensions=[{"kind": "length", "entities": [line["id"]], "value_mm": 30}])
 mcp.call("add_sketch_relations", relations=[{"kind": "horizontal", "entities": [line["id"]]}])
 old_points = {p["id"] for p in sketch()["points"]}
-mcp.call("sketch_point", sketch_name="Sketch1", points=[[0, -14]])
+mcp.call("sketch", shape="point", sketch_name="Sketch1", points=[[0, -14]])
 before = sketch()
 lone = [p["id"] for p in before["points"] if p["id"] not in old_points]
 assert len(lone) == 1, lone
@@ -218,7 +218,7 @@ assert "Boss-Extrude1" in mcp.call("diagnose_model").text
 # Two copies of a saved block and an assembly plane 50 mm off the assembly's
 # Front Plane, made through COM: no MCP tool makes these.
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=30, height_mm=30)
+mcp.call("sketch", shape="rectangle", width_mm=30, height_mm=30)
 mcp.call("extrude_sketch", depth_mm=10)
 block = mcp.run_dir / "block.SLDPRT"
 plane_name = com(f"""$d = Com $sw ActiveDoc -Get

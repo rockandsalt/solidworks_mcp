@@ -1,6 +1,6 @@
-//! Views made from other views and views' shapes: create_projected_view,
-//! create_section_view, create_detail_view, create_auxiliary_view over the
-//! DeriveDrawingView RPC, crop_view and break_view over ShapeDrawingView.
+//! Views made from other views and views' shapes: create_drawing_view's
+//! projected, section, detail and auxiliary views over the DeriveDrawingView
+//! RPC, crop_view and break_view over ShapeDrawingView.
 //! Everything is sheet meters on the wire; which way a view looks and where
 //! it goes is worked out here (docs/notes/drawings.md, "Derived views").
 
@@ -145,7 +145,7 @@ pub struct SectionViewParams {
     pub at_mm: Option<[f64; 2]>,
     /// Look the other way than the sheet's projection says for where the view is.
     #[serde(default)]
-    pub flip_direction: bool,
+    pub flip: bool,
     /// The letter on the sheet, which also names the view ("Section View A-A"; SolidWorks
     /// won't rename a section view). Default: the next one free.
     #[serde(default)]
@@ -252,6 +252,216 @@ pub struct BreakViewParams {
     /// Take all the view's breaks off instead.
     #[serde(default)]
     pub remove: bool,
+}
+
+/// What create_drawing_view adds.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewKind {
+    /// Of a part or assembly: `model` seen from `orientation`.
+    #[default]
+    Model,
+    /// Projected from `view` to a `side` of it, aligned, following its scale and display;
+    /// which face it shows follows the sheet's projection (first / third angle).
+    Projected,
+    /// `view` cut along a straight line (through `through` or through_mm, at angle_deg), seen
+    /// from one side, hatched, with the A-A arrows. The `side` it goes to sets which way it
+    /// looks by the projection (third angle, to the right: it looks left); `flip` the other
+    /// way. Cuts every component of an assembly.
+    Section,
+    /// A circle (center or center_mm, radius_mm) of `view` shown bigger, the circle and label
+    /// on the parent.
+    Detail,
+    /// `view` seen square onto an inclined straight `edge`, showing a face at its true shape.
+    Auxiliary,
+}
+
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+pub struct DrawingViewParams {
+    #[serde(default, rename = "type")]
+    pub kind: ViewKind,
+    /// model: an absolute .SLDPRT / .SLDASM path or the name of an open one; it must be
+    /// saved. Defaults to what the drawing shows, else the one open part or assembly.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// model: defaults to the model's active one.
+    #[serde(default)]
+    pub configuration: Option<String>,
+    /// model: front, back, left, right, top, bottom, isometric, dimetric, trimetric or a view
+    /// saved in the model. Defaults to front.
+    #[serde(default)]
+    pub orientation: Option<String>,
+    /// model: defaults to SolidWorks' (normally hidden_lines_removed).
+    #[serde(default)]
+    pub display: Option<view::Display>,
+    /// model: the sheet to put it on. Defaults to the active sheet.
+    #[serde(default)]
+    pub sheet: Option<String>,
+    /// projected, section, detail, auxiliary: the parent view, e.g. "Drawing View1".
+    #[serde(default)]
+    pub view: Option<String>,
+    /// projected (default right), section (default: the side with more room).
+    #[serde(default)]
+    pub side: Option<Side>,
+    /// The view's center, [x, y] sheet mm from the lower-left corner; a projected, section or
+    /// auxiliary view stays aligned with its parent. Defaults to a free spot.
+    #[serde(default)]
+    pub at_mm: Option<[f64; 2]>,
+    /// model: "1:2", ... or "sheet" (default: the sheet's; an empty sheet may first be
+    /// rescaled to fit); detail: defaults to twice the parent's.
+    #[serde(default)]
+    pub scale: Option<String>,
+    /// section: a view entity id the line goes through (a circle's center, a line's middle).
+    #[serde(default)]
+    pub through: Option<String>,
+    /// section: a point the line goes through, [x, y] sheet mm. Defaults to the view's middle.
+    #[serde(default)]
+    pub through_mm: Option<[f64; 2]>,
+    /// section: the line's angle from the sheet's x axis. Defaults to 90 (vertical).
+    #[serde(default)]
+    pub angle_deg: Option<f64>,
+    /// section, auxiliary: look the other way.
+    #[serde(default)]
+    pub flip: bool,
+    /// section: show only the cut faces.
+    #[serde(default)]
+    pub surface_only: bool,
+    /// section: show only this far behind the cut, model mm.
+    #[serde(default)]
+    pub depth_mm: Option<f64>,
+    /// detail: a view entity id at the circle's center.
+    #[serde(default)]
+    pub center: Option<String>,
+    /// detail: the circle's center, [x, y] sheet mm.
+    #[serde(default)]
+    pub center_mm: Option<[f64; 2]>,
+    /// detail: the circle's radius on the sheet.
+    #[serde(default)]
+    pub radius_mm: Option<f64>,
+    /// detail: how the circle ties to the view. Defaults to standard.
+    #[serde(default)]
+    pub style: Option<DetailStyle>,
+    /// detail: profile (default: the circle), full, jagged or none.
+    #[serde(default)]
+    pub outline: Option<Outline>,
+    /// auxiliary: a straight edge of `view` from inspect_drawing ("view_edge:3"), not along
+    /// the sheet's axes.
+    #[serde(default)]
+    pub edge: Option<String>,
+    /// section, detail, auxiliary: the letter on the sheet, which also names a section or
+    /// detail view ("Section View A-A"). Defaults to the next one free.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// model, projected, auxiliary. Defaults to SolidWorks' next "Drawing ViewN".
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// The create_drawing_view parameters for one kind of view.
+pub enum ViewRequest {
+    Model(view::CreateDrawingViewParams),
+    Projected(ProjectedViewParams),
+    Section(SectionViewParams),
+    Detail(DetailViewParams),
+    Auxiliary(AuxiliaryViewParams),
+}
+
+impl DrawingViewParams {
+    /// Splits the parameters by kind, refusing those the kind doesn't take.
+    pub fn split(self) -> Result<ViewRequest, McpError> {
+        use ViewKind::*;
+        let key = match self.kind {
+            Model => "model",
+            Projected => "projected",
+            Section => "section",
+            Detail => "detail",
+            Auxiliary => "auxiliary",
+        };
+        let given: [(&str, bool, &[ViewKind]); 22] = [
+            ("model", self.model.is_some(), &[Model]),
+            ("configuration", self.configuration.is_some(), &[Model]),
+            ("orientation", self.orientation.is_some(), &[Model]),
+            ("display", self.display.is_some(), &[Model]),
+            ("sheet", self.sheet.is_some(), &[Model]),
+            ("view", self.view.is_some(), &[Projected, Section, Detail, Auxiliary]),
+            ("side", self.side.is_some(), &[Projected, Section]),
+            ("at_mm", self.at_mm.is_some(), &[Model, Projected, Section, Detail, Auxiliary]),
+            ("scale", self.scale.is_some(), &[Model, Detail]),
+            ("through", self.through.is_some(), &[Section]),
+            ("through_mm", self.through_mm.is_some(), &[Section]),
+            ("angle_deg", self.angle_deg.is_some(), &[Section]),
+            ("flip", self.flip, &[Section, Auxiliary]),
+            ("surface_only", self.surface_only, &[Section]),
+            ("depth_mm", self.depth_mm.is_some(), &[Section]),
+            ("center", self.center.is_some(), &[Detail]),
+            ("center_mm", self.center_mm.is_some(), &[Detail]),
+            ("radius_mm", self.radius_mm.is_some(), &[Detail]),
+            ("style", self.style.is_some(), &[Detail]),
+            ("outline", self.outline.is_some(), &[Detail]),
+            ("edge", self.edge.is_some(), &[Auxiliary]),
+            ("label", self.label.is_some(), &[Section, Detail, Auxiliary]),
+        ];
+        if let Some((name, _, _)) = given.iter().find(|(_, given, kinds)| *given && !kinds.contains(&self.kind)) {
+            return Err(invalid(format!("type \"{key}\" doesn't take {name}")));
+        }
+        if self.name.is_some() && matches!(self.kind, Section | Detail) {
+            return Err(invalid(format!(
+                "type \"{key}\" doesn't take name: its label names it (SolidWorks won't rename it)"
+            )));
+        }
+        let needs = |value: Option<String>, name: &str| {
+            value.ok_or_else(|| invalid(format!("type \"{key}\" needs {name}")))
+        };
+        Ok(match self.kind {
+            Model => ViewRequest::Model(view::CreateDrawingViewParams {
+                model: self.model,
+                configuration: self.configuration,
+                orientation: self.orientation,
+                at_mm: self.at_mm,
+                scale: self.scale,
+                display: self.display,
+                sheet: self.sheet,
+                name: self.name,
+            }),
+            Projected => ViewRequest::Projected(ProjectedViewParams {
+                view: needs(self.view, "view")?,
+                side: self.side,
+                at_mm: self.at_mm,
+                name: self.name,
+            }),
+            Section => ViewRequest::Section(SectionViewParams {
+                view: needs(self.view, "view")?,
+                through: self.through,
+                through_mm: self.through_mm,
+                angle_deg: self.angle_deg,
+                side: self.side,
+                at_mm: self.at_mm,
+                flip: self.flip,
+                label: self.label,
+                surface_only: self.surface_only,
+                depth_mm: self.depth_mm,
+            }),
+            Detail => ViewRequest::Detail(DetailViewParams {
+                view: needs(self.view, "view")?,
+                center: self.center,
+                center_mm: self.center_mm,
+                radius_mm: self.radius_mm.ok_or_else(|| invalid("type \"detail\" needs radius_mm"))?,
+                scale: self.scale,
+                at_mm: self.at_mm,
+                style: self.style,
+                outline: self.outline,
+                label: self.label,
+            }),
+            Auxiliary => ViewRequest::Auxiliary(AuxiliaryViewParams {
+                view: needs(self.view, "view")?,
+                edge: needs(self.edge, "edge")?,
+                flip: self.flip,
+                at_mm: self.at_mm,
+                label: self.label,
+                name: self.name,
+            }),
+        })
+    }
 }
 
 // ---- What the drawing looks like before the call ------------------------------
@@ -494,7 +704,7 @@ pub fn section_plan(
     // Third angle: a view to the right looks left, from its side at the
     // parent. First angle: the other way round.
     let mut look = if sheet.first_angle { goes } else { -goes };
-    if params.flip_direction {
+    if params.flip {
         look = -look;
     }
     let (start, end) = section_line(&rect, through, along, look);
@@ -595,7 +805,7 @@ pub fn auxiliary_plan(
     let along = (b - a).try_normalize().ok_or_else(|| invalid("that edge is seen end-on"))?;
     if along.x.abs().min(along.y.abs()) < AXIS_TOLERANCE {
         return Err(invalid(format!(
-            "{} runs along the sheet's axes: use create_projected_view for a view square onto it",
+            "{} runs along the sheet's axes: use a projected view (create_drawing_view type \"projected\") for a view square onto it",
             params.edge.trim()
         )));
     }
@@ -744,6 +954,28 @@ pub fn shape_reply_text(request: &proto::ShapeDrawingViewRequest, reply: &proto:
 mod tests {
     use super::*;
 
+    fn split(args: Value) -> Result<ViewRequest, McpError> {
+        serde_json::from_value::<DrawingViewParams>(args).unwrap().split()
+    }
+
+    #[test]
+    fn view_types_take_only_their_parameters() {
+        assert!(matches!(split(json!({"orientation": "top"})), Ok(ViewRequest::Model(_))));
+        assert!(matches!(split(json!({"type": "section", "view": "A", "flip": true})), Ok(ViewRequest::Section(s)) if s.flip));
+        assert!(matches!(split(json!({"type": "auxiliary", "view": "A", "edge": "view_edge:1"})), Ok(ViewRequest::Auxiliary(_))));
+        for (args, needle) in [
+            (json!({"type": "projected"}), "needs view"),
+            (json!({"type": "detail", "view": "A"}), "needs radius_mm"),
+            (json!({"type": "auxiliary", "view": "A"}), "needs edge"),
+            (json!({"type": "projected", "view": "A", "scale": "1:2"}), "doesn't take scale"),
+            (json!({"view": "A"}), "doesn't take view"),
+            (json!({"type": "section", "view": "A", "name": "S"}), "label names it"),
+        ] {
+            let error = split(args.clone()).err().unwrap();
+            assert!(error.message.contains(needle), "{args}: {}", error.message);
+        }
+    }
+
     fn view(name: &str, lo: [f64; 2], hi: [f64; 2]) -> proto::ViewInfo {
         let v = |p: [f64; 2]| Some(proto::Vec3 { x: p[0], y: p[1], z: 0.0 });
         proto::ViewInfo {
@@ -796,7 +1028,7 @@ mod tests {
         }
         let s = section(&d, json!({"view": "F", "side": "left"})).unwrap();
         assert!((looks(&s) - DVec2::X).length() < 1e-9);
-        let s = section(&d, json!({"view": "F", "side": "right", "flip_direction": true})).unwrap();
+        let s = section(&d, json!({"view": "F", "side": "right", "flip": true})).unwrap();
         assert!((looks(&s) - DVec2::X).length() < 1e-9);
         // A horizontal line, the view below: looks up.
         let s = section(&d, json!({"view": "F", "angle_deg": 0, "side": "below"})).unwrap();

@@ -63,7 +63,7 @@ top = out / "comp-top.SLDASM"
 # ---- The part: 40 x 20 rectangle on Front, 10 deep along +X ----------------------
 # (Front faces +X on this machine: local box x 0..10, y -20..20, z -10..10.)
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
 mcp.call("extrude_sketch", depth_mm=10)
 mcp.call("save_document", path=str(block))
 b = mcp.call("inspect_model", what="bodies").json["bodies"][0]["bbox_mm"]

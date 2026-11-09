@@ -49,7 +49,7 @@ pub struct RibParams {
     /// gets thinner away from the sketch. Defaults to no taper.
     #[serde(default)]
     pub draft_deg: Option<f64>,
-    /// With draft_deg: get thicker away from the sketch instead. Defaults to false.
+    /// With draft_deg: get thicker away from the sketch instead.
     #[serde(default)]
     pub draft_outward: bool,
 }

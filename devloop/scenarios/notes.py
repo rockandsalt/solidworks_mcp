@@ -65,11 +65,11 @@ def overlaps(box, outline):
 # ---- A 40 x 20 x 10 box with a 6 mm boss on top; a drawing with its front
 # at 1:1 and its top at 1:2.
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
 mcp.call("extrude_sketch", depth_mm=10)
 faces = mcp.call("inspect_model", what="faces", surface_type="plane").json["faces"]
 top = [f["id"] for f in faces if f["normal"][2] > 0.99][0]
-mcp.call("sketch_circle", on=top, center=[5, 0, 10], diameter_mm=6)
+mcp.call("sketch", shape="circle", on=top, center=[5, 0, 10], diameter_mm=6)
 mcp.call("extrude_sketch", depth_mm=8)
 mcp.call("save_document", path=str(mcp.run_dir.resolve() / "notes-block.SLDPRT"))
 mcp.call("create_drawing", sheet_format="a3 - iso")

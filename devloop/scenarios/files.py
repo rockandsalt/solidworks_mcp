@@ -67,7 +67,7 @@ block = out / "files-block.SLDPRT"
 # ---- Saving a part ------------------------------------------------------------
 # 40 x 20 box, 10 deep along X (the Front Plane faces +X on this machine).
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
 mcp.call("extrude_sketch", depth_mm=10)
 assert "never saved" in active(), active()
 

@@ -42,10 +42,10 @@ pub struct MirrorFeaturesParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct MirrorSketchParams {
     /// Sketch entity ids to mirror ("line:3", "arc:1", "point:7") from inspect_sketch or the
-    /// sketch_* tools, all in one sketch.
+    /// sketch tool, all in one sketch.
     pub entities: Vec<String>,
     /// The line of the same sketch to mirror about ("line:5"), usually a centerline drawn
-    /// with sketch_line construction=true.
+    /// with the sketch tool, construction=true.
     pub axis: String,
     /// The sketch, e.g. "Sketch1". Defaults to the sketch the ids belong to.
     #[serde(default)]
@@ -204,7 +204,7 @@ pub(crate) fn sketch_ref(
         Some(kind) if SKETCH_KINDS.contains(&kind) => sketch::decode_ref(ids, entity).ok_or_else(|| {
             invalid(format!(
                 "{what}: {}",
-                ids.unknown_id(entity, "inspect_sketch and the sketch_* tools", "call inspect_sketch for current ones")
+                ids.unknown_id(entity, "inspect_sketch and the sketch tool", "call inspect_sketch for current ones")
             ))
         }),
         _ if entity.eq_ignore_ascii_case("origin") => {

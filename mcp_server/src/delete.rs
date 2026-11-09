@@ -67,7 +67,7 @@ pub struct DeleteFeaturesParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct DeleteSketchEntitiesParams {
-    /// Sketch entity ids from inspect_sketch or the sketch_* tools, all in one sketch:
+    /// Sketch entity ids from inspect_sketch or the sketch tool, all in one sketch:
     /// segments ("line:3", "arc:1", "circle:2", "spline:1", ...) and standalone points
     /// ("point:7", e.g. hole centers). A segment's end and center points go with it; on
     /// their own they can't be deleted.
@@ -160,7 +160,7 @@ pub fn sketch_items(
                     sketch::decode_ref(ids, entity).ok_or_else(|| {
                         let why = ids.unknown_id(
                             entity,
-                            "inspect_sketch and the sketch_* tools",
+                            "inspect_sketch and the sketch tool",
                             "call inspect_sketch for current ones",
                         );
                         invalid(format!("{what}: {why}"))

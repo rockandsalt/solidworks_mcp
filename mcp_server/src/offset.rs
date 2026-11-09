@@ -45,7 +45,7 @@ pub struct OffsetParams {
     /// How far to offset, in mm, more than 0. Use side for the direction.
     pub distance_mm: f64,
     /// What to offset, in the order given. Sketch entity ids ("line:3", "arc:1", "circle:2")
-    /// from inspect_sketch or the sketch_* tools, all in one sketch; or model edge and face
+    /// from inspect_sketch or the sketch tool, all in one sketch; or model edge and face
     /// ids ("edge:4", "face:2") from inspect_model. Not both kinds in one call. Omit, with
     /// sketch_name, for every entity of that sketch except construction geometry.
     #[serde(default)]
@@ -56,18 +56,18 @@ pub struct OffsetParams {
     #[serde(default)]
     pub side: OffsetSide,
     /// Also offset what's connected to the given entities: a whole contour from one of its
-    /// sketch entities, or for model edges what's tangent to them. Defaults to false.
+    /// sketch entities, or for model edges what's tangent to them.
     #[serde(default)]
     pub chain: bool,
     /// With side "both", on sketch entities: close the two offsets of an open chain with
     /// "arcs" or "lines" -- e.g. a line into a slot. Defaults to "none".
     #[serde(default)]
     pub caps: OffsetCaps,
-    /// Sketch entities only: make the new entities construction geometry. Defaults to false.
+    /// Sketch entities only: make the new entities construction geometry.
     #[serde(default)]
     pub construction: bool,
     /// Sketch entities only: turn the originals into construction geometry, e.g. to keep just
-    /// the offset for a feature. Defaults to false.
+    /// the offset for a feature.
     #[serde(default)]
     pub base_construction: bool,
     /// Sketch entities only: add a driving dimension of the distance, which set_dimension can

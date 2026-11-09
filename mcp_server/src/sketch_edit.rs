@@ -29,7 +29,7 @@ pub struct SketchFilletParams {
     pub radius_mm: f64,
     /// Which corners: sketch point ids ("point:3"), each where two entities meet; or exactly two
     /// entity ids ("line:1", "arc:2") for the corner between them, which also works when they
-    /// don't touch yet (they're extended to it). inspect_sketch and the sketch_* tools give ids.
+    /// don't touch yet (they're extended to it). inspect_sketch and the sketch tool give ids.
     pub entities: Vec<String>,
     /// The sketch, e.g. "Sketch1". Defaults to the one the ids belong to.
     #[serde(default)]
@@ -107,7 +107,7 @@ pub struct ConvertParams {
     #[serde(default)]
     pub loops: ConvertLoops,
     /// New sketch only: make it a 3D sketch, where edges keep their place in space instead of
-    /// being projected, e.g. for a sweep path along a model's edges. Defaults to false.
+    /// being projected, e.g. for a sweep path along a model's edges.
     #[serde(default)]
     pub sketch_3d: bool,
     /// sketch_name draws into an existing sketch (2D or 3D). Otherwise a new sketch on `plane` or

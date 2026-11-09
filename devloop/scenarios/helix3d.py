@@ -1,4 +1,4 @@
-# create_helix and 3D sketches (sketch_* with sketch_3d). Helixes: each way of
+# create_helix and 3D sketches (the sketch tool with sketch_3d). Helixes: each way of
 # defining one (ends and length checked against the formula), clockwise,
 # reversed, tapered, a spiral; a wire and a profile swept along one, a thread
 # cut with one, checked by volume; refusals and deleting. 3D sketches: a chain
@@ -52,7 +52,7 @@ def features():
 
 def circle(center_a=0.0, center_b=0.0, radius=10.0):
     """A circle on Top around a*u + b*v; returns the sketch's name."""
-    r = mcp.call("sketch_circle", plane="top", center=at(center_a, center_b), radius_mm=radius)
+    r = mcp.call("sketch", shape="circle", plane="top", center=at(center_a, center_b), radius_mm=radius)
     return re.search(r"Sketch\d+", r.text).group(0)
 
 
@@ -158,9 +158,9 @@ assert abs(dot(sub(end, c), w)) <= EPS and abs(norm(sub(end, c)) - 22) <= EPS, (
 
 # ---- Refusals leave nothing behind -----------------------------------------
 
-line_sketch = re.search(r"Sketch\d+", mcp.call("sketch_line", plane="top", points=[at(0, 100), at(10, 100)]).text).group(0)
+line_sketch = re.search(r"Sketch\d+", mcp.call("sketch", shape="line", plane="top", points=[at(0, 100), at(10, 100)]).text).group(0)
 two = circle(0, 150)
-mcp.call("sketch_circle", sketch_name=two, center=at(0, 180), radius_mm=5)
+mcp.call("sketch", shape="circle", sketch_name=two, center=at(0, 180), radius_mm=5)
 before = features()
 for args, needle in (
     (dict(sketch_name=line_sketch, pitch_mm=5, revolutions=4), "exactly one circle"),
@@ -213,7 +213,7 @@ plane = next(p for p, n in (("front", u), ("right", v)) if abs(dot(start, n)) <=
 radial = scale(start, 1 / norm(start))
 h = 1.5
 corners = [add(scale(radial, 10 + a), scale(w, b)) for a, b in ((-h, -h), (h, -h), (h, h), (-h, h))]
-mcp.call("sketch_line", plane=plane, closed=True, points=corners)
+mcp.call("sketch", shape="line", plane=plane, closed=True, points=corners)
 r = mcp.call("sweep_sketch", path=path)
 assert path in r.text, r.text
 # Each section stays in a plane through the axis, so Pappus: area * 2 pi R * turns.
@@ -227,7 +227,7 @@ mcp.call("extrude_sketch", sketch_name=base, depth_mm=30)
 solid = body()["volume_mm3"]
 r = mcp.call("create_helix", pitch_mm=5, revolutions=3, sketch_name=circle())
 path = feature_of(r)
-r = mcp.call("cut_sweep_sketch", path=path, circle_diameter_mm=1.5)
+r = mcp.call("sweep_sketch", cut=True, path=path, circle_diameter_mm=1.5)
 assert "Cut-Sweep" in r.text, r.text
 got = body()["volume_mm3"]
 assert 0 < solid - got < solid * 0.2, (solid, got)
@@ -236,11 +236,11 @@ assert 0 < solid - got < solid * 0.2, (solid, got)
 
 mcp.call("create_part")
 p0, p1, p2, p3 = [0, 0, 0], [40, 0, 0], [40, 30, 0], [40, 30, 50]
-r = mcp.call("sketch_line", sketch_3d=True, points=[p0, p1, p2])
+r = mcp.call("sketch", shape="line", sketch_3d=True, points=[p0, p1, p2])
 assert "new 3D sketch" in r.text and "not extruded" in r.text and "Sketch axes" not in r.text, r.text
 path = re.search(r"3DSketch\d+", r.text).group(0)
 assert "0 closed and 1 open" in r.text, r.text
-r = mcp.call("sketch_line", sketch_name=path, points=[p2, p3])
+r = mcp.call("sketch", shape="line", sketch_name=path, points=[p2, p3])
 assert "0 closed and 1 open" in r.text, r.text  # joined to the chain
 s = mcp.call("inspect_sketch", sketch_name=path).json
 assert s["is_3d"] is True and "sketch_axes" not in s, s
@@ -257,7 +257,7 @@ assert abs(got - math.pi * 2 ** 2 * 120) <= 0.05 * math.pi * 2 ** 2 * 120, got
 # An arc, tangent or not: its three points set its plane, off every default one.
 mcp.call("create_part")
 a, b, t = [30, 0, 0], [0, 30, 30], [20, 20, 20]
-r = mcp.call("sketch_arc", sketch_3d=True, start=a, end=b, through=t)
+r = mcp.call("sketch", shape="arc", sketch_3d=True, start=a, end=b, through=t)
 arc_sketch = re.search(r"3DSketch\d+", r.text).group(0)
 s = mcp.call("inspect_sketch", sketch_name=arc_sketch).json
 assert [g["type"] for g in s["segments"]] == ["arc"], s
@@ -271,9 +271,9 @@ for p in (a, b, t):
     assert abs(norm(sub(p, center)) - radius) <= EPS, (p, center, radius)
 # Add a spline on from its end and a stand-alone point.
 spline_points = [b, [-10, 50, 40], [-30, 60, 70]]
-r = mcp.call("sketch_spline", sketch_name=arc_sketch, points=spline_points)
+r = mcp.call("sketch", shape="spline", sketch_name=arc_sketch, points=spline_points)
 assert "0 closed and 1 open" in r.text, r.text
-r = mcp.call("sketch_point", sketch_name=arc_sketch, points=[[1, 2, 3]])
+r = mcp.call("sketch", shape="point", sketch_name=arc_sketch, points=[[1, 2, 3]])
 assert "point:" in r.text, r.text
 s = mcp.call("inspect_sketch", sketch_name=arc_sketch).json
 assert any(p["at_mm"] == [1.0, 2.0, 3.0] for p in s["points"]), s["points"]
@@ -282,7 +282,7 @@ close(spline["end_mm"], spline_points[-1], "spline end")
 
 # A rod swept along an arc in space: pi r^2 * arc length, whatever its plane.
 mcp.call("create_part")
-r = mcp.call("sketch_arc", sketch_3d=True, start=a, end=b, through=t)
+r = mcp.call("sketch", shape="arc", sketch_3d=True, start=a, end=b, through=t)
 path = re.search(r"3DSketch\d+", r.text).group(0)
 arc = mcp.call("inspect_sketch", sketch_name=path).json["segments"][0]
 r = mcp.call("sweep_sketch", path=path, circle_diameter_mm=4)
@@ -292,7 +292,7 @@ check_volume(math.pi * 2 ** 2 * arc["length_mm"], "rod along a 3D arc")
 # ---- A spline through space as a sweep path: the volume follows its length --
 
 mcp.call("create_part")
-r = mcp.call("sketch_spline", sketch_3d=True, points=[[0, 0, 0], [20, 10, 10], [40, 0, 30], [60, -10, 30]])
+r = mcp.call("sketch", shape="spline", sketch_3d=True, points=[[0, 0, 0], [20, 10, 10], [40, 0, 30], [60, -10, 30]])
 path = re.search(r"3DSketch\d+", r.text).group(0)
 length = mcp.call("inspect_sketch", sketch_name=path).json["segments"][0]["length_mm"]
 mcp.call("sweep_sketch", path=path, circle_diameter_mm=3)
@@ -301,13 +301,13 @@ check_volume(math.pi * 1.5 ** 2 * length, "rod along a 3D spline")
 # ---- A 3D guide curve for a loft --------------------------------------------
 
 mcp.call("create_part")
-r = mcp.call("sketch_circle", plane="front", center=at(0, 0), radius_mm=10)
+r = mcp.call("sketch", shape="circle", plane="front", center=at(0, 0), radius_mm=10)
 first = re.search(r"Sketch\d+", r.text).group(0)
-[p] = made(mcp.call("create_reference_plane", references=[{"entity": "front", "offset_mm": 50}]))
-r = mcp.call("sketch_circle", on=p["id"], center=at(dot(p["point_on_plane_mm"], u), 0), radius_mm=10)
+[p] = made(mcp.call("create_reference_geometry", geometry="plane", references=[{"entity": "front", "offset_mm": 50}]))
+r = mcp.call("sketch", shape="circle", on=p["id"], center=at(dot(p["point_on_plane_mm"], u), 0), radius_mm=10)
 second = re.search(r"Sketch\d+", r.text).group(0)
 offset = dot(p["point_on_plane_mm"], u)
-r = mcp.call("sketch_spline", sketch_3d=True, points=[at(0, 10), at(offset / 2, 13, 2), at(offset, 10)])
+r = mcp.call("sketch", shape="spline", sketch_3d=True, points=[at(0, 10), at(offset / 2, 13, 2), at(offset, 10)])
 guide = re.search(r"3DSketch\d+", r.text).group(0)
 r = mcp.call("loft_sketch", profiles=[first, second], guide_curves=[guide])
 # A guide on a circle moves the whole section along it (architecture.md), so the
@@ -317,7 +317,7 @@ check_volume(math.pi * 10 ** 2 * abs(offset), "cylinder along a 3D guide")
 # ---- Relations, dimensions, deleting ----------------------------------------
 
 mcp.call("create_part")
-r = mcp.call("sketch_line", sketch_3d=True, points=[[0, 0, 0], [30, 2, 1], [32, 40, 3], [33, 41, 60]])
+r = mcp.call("sketch", shape="line", sketch_3d=True, points=[[0, 0, 0], [30, 2, 1], [32, 40, 3], [33, 41, 60]])
 path = re.search(r"3DSketch\d+", r.text).group(0)
 lines = re.findall(r"line:\d+", r.text)
 r = mcp.call("add_sketch_relations", relations=[
@@ -348,13 +348,13 @@ assert abs(g["length_mm"] - 35) <= EPS, g
 for tool, args, needle in (
     ("add_sketch_relations", dict(relations=[{"kind": "horizontal", "entities": [lines[1]]}]), "along_x"),
     ("dimension_sketch", dict(dimensions=[{"kind": "horizontal", "entities": [lines[1]]}]), "no horizontal"),
-    ("sketch_circle", dict(sketch_name=path, center=[0, 0, 0], radius_mm=5), "can't take a circle"),
-    ("sketch_arc", dict(sketch_name=path, start=[0, 0, 0], end=[5, 0, 0], center=[2, 2, 2]), "through"),
-    ("sketch_line", dict(sketch_name=path, points=[[0, 0], [5, 5]]), "[x, y, z]"),
-    ("sketch_line", dict(sketch_name=path, points=[[1, 1, 1], [1, 1, 1]]), "same point"),
-    ("sketch_line", dict(sketch_3d=True, points=[[0, 0], [5, 5]]), "[x, y, z]"),
-    ("sketch_line", dict(sketch_3d=True, plane="top", points=[[0, 0, 0], [5, 5, 5]]), "plane"),
-    ("sketch_line", dict(sketch_3d=True, sketch_name=path, points=[[0, 0, 0], [5, 5, 5]]), "sketch_3d"),
+    ("sketch", dict(shape="circle", sketch_name=path, center=[0, 0, 0], radius_mm=5), "can't take a circle"),
+    ("sketch", dict(shape="arc", sketch_name=path, start=[0, 0, 0], end=[5, 0, 0], center=[2, 2, 2]), "through"),
+    ("sketch", dict(shape="line", sketch_name=path, points=[[0, 0], [5, 5]]), "[x, y, z]"),
+    ("sketch", dict(shape="line", sketch_name=path, points=[[1, 1, 1], [1, 1, 1]]), "same point"),
+    ("sketch", dict(shape="line", sketch_3d=True, points=[[0, 0], [5, 5]]), "[x, y, z]"),
+    ("sketch", dict(shape="line", sketch_3d=True, plane="top", points=[[0, 0, 0], [5, 5, 5]]), "plane"),
+    ("sketch", dict(shape="line", sketch_3d=True, sketch_name=path, points=[[0, 0, 0], [5, 5, 5]]), "sketch_3d"),
     ("extrude_sketch", dict(sketch_name=path, depth_mm=5), "3D sketch"),
     ("create_helix", dict(sketch_name=path, pitch_mm=5, revolutions=2), "3D sketch"),
     ("fully_define_sketch", dict(sketch_name=path), "3D sketch"),
@@ -368,12 +368,12 @@ assert len(s2["segments"]) == 3, s2["segments"]
 
 # A failed new 3D sketch is gone again.
 before = features()
-r = mcp.call("sketch_circle", sketch_3d=True, center=[0, 0, 0], radius_mm=5, expect_error=True)
+r = mcp.call("sketch", shape="circle", sketch_3d=True, center=[0, 0, 0], radius_mm=5, expect_error=True)
 assert r.is_error and "can't take a circle" in r.text, r.text
 assert features() == before, (before, features())
 
 # A horizontal relation is still fine in 2D, along_x isn't.
-r = mcp.call("sketch_line", plane="top", points=[at(0, 0), at(10, 1)])
+r = mcp.call("sketch", shape="line", plane="top", points=[at(0, 0), at(10, 1)])
 flat_line = re.search(r"line:\d+", r.text).group(0)
 r = mcp.call("add_sketch_relations", relations=[{"kind": "along_x", "entities": [flat_line]}], expect_error=True)
 assert r.is_error and "3D sketches" in r.text, r.text

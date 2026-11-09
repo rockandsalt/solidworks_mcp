@@ -59,7 +59,7 @@ def at(a=0.0, b=0.0, c=0.0):
 
 def square(a, size, **target):
     h = size / 2
-    return sketch_name(mcp.call("sketch_line", closed=True, points=[
+    return sketch_name(mcp.call("sketch", shape="line", closed=True, points=[
         at(a, -h, -h), at(a, h, -h), at(a, h, h), at(a, -h, h)], **target))
 
 
@@ -72,7 +72,7 @@ def dims(j):
 # 60 x 40 on Front, 10 deep along +x (this template's planes, see devloop.md).
 
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=60, height_mm=40)
+mcp.call("sketch", shape="rectangle", width_mm=60, height_mm=40)
 mcp.call("extrude_sketch", depth_mm=10)
 j = feature("Boss-Extrude1")
 assert j["type"] == "boss-extrude" and j["type_name"] == "Extrusion", j
@@ -81,8 +81,8 @@ assert j["definition"]["sketch"] == "Sketch1" and "cut" not in j["definition"], 
 assert dims(j) == {"D1@Boss-Extrude1": 10.0}, j
 assert "edit_extrude" in j["note"] and "set_dimension" in j["note"], j
 
-r = mcp.call("sketch_circle", center=[10, 5], radius_mm=2)
-r = mcp.call("cut_extrude_sketch", sketch_name=sketch_name(r), through_all=True)
+r = mcp.call("sketch", shape="circle", center=[10, 5], radius_mm=2)
+r = mcp.call("extrude_sketch", cut=True, sketch_name=sketch_name(r), through_all=True)
 cut = re.search(r"Cut-Extrude\d+", r.text).group(0)
 j = feature(cut)
 assert j["definition"]["cut"] is True and j["definition"]["direction1"]["end_condition"] == "through_all", j
@@ -143,7 +143,7 @@ for bad in ["NoSuchFeature", edge]:
 # ---- A tray with a web: shell and rib ----------------------------------------
 
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
 mcp.call("extrude_sketch", depth_mm=10)
 open_face = next(f["id"] for f in inspect("faces", limit=500) if abs(f["area_mm2"] - 800) < 1e-6 and f["normal"][0] > 0)
 mcp.call("shell_body", thickness_mm=2, open_faces=[open_face])
@@ -151,7 +151,7 @@ j = feature("Shell1")
 d = j["definition"]
 assert d["thickness_mm"] == 2.0 and d["removed_faces"] == [open_face] and "outward" not in d, (d, open_face)
 
-web = sketch_name(mcp.call("sketch_line", plane="top", points=[[6, -5, 0], [6, 5, 0]]))
+web = sketch_name(mcp.call("sketch", shape="line", plane="top", points=[[6, -5, 0], [6, 5, 0]]))
 r = mcp.call("rib_sketch", thickness_mm=2)
 rib = re.search(r"Rib\d+", r.text).group(0)
 j = feature(rib)
@@ -161,7 +161,7 @@ assert d["thickness_mm"] == 2.0 and d["side"] == "both" and d["sketch"] == web, 
 # ---- A block with a draft ------------------------------------------------------
 
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
 mcp.call("extrude_sketch", depth_mm=10)
 fs = inspect("faces", limit=500)
 ends = [f["id"] for f in fs if abs(f["area_mm2"] - 200) < 1e-6]
@@ -175,9 +175,9 @@ assert d["faces"] == [ends[0]] and d["neutral_plane"] == flats[0], (d, ends, fla
 # ---- A stepped shaft: revolve --------------------------------------------------
 
 mcp.call("create_part")
-r = mcp.call("sketch_line", points=[[0, 0], [40, 0], [40, 10], [25, 10], [25, 15], [0, 15]], closed=True)
+r = mcp.call("sketch", shape="line", points=[[0, 0], [40, 0], [40, 10], [25, 10], [25, 15], [0, 15]], closed=True)
 shaft = sketch_name(r)
-mcp.call("sketch_line", sketch_name=shaft, points=[[-10, 0], [50, 0]], construction=True)
+mcp.call("sketch", shape="line", sketch_name=shaft, points=[[-10, 0], [50, 0]], construction=True)
 r = mcp.call("revolve_sketch")
 j = feature(re.search(r"Revolve\d+", r.text).group(0))
 d = j["definition"]
@@ -188,7 +188,7 @@ assert d["type"] == "one direction" and d["axis"] != "nothing", j
 
 mcp.call("create_part")
 axes()
-path = sketch_name(mcp.call("sketch_line", plane="top", points=[at(0, 0), at(100, 0)]))
+path = sketch_name(mcp.call("sketch", shape="line", plane="top", points=[at(0, 0), at(100, 0)]))
 profile = square(0, 10, plane="front")
 r = mcp.call("sweep_sketch", path=path)
 j = feature(created(r))
@@ -200,7 +200,7 @@ assert "edit_sweep" in j["note"], j
 
 mcp.call("create_part")
 axes()
-r = mcp.call("create_reference_plane", references=[{"entity": "front", "offset_mm": 30}])
+r = mcp.call("create_reference_geometry", geometry="plane", references=[{"entity": "front", "offset_mm": 30}])
 [plane] = json.loads(r.text[r.text.rindex("\n[") + 1:])
 offset = dot(plane["point_on_plane_mm"], u)
 base = square(0, 20, plane="front")
@@ -216,7 +216,7 @@ assert j["type"] == "loft" and j["dimensions"] == [], j  # not Plane1's offset
 
 mcp.call("create_part")
 axes()
-circle = sketch_name(mcp.call("sketch_circle", plane="top", center=at(), radius_mm=10))
+circle = sketch_name(mcp.call("sketch", shape="circle", plane="top", center=at(), radius_mm=10))
 r = mcp.call("create_helix", pitch_mm=5, revolutions=4, sketch_name=circle)
 j = feature(created(r))
 d = j["definition"]
@@ -227,7 +227,7 @@ assert 4 in dims(j).values(), j  # the turns
 # ---- A Hole Wizard counterbore ------------------------------------------------------
 
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=60, height_mm=40)
+mcp.call("sketch", shape="rectangle", width_mm=60, height_mm=40)
 mcp.call("extrude_sketch", depth_mm=10)
 far = next(f["id"] for f in inspect("faces", surface_type="plane")
            if abs(f["normal"][0]) > 0.99 and abs(f["point_on_plane_mm"][0] - 10) < 1e-6)

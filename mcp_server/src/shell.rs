@@ -28,7 +28,7 @@ pub struct ShellParams {
     #[serde(default)]
     pub face_thicknesses: Vec<FaceThickness>,
     /// Add the walls outside the body's faces, keeping its faces as the inside of the shell and
-    /// making the body bigger, instead of inside them. Defaults to false.
+    /// making the body bigger, instead of inside them.
     #[serde(default)]
     pub outward: bool,
     /// The body to shell, by inspect_model id ("body:1"), for a closed shell of a part with

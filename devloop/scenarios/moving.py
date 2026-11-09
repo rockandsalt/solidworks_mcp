@@ -73,7 +73,7 @@ top = out / "move-top.SLDASM"
 # ---- The part (40 x 20 on Front, 10 deep along +X: x 0..10, y -20..20, z -10..10)
 # and a one-block subassembly ----------------------------------------------------------
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
 mcp.call("extrude_sketch", depth_mm=10)
 mcp.call("save_document", path=str(block))
 close_all()

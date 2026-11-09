@@ -60,7 +60,7 @@ def callouts(e):
 # ---- A 40 x 20 x 10 block (x 0..10 along the Front plane's normal, y
 # -20..20, z -10..10 in this template) with a 6 mm hole through it along x.
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
 mcp.call("extrude_sketch", depth_mm=10)
 planes = mcp.call("inspect_model", what="faces", surface_type="plane").json["faces"]
 
@@ -70,8 +70,8 @@ def face(normal):
 
 
 front = face([1, 0, 0])
-mcp.call("sketch_circle", on=front, center=[10, 5, 0], diameter_mm=6)
-mcp.call("cut_extrude_sketch", through_all=True)
+mcp.call("sketch", shape="circle", on=front, center=[10, 5, 0], diameter_mm=6)
+mcp.call("extrude_sketch", cut=True, through_all=True)
 faces = mcp.call("inspect_model", what="faces").json["faces"]
 planes = [f for f in faces if f["type"] == "plane"]
 front, back, top = face([1, 0, 0]), face([-1, 0, 0]), face([0, 0, 1])

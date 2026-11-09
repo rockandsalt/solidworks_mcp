@@ -56,18 +56,18 @@ def overlaps(a, b):
 # Plate 60 x 40 x 5 (x 0..5, y -30..30, z -20..20) with four 6 mm holes along X
 # at (y, z) = (+-20, +-10); block 20 x 10 x 10; assembly: plate + 2 blocks.
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=60, height_mm=40)
+mcp.call("sketch", shape="rectangle", width_mm=60, height_mm=40)
 mcp.call("extrude_sketch", depth_mm=5)
 faces = mcp.call("inspect_model", what="faces", surface_type="plane").json["faces"]
 cap = [f["id"] for f in faces if abs(f["normal"][0]) > 0.99 and abs(f["point_on_plane_mm"][0] - 5) < 1e-6][0]
-mcp.call("sketch_circle", on=cap, center=[5, -20, -10], diameter_mm=6)
+mcp.call("sketch", shape="circle", on=cap, center=[5, -20, -10], diameter_mm=6)
 for y, z in ((20, -10), (-20, 10), (20, 10)):
-    mcp.call("sketch_circle", sketch_name="Sketch2", center=[5, y, z], diameter_mm=6)
-mcp.call("cut_extrude_sketch", through_all=True)
+    mcp.call("sketch", shape="circle", sketch_name="Sketch2", center=[5, y, z], diameter_mm=6)
+mcp.call("extrude_sketch", cut=True, through_all=True)
 plate = mcp.run_dir / "tables-plate.SLDPRT"
 save(plate)
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=20, height_mm=10)
+mcp.call("sketch", shape="rectangle", width_mm=20, height_mm=10)
 mcp.call("extrude_sketch", depth_mm=10)
 block = mcp.run_dir / "tables-block.SLDPRT"
 save(block)

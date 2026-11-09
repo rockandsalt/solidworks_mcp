@@ -1,4 +1,4 @@
-# sketch_slot / sketch_polygon / sketch_ellipse, sketch_fillet / sketch_chamfer,
+# sketch shapes slot / polygon / ellipse, sketch_fillet / sketch_chamfer,
 # trim_sketch_entity / extend_sketch_entity and convert_entities: each shape read
 # back and extruded (volume), which corner or piece each edit touches, driving
 # what they dimension, refusals leaving the sketch as it was, on a plane other
@@ -76,7 +76,7 @@ def refused_unchanged(name, tool, expect, **args):
 def rectangle(**where):
     """A closed 40 x 20 rectangle: its sketch, its four lines (bottom, right, top, left) and the
     point at each corner by its coordinates."""
-    r = mcp.call("sketch_line", points=[[-20, -10], [20, -10], [20, 10], [-20, 10]], closed=True, **where)
+    r = mcp.call("sketch", shape="line", points=[[-20, -10], [20, -10], [20, 10], [-20, 10]], closed=True, **where)
     name = sketch_name(r)
     lines = found(part_after(r.text, "Ids"), "line")
     assert len(lines) == 4, r.text
@@ -99,7 +99,7 @@ def no_dialogs():
 
 mcp.call("create_part")
 
-r = mcp.call("sketch_slot", start=[-20, 0], end=[20, 0], width_mm=6)
+r = mcp.call("sketch", shape="slot", start=[-20, 0], end=[20, 0], width_mm=6)
 name = sketch_name(r)
 assert r.text.startswith(f"drew a slot 6 mm wide in {name} (new sketch"), r.text
 assert f"{name} now has 1 closed and 0 open" in r.text, r.text
@@ -116,7 +116,7 @@ check_volume((40 * 6 + math.pi * 9) * 10, "straight slot")
 
 # Curved: by center (counterclockwise, then clockwise the long way) and through a point.
 mcp.call("create_part")
-r = mcp.call("sketch_slot", start=[20, 0], end=[0, 20], center=[0, 0], width_mm=6)
+r = mcp.call("sketch", shape="slot", start=[20, 0], end=[0, 20], center=[0, 0], width_mm=6)
 name = sketch_name(r)
 assert "a curved slot 6 mm wide" in r.text, r.text
 middle = next(x for x in sketch(name)["segments"] if x.get("construction"))
@@ -125,18 +125,18 @@ mcp.call("extrude_sketch", sketch_name=name, depth_mm=10)
 check_volume((10 * math.pi * 6 + math.pi * 9) * 10, "slot along a quarter arc")
 
 mcp.call("create_part")
-r = mcp.call("sketch_slot", start=[20, 0], end=[0, 40], center=[0, 0], clockwise=True, width_mm=6)
+r = mcp.call("sketch", shape="slot", start=[20, 0], end=[0, 40], center=[0, 0], clockwise=True, width_mm=6)
 name = sketch_name(r)
 middle = next(x for x in sketch(name)["segments"] if x.get("construction"))
 assert abs(middle["length_mm"] - 30 * math.pi) < 1e-3, middle  # end moved onto the radius
 assert any(near(x["center_mm"], [0, 20]) for x in sketch(name)["segments"] if x["type"] == "arc" and x["radius_mm"] == 3), sketch(name)
 
-r = mcp.call("sketch_slot", start=[120, 0], end=[100, 20], through=[100 + 20 * math.sqrt(0.5), 20 * math.sqrt(0.5)], width_mm=4, sketch_name=name)
+r = mcp.call("sketch", shape="slot", start=[120, 0], end=[100, 20], through=[100 + 20 * math.sqrt(0.5), 20 * math.sqrt(0.5)], width_mm=4, sketch_name=name)
 assert f"{name} now has 2 closed" in r.text, r.text
 
 # Dimensions drive it.
 mcp.call("create_part")
-r = mcp.call("sketch_slot", start=[-20, 0], end=[20, 0], width_mm=6, add_dimensions=True)
+r = mcp.call("sketch", shape="slot", start=[-20, 0], end=[20, 0], width_mm=6, add_dimensions=True)
 name = sketch_name(r)
 dims = {round(d["value_mm"], 3): d["name"] for d in sketch(name)["dimensions"]}
 assert set(dims) == {6, 40}, dims
@@ -144,7 +144,7 @@ mcp.call("set_dimension", name=dims[6], value_mm=8)
 assert all(x["radius_mm"] == 4 for x in sketch(name)["segments"] if x["type"] == "arc"), sketch(name)
 
 # Construction.
-r = mcp.call("sketch_slot", start=[-20, 30], end=[20, 30], width_mm=6, construction=True, sketch_name=name)
+r = mcp.call("sketch", shape="slot", start=[-20, 30], end=[20, 30], width_mm=6, construction=True, sketch_name=name)
 assert sum(1 for x in sketch(name)["segments"] if not x.get("construction")) == 4, sketch(name)["segments"]  # the first's
 
 before = features()
@@ -157,14 +157,14 @@ for args, expect in [
     (dict(start=[0, 0], end=[20, 0], through=[10, 0], width_mm=4), "straight line"),
     (dict(start=[10, 0], end=[20, 0], center=[0, 0], width_mm=4), "same angle"),
 ]:
-    refused("sketch_slot", expect, **args)
+    refused("sketch", expect, shape="slot", **args)
 assert features() == before, features()
 
 # ---- Polygons ----------------------------------------------------------------
 
 mcp.call("create_part")
 
-r = mcp.call("sketch_polygon", center=[0, 0], sides=6, corner_radius_mm=10)
+r = mcp.call("sketch", shape="polygon", center=[0, 0], sides=6, corner_radius_mm=10)
 name = sketch_name(r)
 assert "drew a polygon with 6 sides" in r.text and f"{name} now has 1 closed" in r.text, r.text
 assert len(found(part_after(r.text, "Ids"), "line")) == 6 and len(found(part_after(r.text, "Ids"), "circle")) == 1, r.text
@@ -177,7 +177,7 @@ check_volume(1.5 * math.sqrt(3) * 100 * 10, "hexagon by its corner")
 
 # By its flats, turned so a side's middle is where the angle says; the circle sizes it.
 mcp.call("create_part")
-r = mcp.call("sketch_polygon", center=[5, 7], sides=6, flat_radius_mm=10)
+r = mcp.call("sketch", shape="polygon", center=[5, 7], sides=6, flat_radius_mm=10)
 name = sketch_name(r)
 s = sketch(name)["segments"]
 circle = next(x for x in s if x["type"] == "circle")
@@ -192,7 +192,7 @@ side_x = circle["center_mm"][0] + 15
 assert any(x["type"] == "line" and abs(x["start_mm"][0] - side_x) < 1e-3 and abs(x["end_mm"][0] - side_x) < 1e-3 for x in s), s
 
 mcp.call("create_part")
-r = mcp.call("sketch_polygon", center=[0, 0], sides=4, corner_radius_mm=10, angle_deg=45)
+r = mcp.call("sketch", shape="polygon", center=[0, 0], sides=4, corner_radius_mm=10, angle_deg=45)
 name = sketch_name(r)
 assert any(near(p["at_mm"], [10 * math.sqrt(0.5), 10 * math.sqrt(0.5)]) for p in sketch(name)["points"]), sketch(name)["points"]
 mcp.call("extrude_sketch", sketch_name=name, depth_mm=10)
@@ -200,7 +200,7 @@ check_volume(200 * 10, "a square by its corner, level")
 
 mcp.call("create_part")
 for sides in (3, 40):
-    r = mcp.call("sketch_polygon", center=[sides * 10, 0], sides=sides, corner_radius_mm=5)
+    r = mcp.call("sketch", shape="polygon", center=[sides * 10, 0], sides=sides, corner_radius_mm=5)
     assert len(found(part_after(r.text, "Ids"), "line")) == sides, r.text
 
 before = features()
@@ -211,14 +211,14 @@ for args, expect in [
     (dict(center=[0, 0], sides=6, corner_radius_mm=5, flat_radius_mm=4), "exactly one"),
     (dict(center=[0, 0], sides=6, corner_radius_mm=-1), "positive"),
 ]:
-    refused("sketch_polygon", expect, **args)
+    refused("sketch", expect, shape="polygon", **args)
 assert features() == before, features()
 
 # ---- Ellipses ----------------------------------------------------------------
 
 mcp.call("create_part")
 
-r = mcp.call("sketch_ellipse", center=[1, 2], major_radius_mm=20, minor_radius_mm=10)
+r = mcp.call("sketch", shape="ellipse", center=[1, 2], major_radius_mm=20, minor_radius_mm=10)
 name = sketch_name(r)
 assert "an ellipse of 20 x 10 mm radii" in r.text and f"{name} now has 1 closed" in r.text, r.text
 [ellipse] = found(part_after(r.text, "Ids"), "ellipse")
@@ -229,7 +229,7 @@ mcp.call("extrude_sketch", sketch_name=name, depth_mm=10)
 check_volume(math.pi * 200 * 10, "ellipse")
 
 mcp.call("create_part")
-r = mcp.call("sketch_ellipse", center=[0, 0], major_radius_mm=20, minor_radius_mm=10, angle_deg=30)
+r = mcp.call("sketch", shape="ellipse", center=[0, 0], major_radius_mm=20, minor_radius_mm=10, angle_deg=30)
 name = sketch_name(r)
 [ellipse] = found(part_after(r.text, "Ids"), "ellipse")
 e = by_id(name)[ellipse]
@@ -242,10 +242,10 @@ assert by_id(name)[ellipse]["major_radius_mm"] == 25, sketch(name)
 
 # A part of one, by trimming: an ellipse with ends.
 mcp.call("create_part")
-r = mcp.call("sketch_ellipse", center=[0, 0], major_radius_mm=20, minor_radius_mm=10)
+r = mcp.call("sketch", shape="ellipse", center=[0, 0], major_radius_mm=20, minor_radius_mm=10)
 name = sketch_name(r)
 [ellipse] = found(part_after(r.text, "Ids"), "ellipse")
-mcp.call("sketch_line", points=[[-30, 0], [30, 0]], sketch_name=name)
+mcp.call("sketch", shape="line", points=[[-30, 0], [30, 0]], sketch_name=name)
 r = mcp.call("trim_sketch_entity", entity=ellipse, at=[0, 10])
 assert r.text.startswith(f"trimmed {ellipse} in {name}."), r.text
 [half] = found(part_after(r.text, "Changed"), "ellipse")
@@ -254,20 +254,20 @@ assert sorted(abs(e["start_mm"][0]) for _ in [0]) == [20] and e["start_mm"][1] =
 
 before = features()
 for args, expect in [
-    (dict(center=[0, 0], major_radius_mm=10, minor_radius_mm=10), "sketch_circle"),
+    (dict(center=[0, 0], major_radius_mm=10, minor_radius_mm=10), 'shape "circle"'),
     (dict(center=[0, 0], major_radius_mm=5, minor_radius_mm=10), "more than"),
     (dict(center=[0, 0], major_radius_mm=5, minor_radius_mm=0), "more than"),
 ]:
-    refused("sketch_ellipse", expect, **args)
+    refused("sketch", expect, shape="ellipse", **args)
 assert features() == before, features()
 
 # None of them in a 3D sketch.
-r = mcp.call("sketch_line", points=[[0, 0, 0], [10, 0, 5]], sketch_3d=True)
+r = mcp.call("sketch", shape="line", points=[[0, 0, 0], [10, 0, 5]], sketch_3d=True)
 sketch3d = sketch_name(r)
 for tool, args in [
-    ("sketch_slot", dict(start=[0, 0, 0], end=[10, 0, 0], width_mm=2)),
-    ("sketch_polygon", dict(center=[0, 0, 0], sides=6, corner_radius_mm=2)),
-    ("sketch_ellipse", dict(center=[0, 0, 0], major_radius_mm=4, minor_radius_mm=2)),
+    ("sketch", dict(shape="slot", start=[0, 0, 0], end=[10, 0, 0], width_mm=2)),
+    ("sketch", dict(shape="polygon", center=[0, 0, 0], sides=6, corner_radius_mm=2)),
+    ("sketch", dict(shape="ellipse", center=[0, 0, 0], major_radius_mm=4, minor_radius_mm=2)),
 ]:
     refused_unchanged(sketch3d, tool, "3D sketch", sketch_name=sketch3d, **args)
 
@@ -326,10 +326,10 @@ r = mcp.call("sketch_fillet", entities=[top, left], radius_mm=2)
 assert near(by_id(name)[arc]["center_mm"], [-18, 8]), by_id(name)[arc]
 
 # Lines that don't touch yet grow to it.
-r = mcp.call("sketch_line", points=[[0, 0], [10, 0]])
+r = mcp.call("sketch", shape="line", points=[[0, 0], [10, 0]])
 far = sketch_name(r)
 [a] = found(part_after(r.text, "Ids"), "line")
-r = mcp.call("sketch_line", points=[[15, 5], [15, 20]], sketch_name=far)
+r = mcp.call("sketch", shape="line", points=[[15, 5], [15, 20]], sketch_name=far)
 [b] = found(part_after(r.text, "Ids"), "line")
 r = mcp.call("sketch_fillet", entities=[a, b], radius_mm=3)
 s = by_id(far)
@@ -354,10 +354,10 @@ refused_unchanged(name, "sketch_fillet", "two entities make one", entities=[righ
 refused_unchanged(name, "sketch_fillet", "not both", entities=[right, at[(20, 10)]], radius_mm=3)
 refused_unchanged(name, "sketch_fillet", "radius_mm", entities=[at[(20, 10)]], radius_mm=0)
 refused_unchanged(name, "sketch_fillet", "couldn't fillet", entities=[bottom, top], radius_mm=3)  # parallel
-r = mcp.call("sketch_line", points=[[-20, 0], [20, 0]])
+r = mcp.call("sketch", shape="line", points=[[-20, 0], [20, 0]])
 cross = sketch_name(r)
 [a] = found(part_after(r.text, "Ids"), "line")
-r = mcp.call("sketch_line", points=[[0, -10], [0, 10]], sketch_name=cross)
+r = mcp.call("sketch", shape="line", points=[[0, -10], [0, 10]], sketch_name=cross)
 [b] = found(part_after(r.text, "Ids"), "line")
 refused_unchanged(cross, "sketch_fillet", "couldn't fillet", entities=[a, b], radius_mm=3)
 no_dialogs()
@@ -424,12 +424,12 @@ mcp.call("create_part")
 
 def crossed():
     """A line across two verticals."""
-    r = mcp.call("sketch_line", points=[[-20, 0], [20, 0]])
+    r = mcp.call("sketch", shape="line", points=[[-20, 0], [20, 0]])
     name = sketch_name(r)
     [h] = found(part_after(r.text, "Ids"), "line")
-    r = mcp.call("sketch_line", points=[[-10, -10], [-10, 10]], sketch_name=name)
+    r = mcp.call("sketch", shape="line", points=[[-10, -10], [-10, 10]], sketch_name=name)
     [v1] = found(part_after(r.text, "Ids"), "line")
-    r = mcp.call("sketch_line", points=[[10, -10], [10, 10]], sketch_name=name)
+    r = mcp.call("sketch", shape="line", points=[[10, -10], [10, 10]], sketch_name=name)
     [v2] = found(part_after(r.text, "Ids"), "line")
     return name, h, v1, v2
 
@@ -455,20 +455,20 @@ assert s[h]["length_mm"] == 20 and len(s) == 3, s
 assert near(s[h]["start_mm"], [-10, 0]) and near(s[h]["end_mm"], [10, 0]), s
 
 # Nothing crosses it: gone, and said so.
-r = mcp.call("sketch_line", points=[[0, 0], [10, 0]])
+r = mcp.call("sketch", shape="line", points=[[0, 0], [10, 0]])
 name = sketch_name(r)
 [a] = found(part_after(r.text, "Ids"), "line")
-r = mcp.call("sketch_circle", center=[50, 50], radius_mm=5, sketch_name=name)
+r = mcp.call("sketch", shape="circle", center=[50, 50], radius_mm=5, sketch_name=name)
 r = mcp.call("trim_sketch_entity", entity=a, at=[5, 0])
 assert found(part_after(r.text, "Gone"), "line") == [a], r.text
 assert all(x["type"] != "line" for x in sketch(name)["segments"]), sketch(name)
 refused("trim_sketch_entity", "any more", entity=a, at=[5, 0], sketch_name=name)
 
 # A circle becomes an arc, with a new id.
-r = mcp.call("sketch_circle", center=[0, 0], radius_mm=10)
+r = mcp.call("sketch", shape="circle", center=[0, 0], radius_mm=10)
 name = sketch_name(r)
 [c] = found(part_after(r.text, "Ids"), "circle")
-mcp.call("sketch_line", points=[[-20, 0], [20, 0]], sketch_name=name)
+mcp.call("sketch", shape="line", points=[[-20, 0], [20, 0]], sketch_name=name)
 r = mcp.call("trim_sketch_entity", entity=c, at=[0, 10])
 [arc] = found(part_after(r.text, "Changed"), "arc")
 s = by_id(name)
@@ -477,10 +477,10 @@ assert all(p[1] <= 0 for p in [s[arc]["start_mm"], s[arc]["end_mm"]]) and c not 
 
 # Trim a sketch into a closed shape and use it.
 mcp.call("create_part")
-r = mcp.call("sketch_circle", center=[0, 0], radius_mm=10)
+r = mcp.call("sketch", shape="circle", center=[0, 0], radius_mm=10)
 name = sketch_name(r)
 [c] = found(part_after(r.text, "Ids"), "circle")
-r = mcp.call("sketch_line", points=[[-20, 0], [20, 0]], sketch_name=name)
+r = mcp.call("sketch", shape="line", points=[[-20, 0], [20, 0]], sketch_name=name)
 [h] = found(part_after(r.text, "Ids"), "line")
 mcp.call("trim_sketch_entity", entity=c, at=[0, 10])
 r = mcp.call("trim_sketch_entity", entity=h, at=[-15, 0])
@@ -491,10 +491,10 @@ check_volume(math.pi * 50 * 10, "a half disc made by trimming")
 
 # Corners: both grow; crossing and parallel refused.
 mcp.call("create_part")
-r = mcp.call("sketch_line", points=[[0, 0], [10, 0]])
+r = mcp.call("sketch", shape="line", points=[[0, 0], [10, 0]])
 name = sketch_name(r)
 [a] = found(part_after(r.text, "Ids"), "line")
-r = mcp.call("sketch_line", points=[[20, 5], [20, 20]], sketch_name=name)
+r = mcp.call("sketch", shape="line", points=[[20, 5], [20, 20]], sketch_name=name)
 [b] = found(part_after(r.text, "Ids"), "line")
 r = mcp.call("trim_sketch_entity", entity=a, corner_with=b)
 assert sorted(found(part_after(r.text, "Changed"), "line")) == sorted([a, b]), r.text
@@ -517,11 +517,11 @@ mcp.call("create_part")
 
 def between():
     """A short line between two verticals."""
-    r = mcp.call("sketch_line", points=[[0, 0], [10, 0]])
+    r = mcp.call("sketch", shape="line", points=[[0, 0], [10, 0]])
     name = sketch_name(r)
     [a] = found(part_after(r.text, "Ids"), "line")
-    r = mcp.call("sketch_line", points=[[20, -10], [20, 10]], sketch_name=name)
-    r = mcp.call("sketch_line", points=[[-20, -10], [-20, 10]], sketch_name=name)
+    r = mcp.call("sketch", shape="line", points=[[20, -10], [20, 10]], sketch_name=name)
+    r = mcp.call("sketch", shape="line", points=[[-20, -10], [-20, 10]], sketch_name=name)
     return name, a
 
 
@@ -538,29 +538,29 @@ mcp.call("extend_sketch_entity", entity=a, at=[1, 0])
 s = by_id(name)
 assert near(s[a]["start_mm"], [-20, 0]) and near(s[a]["end_mm"], [10, 0]), s[a]
 
-r = mcp.call("sketch_line", points=[[0, 0], [10, 0]])
+r = mcp.call("sketch", shape="line", points=[[0, 0], [10, 0]])
 name = sketch_name(r)
 [a] = found(part_after(r.text, "Ids"), "line")
-mcp.call("sketch_line", points=[[20, -10], [20, 10]], sketch_name=name)
-mcp.call("sketch_line", points=[[30, -10], [30, 10]], sketch_name=name)
+mcp.call("sketch", shape="line", points=[[20, -10], [20, 10]], sketch_name=name)
+mcp.call("sketch", shape="line", points=[[30, -10], [30, 10]], sketch_name=name)
 mcp.call("extend_sketch_entity", entity=a, at=[10, 0])
 mcp.call("extend_sketch_entity", entity=a, at=[20, 0])
 assert by_id(name)[a]["length_mm"] == 30, by_id(name)[a]
 
 # An arc, up to a line.
-r = mcp.call("sketch_arc", start=[10, 0], end=[math.sqrt(75), 5], center=[0, 0])
+r = mcp.call("sketch", shape="arc", start=[10, 0], end=[math.sqrt(75), 5], center=[0, 0])
 name = sketch_name(r)
 [arc] = found(part_after(r.text, "Ids"), "arc")
-mcp.call("sketch_line", points=[[-20, 8], [20, 8]], sketch_name=name)
+mcp.call("sketch", shape="line", points=[[-20, 8], [20, 8]], sketch_name=name)
 mcp.call("extend_sketch_entity", entity=arc, at=[math.sqrt(75), 5])
 assert near(by_id(name)[arc]["end_mm"], [6, 8]), by_id(name)[arc]
 
 # Nothing in the way of that end (SolidWorks would grow the other one), or of either.
-r = mcp.call("sketch_line", points=[[0, 0], [10, 0]])
+r = mcp.call("sketch", shape="line", points=[[0, 0], [10, 0]])
 name = sketch_name(r)
 [a] = found(part_after(r.text, "Ids"), "line")
 refused_unchanged(name, "extend_sketch_entity", "nothing is in the way", entity=a, at=[8, 0])
-mcp.call("sketch_line", points=[[-20, -10], [-20, 10]], sketch_name=name)
+mcp.call("sketch", shape="line", points=[[-20, -10], [-20, 10]], sketch_name=name)
 refused_unchanged(name, "extend_sketch_entity", "the other end", entity=a, at=[8, 0])
 refused_unchanged(name, "extend_sketch_entity", "at has 1", entity=a, at=[8])
 no_dialogs()
@@ -569,10 +569,10 @@ no_dialogs()
 # Sketch coordinates aren't model coordinates here, whichever way the template's planes face.
 
 mcp.call("create_part")
-r = mcp.call("sketch_line", points=[[-20, 0], [20, 0]], plane="right")
+r = mcp.call("sketch", shape="line", points=[[-20, 0], [20, 0]], plane="right")
 name = sketch_name(r)
 [h] = found(part_after(r.text, "Ids"), "line")
-r = mcp.call("sketch_line", points=[[10, -10], [10, 10]], sketch_name=name)
+r = mcp.call("sketch", shape="line", points=[[10, -10], [10, 10]], sketch_name=name)
 [v] = found(part_after(r.text, "Ids"), "line")
 axes = sketch(name)["sketch_axes"]
 
@@ -583,24 +583,24 @@ def model(x, y):
 
 mcp.call("trim_sketch_entity", entity=h, at=[15, 0])
 assert near(by_id(name)[h]["end_mm"], [10, 0]), by_id(name)[h]
-r = mcp.call("sketch_line", points=[[-20, 5], [0, 5]], sketch_name=name)
+r = mcp.call("sketch", shape="line", points=[[-20, 5], [0, 5]], sketch_name=name)
 [short] = found(part_after(r.text, "Ids"), "line")
 mcp.call("extend_sketch_entity", entity=short, at=[0, 5])
 assert near(by_id(name)[short]["end_mm"], [10, 5]), by_id(name)[short]
 
 # The same in model coordinates, projected; off the plane doesn't matter.
-r = mcp.call("sketch_line", points=[[-20, 7], [20, 7]], sketch_name=name)
+r = mcp.call("sketch", shape="line", points=[[-20, 7], [20, 7]], sketch_name=name)
 [other] = found(part_after(r.text, "Ids"), "line")
 at_model = model(15, 7)
 at_model = [at_model[i] + 3 * axes["normal"][i] for i in range(3)]
 mcp.call("trim_sketch_entity", entity=other, at=at_model)
 assert near(by_id(name)[other]["end_mm"], [10, 7]), by_id(name)[other]
 
-r = mcp.call("sketch_slot", start=model(40, 0), end=model(60, 0), width_mm=4, sketch_name=name)
+r = mcp.call("sketch", shape="slot", start=model(40, 0), end=model(60, 0), width_mm=4, sketch_name=name)
 assert any(x["type"] == "arc" and near(x["center_mm"], [60, 0]) for x in sketch(name)["segments"]), sketch(name)
-r = mcp.call("sketch_polygon", center=model(40, 30), sides=6, corner_radius_mm=4, sketch_name=name)
+r = mcp.call("sketch", shape="polygon", center=model(40, 30), sides=6, corner_radius_mm=4, sketch_name=name)
 assert any(x["type"] == "circle" and near(x["center_mm"], [40, 30]) for x in sketch(name)["segments"]), sketch(name)
-r = mcp.call("sketch_ellipse", center=model(70, 30), major_radius_mm=4, minor_radius_mm=2, sketch_name=name)
+r = mcp.call("sketch", shape="ellipse", center=model(70, 30), major_radius_mm=4, minor_radius_mm=2, sketch_name=name)
 assert any(x["type"] == "ellipse" and near(x["center_mm"], [70, 30]) for x in sketch(name)["segments"]), sketch(name)
 
 # Fillets on a sketch of a face.
@@ -608,23 +608,23 @@ mcp.call("create_part")
 base, _, _ = rectangle()
 mcp.call("extrude_sketch", sketch_name=base, depth_mm=10)
 top_face = next(f for f in mcp.call("inspect_model", what="faces", surface_type="plane", limit=100).json["faces"] if abs(f["area_mm2"] - 800) < 1e-3)["id"]
-r = mcp.call("sketch_line", on=top_face, points=[[-5, -5], [5, -5], [5, 5], [-5, 5]], closed=True)
+r = mcp.call("sketch", shape="line", on=top_face, points=[[-5, -5], [5, -5], [5, 5], [-5, 5]], closed=True)
 name = sketch_name(r)
 at = corners(name)
 mcp.call("sketch_fillet", entities=[next(iter(at.values()))], radius_mm=2)
-mcp.call("cut_extrude_sketch", sketch_name=name, depth_mm=2)
+mcp.call("extrude_sketch", cut=True, sketch_name=name, depth_mm=2)
 check_volume(8000 - (100 - (1 - math.pi / 4) * 4) * 2, "a filleted pocket")
 
 # ---- Converting --------------------------------------------------------------
 
 mcp.call("create_part")
-r = mcp.call("sketch_line", points=[[-20, -10], [20, -10], [20, 10], [-20, 10]], closed=True)
+r = mcp.call("sketch", shape="line", points=[[-20, -10], [20, -10], [20, 10], [-20, 10]], closed=True)
 plate = sketch_name(r)
 plate_lines = found(part_after(r.text, "Ids"), "line")
 dim_line = plate_lines[0]
 mcp.call("dimension_sketch", dimensions=[{"kind": "length", "entities": [dim_line], "value_mm": 40}])
 plate_dim = sketch(plate)["dimensions"][0]["name"]
-mcp.call("sketch_circle", sketch_name=plate, center=[5, 0], radius_mm=4)
+mcp.call("sketch", shape="circle", sketch_name=plate, center=[5, 0], radius_mm=4)
 mcp.call("extrude_sketch", sketch_name=plate, depth_mm=10)
 plate_volume = (800 - math.pi * 16) * 10
 check_volume(plate_volume, "plate")
@@ -655,7 +655,7 @@ r = mcp.call("convert_entities", entities=[face], loops="outer")
 name = sketch_name(r)
 assert f"{name} now has 1 closed and 0 open" in r.text, r.text
 assert len(found(part_after(r.text, "New"), "line")) == 4 and not found(part_after(r.text, "New"), "circle"), r.text
-mcp.call("cut_extrude_sketch", sketch_name=name, depth_mm=1)
+mcp.call("extrude_sketch", cut=True, sketch_name=name, depth_mm=1)
 check_volume(plate_volume - (800 - math.pi * 16) * 1, "a cut through what the outer loop converted")
 for feature in reversed([f for f in features() if f not in before]):  # the cut keeps its sketch
     mcp.call("delete_features", features=[feature])
@@ -721,7 +721,7 @@ mcp.call("delete_features", features=[name])
 
 # Refusals leave nothing behind.
 before = features()
-r = mcp.call("sketch_line", points=[[50, 50], [60, 50]])
+r = mcp.call("sketch", shape="line", points=[[50, 50], [60, 50]])
 own_name = sketch_name(r)
 [own] = found(part_after(r.text, "Ids"), "line")
 before = features()
@@ -748,7 +748,7 @@ no_dialogs()
 
 # A face with no holes is fine with loops "all", though its second pass finds nothing.
 mcp.call("create_part")
-r = mcp.call("sketch_slot", start=[-20, 0], end=[20, 0], width_mm=10)
+r = mcp.call("sketch", shape="slot", start=[-20, 0], end=[20, 0], width_mm=10)
 mcp.call("extrude_sketch", sketch_name=sketch_name(r), depth_mm=5)
 slot_area = 40 * 10 + math.pi * 25
 face = next(f for f in mcp.call("inspect_model", what="faces", surface_type="plane", limit=100).json["faces"] if abs(f["area_mm2"] - slot_area) < 1e-3)["id"]

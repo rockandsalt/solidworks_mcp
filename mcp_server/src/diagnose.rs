@@ -264,7 +264,7 @@ fn fix_hint(p: &proto::FeatureDiagnosis) -> Option<String> {
         31 => format!("its end condition's face/vertex is gone or out of reach{parents}"),
         33..=37 | 72 => format!(
             "its sketch profile isn't a valid closed contour any more: inspect_sketch to see the \
-             contours, then close gaps with sketch_line or remove stray segments with \
+             contours, then close gaps with the sketch tool or remove stray segments with \
              delete_sketch_entities{parents}"
         ),
         51 => "a sketch entity referenced model geometry (converted/offset edge, or a relation to \

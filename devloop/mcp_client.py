@@ -23,7 +23,7 @@ A scenario is a Python file run with `mcp` (a Client) and `ToolError` in
 scope:
 
     part = mcp.call("create_part")
-    mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+    mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
     faces = mcp.call("inspect_model", what="faces").json
     mcp.call("extrude_sketch", depth_mm=-1, expect_error=True)
 

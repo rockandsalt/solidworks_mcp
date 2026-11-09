@@ -71,7 +71,7 @@ namespace
 			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
 				"a helix is made from a sketch holding exactly one circle, but " + name + " has " +
 				std::to_string(circles) + " circle(s) and " + std::to_string(others) +
-				" other segment(s) -- draw the circle in a sketch of its own (sketch_circle)");
+				" other segment(s) -- draw the circle in a sketch of its own");
 		return grpc::Status::OK;
 	}
 

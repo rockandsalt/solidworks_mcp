@@ -53,7 +53,7 @@ def close(a, b, tol=1e-3):
 # 40 x 20 box, 10 deep. With this machine's template the Front Plane faces +X
 # (docs/notes/devloop.md), so the extrude's depth is the box's X extent.
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
 mcp.call("extrude_sketch", depth_mm=10)
 print("    body:", body())
 assert x_range() == (0, 10), x_range()
@@ -99,8 +99,8 @@ assert close(volume(), full), volume()
 faces = mcp.call("inspect_model", what="faces", surface_type="plane").json["faces"]
 cap = [f["id"] for f in faces if abs(f["normal"][0] - 1) < 1e-6]
 assert len(cap) == 1, faces
-mcp.call("sketch_circle", on=cap[0], center=[10, 0, 0], diameter_mm=6)
-mcp.call("cut_extrude_sketch", depth_mm=3)
+mcp.call("sketch", shape="circle", on=cap[0], center=[10, 0, 0], diameter_mm=6)
+mcp.call("extrude_sketch", cut=True, depth_mm=3)
 assert close(volume(), full - math.pi * 9 * 3), volume()
 r = mcp.call("edit_extrude", feature="Cut-Extrude1", end_condition="through_all")
 print("    cut:", r.text)
@@ -136,7 +136,7 @@ assert "no feature named" in r.text, r.text
 # Two 30 x 30 x 10 blocks and an assembly plane 50 mm off the assembly's Front
 # Plane, as in deleting.py.
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=30, height_mm=30)
+mcp.call("sketch", shape="rectangle", width_mm=30, height_mm=30)
 mcp.call("extrude_sketch", depth_mm=10)
 block = mcp.run_dir / "edit-block.SLDPRT"
 plane_name = com(f"""$d = Com $sw ActiveDoc -Get

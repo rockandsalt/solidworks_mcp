@@ -62,7 +62,7 @@ top = out / "fix-top.SLDASM"
 # ---- The part, and a subassembly of two (the first fixed, the second floating) ----
 # 40 x 20 on Front, 10 deep along +X (Front faces +X on this machine): y -20..20.
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
 mcp.call("extrude_sketch", depth_mm=10)
 mcp.call("save_document", path=str(block))
 close_all()

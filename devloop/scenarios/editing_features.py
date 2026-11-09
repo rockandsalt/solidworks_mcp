@@ -54,7 +54,7 @@ def dot(a, b):
 
 LENGTH = 10
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
 mcp.call("extrude_sketch", depth_mm=LENGTH)
 box = 40 * 20 * LENGTH
 short = [e for e in edges() if e["type"] == "line" and abs(e["length_mm"] - LENGTH) < 1e-6]
@@ -136,11 +136,11 @@ assert r.is_error and "not a fillet" in r.text, r.text
 mcp.call("create_part")
 planes = {f["name"]: f for f in mcp.call("inspect_model", what="features").json["features"]}
 right_n, top_n = planes["Right Plane"]["normal"], planes["Top Plane"]["normal"]
-mcp.call("create_rectangle_sketch", width_mm=100, height_mm=60)
+mcp.call("sketch", shape="rectangle", width_mm=100, height_mm=60)
 mcp.call("extrude_sketch", depth_mm=10)
 plate = 100 * 60 * 10
-r = mcp.call("sketch_circle", center=[-40, -20], radius_mm=2)
-r = mcp.call("cut_extrude_sketch", sketch_name=sketch_name(r), through_all=True)
+r = mcp.call("sketch", shape="circle", center=[-40, -20], radius_mm=2)
+r = mcp.call("extrude_sketch", cut=True, sketch_name=sketch_name(r), through_all=True)
 cut = re.search(r"Cut-Extrude\d+", r.text).group(0)
 hole = math.pi * 2 ** 2 * 10
 r = mcp.call("linear_pattern_features", features=[cut], direction="right", count=5, spacing_mm=20)
@@ -196,8 +196,8 @@ check_volume(v0, "after the refused reverse")
 
 # Copy another cut, made above the pattern by rolling back.
 mcp.call("rollback", before=pattern)
-r = mcp.call("sketch_circle", center=[-30, -20], radius_mm=1)  # copied along Top to y 0, 20
-r = mcp.call("cut_extrude_sketch", sketch_name=sketch_name(r), through_all=True)
+r = mcp.call("sketch", shape="circle", center=[-30, -20], radius_mm=1)  # copied along Top to y 0, 20
+r = mcp.call("extrude_sketch", cut=True, sketch_name=sketch_name(r), through_all=True)
 small = re.search(r"Cut-Extrude\d+", r.text).group(0)
 mcp.call("rollback")
 r = mcp.call("edit_pattern", feature=pattern, features=[small])
@@ -212,11 +212,11 @@ assert r.is_error, r.text
 # ---- Circular pattern ------------------------------------------------------
 
 mcp.call("create_part")
-r = mcp.call("sketch_circle", center=[0, 0], radius_mm=30)
+r = mcp.call("sketch", shape="circle", center=[0, 0], radius_mm=30)
 mcp.call("extrude_sketch", sketch_name=sketch_name(r), depth_mm=10)
 disc = math.pi * 30 ** 2 * 10
-r = mcp.call("sketch_circle", center=[20, 0], radius_mm=2)
-r = mcp.call("cut_extrude_sketch", sketch_name=sketch_name(r), through_all=True)
+r = mcp.call("sketch", shape="circle", center=[20, 0], radius_mm=2)
+r = mcp.call("extrude_sketch", cut=True, sketch_name=sketch_name(r), through_all=True)
 bolt = re.search(r"Cut-Extrude\d+", r.text).group(0)
 rim = next(f["id"] for f in mcp.call("inspect_model", what="faces", surface_type="cylinder").json["faces"]
            if abs(f["radius_mm"] - 30) < 1e-6)
@@ -262,7 +262,7 @@ def at(a=0.0, b=0.0, c=0.0):
 
 
 def straight_path(length):
-    return sketch_name(mcp.call("sketch_line", plane="top", points=[at(0, 0), at(length, 0)]))
+    return sketch_name(mcp.call("sketch", shape="line", plane="top", points=[at(0, 0), at(length, 0)]))
 
 
 def extents():
@@ -271,7 +271,7 @@ def extents():
 
 
 path = straight_path(100)
-profile = sketch_name(mcp.call("sketch_line", plane="front", closed=True, points=[
+profile = sketch_name(mcp.call("sketch", shape="line", plane="front", closed=True, points=[
     at(0, -5, -5), at(0, 5, -5), at(0, 5, 5), at(0, -5, 5)]))
 r = mcp.call("sweep_sketch", path=path, sketch_name=profile)
 sweep = re.search(r"Sweep\d+", r.text).group(0)

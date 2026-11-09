@@ -40,7 +40,7 @@ pub struct LinearPatternParams {
     pub count: u32,
     /// From one instance to the next along direction, in mm.
     pub spacing_mm: f64,
-    /// Pattern the other way along direction. Defaults to false.
+    /// Pattern the other way along direction.
     #[serde(default)]
     pub reverse_direction: bool,
     /// A second direction for a grid of instances, same kinds of reference as direction.
@@ -53,7 +53,7 @@ pub struct LinearPatternParams {
     /// From one instance to the next along direction2, in mm. Required with direction2.
     #[serde(default)]
     pub spacing2_mm: Option<f64>,
-    /// Pattern the other way along direction2. Defaults to false.
+    /// Pattern the other way along direction2.
     #[serde(default)]
     pub reverse_direction2: bool,
 }
@@ -81,7 +81,7 @@ pub struct CircularPatternParams {
     /// instances must fit in one turn.
     #[serde(default)]
     pub spacing_deg: Option<f64>,
-    /// Pattern the other way round the axis. Defaults to false.
+    /// Pattern the other way round the axis.
     #[serde(default)]
     pub reverse_direction: bool,
 }
@@ -89,7 +89,7 @@ pub struct CircularPatternParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct LinearSketchPatternParams {
     /// Sketch entity ids to copy ("line:3", "circle:1", "point:7") from inspect_sketch or the
-    /// sketch_* tools, all in one sketch.
+    /// sketch tool, all in one sketch.
     pub entities: Vec<String>,
     /// Instances along the first direction, the originals included (at least 1; the
     /// pattern needs 2 or more instances in all).
@@ -121,7 +121,7 @@ pub struct LinearSketchPatternParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct CircularSketchPatternParams {
     /// Sketch entity ids to copy ("line:3", "circle:1", "point:7") from inspect_sketch or the
-    /// sketch_* tools, all in one sketch.
+    /// sketch tool, all in one sketch.
     pub entities: Vec<String>,
     /// The point to pattern round, [x, y] in sketch coordinates (mm). Defaults to the sketch
     /// origin [0, 0].
@@ -138,7 +138,7 @@ pub struct CircularSketchPatternParams {
     #[serde(default)]
     pub spacing_deg: Option<f64>,
     /// Go clockwise instead of counterclockwise (seen with the sketch's x axis to the right
-    /// and y up). Defaults to false.
+    /// and y up).
     #[serde(default)]
     pub reverse_direction: bool,
     /// The sketch, e.g. "Sketch1". Defaults to the sketch the ids belong to.
@@ -224,7 +224,7 @@ pub(crate) fn axis_ref(ids: &IdRegistry, axis: &str) -> Result<proto::GeometryRe
         (_, Shape::Round) => Err(invalid(format!(
             "axis: {} is a sketch arc or circle -- give a reference axis, a straight or circular edge, \
              a sketch line or a cylindrical face (for the center of a sketch circle, \
-             create_reference_axis through it first)",
+             a reference axis through it first, create_reference_geometry)",
             axis.trim()
         ))),
         (_, Shape::Point) => Err(invalid(format!(

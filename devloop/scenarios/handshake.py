@@ -117,5 +117,5 @@ print(f"    instance file: {reloaded}")
 assert reloaded["token"] != info["token"]
 mcp.call("get_active_document_name")
 part = mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=20, height_mm=10)
+mcp.call("sketch", shape="rectangle", width_mm=20, height_mm=10)
 mcp.call("extrude_sketch", depth_mm=5)

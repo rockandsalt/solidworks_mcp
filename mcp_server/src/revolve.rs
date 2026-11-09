@@ -1,4 +1,4 @@
-//! The revolve tools (revolve_sketch, cut_revolve_sketch): their parameters,
+//! revolve_sketch (also the cut): its parameters,
 //! the axis reference, and the reply text.
 
 use rmcp::{ErrorData as McpError, schemars};
@@ -15,26 +15,23 @@ fn invalid(message: impl Into<String>) -> McpError {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RevolveParams {
-    /// What to revolve about: a sketch line id ("line:3", e.g. a centerline drawn with
-    /// sketch_line construction=true), a straight edge ("edge:7") or a reference axis
-    /// ("feature:4", or its name such as "Axis1"). Omit to use the sketch's own centerline
-    /// (it must have exactly one).
+    /// A sketch line id ("line:3"), a straight edge ("edge:7") or a reference axis
+    /// ("feature:4", "Axis1"). Defaults to the sketch's one centerline (a construction line).
     #[serde(default)]
     pub axis: Option<String>,
-    /// How far round the axis, in degrees: more than 0, at most 360. Defaults to 360 (a full
-    /// turn). With mid_plane this is the total, split evenly across both sides of the sketch
-    /// plane.
+    /// More than 0, at most 360; with mid_plane the total. Defaults to 360.
     #[serde(default)]
     pub angle_deg: Option<f64>,
-    /// Feature-tree name of the sketch to revolve, e.g. "Sketch1". Omit to use the most
-    /// recently created sketch that no feature uses yet.
+    /// Remove material instead (cut-revolve).
+    #[serde(default)]
+    pub cut: bool,
+    /// The sketch, e.g. "Sketch1". Defaults to the newest sketch no feature uses yet.
     #[serde(default)]
     pub sketch_name: Option<String>,
-    /// Revolve the other way round the axis. Ignored with mid_plane or a full turn. Defaults
-    /// to false.
+    /// The other way round the axis. Ignored with mid_plane or a full turn.
     #[serde(default)]
     pub reverse_direction: bool,
-    /// Revolve symmetrically to both sides of the sketch plane. Defaults to false.
+    /// Symmetric to both sides of the sketch plane.
     #[serde(default)]
     pub mid_plane: bool,
 }
@@ -52,11 +49,11 @@ fn axis_ref(ids: &IdRegistry, axis: &str) -> Result<proto::GeometryRef, McpError
         Shape::Edge | Shape::Segment | Shape::Feature => Ok(r),
         Shape::Round => Err(invalid(format!(
             "axis: {axis} is an arc or circle -- give a sketch line, a straight edge or a reference \
-             axis (for the axis of a hole or a round face, create_reference_axis on the face first)"
+             axis (for the axis of a hole or a round face, make a reference axis on the face first)"
         ))),
         Shape::Surface => Err(invalid(format!(
             "axis: {axis} is a face or plane -- give a sketch line, a straight edge or a reference \
-             axis (for the axis of a cylindrical face, create_reference_axis on it first)"
+             axis (for the axis of a cylindrical face, make a reference axis on it first)"
         ))),
         Shape::Point => Err(invalid(format!(
             "axis: {axis} is a point -- give a sketch line, a straight edge or a reference axis"
@@ -130,6 +127,7 @@ mod tests {
         RevolveParams {
             axis: axis.map(Into::into),
             angle_deg,
+            cut: false,
             sketch_name: None,
             reverse_direction: false,
             mid_plane: false,

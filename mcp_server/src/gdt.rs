@@ -273,35 +273,30 @@ pub struct FrameParams {
 /// What the symbol is attached to and where it goes, in a part / assembly or a drawing.
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub struct PlaceParams {
-    /// What it points at, with a leader: in a part or assembly a face or edge from inspect_model
-    /// ("face:7", "edge:3"); in a drawing a view entity from inspect_drawing ("view_edge:4",
-    /// "silhouette:1", "view_vertex:2"), and it belongs to that view.
+    /// What it points at with a leader: a face or edge id in a part or assembly, a view entity id
+    /// in a drawing (it then belongs to that view).
     #[serde(default)]
     pub on: Option<String>,
-    /// Drawings, frames only, instead of `on`: a dimension it sits on, by the name
-    /// inspect_drawing lists ("RD1@Drawing View1") -- the feature of size the dimension measures
-    /// (a hole's diameter). In a part, use the feature's face (a hole's cylindrical face).
+    /// Drawings, frames only, instead of `on`: the size dimension it sits on ("RD1@Drawing
+    /// View1"). In a part, use the feature's face.
     #[serde(default)]
     pub dimension: Option<String>,
-    /// Where the leader's arrow touches `on`: a part's [x, y, z] model mm (on the face/edge); a
-    /// drawing's [x, y] sheet mm. Default: a face's middle in a part, an edge's middle in a
-    /// drawing.
+    /// Where the arrow touches `on`: [x, y, z] model mm in a part, [x, y] sheet mm in a drawing.
+    /// Default: its middle.
     #[serde(default)]
     pub arrow_at_mm: Option<Vec<f64>>,
-    /// Where the symbol goes: a part's [x, y, z] model mm (SolidWorks keeps it in its annotation
-    /// view's plane), a drawing's [x, y] sheet mm (the upper-left corner). Default: a frame 10 mm
-    /// out from its arrow (in a drawing outside the view), a datum symbol where SolidWorks puts
-    /// it (just off its entity).
+    /// Where the symbol goes: [x, y, z] model mm in a part, [x, y] sheet mm (upper-left corner)
+    /// in a drawing. Default: 10 mm out from the arrow (outside the view); a datum symbol just
+    /// off its entity.
     #[serde(default)]
     pub at_mm: Option<Vec<f64>>,
-    /// Drawings, instead of at_mm: [x, y] in the view's own coordinates (mm at the model's size
-    /// from the model origin as the view shows it).
+    /// Drawings, instead of at_mm: [x, y] in the view's own coordinates (model mm from its origin).
     #[serde(default)]
     pub at_view_mm: Option<[f64; 2]>,
-    /// Drawings: the view a free frame (no `on` / `dimension`) goes in; without it, the sheet.
+    /// Drawings: the view a free symbol goes in (default: the sheet).
     #[serde(default)]
     pub view: Option<String>,
-    /// Drawings: the sheet a free frame goes on (default: the active one).
+    /// Drawings: the sheet a free symbol goes on (default: the active one).
     #[serde(default)]
     pub sheet: Option<String>,
 }

@@ -72,11 +72,11 @@ def axes(view):
 # ---- The parts: a 40 x 20 x 10 box with a boss (as in sheets.py), a second
 # configuration without the boss; and a plain 60 x 30 x 5 plate, closed.
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
 mcp.call("extrude_sketch", depth_mm=10)
 faces = mcp.call("inspect_model", what="faces", surface_type="plane").json["faces"]
 top = [f["id"] for f in faces if f["normal"][2] > 0.99][0]
-mcp.call("sketch_circle", on=top, center=[5, 0, 10], diameter_mm=6)
+mcp.call("sketch", shape="circle", on=top, center=[5, 0, 10], diameter_mm=6)
 mcp.call("extrude_sketch", depth_mm=8)
 part = mcp.run_dir.resolve() / "views-block.SLDPRT"
 mcp.call("save_document", path=str(part))
@@ -92,7 +92,7 @@ Com $p ShowConfiguration2 @('Default') | Out-Null
 mcp.call("save_document")
 
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=60, height_mm=30)
+mcp.call("sketch", shape="rectangle", width_mm=60, height_mm=30)
 mcp.call("extrude_sketch", depth_mm=5)
 plate = mcp.run_dir.resolve() / "views-plate.SLDPRT"
 mcp.call("save_document", path=str(plate))

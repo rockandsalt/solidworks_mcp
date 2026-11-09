@@ -31,7 +31,7 @@ def sw_dialogs() -> list[str]:
 
 
 def box(depth=10):
-    mcp.call("create_rectangle_sketch", width_mm=20, height_mm=20)
+    mcp.call("sketch", shape="rectangle", width_mm=20, height_mm=20)
     mcp.call("extrude_sketch", depth_mm=depth)
 
 
@@ -79,16 +79,16 @@ for bad in (0, -1, 101):
 # warns of (seen 2026-11-01). A line stays, whatever the steps; the reply says so
 # and the sketch isn't left open.
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=20, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=20, height_mm=20)
 count = len(mcp.call("inspect_sketch", sketch_name="Sketch1").json["segments"])
-mcp.call("sketch_line", sketch_name="Sketch1", points=[[30, 30], [40, 40]])
+mcp.call("sketch", shape="line", sketch_name="Sketch1", points=[[30, 30], [40, 40]])
 r = mcp.call("undo", steps=3)
 assert "are as they were" in r.text, r.text
 assert len(mcp.call("inspect_sketch", sketch_name="Sketch1").json["segments"]) == count + 1
 # A circle takes the whole sketch with it; the reply says that too.
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=20, height_mm=20)
-mcp.call("sketch_circle", sketch_name="Sketch1", center=[50, 50], radius_mm=2)
+mcp.call("sketch", shape="rectangle", width_mm=20, height_mm=20)
+mcp.call("sketch", shape="circle", sketch_name="Sketch1", center=[50, 50], radius_mm=2)
 r = mcp.call("undo")
 assert "removed Sketch1 (sketch)" in r.text, r.text
 assert "Sketch1" not in features()
@@ -109,7 +109,7 @@ assert abs(bodies()[0]["volume_mm3"] - 12000) < 1e-3
 r = mcp.call("undo")
 assert "from 12000.000 to 4000.000 mm^3" in r.text, r.text
 assert abs(bodies()[0]["volume_mm3"] - 4000) < 1e-3
-mcp.call("create_rectangle_sketch", width_mm=4, height_mm=4, plane="top")
+mcp.call("sketch", shape="rectangle", width_mm=4, height_mm=4, plane="top")
 assert "Sketch2" in features()
 
 # ---- set_visibility, part: a sketch, an absorbed sketch, planes, the body

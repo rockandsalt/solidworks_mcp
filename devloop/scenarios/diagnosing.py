@@ -96,12 +96,12 @@ try:
     # template, docs/notes/devloop.md), a 6 mm cylinder on its top face
     # (z 10..15), a 2 mm hole cut into the cylinder's top.
     mcp.call("create_part")
-    mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)  # Sketch1
+    mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)  # Sketch1
     mcp.call("extrude_sketch", depth_mm=10)  # Boss-Extrude1
-    mcp.call("sketch_circle", on=plane_face(10), center=[5, 0, 10], diameter_mm=6)  # Sketch2
+    mcp.call("sketch", shape="circle", on=plane_face(10), center=[5, 0, 10], diameter_mm=6)  # Sketch2
     mcp.call("extrude_sketch", depth_mm=5)  # Boss-Extrude2
-    mcp.call("sketch_circle", on=plane_face(15), center=[5, 0, 15], diameter_mm=2)  # Sketch3
-    mcp.call("cut_extrude_sketch", depth_mm=2)  # Cut-Extrude1
+    mcp.call("sketch", shape="circle", on=plane_face(15), center=[5, 0, 15], diameter_mm=2)  # Sketch3
+    mcp.call("extrude_sketch", cut=True, depth_mm=2)  # Cut-Extrude1
     block = mcp.run_dir / "diag-block.SLDPRT"
     com(f"""$d = Com $sw ActiveDoc -Get
 $e = Com $d SaveAs3 @('{block}', 0, 1); if ($e -ne 0) {{ throw "SaveAs3: $e" }}""")
@@ -194,12 +194,12 @@ Com $a GetTitle""").splitlines()[-1]
     # a block (Boss-Extrude2) standing on that face, and a line converted from
     # another of the block's bottom edges ("On Edge"). Then the block goes.
     mcp.call("create_part")
-    mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)  # Sketch1
+    mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)  # Sketch1
     mcp.call("extrude_sketch", depth_mm=10)  # Boss-Extrude1
     top = plane_face(10)
-    mcp.call("sketch_line", on=top, points=[[2, 5, 10], [8, 5, 10], [8, 15, 10], [2, 15, 10]], closed=True)  # Sketch2
+    mcp.call("sketch", shape="line", on=top, points=[[2, 5, 10], [8, 5, 10], [8, 15, 10], [2, 15, 10]], closed=True)  # Sketch2
     mcp.call("extrude_sketch", depth_mm=5)  # Boss-Extrude2: x 2..8, y 5..15, z 10..15
-    mcp.call("sketch_circle", on=plane_face(10), center=[5, -10, 10], diameter_mm=4)  # Sketch3
+    mcp.call("sketch", shape="circle", on=plane_face(10), center=[5, -10, 10], diameter_mm=4)  # Sketch3
     com("""$d = Com $sw ActiveDoc -Get; $x = Com $d Extension -Get; $sm = Com $d SketchManager -Get
 $none = [Runtime.InteropServices.DispatchWrapper]::new([object]$null)
 # Typed: a bare -0.01 argument would come in as a string.

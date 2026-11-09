@@ -37,7 +37,7 @@ asm_file = out / "measure-top.SLDASM"
 
 # ---- A block -----------------------------------------------------------------------
 mcp.call("create_part")
-mcp.call("create_rectangle_sketch", width_mm=40, height_mm=20)
+mcp.call("sketch", shape="rectangle", width_mm=40, height_mm=20)
 mcp.call("extrude_sketch", depth_mm=10)
 body = mcp.call("inspect_model", what="bodies").json["bodies"][0]
 lo, hi = body["bbox_mm"]["min"], body["bbox_mm"]["max"]
@@ -130,7 +130,7 @@ for i in range(3):
 # Relative to a coordinate system at the corner (axes as the model's): the
 # center of mass is half the size away, and the products of inertia are
 # +m*dx*dy (SolidWorks' Pxy = +integral of x*y dm, seen 2026-11-03).
-mcp.call("create_coordinate_system", origin=corner, name="Corner CS")
+mcp.call("create_reference_geometry", geometry="coordinate_system", origin=corner, name="Corner CS")
 j = mass(coordinate_system="Corner CS")
 d = [s / 2 for s in size]
 assert close(j["center_of_mass_mm"], d), j
@@ -147,8 +147,8 @@ assert "note" not in j and j["density_kg_m3"] > 7000, j
 assert close(j["mass_kg"], j["density_kg_m3"] * volume * 1e-9), j
 
 # ---- A hole: circular edges, and where distances to them are taken ----------------------------
-mcp.call("sketch_circle", on=cap_hi, center=[0, 0], diameter_mm=6)
-mcp.call("cut_extrude_sketch", through_all=True)
+mcp.call("sketch", shape="circle", on=cap_hi, center=[0, 0], diameter_mm=6)
+mcp.call("extrude_sketch", cut=True, through_all=True)
 circles = mcp.call("inspect_model", what="edges", curve_type="circle").json["edges"]
 assert len(circles) == 2, circles
 j = measure(circles[0]["id"])

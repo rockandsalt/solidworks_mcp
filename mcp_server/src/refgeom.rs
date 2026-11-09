@@ -1,6 +1,6 @@
-//! The reference geometry tools (create_reference_plane / _axis / _point,
-//! create_coordinate_system): their parameters, turning reference strings
-//! into wire refs, filling in what can be inferred, and the reply text.
+//! create_reference_geometry (planes, axes, points, coordinate systems): its
+//! parameters, turning reference strings into wire refs, filling in what can
+//! be inferred, and the reply text.
 //!
 //! A reference is anything the Reference Geometry commands accept: model
 //! faces / edges / vertices and reference features by inspect_model id,
@@ -92,59 +92,116 @@ impl From<PlaneRelation> for proto::PlaneConstraint {
 /// What reference strings can be, as the parameter docs put it.
 const REFERENCE_DOC: &str = "inspect_model ids of faces, edges, vertices (\"vertex:N\", from an \
     edge's start_vertex/end_vertex) or reference planes/axes/points (\"feature:N\"); sketch \
-    entity ids (\"line:3\", \"arc:1\", \"point:7\" from the sketch_* tools or inspect_sketch); \
+    entity ids (\"line:3\", \"arc:1\", \"point:7\" from the sketch tool or inspect_sketch); \
     \"origin\"; \"front\", \"top\" or \"right\" for the default planes; or a reference \
     feature's name such as \"Plane1\"";
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 pub struct PlaneReference {
-    /// What the plane is defined from: an inspect_model id of a face, edge, vertex or
-    /// reference plane/axis/point ("face:3", "edge:7", "vertex:2", "feature:1"); a sketch
-    /// entity id ("line:3", "point:7"); "origin"; "front" / "top" / "right" (the default
-    /// planes); or a reference feature's name ("Plane1").
+    /// The reference (see `references`).
     pub entity: String,
-    /// How the plane relates to it: "coincident" (through it), "parallel", "perpendicular",
-    /// "distance" (offset by offset_mm), "angle" (by angle_deg, about another reference that is a
-    /// line/edge), "tangent" or "mid_plane". Defaults to "distance" with offset_mm, "angle"
-    /// with angle_deg, else "coincident".
+    /// How the plane relates to it. Defaults to "distance" with offset_mm, "angle" with
+    /// angle_deg, else "coincident".
     #[serde(default)]
     pub relation: Option<PlaneRelation>,
-    /// relation "distance": how far from the plane/face, in millimeters (more than 0).
+    /// relation "distance": more than 0.
     #[serde(default)]
     pub offset_mm: Option<f64>,
-    /// relation "angle": the angle in degrees (more than 0).
+    /// relation "angle": more than 0.
     #[serde(default)]
     pub angle_deg: Option<f64>,
-    /// Put the plane on the other side of this reference (the offset / angle the other way, or
-    /// the normal flipped). Defaults to false.
+    /// The other side of this reference: offset / angle the other way, or the normal flipped.
     #[serde(default)]
     pub flip: bool,
 }
 
+/// One reference: its id or name, or for a plane how the plane relates to it.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct ReferencePlaneParams {
-    /// One to three references, combined as in SolidWorks' Plane command. E.g. offset:
-    /// [{"entity": "top", "offset_mm": 20}]; at an angle about an edge: [{"entity": "face:3",
-    /// "angle_deg": 30}, {"entity": "edge:5"}]; through three points: [{"entity": "vertex:1"},
-    /// {"entity": "vertex:2"}, {"entity": "point:4"}]; normal to a sketch path at its end:
-    /// [{"entity": "line:2", "relation": "perpendicular"}, {"entity": "point:3"}]; between two
-    /// faces: both with "relation": "mid_plane".
-    pub references: Vec<PlaneReference>,
-    /// Name for the new plane, e.g. "Mounting Plane". Defaults to SolidWorks' "PlaneN".
+#[serde(untagged)]
+pub enum Reference {
+    Entity(String),
+    Plane(PlaneReference),
+}
+
+/// What create_reference_geometry adds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GeometryKind {
+    /// From 1 to 3 references.
+    Plane,
+    /// From 1 or 2: a straight edge or sketch line; a cylindrical or conical face; two planes
+    /// (where they meet); two points; a point and a face or plane (through it, normal to it).
+    Axis,
+    /// From 1 or 2, see point_kind.
+    Point,
+    /// From origin and up to two of x_axis / y_axis / z_axis; no references.
+    CoordinateSystem,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ReferenceGeometryParams {
+    pub geometry: GeometryKind,
+    /// Each an inspect_model id of a face, edge, vertex or reference plane / axis / point
+    /// ("face:3", "vertex:2" from an edge's end, "feature:1"), a sketch entity id ("line:3"),
+    /// "origin", "front" / "top" / "right", or a reference feature's name. A plane's may be
+    /// objects, e.g. offset
+    /// [{"entity": "top", "offset_mm": 20}]; at an angle about an edge [{"entity": "face:3",
+    /// "angle_deg": 30}, "edge:5"]; normal to a path at a point [{"entity": "line:2",
+    /// "relation": "perpendicular"}, "point:3"]; three points; between two faces, both
+    /// "relation": "mid_plane".
+    #[serde(default)]
+    pub references: Vec<Reference>,
+    /// point: defaults from the references -- distance_mm / percent / count: along; a face:
+    /// face_center; an edge, arc or circle: center; a vertex or sketch point: at; a point and a
+    /// face or plane: projection; any other two: intersection.
+    #[serde(default)]
+    pub point_kind: Option<PointKind>,
+    /// point along: from one end of the curve (SolidWorks picks which; check the position).
+    #[serde(default)]
+    pub distance_mm: Option<f64>,
+    /// point along: 0-100 percent of the curve's length, from one end.
+    #[serde(default)]
+    pub percent: Option<f64>,
+    /// point along: how many, 1 to 100; alone spread evenly, else one every distance_mm /
+    /// percent.
+    #[serde(default)]
+    pub count: Option<u32>,
+    /// coordinate_system: a vertex, sketch point or reference point. Defaults to the origin.
+    #[serde(default)]
+    pub origin: Option<String>,
+    /// coordinate_system: what X follows -- an edge, sketch line or axis (along it), a plane
+    /// or planar face (its normal), a point (toward it). At most two of the three axes.
+    #[serde(default)]
+    pub x_axis: Option<String>,
+    /// coordinate_system: see x_axis.
+    #[serde(default)]
+    pub y_axis: Option<String>,
+    /// coordinate_system: see x_axis.
+    #[serde(default)]
+    pub z_axis: Option<String>,
+    /// coordinate_system: reverse X.
+    #[serde(default)]
+    pub flip_x: bool,
+    /// coordinate_system: reverse Y.
+    #[serde(default)]
+    pub flip_y: bool,
+    /// coordinate_system: reverse Z.
+    #[serde(default)]
+    pub flip_z: bool,
+    /// Defaults to SolidWorks' (Plane1, Axis1, Point1, ...; several points: Name, Name2, ...).
     #[serde(default)]
     pub name: Option<String>,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Debug)]
+pub struct ReferencePlaneParams {
+    pub references: Vec<PlaneReference>,
+    pub name: Option<String>,
+}
+
+#[derive(Debug)]
 pub struct ReferenceAxisParams {
-    /// One or two references, as SolidWorks' Axis command takes them: a straight edge or
-    /// sketch line; a cylindrical or conical face ("face:N", its axis); two planes / planar
-    /// faces (where they meet); two points / vertices / "origin"; or a point and a face or
-    /// plane (through the point, normal to it). Each is an inspect_model id, a sketch entity
-    /// id ("line:3", "point:7"), "origin", "front"/"top"/"right", or a feature name.
     pub references: Vec<String>,
-    /// Name for the new axis. Defaults to SolidWorks' "AxisN".
-    #[serde(default)]
     pub name: Option<String>,
 }
 
@@ -181,64 +238,138 @@ impl From<PointKind> for proto::ReferencePointKind {
     }
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Debug)]
 pub struct ReferencePointParams {
-    /// One or two references: an edge or sketch segment, a face, a vertex or sketch point,
-    /// "origin", a plane ("front"/"top"/"right", "feature:N", a name) -- see `kind`.
     pub references: Vec<String>,
-    /// "center", "face_center", "projection", "intersection", "along" or "at". Defaults from
-    /// the references: distance_mm/percent/count -> "along"; one face -> "face_center"; one
-    /// edge, arc or circle -> "center"; one vertex / sketch point -> "at"; a point and a face
-    /// or plane -> "projection"; any other two -> "intersection".
-    #[serde(default)]
     pub kind: Option<PointKind>,
-    /// kind "along": distance from one end of the curve, in millimeters. Which end is
-    /// SolidWorks' choice: check the reported position (for the other end, use the length minus
-    /// this).
-    #[serde(default)]
     pub distance_mm: Option<f64>,
-    /// kind "along": position as a percentage of the curve's length (0-100), from one end as
-    /// for distance_mm.
-    #[serde(default)]
     pub percent: Option<f64>,
-    /// kind "along": how many points. Alone: spread evenly over the curve; with distance_mm /
-    /// percent: one every distance_mm / percent. Defaults to 1. At most 100.
-    #[serde(default)]
     pub count: Option<u32>,
-    /// Name for the new point (several: Name, Name2, ...). Defaults to SolidWorks' "PointN".
-    #[serde(default)]
     pub name: Option<String>,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Debug)]
 pub struct CoordinateSystemParams {
-    /// Where its origin goes: a vertex, sketch point or reference point. Defaults to the part
-    /// origin.
-    #[serde(default)]
     pub origin: Option<String>,
-    /// What its X axis follows: an edge, sketch line or axis (along it), a plane or planar
-    /// face (along its normal), or a vertex / point (pointing at it). Give at most two of
-    /// x_axis/y_axis/z_axis; the third follows. Unset axes keep the model's directions.
-    #[serde(default)]
     pub x_axis: Option<String>,
-    /// What its Y axis follows; see x_axis.
-    #[serde(default)]
     pub y_axis: Option<String>,
-    /// What its Z axis follows; see x_axis.
-    #[serde(default)]
     pub z_axis: Option<String>,
-    /// Reverse the X axis. Defaults to false.
-    #[serde(default)]
     pub flip_x: bool,
-    /// Reverse the Y axis. Defaults to false.
-    #[serde(default)]
     pub flip_y: bool,
-    /// Reverse the Z axis. Defaults to false.
-    #[serde(default)]
     pub flip_z: bool,
-    /// Name for the new coordinate system. Defaults to SolidWorks' "Coordinate SystemN".
-    #[serde(default)]
     pub name: Option<String>,
+}
+
+/// The request for whatever `params` asks for, the references in words for the reply, and
+/// the references as given, numbered in error messages.
+pub fn geometry_request(
+    ids: &IdRegistry,
+    params: ReferenceGeometryParams,
+) -> Result<(proto::CreateReferenceGeometryRequest, String, Vec<String>), McpError> {
+    let geometry = params.geometry;
+    let key = match geometry {
+        GeometryKind::Plane => "plane",
+        GeometryKind::Axis => "axis",
+        GeometryKind::Point => "point",
+        GeometryKind::CoordinateSystem => "coordinate_system",
+    };
+    let given = [
+        ("point_kind", params.point_kind.is_some(), geometry == GeometryKind::Point),
+        ("distance_mm", params.distance_mm.is_some(), geometry == GeometryKind::Point),
+        ("percent", params.percent.is_some(), geometry == GeometryKind::Point),
+        ("count", params.count.is_some(), geometry == GeometryKind::Point),
+        ("references", !params.references.is_empty(), geometry != GeometryKind::CoordinateSystem),
+    ];
+    let cs = geometry == GeometryKind::CoordinateSystem;
+    let cs_given = [
+        ("origin", params.origin.is_some()),
+        ("x_axis", params.x_axis.is_some()),
+        ("y_axis", params.y_axis.is_some()),
+        ("z_axis", params.z_axis.is_some()),
+        ("flip_x", params.flip_x),
+        ("flip_y", params.flip_y),
+        ("flip_z", params.flip_z),
+    ];
+    let stray = given
+        .iter()
+        .find(|(_, given, applies)| *given && !applies)
+        .map(|(name, _, _)| *name)
+        .or(cs_given.iter().find(|(_, given)| *given && !cs).map(|(name, _)| *name));
+    if let Some(name) = stray {
+        return Err(invalid(format!("geometry \"{key}\" doesn't take {name}")));
+    }
+
+    // Plain references for an axis or point: an object may only name its entity.
+    let entities = |references: Vec<Reference>| -> Result<Vec<String>, McpError> {
+        references
+            .into_iter()
+            .enumerate()
+            .map(|(i, r)| match r {
+                Reference::Entity(e) => Ok(e),
+                Reference::Plane(p) if p.relation.is_none() && p.offset_mm.is_none() && p.angle_deg.is_none() && !p.flip => {
+                    Ok(p.entity)
+                }
+                Reference::Plane(_) => Err(invalid(format!(
+                    "reference {}: relation, offset_mm, angle_deg and flip are for planes -- give just the id",
+                    i + 1
+                ))),
+            })
+            .collect()
+    };
+    Ok(match geometry {
+        GeometryKind::Plane => {
+            let params = ReferencePlaneParams {
+                references: params
+                    .references
+                    .into_iter()
+                    .map(|r| match r {
+                        Reference::Entity(entity) => {
+                            PlaneReference { entity, relation: None, offset_mm: None, angle_deg: None, flip: false }
+                        }
+                        Reference::Plane(p) => p,
+                    })
+                    .collect(),
+                name: params.name,
+            };
+            let given = params.references.iter().map(|r| r.entity.clone()).collect();
+            (plane_request(ids, &params)?, plane_from_text(&params), given)
+        }
+        GeometryKind::Axis => {
+            let params = ReferenceAxisParams { references: entities(params.references)?, name: params.name };
+            let refs: Vec<&str> = params.references.iter().map(String::as_str).collect();
+            (axis_request(ids, &params)?, from_text(&refs), params.references.clone())
+        }
+        GeometryKind::Point => {
+            let params = ReferencePointParams {
+                references: entities(params.references)?,
+                kind: params.point_kind,
+                distance_mm: params.distance_mm,
+                percent: params.percent,
+                count: params.count,
+                name: params.name,
+            };
+            let refs: Vec<&str> = params.references.iter().map(String::as_str).collect();
+            (point_request(ids, &params)?, from_text(&refs), params.references.clone())
+        }
+        GeometryKind::CoordinateSystem => {
+            let params = CoordinateSystemParams {
+                origin: params.origin,
+                x_axis: params.x_axis,
+                y_axis: params.y_axis,
+                z_axis: params.z_axis,
+                flip_x: params.flip_x,
+                flip_y: params.flip_y,
+                flip_z: params.flip_z,
+                name: params.name,
+            };
+            let given: Vec<String> = [&params.origin, &params.x_axis, &params.y_axis, &params.z_axis]
+                .iter()
+                .filter_map(|r| (*r).clone())
+                .collect();
+            let refs: Vec<&str> = given.iter().map(String::as_str).collect();
+            (coordinate_system_request(ids, &params)?, from_text(&refs), Vec::new())
+        }
+    })
 }
 
 /// What a reference string names, as far as its form tells.
@@ -304,7 +435,7 @@ pub(crate) fn geometry_ref(ids: &IdRegistry, entity: &str, what: &str) -> Result
                         "{what}: {}",
                         ids.unknown_id(
                             entity,
-                            "inspect_sketch and the sketch_* tools",
+                            "inspect_sketch and the sketch tool",
                             "call inspect_sketch for current ones"
                         )
                     ))
@@ -433,12 +564,12 @@ fn infer_point_kind(params: &ReferencePointParams, shapes: &[Shape]) -> Result<P
         [S::Edge | S::Round] => Ok(PointKind::Center),
         [S::Point] => Ok(PointKind::At),
         [S::Segment] => Err(invalid(
-            "for a point on a sketch line or spline, give distance_mm, percent or count (kind \
-             \"along\"); for its end, use the end point's id (kind \"at\")",
+            "for a point on a sketch line or spline, give distance_mm, percent or count (point_kind \
+             \"along\"); for its end, use the end point's id (point_kind \"at\")",
         )),
         [_] => Err(invalid(
-            "can't tell what point to make from one feature -- give `kind` (\"at\" a reference \
-             point, ...) or other references",
+            "can't tell what point to make from one feature -- give `point_kind` (\"at\" a \
+             reference point, ...) or other references",
         )),
         [S::Point, S::Surface | S::Feature] | [S::Surface | S::Feature, S::Point] => Ok(PointKind::Projection),
         _ => Ok(PointKind::Intersection),
@@ -503,7 +634,7 @@ pub fn point_request(
         }
         .into();
     } else if params.distance_mm.is_some() || params.percent.is_some() || params.count.is_some() {
-        return Err(invalid("distance_mm, percent and count only go with kind \"along\""));
+        return Err(invalid("distance_mm, percent and count only go with point_kind \"along\""));
     }
     Ok(request(proto::create_reference_geometry_request::Geometry::Point(spec), name(&params.name)))
 }
@@ -660,6 +791,31 @@ pub fn from_text(references: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn geometry(args: Value) -> Result<proto::CreateReferenceGeometryRequest, McpError> {
+        let ids = registry();
+        geometry_request(&ids, serde_json::from_value(args).unwrap()).map(|(request, _, _)| request)
+    }
+
+    #[test]
+    fn geometry_kinds_take_only_their_parameters() {
+        use proto::create_reference_geometry_request::Geometry;
+        // Plane references: ids or objects, mixed.
+        let plane = geometry(serde_json::json!({"geometry": "plane", "references": [{"entity": "top", "offset_mm": 20}, "origin"]}));
+        assert!(matches!(plane.unwrap().geometry, Some(Geometry::Plane(spec)) if spec.references.len() == 2));
+        let axis = geometry(serde_json::json!({"geometry": "axis", "references": ["front", {"entity": "top"}]}));
+        assert!(matches!(axis.unwrap().geometry, Some(Geometry::Axis(spec)) if spec.references.len() == 2));
+        assert!(matches!(geometry(serde_json::json!({"geometry": "coordinate_system", "origin": "origin"})).unwrap().geometry, Some(Geometry::CoordinateSystem(_))));
+        for (args, needle) in [
+            (serde_json::json!({"geometry": "axis", "references": [{"entity": "top", "offset_mm": 5}]}), "for planes"),
+            (serde_json::json!({"geometry": "plane", "references": ["top"], "count": 2}), "doesn't take count"),
+            (serde_json::json!({"geometry": "axis", "references": ["top", "front"], "x_axis": "top"}), "doesn't take x_axis"),
+            (serde_json::json!({"geometry": "coordinate_system", "references": ["top"]}), "doesn't take references"),
+        ] {
+            let error = geometry(args.clone()).unwrap_err();
+            assert!(error.message.contains(needle), "{args}: {}", error.message);
+        }
+    }
 
     fn registry() -> IdRegistry {
         let mut ids = IdRegistry::default();

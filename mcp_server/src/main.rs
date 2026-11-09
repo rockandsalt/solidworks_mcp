@@ -46,6 +46,7 @@ mod sketch;
 mod sweep;
 mod table;
 mod tolerance;
+mod tool_schema;
 mod derived_view;
 mod undo;
 mod units;
@@ -107,248 +108,391 @@ impl From<SketchPlane> for proto::Plane {
     }
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SquareSketchParams {
-    /// Side length of the square, in millimeters.
-    side_length_mm: f64,
-    /// Plane to sketch on. Defaults to the Front plane.
-    #[serde(default)]
-    plane: SketchPlane,
-    /// X coordinate of the square's center in the sketch, in millimeters. Defaults to 0 (origin).
-    #[serde(default)]
-    center_x_mm: f64,
-    /// Y coordinate of the square's center in the sketch, in millimeters. Defaults to 0 (origin).
-    #[serde(default)]
-    center_y_mm: f64,
-    #[serde(flatten)]
-    placement: SketchPlacement,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct RectangleSketchParams {
-    /// Width (sketch X direction), in millimeters.
-    width_mm: f64,
-    /// Height (sketch Y direction), in millimeters.
-    height_mm: f64,
-    /// Plane to sketch on. Defaults to the Front plane.
-    #[serde(default)]
-    plane: SketchPlane,
-    /// X coordinate of the rectangle's center in the sketch, in millimeters. Defaults to 0 (origin).
-    #[serde(default)]
-    center_x_mm: f64,
-    /// Y coordinate of the rectangle's center in the sketch, in millimeters. Defaults to 0 (origin).
-    #[serde(default)]
-    center_y_mm: f64,
-    #[serde(flatten)]
-    placement: SketchPlacement,
-}
-
-/// Where to put a sketch other than on a default plane, shared by the sketch tools.
-#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
-struct SketchPlacement {
-    /// Sketch on this instead of `plane`: the id (from inspect_model) of a planar face, e.g.
-    /// "face:4", or of a reference plane feature.
-    #[serde(default)]
-    on: Option<String>,
-    /// Center as a point in model coordinates [x, y, z], in millimeters; it's projected onto
-    /// the sketch plane. Overrides center_x_mm/center_y_mm. When sketching `on` a face without
-    /// a center, the shape is centered on the face's bounding box.
-    #[serde(default)]
-    center_mm: Option<[f64; 3]>,
-}
-
-/// A point for the sketch_* tools, in millimeters: [x, y] in the sketch's own 2D coordinates,
+/// A point for the sketch tools, in millimeters: [x, y] in the sketch's own 2D coordinates,
 /// or [x, y, z] in model coordinates, projected onto the sketch plane (a 3D sketch takes only
 /// these, as they are). All points in one call must use the same form.
 type Point = Vec<f64>;
 
-/// Which sketch the sketch_* tools draw in.
+/// Which sketch the sketch tools draw in.
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 struct SketchTarget {
-    /// Add to this existing sketch, e.g. "Sketch1" or "3DSketch1" (the name an earlier sketch_*
-    /// or create_*_sketch call reported, or a ProfileFeature / 3DProfileFeature from
-    /// inspect_model). Omit to create a new sketch.
+    /// Add to this existing sketch, e.g. "Sketch1" or "3DSketch1". Omit for a new sketch.
     #[serde(default)]
     sketch_name: Option<String>,
-    /// New sketch only: the plane to sketch on. Defaults to the Front plane.
+    /// New sketch: the default plane to sketch on. Defaults to front.
     #[serde(default)]
     plane: Option<SketchPlane>,
-    /// New sketch only: sketch on this instead of `plane`: the id (from inspect_model) of a
-    /// planar face, e.g. "face:4", or of a reference plane feature. Give points as [x, y, z]
-    /// model coordinates to place geometry on a face without knowing its sketch axes.
+    /// New sketch: on this planar face or reference plane instead ("face:4", "feature:2");
+    /// [x, y, z] points then place geometry without knowing the sketch axes.
     #[serde(default)]
     on: Option<String>,
 }
 
-/// Which sketch the drawing tools draw in, which unlike the other sketch tools can be a new 3D one.
+/// Which sketch the sketch tool draws in, which unlike the other sketch tools can be a new 3D one.
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 struct DrawTarget {
-    /// New sketch only: make it a 3D sketch, which has no plane: geometry goes exactly where
-    /// its [x, y, z] model coordinates say, for a path or guide curve that doesn't lie in a
-    /// plane. It can be swept along or used as a loft guide, not extruded. Takes lines, splines,
-    /// points and arcs given by `through`, no circles. Defaults to false.
+    /// New sketch: a 3D sketch, with no plane: [x, y, z] points go where they say. For a
+    /// sweep path or loft guide that doesn't lie in a plane; can't be extruded.
     #[serde(default)]
     sketch_3d: bool,
     #[serde(flatten)]
     sketch: SketchTarget,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SketchLineParams {
-    /// Points to connect with straight lines, in order: 2 points draw one line, more draw a
-    /// connected chain. Each is [x, y] (sketch) or [x, y, z] (model), in millimeters.
-    points: Vec<Point>,
-    /// Also draw a line from the last point back to the first, closing the shape (e.g. a
-    /// polygon to extrude). Defaults to false.
-    #[serde(default)]
-    closed: bool,
-    /// Draw construction lines (reference only, ignored by features). Defaults to false.
-    #[serde(default)]
-    construction: bool,
-    #[serde(flatten)]
-    target: DrawTarget,
+/// What the sketch tool draws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum SketchShape {
+    /// Straight lines through `points`: 2 make one line, more a chain.
+    Line,
+    /// By `center` and radius_mm or diameter_mm.
+    Circle,
+    /// From `start` to `end`, round `center` or through a `through` point (3D sketch: through only).
+    Arc,
+    /// A smooth curve through `points`.
+    Spline,
+    /// Sketch points at `points`.
+    Point,
+    /// Round-ended slot width_mm wide between the end centers `start` and `end`; curved along an
+    /// arc given by `center` or `through`. Reports the construction line / arc down its middle.
+    Slot,
+    /// Regular polygon of `sides` round `center`, sized by corner_radius_mm or flat_radius_mm.
+    /// Reports a construction circle through its corners (or touching its sides): a diameter
+    /// dimension on it sizes the polygon.
+    Polygon,
+    /// By `center`, major_radius_mm and minor_radius_mm.
+    Ellipse,
+    /// width_mm x height_mm round `center`, width along sketch X; always a new 2D sketch.
+    Rectangle,
+}
+
+impl SketchShape {
+    fn name(self) -> &'static str {
+        match self {
+            SketchShape::Line => "line",
+            SketchShape::Circle => "circle",
+            SketchShape::Arc => "arc",
+            SketchShape::Spline => "spline",
+            SketchShape::Point => "point",
+            SketchShape::Slot => "slot",
+            SketchShape::Polygon => "polygon",
+            SketchShape::Ellipse => "ellipse",
+            SketchShape::Rectangle => "rectangle",
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SketchCircleParams {
-    /// Center, [x, y] (sketch) or [x, y, z] (model), in millimeters.
-    center: Point,
-    /// Radius in millimeters. Give this or diameter_mm.
+struct SketchParams {
+    shape: SketchShape,
+    /// line, spline, point.
+    #[serde(default)]
+    points: Option<Vec<Point>>,
+    /// line, spline: join the last point back to the first.
+    #[serde(default)]
+    closed: bool,
+    /// circle, polygon, ellipse, rectangle (default: the origin, or the middle of the `on`
+    /// face); arc, slot: the center of the arc.
+    #[serde(default)]
+    center: Option<Point>,
+    /// arc: where it starts; slot: one end's center.
+    #[serde(default)]
+    start: Option<Point>,
+    /// arc, slot: the other end. With `center` only its direction from the center counts.
+    #[serde(default)]
+    end: Option<Point>,
+    /// arc, slot: a point on the arc between start and end, instead of `center`.
+    #[serde(default)]
+    through: Option<Point>,
+    /// arc, slot with `center`: clockwise, seen from the side the sketch normal points to.
+    #[serde(default)]
+    clockwise: bool,
+    /// circle.
     #[serde(default)]
     radius_mm: Option<f64>,
-    /// Diameter in millimeters. Give this or radius_mm.
+    /// circle.
     #[serde(default)]
     diameter_mm: Option<f64>,
-    /// Draw a construction circle (reference only, ignored by features). Defaults to false.
+    /// slot (twice the end radius), rectangle.
     #[serde(default)]
-    construction: bool,
-    #[serde(flatten)]
-    target: DrawTarget,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SketchArcParams {
-    /// Where the arc starts, [x, y] (sketch) or [x, y, z] (model), in millimeters.
-    start: Point,
-    /// Where the arc ends. With `center`, only its direction from the center matters: it's
-    /// moved onto the radius set by `start`.
-    end: Point,
-    /// Center of the arc. Give this or `through`.
+    width_mm: Option<f64>,
+    /// rectangle. Defaults to width_mm: a square.
     #[serde(default)]
-    center: Option<Point>,
-    /// A point the arc passes through between start and end (3-point arc). Give this or
-    /// `center`. Simplest with model coordinates, since there's no direction to pick.
+    height_mm: Option<f64>,
+    /// polygon: 3 to 40.
     #[serde(default)]
-    through: Option<Point>,
-    /// With `center`: go from start to end clockwise instead of counterclockwise, as seen
-    /// looking at the sketch from the side its normal points to. Defaults to false.
-    #[serde(default)]
-    clockwise: bool,
-    /// Draw a construction arc (reference only, ignored by features). Defaults to false.
-    #[serde(default)]
-    construction: bool,
-    #[serde(flatten)]
-    target: DrawTarget,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SketchSplineParams {
-    /// Points the spline passes through, in order (at least 2, or 3 when closed). Each is
-    /// [x, y] (sketch) or [x, y, z] (model), in millimeters.
-    points: Vec<Point>,
-    /// Make a closed loop back through the first point. Defaults to false.
-    #[serde(default)]
-    closed: bool,
-    /// Draw a construction spline (reference only, ignored by features). Defaults to false.
-    #[serde(default)]
-    construction: bool,
-    #[serde(flatten)]
-    target: DrawTarget,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SketchPointParams {
-    /// Points to place, each [x, y] (sketch) or [x, y, z] (model), in millimeters.
-    points: Vec<Point>,
-    #[serde(flatten)]
-    target: DrawTarget,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SketchSlotParams {
-    /// Center of the slot's arc at one end, [x, y] (sketch) or [x, y, z] (model), in millimeters.
-    start: Point,
-    /// Center of the arc at the other end.
-    end: Point,
-    /// Overall width in millimeters: twice the radius of the end arcs.
-    width_mm: f64,
-    /// For a curved slot: the center of the arc it follows, counterclockwise from start to end
-    /// unless clockwise=true. `end` only gives the angle: it's moved onto the radius set by
-    /// `start`. Leave out center and through for a straight slot.
-    #[serde(default)]
-    center: Option<Point>,
-    /// For a curved slot: a point on the arc it follows, between start and end, instead of center.
-    #[serde(default)]
-    through: Option<Point>,
-    /// With `center`: follow the arc clockwise, as seen looking at the sketch from the side its
-    /// normal points to. Defaults to false.
-    #[serde(default)]
-    clockwise: bool,
-    /// Add driving dimensions of the width and of the length between the end centers, which
-    /// set_dimension can change later. Defaults to false.
-    #[serde(default)]
-    add_dimensions: bool,
-    /// Draw it as construction geometry (reference only, ignored by features). Defaults to false.
-    #[serde(default)]
-    construction: bool,
-    #[serde(flatten)]
-    target: SketchTarget,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SketchPolygonParams {
-    /// Center, [x, y] (sketch) or [x, y, z] (model), in millimeters.
-    center: Point,
-    /// Number of sides, 3 to 40.
-    sides: i32,
-    /// From the center to a corner, in millimeters. Give this or flat_radius_mm.
+    sides: Option<i32>,
+    /// polygon: from the center to a corner.
     #[serde(default)]
     corner_radius_mm: Option<f64>,
-    /// From the center to the middle of a side, in millimeters: half the size across flats. Give
-    /// this or corner_radius_mm.
+    /// polygon: from the center to the middle of a side (half across flats).
     #[serde(default)]
     flat_radius_mm: Option<f64>,
-    /// Direction from the center to a corner (with corner_radius_mm) or to the middle of a side
-    /// (with flat_radius_mm), degrees counterclockwise from sketch X. Defaults to 0.
+    /// polygon: toward a corner (a side's middle with flat_radius_mm); ellipse: the long axis.
+    /// Counterclockwise from sketch X. Defaults to 0.
     #[serde(default)]
-    angle_deg: f64,
-    /// Draw the sides as construction geometry (reference only, ignored by features). Defaults to
-    /// false.
+    angle_deg: Option<f64>,
+    /// ellipse: from the center to the end of the long axis.
     #[serde(default)]
-    construction: bool,
-    #[serde(flatten)]
-    target: SketchTarget,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SketchEllipseParams {
-    /// Center, [x, y] (sketch) or [x, y, z] (model), in millimeters.
-    center: Point,
-    /// From the center to the far end of the long axis, in millimeters.
-    major_radius_mm: f64,
-    /// From the center to the end of the short axis, in millimeters. Less than major_radius_mm.
-    minor_radius_mm: f64,
-    /// Direction of the long axis, degrees counterclockwise from sketch X. Defaults to 0.
+    major_radius_mm: Option<f64>,
+    /// ellipse: from the center to the end of the short axis.
     #[serde(default)]
-    angle_deg: f64,
-    /// Draw it as construction geometry (reference only, ignored by features). Defaults to false.
+    minor_radius_mm: Option<f64>,
+    /// slot: add driving dimensions of its width and length.
+    #[serde(default)]
+    add_dimensions: bool,
+    /// Construction geometry: reference only, ignored by features.
     #[serde(default)]
     construction: bool,
     #[serde(flatten)]
-    target: SketchTarget,
+    target: DrawTarget,
 }
 
-/// Most entities or spline points one sketch_* call may draw (the add-in's limit).
+impl SketchParams {
+    /// Refuses parameters the shape doesn't take, rather than ignoring them.
+    fn check_applies(&self) -> Result<(), McpError> {
+        use SketchShape::*;
+        let all_but_rectangle = &[Line, Circle, Arc, Spline, Point, Slot, Polygon, Ellipse][..];
+        let given: [(&str, bool, &[SketchShape]); 21] = [
+            ("points", self.points.is_some(), &[Line, Spline, Point]),
+            ("closed", self.closed, &[Line, Spline]),
+            ("center", self.center.is_some(), &[Circle, Arc, Slot, Polygon, Ellipse, Rectangle]),
+            ("start", self.start.is_some(), &[Arc, Slot]),
+            ("end", self.end.is_some(), &[Arc, Slot]),
+            ("through", self.through.is_some(), &[Arc, Slot]),
+            ("clockwise", self.clockwise, &[Arc, Slot]),
+            ("radius_mm", self.radius_mm.is_some(), &[Circle]),
+            ("diameter_mm", self.diameter_mm.is_some(), &[Circle]),
+            ("width_mm", self.width_mm.is_some(), &[Slot, Rectangle]),
+            ("height_mm", self.height_mm.is_some(), &[Rectangle]),
+            ("sides", self.sides.is_some(), &[Polygon]),
+            ("corner_radius_mm", self.corner_radius_mm.is_some(), &[Polygon]),
+            ("flat_radius_mm", self.flat_radius_mm.is_some(), &[Polygon]),
+            ("angle_deg", self.angle_deg.is_some(), &[Polygon, Ellipse]),
+            ("major_radius_mm", self.major_radius_mm.is_some(), &[Ellipse]),
+            ("minor_radius_mm", self.minor_radius_mm.is_some(), &[Ellipse]),
+            ("add_dimensions", self.add_dimensions, &[Slot]),
+            ("construction", self.construction, &[Line, Circle, Arc, Spline, Slot, Polygon, Ellipse]),
+            // A circle goes to the add-in, which says why a 3D sketch can't take one.
+            ("sketch_3d", self.target.sketch_3d, &[Line, Circle, Arc, Spline, Point]),
+            ("sketch_name", self.target.sketch.sketch_name.is_some(), all_but_rectangle),
+        ];
+        match given.iter().find(|(_, given, shapes)| *given && !shapes.contains(&self.shape)) {
+            Some((name, _, _)) => Err(McpError::invalid_params(
+                format!("shape \"{}\" doesn't take {name}", self.shape.name()),
+                None,
+            )),
+            None => Ok(()),
+        }
+    }
+
+    /// A parameter the shape needs.
+    fn needs<'a, T>(&self, value: &'a Option<T>, name: &str) -> Result<&'a T, McpError> {
+        value.as_ref().ok_or_else(|| {
+            McpError::invalid_params(format!("shape \"{}\" needs {name}", self.shape.name()), None)
+        })
+    }
+
+    /// The entities a 2D or 3D shape draws (meters), and what to call them in the reply.
+    fn entities(&self, points: &mut PointConverter) -> Result<(Vec<proto::SketchEntity>, String), McpError> {
+        let construction = self.construction;
+        let one = |geometry| vec![sketch_entity(construction, geometry)];
+        Ok(match self.shape {
+            SketchShape::Line => {
+                let given = self.needs(&self.points, "points")?;
+                let n = given.len();
+                if n < 2 {
+                    return Err(McpError::invalid_params("give at least 2 points", None));
+                }
+                if self.closed && n < 3 {
+                    return Err(McpError::invalid_params("a closed chain needs at least 3 points", None));
+                }
+                if n > MAX_SKETCH_ITEMS {
+                    return Err(McpError::invalid_params(format!("at most {MAX_SKETCH_ITEMS} points per call"), None));
+                }
+                let mut vertices = points.convert_all(given, "point")?;
+                if self.closed {
+                    vertices.push(vertices[0]);
+                }
+                let entities = vertices
+                    .windows(2)
+                    .map(|pair| {
+                        sketch_entity(
+                            construction,
+                            proto::sketch_entity::Geometry::Line(proto::SketchLine {
+                                start: Some(pair[0]),
+                                end: Some(pair[1]),
+                            }),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let what = count_of(entities.len(), "line");
+                (entities, what)
+            }
+            SketchShape::Circle => {
+                let radius_mm = match (self.radius_mm, self.diameter_mm) {
+                    (Some(r), None) => r,
+                    (None, Some(d)) => d / 2.0,
+                    _ => {
+                        return Err(McpError::invalid_params("give exactly one of radius_mm or diameter_mm", None));
+                    }
+                };
+                if !(radius_mm.is_finite() && radius_mm > 0.0) {
+                    return Err(McpError::invalid_params(
+                        "the radius/diameter must be a positive number of millimeters",
+                        None,
+                    ));
+                }
+                let center = points.convert(self.needs(&self.center, "center")?, "center")?;
+                let geometry = proto::sketch_entity::Geometry::Circle(proto::SketchCircle {
+                    center: Some(center),
+                    radius: radius_mm / MM_PER_M,
+                });
+                (one(geometry), format!("a circle of radius {radius_mm} mm"))
+            }
+            SketchShape::Arc => {
+                let start = points.convert(self.needs(&self.start, "start")?, "start")?;
+                let end = points.convert(self.needs(&self.end, "end")?, "end")?;
+                let (center, through) = match (&self.center, &self.through) {
+                    (Some(c), None) => (Some(points.convert(c, "center")?), None),
+                    (None, Some(t)) => {
+                        if self.clockwise {
+                            return Err(McpError::invalid_params(
+                                "clockwise only applies with `center`; a 3-point arc's direction comes \
+                                 from its `through` point",
+                                None,
+                            ));
+                        }
+                        (None, Some(points.convert(t, "through")?))
+                    }
+                    _ => return Err(McpError::invalid_params("give exactly one of center or through", None)),
+                };
+                let geometry = proto::sketch_entity::Geometry::Arc(proto::SketchArc {
+                    start: Some(start),
+                    end: Some(end),
+                    center,
+                    through,
+                    clockwise: self.clockwise,
+                });
+                (one(geometry), "an arc".to_string())
+            }
+            SketchShape::Spline => {
+                let given = self.needs(&self.points, "points")?;
+                let n = given.len();
+                let min = if self.closed { 3 } else { 2 };
+                if n < min {
+                    return Err(McpError::invalid_params(format!("give at least {min} points"), None));
+                }
+                if n > MAX_SKETCH_ITEMS {
+                    return Err(McpError::invalid_params(format!("at most {MAX_SKETCH_ITEMS} points per spline"), None));
+                }
+                let geometry = proto::sketch_entity::Geometry::Spline(proto::SketchSpline {
+                    points: points.convert_all(given, "point")?,
+                    closed: self.closed,
+                });
+                let what = format!("a {}spline through {n} points", if self.closed { "closed " } else { "" });
+                (one(geometry), what)
+            }
+            SketchShape::Point => {
+                let given = self.needs(&self.points, "points")?;
+                let n = given.len();
+                if n == 0 {
+                    return Err(McpError::invalid_params("give at least 1 point", None));
+                }
+                if n > MAX_SKETCH_ITEMS {
+                    return Err(McpError::invalid_params(format!("at most {MAX_SKETCH_ITEMS} points per call"), None));
+                }
+                let entities = points
+                    .convert_all(given, "point")?
+                    .into_iter()
+                    .map(|position| {
+                        sketch_entity(
+                            false,
+                            proto::sketch_entity::Geometry::Point(proto::SketchPointEntity { position: Some(position) }),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                (entities, count_of(n, "point"))
+            }
+            SketchShape::Slot => {
+                let width_mm = *self.needs(&self.width_mm, "width_mm")?;
+                if !(width_mm.is_finite() && width_mm > 0.0) {
+                    return Err(McpError::invalid_params("width_mm must be a positive number of millimeters", None));
+                }
+                if self.center.is_some() && self.through.is_some() {
+                    return Err(McpError::invalid_params("give center or through for a curved slot, not both", None));
+                }
+                if self.clockwise && self.center.is_none() {
+                    return Err(McpError::invalid_params(
+                        "clockwise only applies with `center`; a slot through a point has its direction from \
+                         that point",
+                        None,
+                    ));
+                }
+                let start = points.convert(self.needs(&self.start, "start")?, "start")?;
+                let end = points.convert(self.needs(&self.end, "end")?, "end")?;
+                let center = self.center.as_ref().map(|c| points.convert(c, "center")).transpose()?;
+                let through = self.through.as_ref().map(|t| points.convert(t, "through")).transpose()?;
+                let what = format!(
+                    "a {}slot {width_mm} mm wide",
+                    if center.is_some() || through.is_some() { "curved " } else { "" }
+                );
+                let geometry = proto::sketch_entity::Geometry::Slot(proto::SketchSlot {
+                    start: Some(start),
+                    end: Some(end),
+                    center,
+                    through,
+                    clockwise: self.clockwise,
+                    width: width_mm / MM_PER_M,
+                    add_dimensions: self.add_dimensions,
+                });
+                (one(geometry), what)
+            }
+            SketchShape::Polygon => {
+                let sides = *self.needs(&self.sides, "sides")?;
+                let (corner_radius, angle, inscribed) =
+                    polygon_shape(sides, self.corner_radius_mm, self.flat_radius_mm, self.angle_deg.unwrap_or(0.0))?;
+                let center = points.convert(self.needs(&self.center, "center")?, "center")?;
+                let geometry = proto::sketch_entity::Geometry::Polygon(proto::SketchPolygon {
+                    center: Some(center),
+                    sides,
+                    corner_radius,
+                    angle,
+                    inscribed,
+                });
+                (one(geometry), format!("a polygon with {sides} sides"))
+            }
+            SketchShape::Ellipse => {
+                let major = *self.needs(&self.major_radius_mm, "major_radius_mm")?;
+                let minor = *self.needs(&self.minor_radius_mm, "minor_radius_mm")?;
+                if !(major.is_finite() && minor.is_finite() && minor > 0.0 && major > minor) {
+                    return Err(McpError::invalid_params(
+                        format!(
+                            "major_radius_mm must be more than minor_radius_mm, and that more than 0, got {major} \
+                             and {minor} (equal radii are a circle: use shape \"circle\")"
+                        ),
+                        None,
+                    ));
+                }
+                let angle_deg = self.angle_deg.unwrap_or(0.0);
+                if !angle_deg.is_finite() {
+                    return Err(McpError::invalid_params("angle_deg must be finite", None));
+                }
+                let center = points.convert(self.needs(&self.center, "center")?, "center")?;
+                let geometry = proto::sketch_entity::Geometry::Ellipse(proto::SketchEllipse {
+                    center: Some(center),
+                    major_radius: major / MM_PER_M,
+                    minor_radius: minor / MM_PER_M,
+                    angle: angle_deg.to_radians(),
+                });
+                (one(geometry), format!("an ellipse of {major} x {minor} mm radii"))
+            }
+            SketchShape::Rectangle => unreachable!("a rectangle is its own request"),
+        })
+    }
+}
+
+/// Most entities or spline points one sketch call may draw (the add-in's limit).
 const MAX_SKETCH_ITEMS: usize = 1000;
 
 /// A polygon as the add-in draws it: from the center to a corner, in the direction of one
@@ -526,40 +670,24 @@ fn count_of(n: usize, singular: &str) -> String {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ExtrudeSketchParams {
-    /// Extrusion depth, in millimeters. With mid_plane this is the total depth, split evenly
-    /// across both sides of the sketch plane.
-    depth_mm: f64,
-    /// Feature-tree name of the sketch to extrude, e.g. "Sketch1". Omit to extrude the most
-    /// recently created sketch that no feature uses yet.
-    #[serde(default)]
-    sketch_name: Option<String>,
-    /// Extrude in the opposite direction (away from the sketch plane's normal). Ignored with
-    /// mid_plane. Defaults to false.
-    #[serde(default)]
-    reverse_direction: bool,
-    /// Extrude symmetrically to both sides of the sketch plane. Defaults to false.
-    #[serde(default)]
-    mid_plane: bool,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct CutExtrudeSketchParams {
-    /// Cut depth, in millimeters. Required unless through_all is set. With mid_plane this is
-    /// the total depth, split evenly across both sides of the sketch plane.
+    /// In millimeters; with mid_plane the total, split evenly across both sides of the sketch
+    /// plane. Needed unless through_all.
     #[serde(default)]
     depth_mm: Option<f64>,
-    /// Cut through the entire part instead of to a depth. Defaults to false.
+    /// Remove material instead (cut-extrude).
+    #[serde(default)]
+    cut: bool,
+    /// Cuts: through the whole part instead of to a depth.
     #[serde(default)]
     through_all: bool,
-    /// Feature-tree name of the sketch to cut with, e.g. "Sketch2". Omit to use the most
-    /// recently created sketch that no feature uses yet.
+    /// The sketch, e.g. "Sketch1". Defaults to the newest sketch no feature uses yet.
     #[serde(default)]
     sketch_name: Option<String>,
-    /// Cut along the sketch's normal (the way a boss would grow) instead of against it, and
-    /// only that way. Ignored with mid_plane. Defaults to false.
+    /// The other way: a boss against the sketch normal, a cut along it (and only that way).
+    /// Ignored with mid_plane.
     #[serde(default)]
     reverse_direction: bool,
-    /// Cut symmetrically to both sides of the sketch plane. Defaults to false.
+    /// Symmetric to both sides of the sketch plane.
     #[serde(default)]
     mid_plane: bool,
 }
@@ -740,7 +868,7 @@ struct DimensionSpec {
     /// measured along the sketch's X / Y axis), diameter / radius (1 circle or arc), angle
     /// (2 lines).
     kind: DimensionKind,
-    /// What it measures: sketch entity ids from inspect_sketch or the sketch_* tools ("line:3",
+    /// What it measures: sketch entity ids from inspect_sketch or the sketch tool ("line:3",
     /// "point:7", "circle:1"), "origin" for the sketch origin, or an edge/face id from
     /// inspect_model ("edge:12") to measure from the model.
     entities: Vec<String>,
@@ -943,6 +1071,8 @@ const MAX_CONSTRAINTS: usize = 200;
 #[derive(Clone)]
 struct SolidWorksTools {
     tool_router: ToolRouter<SolidWorksTools>,
+    /// What tools/list sends: the router's tools with slimmed schemas.
+    tools: Arc<Vec<rmcp::model::Tool>>,
     addin: AddinClient,
     /// Short IDs handed out by inspect_model, shared by every tool call.
     ids: Arc<Mutex<IdRegistry>>,
@@ -958,8 +1088,10 @@ struct SolidWorksTools {
 #[tool_router]
 impl SolidWorksTools {
     fn new(addin: AddinClient) -> Self {
+        let tool_router = Self::tool_router();
         Self {
-            tool_router: Self::tool_router(),
+            tools: Arc::new(tool_schema::slim_tools(tool_router.list_all())),
+            tool_router,
             addin,
             ids: Arc::default(),
             renderer: Arc::default(),
@@ -969,8 +1101,8 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Get the name of the currently active SolidWorks document, its type and \
-                       its file (or that it was never saved)"
+        description = "The active document: its name, type, file (or that it was never saved) and \
+                       units."
     )]
     async fn get_active_document_name(&self) -> Result<CallToolResult, McpError> {
         let reply = self
@@ -990,14 +1122,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Read or change the active document's units: `units` the unit system \
-                       (mmgs, ips = inch, cgs, mks), `decimals` the decimal places lengths show, \
-                       `drafting_standard` how dimensions, datums and frames are drawn (ansi, \
-                       iso, ...). Nothing given: just report them. This is how SolidWorks shows \
-                       the document -- its dimensions, tolerances, sheet sizes, what a drawing \
-                       prints -- not the tools: they always take and report mm and degrees. Inch \
-                       documents also get inch defaults: ANSI Inch holes, ANSI B sheets, ASME \
-                       borders and title blocks."
+        description = "Read or change how the active document shows units: unit system, decimal \
+                       places, drafting standard. The tools always take and report mm and degrees. \
+                       Inch documents also get inch defaults (ANSI Inch holes, ANSI B sheets, ASME \
+                       borders and title blocks)."
     )]
     async fn document_units(
         &self,
@@ -1024,18 +1152,12 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Save the active document (part, assembly or drawing), without any \
-                       SolidWorks dialogs. No path: save it to its own file (a document never \
-                       saved needs a path). With an absolute path, the extension picks what \
-                       happens: .SLDPRT / .SLDASM / .SLDDRW = Save As (the document becomes that \
-                       file, unless copy=true); .STEP/.STP, .IGS/.IGES, .X_T/.X_B, .SAT, .STL, \
-                       .3MF (parts, assemblies) or .PDF, .DXF, .DWG (drawings) = export a copy \
-                       with SolidWorks' own export options. A drawing's PDF has one page per \
-                       sheet, every sheet unless pdf_sheets names some; pdf_color=false makes it \
-                       black and white. An existing file is only replaced \
-                       with overwrite=true. Saving an assembly or drawing to its own SolidWorks \
-                       file also saves the changed parts it uses. A part with rebuild errors is \
-                       still saved, and the reply says so."
+        description = "Save the active document with no dialogs: to its own file, or Save As an \
+                       absolute path whose extension decides -- .SLDPRT / .SLDASM / .SLDDRW \
+                       (copy=true keeps working on the original), or an export: STEP, IGES, \
+                       Parasolid, SAT, STL, 3MF; PDF (a page per sheet), DXF, DWG for drawings. \
+                       Saving an assembly or drawing saves the changed parts it uses. A part with \
+                       rebuild errors is saved, and the reply says so."
     )]
     async fn save_document(
         &self,
@@ -1054,19 +1176,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Open a SolidWorks part, assembly or drawing file (.SLDPRT, .SLDASM, \
-                       .SLDDRW, by absolute path) and make it the active document, without any \
-                       SolidWorks dialogs; a document that's already open is just made active \
-                       again, so this also switches between open documents. A STEP (.STEP/.STP), \
-                       IGES (.IGS/.IGES) or Parasolid (.X_T/.X_B) file, e.g. a supplier's model, \
-                       is imported into a new part (or assembly) that is never saved: its \
-                       geometry is imported bodies without feature history (feature Imported1), \
-                       which recognize_features reads as holes, bosses, fillets and faces, and \
-                       which new features can be built on; save_document with a .SLDPRT path \
-                       keeps it. Reports problems SolidWorks found, e.g. an assembly's missing \
-                       components. The other tools \
-                       then work on it: call inspect_model (or inspect_drawing) first, ids from \
-                       another document don't apply to it."
+        description = "Open a part, assembly or drawing by absolute path and make it active, with \
+                       no dialogs (an open one is just made active). A STEP, IGES or Parasolid \
+                       file is imported into a new unsaved part or assembly: bodies without \
+                       history, which recognize_features reads. Reports problems such as missing \
+                       components. Ids from another document don't apply."
     )]
     async fn open_document(
         &self,
@@ -1083,12 +1197,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Close an open document: the active one, or `document` by title, file name or \
-                       full path. Saves nothing. A document with unsaved changes is refused unless \
-                       discard_changes=true, which loses them (save_document first to keep them); \
-                       a part an open assembly or drawing uses stays loaded for that document, with \
-                       its changes. The reply says which document is active afterwards: the other \
-                       tools work on that one."
+        description = "Close the active or a named open document, saving nothing. One with unsaved \
+                       changes is refused unless discard_changes. A part an open assembly or \
+                       drawing uses stays loaded for it. The reply says which document is active \
+                       afterwards."
     )]
     async fn close_document(
         &self,
@@ -1104,14 +1216,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Take back the last steps in the active document, like Ctrl+Z; the reply says \
-                       which features went or came back and how the solid volume changed, so check \
-                       it. `steps` (default 1) counts SolidWorks' own steps: a new feature or a \
-                       change of dimension is 1, a new rectangle sketch comes back whole, and a \
-                       failed call may have left some. An edit of an existing sketch isn't reliable \
-                       to undo: it may change nothing or remove the whole sketch, so use \
-                       delete_sketch_entities for those. There's no redo, and hiding a component \
-                       can't be undone. Requires no sketch open for editing."
+        description = "Take back the last steps in the active document, like Ctrl+Z; the reply \
+                       says which features went or came back and how the volume changed. An edit \
+                       of an existing sketch doesn't undo reliably (use delete_sketch_entities). \
+                       No redo; hiding a component can't be undone."
     )]
     async fn undo(&self, Parameters(params): Parameters<undo::UndoParams>) -> Result<CallToolResult, McpError> {
         let request = undo::request(&params)?;
@@ -1120,22 +1228,15 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Escape hatch for what no other tool does: run a VBA macro inside SolidWorks, \
-                       with the whole SOLIDWORKS API and full access to this computer. Prefer the \
-                       other tools when one fits. `code` is a VBA module with a `Sub main()`; start \
-                       with `Set swApp = Application.SldWorks`. Early binding (`Dim doc As \
-                       SldWorks.ModelDoc2`), enum names and out parameters all work. The API is in \
-                       meters and radians. Report back with `McpPrint value`, one line per call: \
-                       MsgBox, Debug.Print and return values don't reach you. An error stops the \
-                       macro and the reply gives its message, but not its line, so print along the \
-                       way when hunting one; what it did before that stays in the model. It runs as \
-                       one piece on SolidWorks' main thread: the reply comes back after 60 seconds at \
-                       the latest. A timeout reports observed start/completion markers and preserves \
-                       diagnostics; it does not stop an in-flight COM call or prove the macro started. \
-                       Outstanding work may delay other tools. Dialogs block SolidWorks, so \
-                       any it opens are closed (End / Cancel / No / OK) and listed in the reply. \
-                       inspect_model ids don't exist in a macro: find things by name (`FeatureByName`, \
-                       `SelectByID2`) or position. Non-ASCII text only through ChrW()."
+        description = "Escape hatch: run a VBA macro inside SolidWorks with the whole API and full \
+                       access to this computer; prefer the other tools. `code` has a `Sub main()` \
+                       and starts with `Set swApp = Application.SldWorks`; early binding, enum \
+                       names and out parameters work; the API is in meters and radians. Report \
+                       back with `McpPrint value` (one line per call; MsgBox and Debug.Print don't \
+                       reach you). An error stops it and gives its message, not its line; what it \
+                       did stays. 60 s at most (a timeout doesn't stop what is running); dialogs \
+                       it opens are closed and listed. inspect_model ids don't exist here: find \
+                       things by name or position."
     )]
     async fn run_macro(&self, Parameters(params): Parameters<macro_run::RunMacroParams>) -> Result<CallToolResult, McpError> {
         let text = macro_run::run(&self.addin, &params).await?;
@@ -1143,15 +1244,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Hide or show things in the active part or assembly (visible=false / true): \
-                       bodies of a part, components of an assembly, sketches and reference \
-                       geometry; `items` = ids from inspect_model, or feature names. Hidden things \
-                       stay in the model and still count in its mass and in features built on \
-                       them; inspect_model marks them `hidden`, and render_views leaves them out. \
-                       To hide a body made by a feature, give the body id, not the feature. A body \
-                       inside an assembly's component goes with its component (or open its part). \
-                       Everything is checked before anything changes, and each is read back. \
-                       Requires no sketch open for editing."
+        description = "Hide or show bodies, components, sketches and reference geometry of the \
+                       active part or assembly. Hidden things stay in the model, its mass and the \
+                       features built on them; render_views leaves them out. Hide a feature's body \
+                       by its body id; a body in an assembly goes with its component."
     )]
     async fn set_visibility(
         &self,
@@ -1170,17 +1266,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Configurations (variants) of the active part or assembly: action=\"list\" \
-                       (default) lists them with the active one, what each suppresses and the \
-                       dimensions whose value differs between them; \"create\" makes `name` (a copy \
-                       of the active configuration, or with `parent` a derived one that follows its \
-                       parent until given its own values) and SolidWorks makes it active; \
-                       \"activate\" switches to `name` (every other tool works on the active \
-                       configuration); \"delete\" removes `name` and the configurations derived from \
-                       it (not the active one). Set values per configuration with set_dimension \
-                       `configurations`, and suppress features or components per configuration with \
-                       set_suppression. Replies with the list after the change. Requires no sketch \
-                       open for editing (except to list)."
+        description = "List, create, activate or delete configurations (variants) of the active \
+                       part or assembly. The list gives the active one, what each suppresses and \
+                       the dimensions that differ. Values per configuration: set_dimension \
+                       `configurations`; suppression: set_suppression."
     )]
     async fn configurations(
         &self,
@@ -1195,17 +1284,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Suppress or unsuppress (suppressed=true / false) features and mates of the \
-                       active part or assembly and top-level components of an assembly, in the \
-                       active configuration (default), in named `configurations`, or with \
-                       all_configurations=true in every one. `items` = ids from inspect_model \
-                       (suppressed ones keep theirs) or names. A suppressed feature is left out of \
-                       the model -- no geometry, mass or rebuild -- and SolidWorks suppresses the \
-                       features that depend on it too (the reply names those); a suppressed component is \
-                       unloaded from that configuration, with its mates. Each is read back per \
-                       configuration; the reply also names features that now fail to rebuild. \
-                       Everything is checked before anything changes. Requires no sketch open for \
-                       editing."
+        description = "Suppress or unsuppress features, mates and top-level components of the \
+                       active part or assembly, in the active, named or all configurations. \
+                       SolidWorks suppresses what depends on a feature too (named in the reply); a \
+                       suppressed component is unloaded with its mates. Read back per \
+                       configuration; reports features that now fail."
     )]
     async fn set_suppression(
         &self,
@@ -1224,7 +1307,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Move the rollback bar of the active part or assembly, as dragging it in the                        feature tree: `before` a feature (it and everything below it are rolled                        back), `after` a feature, or neither to roll everything forward again.                        Rolled-back features are left out of the model -- no geometry, mass or                        rebuild -- until the bar moves down, and inspect_model marks them                        rolled_back. New features made while rolled back go in at the bar, above                        the rolled-back ones: the way to add something early in the history. Read                        back; the reply lists what is rolled back. Saving keeps the bar where it is.                        Requires no sketch open for editing."
+        description = "Move the rollback bar of the active part or assembly `before` or `after` a \
+                       feature, or neither to roll forward. Rolled-back features are left out of \
+                       the model; new features go in at the bar, the way to add something early in \
+                       the history. Saving keeps the bar."
     )]
     async fn rollback(
         &self,
@@ -1239,7 +1325,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Move a feature of the active part or assembly in the feature tree, just                        `before` or just `after` another one (ids from inspect_model or names); what                        it absorbed, such as its sketch, goes with it. Order changes the result: a                        fillet before a cut rounds the edges the cut doesn't remove, a shell after a                        boss hollows that boss too. SolidWorks refuses to put a feature above what it                        is built on (its sketch's plane or face, the edges it uses) or below what is                        built on it; the refusal names those. The model is rebuilt; the reply gives                        the feature's new neighbours and features that now fail to rebuild. Requires                        no sketch open for editing."
+        description = "Move a feature of the active part or assembly `before` or `after` another \
+                       in the tree, with what it absorbed. Order changes the result (a fillet \
+                       before a cut). SolidWorks refuses to put a feature above what it's built on \
+                       or below what's built on it, naming those. Reports its new neighbours and \
+                       features that now fail."
     )]
     async fn reorder_feature(
         &self,
@@ -1254,7 +1344,13 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Equations and global variables of the active part or assembly: with no                        arguments, lists them with their values. `set` adds equations or replaces                        the one with the same name: a global variable (name \"Width\", expression                        \"50\") or a dimension driven by an expression (name \"D1@Boss-Extrude1\",                        expression \"\\\"Width\\\" / 2\"). In expressions, names go in double                        quotes; plain numbers are in the document's units (document_units), or                        write them with units (\"25mm\", \"1in\", \"30deg\"); functions such as                        sin, sqr, IIF(cond, a, b) work, trigonometry in degrees. `delete` removes                        equations by name (refused while another equation uses the global                        variable). All or nothing; the model is rebuilt, and the reply lists                        every equation with its value (dimensions in mm / degrees) and features                        that now fail to rebuild. A dimension an equation drives can't be changed                        with set_dimension. Equations apply to all configurations; for values per                        configuration use design_table ($VALUE@<variable>@equations columns).                        Requires no sketch open for editing (except to list)."
+        description = "List, set or delete equations and global variables of the active part or \
+                       assembly: a variable (\"Width\" = \"50\") or a dimension driven by an \
+                       expression (\"D1@Boss-Extrude1\" = \"\\\"Width\\\" / 2\"). Names in double \
+                       quotes; plain numbers in the document's units, or with units (\"25mm\", \
+                       \"30deg\"); trigonometry in degrees. All or nothing; rebuilds and lists \
+                       every equation's value. Driven dimensions can't be set with set_dimension. \
+                       Values per configuration: design_table."
     )]
     async fn equations(
         &self,
@@ -1276,7 +1372,12 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "The design table of the active part or assembly: SolidWorks' Excel table with                        a row per configuration and a column per dimension, suppression state,                        global variable or property, which sets each configuration's values (a                        family of parts: lengths of a bolt, sizes of a bracket). action=\"read\"                        (default) gives the table; \"write\" replaces its content with `columns`                        and `rows` (making the table if there is none): SolidWorks creates the                        configurations the rows name and sets their values -- configurations                        without a row keep theirs; \"delete\" removes the table, keeping the                        configurations and their values. Columns are checked before anything is                        written; problems SolidWorks finds while applying the table are in the                        reply. Dimensions a table drives can't be changed with set_dimension:                        change their cells. Needs Microsoft Excel. Requires no sketch open for                        editing (except to read)."
+        description = "Read, write or delete the design table of the active part or assembly: \
+                       SolidWorks' Excel table with a row per configuration setting dimensions, \
+                       suppression, global variables or properties (a family of parts). Writing \
+                       creates the configurations the rows name; configurations without a row keep \
+                       their values. Dimensions a table drives can't be changed with \
+                       set_dimension. Needs Microsoft Excel."
     )]
     async fn design_table(
         &self,
@@ -1290,10 +1391,8 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Create a new, empty SolidWorks part document from the user's default \
-                       part template and make it the active document. `units` (mmgs, ips = \
-                       inch, ...), `decimals` and `drafting_standard` set how SolidWorks shows it \
-                       (default: the template's); tools still take mm."
+        description = "Create a new, empty part from the default template and make it active. \
+                       `units`, `decimals` and `drafting_standard` set how SolidWorks shows it."
     )]
     async fn create_part(
         &self,
@@ -1308,11 +1407,9 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Create a new, empty SolidWorks assembly document from the user's default \
-                       assembly template and make it the active document; insert_components puts \
-                       parts and subassemblies into it. `units` (mmgs, ips = inch, ...), \
-                       `decimals` and `drafting_standard` set how SolidWorks shows it (default: \
-                       the template's); tools still take mm."
+        description = "Create a new, empty assembly from the default template and make it active; \
+                       insert_components fills it. `units`, `decimals` and `drafting_standard` set \
+                       how SolidWorks shows it."
     )]
     async fn create_assembly(
         &self,
@@ -1327,17 +1424,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Create a new SolidWorks drawing document and make it the active document. \
-                       `template` picks the drawing template (.drwdot) and `sheet_format` the \
-                       sheet's border and title block (.slddrt, e.g. \"a3 - iso\"), each an \
-                       absolute path or a name from SolidWorks' template / sheet format folder \
-                       (an unknown name lists the ones there are). `paper_size` or \
-                       `paper_size_mm` sets the sheet size (default: the sheet format's own \
-                       size, else the template's, else A3 -- ANSI B for units=ips); `units` the \
-                       drawing's unit system (mmgs, ips = inch, ...), `decimals` and \
-                       `drafting_standard` (ansi, iso, ...) how it shows dimensions (default: \
-                       the template's; tools still take mm). Reports the sheet as set up. The \
-                       drawing starts with no views."
+        description = "Create a new drawing from a template and make it active. `template`, \
+                       `sheet_format` (border and title block) and paper size; an unknown template \
+                       or format name lists the ones there are. Reports the sheet. It has no \
+                       views."
     )]
     async fn create_drawing(
         &self,
@@ -1353,449 +1443,41 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Create a new sketch containing a square on the Front, Top or Right plane \
-                       of the active part document, or `on` a planar face or reference plane \
-                       found with inspect_model. The square is centered on the given point \
-                       (default: the origin, or the middle of the face). Reports the sketch's \
-                       axes in model space. Requires an open part with no sketch being edited; \
-                       call create_part first if none is open."
+        description = "Draw in a sketch of the active part: `shape` line, circle, arc, spline, \
+                       point, slot, polygon, ellipse or rectangle. Into a new sketch on `plane` or \
+                       `on` a planar face or reference plane, into the existing `sketch_name` \
+                       (combining shapes into one profile), or a new 3D sketch (sketch_3d). Points \
+                       are [x, y] in sketch or [x, y, z] in model coordinates (projected onto the \
+                       sketch plane), mm. Ends that meet are joined. Reports the new entities' \
+                       ids, the sketch's closed and open contours (an extrude needs closed ones) \
+                       and its axes in model space."
     )]
-    async fn create_square_sketch(
-        &self,
-        Parameters(params): Parameters<SquareSketchParams>,
-    ) -> Result<CallToolResult, McpError> {
-        self.rectangle_sketch(
-            params.plane,
-            params.placement,
-            params.center_x_mm,
-            params.center_y_mm,
-            params.side_length_mm,
-            params.side_length_mm,
-        )
-        .await
-    }
-
-    #[tool(
-        description = "Create a new sketch containing a rectangle on the Front, Top or Right \
-                       plane of the active part document, or `on` a planar face or reference \
-                       plane found with inspect_model. Width runs along the sketch's X axis and \
-                       height along its Y axis; the result reports those axes in model space. \
-                       Centered on the given point (default: the origin, or the middle of the \
-                       face). Requires an open part with no sketch being edited; call \
-                       create_part first if none is open."
-    )]
-    async fn create_rectangle_sketch(
-        &self,
-        Parameters(params): Parameters<RectangleSketchParams>,
-    ) -> Result<CallToolResult, McpError> {
-        self.rectangle_sketch(
-            params.plane,
-            params.placement,
-            params.center_x_mm,
-            params.center_y_mm,
-            params.width_mm,
-            params.height_mm,
-        )
-        .await
-    }
-
-    #[tool(
-        description = "Draw straight lines in a sketch of the active part: one line between 2 \
-                       points, or a connected chain through more (closed=true joins the last \
-                       point back to the first, e.g. for a polygon to extrude). Draws into a new \
-                       sketch on the Front/Top/Right plane or `on` a planar face, or into an \
-                       existing sketch given by sketch_name -- use that to combine lines, arcs \
-                       and splines into one profile -- or into a 3D sketch (sketch_3d=true), for a \
-                       path that doesn't lie in a plane. Points are [x, y] in sketch coordinates or \
-                       [x, y, z] in model coordinates (projected onto the sketch plane), in \
-                       millimeters. End points that meet are joined, and the result says how many \
-                       closed contours the sketch has (extrude_sketch needs closed ones) and how \
-                       its axes map to model space. Requires an open part with no sketch being \
-                       edited."
-    )]
-    async fn sketch_line(
-        &self,
-        Parameters(params): Parameters<SketchLineParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let n = params.points.len();
-        if n < 2 {
-            return Err(McpError::invalid_params("give at least 2 points", None));
-        }
-        if params.closed && n < 3 {
-            return Err(McpError::invalid_params(
-                "a closed chain needs at least 3 points",
-                None,
-            ));
-        }
-        if n > MAX_SKETCH_ITEMS {
-            return Err(McpError::invalid_params(
-                format!("at most {MAX_SKETCH_ITEMS} points per call"),
-                None,
-            ));
-        }
-        let mut points = PointConverter::default();
-        let mut vertices = points.convert_all(&params.points, "point")?;
-        if params.closed {
-            vertices.push(vertices[0]);
-        }
-        let entities = vertices
-            .windows(2)
-            .map(|pair| {
-                sketch_entity(
-                    params.construction,
-                    proto::sketch_entity::Geometry::Line(proto::SketchLine {
-                        start: Some(pair[0]),
-                        end: Some(pair[1]),
-                    }),
+    async fn sketch(&self, Parameters(params): Parameters<SketchParams>) -> Result<CallToolResult, McpError> {
+        params.check_applies()?;
+        if params.shape == SketchShape::Rectangle {
+            let width_mm = *params.needs(&params.width_mm, "width_mm")?;
+            let target = &params.target.sketch;
+            return self
+                .rectangle_sketch(
+                    target.plane.unwrap_or_default(),
+                    target.on.as_deref(),
+                    params.center.as_deref(),
+                    width_mm,
+                    params.height_mm.unwrap_or(width_mm),
                 )
-            })
-            .collect::<Vec<_>>();
-        let what = count_of(entities.len(), "line");
-        self.draw_sketch(params.target, points.model_space(), entities, what)
-            .await
-    }
-
-    #[tool(
-        description = "Draw a circle in a sketch of the active part, by center and radius or \
-                       diameter -- e.g. a hole profile to cut-extrude. Draws into a new sketch on \
-                       the Front/Top/Right plane or `on` a planar face, or into an existing sketch \
-                       given by sketch_name (not a 3D sketch). The center is [x, y] in sketch \
-                       coordinates or [x, y, z] in model coordinates (projected onto the sketch \
-                       plane), in millimeters. Requires an open part with no sketch being edited."
-    )]
-    async fn sketch_circle(
-        &self,
-        Parameters(params): Parameters<SketchCircleParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let radius_mm = match (params.radius_mm, params.diameter_mm) {
-            (Some(r), None) => r,
-            (None, Some(d)) => d / 2.0,
-            _ => {
-                return Err(McpError::invalid_params(
-                    "give exactly one of radius_mm or diameter_mm",
-                    None,
-                ));
-            }
-        };
-        if !(radius_mm.is_finite() && radius_mm > 0.0) {
-            return Err(McpError::invalid_params(
-                "the radius/diameter must be a positive number of millimeters",
-                None,
-            ));
+                .await;
         }
         let mut points = PointConverter::default();
-        let center = points.convert(&params.center, "center")?;
-        let entity = sketch_entity(
-            params.construction,
-            proto::sketch_entity::Geometry::Circle(proto::SketchCircle {
-                center: Some(center),
-                radius: radius_mm / MM_PER_M,
-            }),
-        );
-        let what = format!("a circle of radius {radius_mm} mm");
-        self.draw_sketch(params.target, points.model_space(), vec![entity], what)
-            .await
+        let (entities, what) = params.entities(&mut points)?;
+        self.draw_sketch(params.target, points.model_space(), entities, what).await
     }
 
     #[tool(
-        description = "Draw an arc in a sketch of the active part from `start` to `end`, \
-                       defined either by its `center` (counterclockwise unless clockwise=true) or \
-                       by a third point it passes `through`. Draws into a new sketch on the \
-                       Front/Top/Right plane or `on` a planar face, or into an existing sketch \
-                       given by sketch_name -- e.g. to round off a chain of lines into a slot or \
-                       a U shape -- or a 3D sketch (sketch_3d=true; `through` only: the three \
-                       points set the arc's plane). Points are [x, y] in sketch coordinates or \
-                       [x, y, z] in model coordinates (projected onto the sketch plane), in \
-                       millimeters. End points that meet other entities are joined. Requires an \
-                       open part with no sketch being edited."
-    )]
-    async fn sketch_arc(
-        &self,
-        Parameters(params): Parameters<SketchArcParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let mut points = PointConverter::default();
-        let start = points.convert(&params.start, "start")?;
-        let end = points.convert(&params.end, "end")?;
-        let (center, through) = match (&params.center, &params.through) {
-            (Some(c), None) => (Some(points.convert(c, "center")?), None),
-            (None, Some(t)) => {
-                if params.clockwise {
-                    return Err(McpError::invalid_params(
-                        "clockwise only applies with `center`; a 3-point arc's direction comes \
-                         from its `through` point",
-                        None,
-                    ));
-                }
-                (None, Some(points.convert(t, "through")?))
-            }
-            _ => {
-                return Err(McpError::invalid_params(
-                    "give exactly one of center or through",
-                    None,
-                ));
-            }
-        };
-        let entity = sketch_entity(
-            params.construction,
-            proto::sketch_entity::Geometry::Arc(proto::SketchArc {
-                start: Some(start),
-                end: Some(end),
-                center,
-                through,
-                clockwise: params.clockwise,
-            }),
-        );
-        self.draw_sketch(
-            params.target,
-            points.model_space(),
-            vec![entity],
-            "an arc".to_string(),
-        )
-        .await
-    }
-
-    #[tool(
-        description = "Draw a smooth spline curve through the given points, in order, in a \
-                       sketch of the active part (closed=true makes a closed loop). Draws into a \
-                       new sketch on the Front/Top/Right plane or `on` a planar face, into a new \
-                       3D sketch (sketch_3d=true, for a curve through space), or into an existing \
-                       sketch given by sketch_name. Points are [x, y] in sketch coordinates or \
-                       [x, y, z] in model coordinates (projected onto the sketch plane), in \
-                       millimeters. Its ends join other entities they meet. Requires an open part \
-                       with no sketch being edited."
-    )]
-    async fn sketch_spline(
-        &self,
-        Parameters(params): Parameters<SketchSplineParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let n = params.points.len();
-        let min = if params.closed { 3 } else { 2 };
-        if n < min {
-            return Err(McpError::invalid_params(
-                format!("give at least {min} points"),
-                None,
-            ));
-        }
-        if n > MAX_SKETCH_ITEMS {
-            return Err(McpError::invalid_params(
-                format!("at most {MAX_SKETCH_ITEMS} points per spline"),
-                None,
-            ));
-        }
-        let mut points = PointConverter::default();
-        let spline_points = points.convert_all(&params.points, "point")?;
-        let entity = sketch_entity(
-            params.construction,
-            proto::sketch_entity::Geometry::Spline(proto::SketchSpline {
-                points: spline_points,
-                closed: params.closed,
-            }),
-        );
-        let what = format!(
-            "a {}spline through {n} points",
-            if params.closed { "closed " } else { "" }
-        );
-        self.draw_sketch(params.target, points.model_space(), vec![entity], what)
-            .await
-    }
-
-    #[tool(
-        description = "Place sketch points in a sketch of the active part, e.g. reference \
-                       points for later geometry. Draws into a new sketch on the Front/Top/Right \
-                       plane or `on` a planar face, into a new 3D sketch (sketch_3d=true), or into \
-                       an existing sketch given by \
-                       sketch_name. Points are [x, y] in sketch coordinates or [x, y, z] in model \
-                       coordinates (projected onto the sketch plane), in millimeters. Requires an \
-                       open part with no sketch being edited."
-    )]
-    async fn sketch_point(
-        &self,
-        Parameters(params): Parameters<SketchPointParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let n = params.points.len();
-        if n == 0 {
-            return Err(McpError::invalid_params("give at least 1 point", None));
-        }
-        if n > MAX_SKETCH_ITEMS {
-            return Err(McpError::invalid_params(
-                format!("at most {MAX_SKETCH_ITEMS} points per call"),
-                None,
-            ));
-        }
-        let mut points = PointConverter::default();
-        let entities = points
-            .convert_all(&params.points, "point")?
-            .into_iter()
-            .map(|position| {
-                sketch_entity(
-                    false,
-                    proto::sketch_entity::Geometry::Point(proto::SketchPointEntity {
-                        position: Some(position),
-                    }),
-                )
-            })
-            .collect::<Vec<_>>();
-        let what = count_of(n, "point");
-        self.draw_sketch(params.target, points.model_space(), entities, what)
-            .await
-    }
-
-    #[tool(
-        description = "Draw a slot (two parallel sides with round ends) in a 2D sketch of the \
-                       active part, straight between the two end centers `start` and `end`, or \
-                       curved along an arc given by its `center` or a point it passes `through` \
-                       -- e.g. a profile to cut-extrude. Draws into a new sketch on the \
-                       Front/Top/Right plane or `on` a planar face, or into an existing sketch \
-                       given by sketch_name. Points are [x, y] in sketch coordinates or [x, y, z] \
-                       in model coordinates (projected onto the sketch plane), in millimeters. \
-                       Reports every segment's id, plus the construction line or arc down its \
-                       middle and the point at its center. Requires an open part with no sketch \
-                       being edited."
-    )]
-    async fn sketch_slot(
-        &self,
-        Parameters(params): Parameters<SketchSlotParams>,
-    ) -> Result<CallToolResult, McpError> {
-        if !(params.width_mm.is_finite() && params.width_mm > 0.0) {
-            return Err(McpError::invalid_params(
-                "width_mm must be a positive number of millimeters",
-                None,
-            ));
-        }
-        if params.center.is_some() && params.through.is_some() {
-            return Err(McpError::invalid_params(
-                "give center or through for a curved slot, not both",
-                None,
-            ));
-        }
-        if params.clockwise && params.center.is_none() {
-            return Err(McpError::invalid_params(
-                "clockwise only applies with `center`; a slot through a point has its direction from \
-                 that point",
-                None,
-            ));
-        }
-        let mut points = PointConverter::default();
-        let start = points.convert(&params.start, "start")?;
-        let end = points.convert(&params.end, "end")?;
-        let center = params.center.as_ref().map(|c| points.convert(c, "center")).transpose()?;
-        let through = params.through.as_ref().map(|t| points.convert(t, "through")).transpose()?;
-        let what = format!(
-            "a {}slot {} mm wide",
-            if center.is_some() || through.is_some() { "curved " } else { "" },
-            params.width_mm
-        );
-        let entity = sketch_entity(
-            params.construction,
-            proto::sketch_entity::Geometry::Slot(proto::SketchSlot {
-                start: Some(start),
-                end: Some(end),
-                center,
-                through,
-                clockwise: params.clockwise,
-                width: params.width_mm / MM_PER_M,
-                add_dimensions: params.add_dimensions,
-            }),
-        );
-        let target = DrawTarget { sketch_3d: false, sketch: params.target };
-        self.draw_sketch(target, points.model_space(), vec![entity], what).await
-    }
-
-    #[tool(
-        description = "Draw a regular polygon in a 2D sketch of the active part, e.g. a hexagon \
-                       for a bolt head or nut, sized by the distance from its center to a corner \
-                       (corner_radius_mm) or to the middle of a side (flat_radius_mm: half the \
-                       size across flats). Draws into a new sketch on the Front/Top/Right plane or \
-                       `on` a planar face, or into an existing sketch given by sketch_name. The \
-                       center is [x, y] in sketch coordinates or [x, y, z] in model coordinates \
-                       (projected onto the sketch plane), in millimeters. Reports the ids of the \
-                       sides and of a construction circle through the corners (or touching the \
-                       sides, with flat_radius_mm): a diameter dimension on it sets the polygon's \
-                       size. Requires an open part with no sketch being edited."
-    )]
-    async fn sketch_polygon(
-        &self,
-        Parameters(params): Parameters<SketchPolygonParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let (corner_radius, angle, inscribed) = polygon_shape(
-            params.sides,
-            params.corner_radius_mm,
-            params.flat_radius_mm,
-            params.angle_deg,
-        )?;
-        let mut points = PointConverter::default();
-        let center = points.convert(&params.center, "center")?;
-        let entity = sketch_entity(
-            params.construction,
-            proto::sketch_entity::Geometry::Polygon(proto::SketchPolygon {
-                center: Some(center),
-                sides: params.sides,
-                corner_radius,
-                angle,
-                inscribed,
-            }),
-        );
-        let what = format!("a polygon with {} sides", params.sides);
-        let target = DrawTarget { sketch_3d: false, sketch: params.target };
-        self.draw_sketch(target, points.model_space(), vec![entity], what).await
-    }
-
-    #[tool(
-        description = "Draw a whole ellipse in a 2D sketch of the active part, by its center and \
-                       the radii of its long and short axes, the long axis at angle_deg from \
-                       sketch X. Draws into a new sketch on the Front/Top/Right plane or `on` a \
-                       planar face, or into an existing sketch given by sketch_name. The center is \
-                       [x, y] in sketch coordinates or [x, y, z] in model coordinates (projected \
-                       onto the sketch plane), in millimeters. inspect_sketch gives the ids of its \
-                       center and axis end points; distance dimensions from the center to them set \
-                       its size. trim_sketch_entity makes a part of an ellipse from it. Requires an \
-                       open part with no sketch being edited."
-    )]
-    async fn sketch_ellipse(
-        &self,
-        Parameters(params): Parameters<SketchEllipseParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let (major, minor) = (params.major_radius_mm, params.minor_radius_mm);
-        if !(major.is_finite() && minor.is_finite() && minor > 0.0 && major > minor) {
-            return Err(McpError::invalid_params(
-                format!(
-                    "major_radius_mm must be more than minor_radius_mm, and that more than 0, got {major} \
-                     and {minor} (equal radii are a circle: use sketch_circle)"
-                ),
-                None,
-            ));
-        }
-        if !params.angle_deg.is_finite() {
-            return Err(McpError::invalid_params("angle_deg must be finite", None));
-        }
-        let mut points = PointConverter::default();
-        let center = points.convert(&params.center, "center")?;
-        let entity = sketch_entity(
-            params.construction,
-            proto::sketch_entity::Geometry::Ellipse(proto::SketchEllipse {
-                center: Some(center),
-                major_radius: major / MM_PER_M,
-                minor_radius: minor / MM_PER_M,
-                angle: params.angle_deg.to_radians(),
-            }),
-        );
-        let what = format!("an ellipse of {major} x {minor} mm radii");
-        let target = DrawTarget { sketch_3d: false, sketch: params.target };
-        self.draw_sketch(target, points.model_space(), vec![entity], what).await
-    }
-
-    #[tool(
-        description = "Round corners of a 2D sketch of the active part with arcs of one radius, \
-                       like SolidWorks' Sketch Fillet. entities = sketch point ids (\"point:3\"), \
-                       each where two entities meet; or exactly two entity ids (\"line:1\", \
-                       \"arc:2\") for the corner between them, extended to it if they don't touch \
-                       yet. Lines and arcs shorten to make room, and what was dimensioned to the \
-                       corner stays on a point left there. Adds a radius dimension, which \
-                       set_dimension can change, and equal relations between arcs made together. \
-                       Reports the new arcs, what changed, the contours, the definition state, \
-                       and features that now fail to rebuild. All or nothing: refuses a radius \
-                       with no room or entities that cross (trim_sketch_entity first). Requires no \
-                       sketch open for editing."
+        description = "Round sketch corners with arcs of one radius (Sketch Fillet), at corner \
+                       points or between two entities (extended to meet if needed). Lines and arcs \
+                       shorten; what was dimensioned to the corner stays on a point there. Adds a \
+                       radius dimension. Reports the new arcs, what changed, the contours, the \
+                       definition state and features that now fail. All or nothing."
     )]
     async fn sketch_fillet(
         &self,
@@ -1820,17 +1502,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Cut corners of a 2D sketch of the active part with a straight line, like \
-                       SolidWorks' Sketch Chamfer. entities = sketch point ids (\"point:3\"), each \
-                       where two entities meet; or exactly two entity ids (\"line:1\", \"line:2\") \
-                       that touch. distance_mm alone is the same on both sides. With two entity \
-                       ids, second_distance_mm or angle_deg make the sides differ: distance_mm is \
-                       along the first entity, second_distance_mm along the other, angle_deg from \
-                       the first. Adds dimensions of the chamfer, which set_dimension can change, \
-                       and keeps the sharp corner as a point. Reports the new lines, what changed, \
-                       the contours, the definition state, and features that now fail to rebuild. \
-                       All or nothing: refuses sizes with no room or entities that don't touch. \
-                       Requires no sketch open for editing."
+        description = "Cut sketch corners with a straight line (Sketch Chamfer), at corner points \
+                       or between two touching entities; with two entities the sides may differ. \
+                       Adds dimensions and keeps the sharp corner as a point. Reports the new \
+                       lines, what changed, the contours, the definition state and features that \
+                       now fail. All or nothing."
     )]
     async fn sketch_chamfer(
         &self,
@@ -1854,16 +1530,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Trim an entity of a 2D sketch of the active part. With `at`: removes the \
-                       piece of the entity at that point, between whatever crosses it on either \
-                       side -- the whole entity if nothing does. A piece from the middle of a line \
-                       leaves two lines, and a circle becomes an arc with a new id, so use the ids \
-                       in the reply. With corner_with: this entity and the other grow until they \
-                       meet in a corner (they must not cross already). `at` is [x, y] in sketch \
-                       coordinates or [x, y, z] in model coordinates, in millimeters; the nearest \
-                       point on the entity counts. One piece per call. Reports what's new, what \
-                       changed, what's gone, the contours, the definition state, and features that \
-                       now fail to rebuild. Requires no sketch open for editing."
+        description = "Trim a sketch entity: remove the piece at `at` between whatever crosses it \
+                       (all of it if nothing does), or with corner_with grow it and another into a \
+                       corner. A piece from a line's middle leaves two lines, a trimmed circle is \
+                       an arc with a new id: use the reply's ids. One piece per call."
     )]
     async fn trim_sketch_entity(
         &self,
@@ -1890,13 +1560,9 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Extend an end of a line or arc of a 2D sketch of the active part up to the \
-                       next entity in its way, leaving them touching. `at` picks the end: the one \
-                       nearest that point, [x, y] in sketch coordinates or [x, y, z] in model \
-                       coordinates, in millimeters. Calling again goes on past that entity to the \
-                       next one. Refuses an end with nothing in its way. Reports what changed, the \
-                       contours, the definition state, and features that now fail to rebuild. \
-                       Requires no sketch open for editing."
+        description = "Extend the end of a sketch line or arc nearest `at` to the next entity in \
+                       its way; again goes on to the one after. Reports what changed, the \
+                       contours, the definition state and features that now fail."
     )]
     async fn extend_sketch_entity(
         &self,
@@ -1923,20 +1589,12 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Project model edges and faces, or entities of other sketches, into a sketch \
-                       of the active part, like SolidWorks' Convert Entities: the new entities \
-                       stay tied to what they came from and follow it when it changes, and need no \
-                       dimensions. entities = edge and face ids from inspect_model (\"edge:4\", \
-                       \"face:2\") or other sketches' ids from inspect_sketch (\"line:3\"). A face \
-                       brings its outer loop and its holes (loops=\"outer\" or \"inner\" for one of \
-                       them); an edge brings only itself, so give a face or every edge for a \
-                       whole loop. They go into \
-                       sketch_name, or a new sketch on plane or on (a single face defaults to a \
-                       new sketch on itself), or a new 3D sketch (sketch_3d=true), where edges keep \
-                       their place in space: e.g. a sweep path. Reports the new entities' ids, the \
-                       sketch's contours and definition state, and features that now fail to \
-                       rebuild. Refuses what comes to nothing, leaving nothing behind. Requires no \
-                       sketch open for editing."
+        description = "Project model edges and faces, or other sketches' entities, into a sketch \
+                       (Convert Entities): the new entities follow what they came from and need no \
+                       dimensions. A face brings its loops, an edge only itself. A single face \
+                       defaults to a new sketch on itself; in a new 3D sketch edges keep their \
+                       place in space (a sweep path). Reports the new ids, the contours, the \
+                       definition state and features that now fail."
     )]
     async fn convert_entities(
         &self,
@@ -1955,72 +1613,18 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Extrude a closed sketch of the active part into a solid (boss-extrude, \
-                       blind depth), merging with any existing body. By default extrudes the \
-                       most recently created sketch that isn't used by a feature yet, e.g. the \
-                       one create_square_sketch or create_rectangle_sketch just made. Requires \
-                       an open part with no sketch being edited."
+        description = "Extrude a closed sketch of the active part into a solid, merging with any \
+                       body, or with cut=true remove material to a depth or through_all. A cut \
+                       goes against the sketch normal (into the part, for a sketch on its face); \
+                       if that removes nothing it goes the other way and says so."
     )]
     async fn extrude_sketch(
         &self,
         Parameters(params): Parameters<ExtrudeSketchParams>,
     ) -> Result<CallToolResult, McpError> {
-        let depth_mm = params.depth_mm;
-        if !(depth_mm.is_finite() && depth_mm > 0.0) {
-            return Err(McpError::invalid_params(
-                format!("depth must be a positive number of millimeters, got {depth_mm}"),
-                None,
-            ));
+        if params.through_all && !params.cut {
+            return Err(McpError::invalid_params("through_all is for cuts (cut=true)", None));
         }
-        let sketch_name = params
-            .sketch_name
-            .map(|name| name.trim().to_string())
-            .unwrap_or_default();
-
-        let request = proto::ExtrudeSketchRequest {
-            sketch_name,
-            depth: depth_mm / MM_PER_M,
-            reverse_direction: params.reverse_direction,
-            mid_plane: params.mid_plane,
-            cut: false,
-            through_all: false,
-        };
-        let result = self
-            .addin
-            .extrude_sketch(request)
-            .await
-            .map_err(|status| self.addin_error(status))?;
-
-        let how = if params.mid_plane {
-            " (mid-plane)"
-        } else if params.reverse_direction {
-            " (reversed)"
-        } else {
-            ""
-        };
-        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-            "created {} by extruding {} {depth_mm} mm{how}.{}",
-            result.feature_name,
-            result.sketch_name,
-            sketch_status_note(&result.sketch_name, result.sketch_status())
-        ))]))
-    }
-
-    #[tool(
-        description = "Cut a closed sketch of the active part into the existing solid \
-                       (cut-extrude), removing material to a depth or through the whole part. \
-                       By default uses the most recently created sketch that isn't used by a \
-                       feature yet. Typical use: inspect_model to find a face, \
-                       create_rectangle_sketch on it, then this. Cuts against the sketch's \
-                       normal (into the part, for a sketch on a face); if that would remove \
-                       nothing, e.g. a sketch on a plane with the part on its normal side, it \
-                       cuts the other way and says so. Requires an open part with no sketch \
-                       being edited."
-    )]
-    async fn cut_extrude_sketch(
-        &self,
-        Parameters(params): Parameters<CutExtrudeSketchParams>,
-    ) -> Result<CallToolResult, McpError> {
         let depth_mm = match (params.through_all, params.depth_mm) {
             (true, _) => 0.0,
             (false, Some(d)) if d.is_finite() && d > 0.0 => d,
@@ -2030,12 +1634,10 @@ impl SolidWorksTools {
                     None,
                 ));
             }
-            (false, None) => {
-                return Err(McpError::invalid_params(
-                    "give depth_mm, or set through_all",
-                    None,
-                ));
+            (false, None) if params.cut => {
+                return Err(McpError::invalid_params("give depth_mm, or set through_all", None));
             }
+            (false, None) => return Err(McpError::invalid_params("give depth_mm", None)),
         };
         let sketch_name = params
             .sketch_name
@@ -2047,7 +1649,7 @@ impl SolidWorksTools {
             depth: depth_mm / MM_PER_M,
             reverse_direction: params.reverse_direction,
             mid_plane: params.mid_plane,
-            cut: true,
+            cut: params.cut,
             through_all: params.through_all,
         };
         let result = self
@@ -2065,13 +1667,16 @@ impl SolidWorksTools {
         } else {
             format!("{depth_mm} mm")
         };
-        let flipped = if result.direction_flipped {
-            " It cut along the sketch normal (reversed): against it there was nothing to remove."
-        } else {
-            ""
+        let (verb, flipped) = match (params.cut, result.direction_flipped) {
+            (false, _) => ("extruding", ""),
+            (true, false) => ("cutting with", ""),
+            (true, true) => (
+                "cutting with",
+                " It cut along the sketch normal (reversed): against it there was nothing to remove.",
+            ),
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-            "created {} by cutting with {} {how}.{flipped}{}",
+            "created {} by {verb} {} {how}.{flipped}{}",
             result.feature_name,
             result.sketch_name,
             sketch_status_note(&result.sketch_name, result.sketch_status())
@@ -2079,87 +1684,51 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Revolve a closed sketch of the active part about an axis into a solid \
-                       (revolved boss: a shaft, knob, flange, ...), merging with any existing \
-                       body. The axis is the sketch's centerline by default: draw the half \
-                       profile on one side of a sketch_line with construction=true, in the same \
-                       sketch. Or give axis = a sketch line id, a straight edge or a reference \
-                       axis. A full turn (360 degrees) unless angle_deg says otherwise. By \
-                       default revolves the most recently created sketch that isn't used by a \
-                       feature yet. The profile may touch the axis but not cross it. Requires an \
-                       open part with no sketch being edited."
+        description = "Revolve a closed sketch of the active part about an axis into a solid (a \
+                       shaft, knob, flange), or with cut=true remove material (a groove, a turned \
+                       recess). Draw the half profile beside a construction line in the same \
+                       sketch, or give `axis`; it may touch the axis, not cross it. A partial-turn \
+                       cut that would remove nothing goes the other way and says so."
     )]
     async fn revolve_sketch(
         &self,
         Parameters(params): Parameters<revolve::RevolveParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.revolve(params, false).await
+        self.revolve(params).await
     }
 
     #[tool(
-        description = "Cut by revolving a closed sketch of the active part about an axis \
-                       (cut-revolve), removing material: a groove round a shaft, a turned \
-                       recess, a chamfer-like profile. Axis, angle and sketch as for \
-                       revolve_sketch (default: the sketch's centerline, a full turn); typically \
-                       the sketch is on a plane through the part's axis. For a partial turn that \
-                       would remove nothing the default way, it cuts the other way and says so. \
-                       Requires an open part with no sketch being edited."
-    )]
-    async fn cut_revolve_sketch(
-        &self,
-        Parameters(params): Parameters<revolve::RevolveParams>,
-    ) -> Result<CallToolResult, McpError> {
-        self.revolve(params, true).await
-    }
-
-    #[tool(
-        description = "Sweep a closed profile sketch of the active part along a path into a solid (swept boss: a handle, pipe, rail, spring, ...), merging with any existing body. Draw the path first (e.g. sketch_line / sketch_arc on Front), then the profile in its own sketch on a plane across the path's start (e.g. Right, or a create_reference_plane through the path's end point), and give path = the path sketch's name. Or skip the profile sketch: circle_diameter_mm sweeps a round section (a rod or wire). By default the profile is the most recently created sketch that isn't used by a feature yet, other than the path. twist_deg turns the profile along the path. Requires an open part with no sketch being edited."
+        description = "Sweep a closed profile sketch of the active part along a `path` sketch into \
+                       a solid (a handle, pipe, spring), or with cut=true remove material (a \
+                       groove along a curve, a thread-like cut). Draw the path, then the profile \
+                       in its own sketch on a plane across the path's start; or circle_diameter_mm \
+                       sweeps a round section with no profile sketch."
     )]
     async fn sweep_sketch(
         &self,
         Parameters(params): Parameters<sweep::SweepParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.sweep(params, false).await
+        self.sweep(params).await
     }
 
     #[tool(
-        description = "Cut by sweeping a closed profile sketch (or a circle, circle_diameter_mm) of the active part along a path (cut-sweep), removing material: a groove that follows a curve, a channel, a thread-like helical cut. Path, profile and twist as for sweep_sketch; the profile must overlap the part where it starts or along the way. Requires an open part with no sketch being edited."
-    )]
-    async fn cut_sweep_sketch(
-        &self,
-        Parameters(params): Parameters<sweep::SweepParams>,
-    ) -> Result<CallToolResult, McpError> {
-        self.sweep(params, true).await
-    }
-
-    #[tool(
-        description = "Loft through two or more profile sketches of the active part, in order, into a solid (lofted boss: a transition between a square and a round section, a bottle neck, a duct, a blade, a pyramid), merging with any existing body. Draw each profile as one closed contour in its own sketch on its own plane (e.g. Front, and a create_reference_plane offset from it), then give profiles = their sketch names in the order to pass through. The first or last profile may be a sketch holding a single sketch_point (a loft to a tip). guide_curves (sketches touching every profile) shape the sides; closed loops back to the first profile; start_normal / end_normal make the loft leave / meet the end profiles at right angles. Requires an open part with no sketch being edited."
+        description = "Loft through profile sketches of the active part, in order, into a solid (a \
+                       square-to-round transition, a bottle neck, a pyramid), or with cut=true \
+                       remove material (a tapered pocket). Each profile is one closed contour in \
+                       its own sketch on its own plane, e.g. Front and a reference plane offset \
+                       from it."
     )]
     async fn loft_sketch(
         &self,
         Parameters(params): Parameters<loft::LoftParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.loft(params, false).await
+        self.loft(params).await
     }
 
     #[tool(
-        description = "Cut by lofting through two or more profile sketches of the active part (cut-loft), removing material: a tapered pocket, a funnel-shaped hole, a transition from a square to a round opening. Profiles, guide_curves, closed and start_normal / end_normal as for loft_sketch; the loft must pass through material. Requires an open part with no sketch being edited."
-    )]
-    async fn cut_loft_sketch(
-        &self,
-        Parameters(params): Parameters<loft::LoftParams>,
-    ) -> Result<CallToolResult, McpError> {
-        self.loft(params, true).await
-    }
-
-    #[tool(
-        description = "Round edges of the active part with a constant-radius fillet. edges = \
-                       edge ids (\"edge:7\") or face ids (\"face:3\": all of that face's edges, \
-                       e.g. the top face of a box) from inspect_model (what=\"edges\" / \"faces\"; \
-                       render_views with highlight shows which is which). Edges tangent to the \
-                       given ones are rounded too unless tangent_propagation=false. Usually the \
-                       last step: fillet after the extrudes and cuts that make the edges. \
-                       Requires an open part with no sketch being edited."
+        description = "Round edges of the active part (or all edges of given faces) with a \
+                       constant-radius fillet; tangent edges too unless tangent_propagation=false. \
+                       Usually after the extrudes and cuts that make the edges."
     )]
     async fn fillet_edges(
         &self,
@@ -2178,13 +1747,9 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Bevel edges of the active part with a chamfer. edges = edge ids \
-                       (\"edge:7\") or face ids (\"face:3\": all of that face's edges) from \
-                       inspect_model. distance_mm alone makes a 45 degree, equal-distance chamfer; \
-                       add angle_deg (angle-distance) or distance2_mm (distance-distance) for an \
-                       uneven one, and flip to swap which face each is measured on. Edges tangent \
-                       to the given ones are beveled too unless tangent_propagation=false. \
-                       Requires an open part with no sketch being edited."
+        description = "Bevel edges of the active part (or all edges of given faces) with a \
+                       chamfer: equal distances, angle-distance or distance-distance. Tangent \
+                       edges are beveled too unless tangent_propagation=false."
     )]
     async fn chamfer_edges(
         &self,
@@ -2203,14 +1768,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Make a helix or a flat spiral curve in the active part from a sketch \
-                       holding one circle (sketch_circle first): the circle sets the diameter, its \
-                       plane the axis. Give exactly two of pitch_mm, height_mm and revolutions \
-                       (spiral=true: pitch_mm and revolutions); clockwise, reverse_direction, \
-                       start_angle_deg and taper_deg shape it further. The curve is not solid: \
-                       use it as sweep_sketch's or cut_sweep_sketch's path for a spring, a coil or \
-                       a thread. The reply says where it starts and ends. The sketch stays with \
-                       the curve. Requires an open part with no sketch being edited."
+        description = "Make a helix or flat spiral curve in the active part from a sketch holding \
+                       one circle: the circle sets the diameter, its plane the axis. Give two of \
+                       pitch_mm, height_mm and revolutions (spiral: pitch_mm and revolutions). Not \
+                       solid: a sweep path for a spring, coil or thread. The reply says where it \
+                       starts and ends."
     )]
     async fn create_helix(
         &self,
@@ -2226,17 +1788,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Hollow out a solid body of the active part, leaving walls of an even \
-                       thickness (shell): an enclosure, a tray, a cup, a housing. open_faces = \
-                       face ids (\"face:3\") from inspect_model to remove, leaving openings, e.g. \
-                       the top face of a box; with none the body is closed all round with an \
-                       empty cavity inside. face_thicknesses gives walls a thickness of their own, \
-                       e.g. a thicker base; outward adds the walls outside the faces, making the \
-                       body bigger. One body per call: in a part with several, open_faces says \
-                       which (all of one body), or body for a closed shell. Usually after the \
-                       extrudes and the outside fillets \
-                       (they carry through to the inside), before features that belong inside the \
-                       cavity. Requires an open part with no sketch being edited."
+        description = "Hollow a solid body of the active part into walls of even thickness (an \
+                       enclosure, a tray), removing open_faces as openings, or closed with a \
+                       cavity. One body per call. Usually after the extrudes and outside fillets, \
+                       before features inside the cavity."
     )]
     async fn shell_body(
         &self,
@@ -2255,17 +1810,12 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Make a rib: a thin stiffening wall of the active part grown from a sketch \
-                       until it meets the body, e.g. a web across a tray or a gusset in a corner. \
-                       Draw the sketch first, usually one open line or chain on a plane across \
-                       the part, where the rib's free edge should be: it needn't reach the walls, \
-                       its ends carry on to them, but they must run into material (over a plain \
-                       plate, draw the chain down to the plate). The rib grows within the sketch \
-                       plane, or along the sketch's normal with normal_to_sketch, towards the \
-                       material; if the default way makes nothing it goes the other way and says \
-                       so. By default \
-                       uses the most recently created sketch that isn't used by a feature yet. \
-                       Requires an open part with a solid body and no sketch being edited."
+        description = "Make a rib: a thin wall of the active part grown from a sketch until it \
+                       meets the body, e.g. a web across a tray. The sketch, usually an open line \
+                       or chain where the rib's free edge goes, may stop short of the walls, but \
+                       its ends must run into material. Grows within the sketch plane (or \
+                       normal_to_sketch); if the default way makes nothing it goes the other way \
+                       and says so."
     )]
     async fn rib_sketch(
         &self,
@@ -2284,13 +1834,9 @@ impl SolidWorksTools {
 
     #[tool(
         description = "Taper faces of the active part about a neutral plane (draft), so a molded \
-                       or cast part comes out of its mold. faces = the walls to taper, ids \
-                       (\"face:3\") from inspect_model; neutral_plane = where they keep their \
-                       size: \"front\" / \"top\" / \"right\", a planar face id or a reference \
-                       plane. The reply says whether the body grew or shrank; flip leans the \
-                       faces the other way. propagation takes in tangent faces, or all, inner or \
-                       outer walls on the plane. For the sides of one extrude, edit_extrude's \
-                       draft_deg is simpler. Requires an open part with no sketch being edited."
+                       or cast part leaves its mold. The reply says whether the body grew or \
+                       shrank (flip leans the other way). For the sides of one extrude, \
+                       edit_extrude draft_deg is simpler."
     )]
     async fn draft_faces(
         &self,
@@ -2309,15 +1855,9 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Mirror features or whole bodies of the active part about a plane. plane = \
-                       \"front\" / \"top\" / \"right\", a planar face id (\"face:3\") or a \
-                       reference plane (create_reference_plane). features = feature names \
-                       (\"Boss-Extrude1\") or ids from inspect_model: copies are built on the \
-                       other side of the plane, e.g. a boss, cut or hole drawn on one half of a \
-                       symmetric part. Or bodies = body ids (\"body:1\") to mirror whole bodies, \
-                       e.g. to finish a half-modelled part about its cut face (merged with it \
-                       unless merge=false). To mirror sketch geometry inside a sketch, use \
-                       mirror_sketch_entities. Requires an open part with no sketch being edited."
+        description = "Mirror features of the active part about a plane (copies on the other \
+                       side), or whole bodies, e.g. to finish a half-modelled part about its cut \
+                       face (merged unless merge=false)."
     )]
     async fn mirror_features(
         &self,
@@ -2338,17 +1878,8 @@ impl SolidWorksTools {
 
     #[tool(
         description = "Copy features or whole bodies of the active part in a row, or a grid with \
-                       direction2, e.g. a row of holes or slots. features = feature names \
-                       (\"Cut-Extrude1\") or ids from inspect_model; or bodies = body ids \
-                       (\"body:1\"). direction = a straight edge (\"edge:7\"), a sketch line, a \
-                       reference axis, or a planar face or plane (\"front\", \"face:3\") to \
-                       pattern along its normal; count = instances including the original; \
-                       spacing_mm = distance from one to the next. Which way an edge points \
-                       isn't obvious: if the copies go the wrong way, edit_pattern with \
-                       reverse_direction=true. To copy round an axis, use \
-                       circular_pattern_features; to copy sketch geometry inside a sketch, \
-                       linear_pattern_sketch_entities. Requires an open part with no sketch being \
-                       edited."
+                       direction2, spacing_mm apart. Which way an edge points isn't obvious: if \
+                       the copies go the wrong way, edit_pattern reverse_direction=true."
     )]
     async fn linear_pattern_features(
         &self,
@@ -2371,16 +1902,8 @@ impl SolidWorksTools {
 
     #[tool(
         description = "Copy features or whole bodies of the active part round an axis, e.g. bolt \
-                       holes round a flange or spokes of a wheel. features = feature names \
-                       (\"Cut-Extrude1\") or ids from inspect_model; or bodies = body ids \
-                       (\"body:1\"). axis = a reference axis (\"Axis1\"), a cylindrical face \
-                       (\"face:3\", e.g. the bore or the outside of a round part), a straight or \
-                       circular edge, or a sketch line; count = instances including the \
-                       original, spread evenly all the way round unless angle_deg (the total) or \
-                       spacing_deg (between neighbours) says otherwise. To copy in a row, use \
-                       linear_pattern_features; to copy sketch geometry inside a sketch, \
-                       circular_pattern_sketch_entities. Requires an open part with no sketch \
-                       being edited."
+                       holes round a flange. count includes the original; spread evenly all the \
+                       way round unless angle_deg or spacing_deg."
     )]
     async fn circular_pattern_features(
         &self,
@@ -2402,25 +1925,12 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Look at the active part or assembly without changing it. \
-                       what=\"overview\" (default) lists the feature tree (name, type, \
-                       parents/children; type ProfileFeature is a sketch; features that fail to \
-                       rebuild carry an `error` or `warning` -- diagnose_model explains them) and \
-                       the bodies (bounding box, volume, centroid). what=\"faces\" lists faces with their geometry: \
-                       planes with outward normal and a point on the plane, cylinders with axis, \
-                       radius and whether they're holes, plus area and bounding box. \
-                       what=\"edges\" lists edges with type, length, end points, circle \
-                       center/radius and the faces they join. Narrow faces/edges with `within` \
-                       (a body, a feature name like \"Boss-Extrude1\" for the faces it made, or a \
-                       face for its edges) and the filters. In an assembly the overview also \
-                       lists the components (\"component:2\": file, fixed or floating, origin \
-                       and axes in the assembly) and the mates; within=\"component:2\" narrows \
-                       features (that part's own planes, for mating), bodies, faces and edges to \
-                       one component, and every face/edge names its component. Every entity has \
-                       an id such as \"face:7\" that other tools accept, e.g. \
-                       create_rectangle_sketch `on` or add_mate `entities`. IDs stay valid across \
-                       edits for as long as the entity exists. All lengths and coordinates are in \
-                       millimeters, in the part's model space or the assembly's space."
+        description = "Look at the active part or assembly: the feature tree (failing features \
+                       carry an error; diagnose_model explains), bodies, faces with geometry, \
+                       edges, and in an assembly components and mates. Every entity has an id \
+                       (\"face:7\") other tools take, valid across edits while it exists; `within` \
+                       narrows to a body, feature, face or component. mm, in model (or assembly) \
+                       space."
     )]
     async fn inspect_model(
         &self,
@@ -2493,20 +2003,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Recognize what the active part's bodies are made of, from their faces and \
-                       edges, without changing anything: meant for imported geometry (STEP, \
-                       IGES, Parasolid opened with open_document), which has no feature history, \
-                       but works on any body. Finds holes (simple, counterbore, countersink; \
-                       diameter, through or depth, entry point and direction into the material, \
-                       the steps of a stepped hole, drill point angle), cylindrical bosses and \
-                       shafts, fillets and rounds by radius, rounded ends such as slot ends, \
-                       chamfers (legs on each face), and lists the remaining planar faces by \
-                       direction and position (e.g. the faces at x = 0 and x = 10 of a 10 mm \
-                       plate); faces it can't place are listed as other_faces. `summary` says it \
-                       in a few lines. Every item gives its face ids, the same as inspect_model's, \
-                       for sketching on, mating or render_views highlight. Narrow it with \
-                       `within` (a body, a feature such as \"Imported1\", or in an assembly a \
-                       component). Millimeters and degrees, in model space."
+        description = "Recognize what the active part's bodies are made of, for imported geometry \
+                       with no history (works on any body): holes (counterbore, countersink, \
+                       steps, depth, direction), bosses, fillets, rounded ends, chamfers, and the \
+                       planar faces by direction and position. Every item gives its face ids. mm, \
+                       degrees, model space."
     )]
     async fn recognize_features(
         &self,
@@ -2539,19 +2040,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Read the active part's (or assembly's) MBD / PMI: the 3D annotations \
-                       made with SolidWorks' MBD Dimension (DimXpert) tools or the annotation \
-                       tools, without changing anything. Lists dimensions with their tolerances \
-                       (bilateral, limit, symmetric, basic, fits like H7) and nominal values, \
-                       datum feature symbols (\"A\", \"B\"), geometric tolerances as feature \
-                       control frames (characteristic, tolerance, diameter zone, MMC/LMC \
-                       modifiers, datum references, plus a one-line callout such as \"position | \
-                       dia 0.1 (M) | A | B | C\"), datum targets, surface finish symbols and notes. \
-                       Each annotation lists the faces/edges it's attached to as inspect_model \
-                       ids (\"face:7\"), so render_views can highlight them; filter by `kind` \
-                       or by an entity with `on`. Dimensions that drive sketches/features are \
-                       left out unless include_feature_dimensions is set. Millimeters and \
-                       degrees."
+        description = "Read the 3D annotations (MBD / PMI) of the active part or assembly: \
+                       dimensions with tolerances, datum symbols, feature control frames with a \
+                       one-line callout, datum targets, surface finish symbols, notes, each with \
+                       the face / edge ids it's attached to. Feature-driving dimensions only if \
+                       asked."
     )]
     async fn inspect_annotations(
         &self,
@@ -2576,28 +2069,10 @@ impl SolidWorksTools {
 
     #[tool(
         description = "Add a geometric tolerance -- a feature control frame -- to the active part \
-                       or assembly (3D PMI / MBD) or drawing. `characteristic`: flatness, \
-                       straightness, circularity, cylindricity (form: no datums), \
-                       profile_of_a_surface / profile_of_a_line, perpendicularity, parallelism, \
-                       angularity (need a datum), position, concentricity, symmetry, \
-                       circular_runout / total_runout (need a datum). `tolerance` in mm (written \
-                       in the document's unit: 0.002 in an inch document; a text goes as is), \
-                       `diameter_zone` (the diameter sign, e.g. a hole's position), `modifier` \
-                       (MMC / LMC; none = RFS), `datums` in order of precedence (\"A\", \"B(M)\", \"C\"; \
-                       \"A-B\" for a common datum). Attach with `on` -- in a part a face or edge id \
-                       from inspect_model (\"face:7\"), in a drawing a view entity from \
-                       inspect_drawing (\"view_edge:4\") -- for a leader to it (arrow at \
-                       `arrow_at_mm`; a hole's cylindrical face for its position), in a drawing \
-                       also `dimension` to put it on a size dimension (\"RD1@Drawing View1\"), or \
-                       neither for a free frame. `at_mm` places it ([x, y, z] model mm in a part, [x, y] \
-                       sheet mm in a drawing; default: 10 mm out from the arrow). Also \
-                       `second_frame` (+ `composite`), `datum_feature` (a datum symbol on the \
-                       frame), `projected_zone_mm`. `standard`: iso (ISO 1101) or asme (ASME \
-                       Y14.5), the GD&T rules it's checked against (default: the document's \
-                       drafting standard's -- ANSI is asme); SolidWorks draws it by the \
-                       document's drafting standard (document_units). The frame is read back from SolidWorks; the \
-                       reply gives its callout (\"position | dia 0.1 (M) | A | B | C\"), name \
-                       (delete_drawing_annotations removes it, in parts too) and where it went."
+                       or assembly (3D PMI / MBD) or drawing, with a leader to `on`, on a size \
+                       `dimension` (drawings), or free. The frame is read back: the reply gives \
+                       its callout (\"position | dia 0.1 (M) | A | B | C\"), its name (for \
+                       delete_drawing_annotations, parts too) and where it went."
     )]
     async fn add_geometric_tolerance(
         &self,
@@ -2609,16 +2084,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Add a datum feature symbol -- the boxed letter on a triangle that makes a \
-                       face, edge or feature of size datum A, B, ... -- to the active part, assembly \
-                       or drawing, for add_geometric_tolerance's frames to reference. `on`: a face \
-                       or edge id from inspect_model in a part (\"face:7\"), a view entity from \
-                       inspect_drawing in a drawing (\"view_edge:4\"; a hole's circle) -- a \
-                       hole's or shaft's cylindrical face makes its axis the datum. `label`: the letter (default: SolidWorks' next one; refused if \
-                       another datum symbol has it), `standard` (iso / asme, as for \
-                       add_geometric_tolerance). SolidWorks stands it just off the entity; \
-                       `at_mm` moves it ([x, y, z] model mm in a part, [x, y] sheet mm in a \
-                       drawing)."
+        description = "Add a datum feature symbol (the boxed letter on a triangle that makes a \
+                       face, edge or feature of size datum A, B, ...) to the active part, assembly \
+                       or drawing, for add_geometric_tolerance to reference. A hole's or shaft's \
+                       cylindrical face makes its axis the datum. A letter another datum symbol \
+                       has is refused."
     )]
     async fn add_datum_symbol(
         &self,
@@ -2630,18 +2100,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Add a surface finish (surface texture) symbol to the active drawing, part \
-                       or assembly. `kind`: basic (default), machining_required, no_machining. \
-                       Texts are shown as written: `roughness` (\"Ra 3.2\"), `roughness_min`, \
-                       `production_method`, `sampling_length`, `allowance`; `lay` (parallel, \
-                       perpendicular, crossed, multi_directional, circular, radial, particulate). \
-                       `on` -- a view entity from inspect_drawing (\"view_edge:4\"), or a face or \
-                       edge from inspect_model in a part -- for a leader to it, arrow at \
-                       `arrow_at_mm`, the symbol's point at `at_mm` (default: outside the view); \
-                       `no_leader` stands it on the entity at arrow_at_mm instead. Without `on` it \
-                       stands free at `at_mm`, in `view` or on the sheet: a drawing's general \
-                       finish. SolidWorks draws it by the drafting standard (document_units). \
-                       delete_drawing_annotations removes it."
+        description = "Add a surface finish (texture) symbol to the active drawing, part or \
+                       assembly: with a leader to `on`, standing on it (no_leader), or free at \
+                       at_mm (a drawing's general finish). Texts show as written. Drawn by the \
+                       document's drafting standard. delete_drawing_annotations removes it."
     )]
     async fn add_surface_finish_symbol(
         &self,
@@ -2653,15 +2115,8 @@ impl SolidWorksTools {
 
     #[tool(
         description = "Add a weld symbol to the active drawing, part or assembly: a leader to the \
-                       joint (`on`: a view entity from inspect_drawing, \"view_edge:4\", or an edge \
-                       or face from inspect_model in a part; arrow at `arrow_at_mm`) and a reference \
-                       line at `at_mm` (its end; default: outside the view). Say the weld by side: \
-                       `arrow_side` and / or `other_side` = {symbol: fillet, square, v, bevel, u, j, \
-                       plug, spot, seam, backing, ...; size and length as shown (\"5\", \"3x50-100\"); \
-                       contour: flat, convex, concave}, or `both_sides` to repeat arrow_side. Each is \
-                       drawn where `standard` says: iso (ISO 2553: arrow side on the solid line) or \
-                       asme (AWS A2.4: arrow side below the line), default by the document's drafting \
-                       standard. Also `all_around`, `field_weld`, `process` (\"GMAW\"). \
+                       joint (`on`) and a reference line at at_mm, with the weld on the arrow \
+                       side, the other side or both, drawn as `standard` places them. \
                        delete_drawing_annotations removes it."
     )]
     async fn add_weld_symbol(
@@ -2674,15 +2129,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Add center marks to a view of the active drawing. `on`: circles and arcs seen \
-                       face-on, edge ids from inspect_drawing with the view (\"view_edge:3\"), one \
-                       mark each -- one already marked is left alone, and SolidWorks may have marked \
-                       them when the view was made, so look at the view's annotations first -- or \
-                       with `group` one mark over them all, replacing their own: linear (holes in a \
-                       row) or circular (holes on a bolt circle; SolidWorks marks the circle's center \
-                       too). Without `on`: every hole in `view`, \
-                       or what `throughout` says (holes, fillets, slots). The reply gives each mark's \
-                       name and centers in sheet mm. delete_drawing_annotations removes them."
+        description = "Add center marks to a view of the active drawing: one per circle or arc in \
+                       `on`, or with `group` one over them all; without `on`, every hole (or \
+                       `throughout`) of `view`. Circles already marked are left alone -- \
+                       SolidWorks may mark them when a view is made, so check the view's \
+                       annotations first. Reports each mark's name and centers."
     )]
     async fn add_center_marks(
         &self,
@@ -2706,11 +2157,9 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Add centerlines to a view of the active drawing. `between`: pairs of parallel \
-                       straight edges or silhouettes from inspect_drawing with the view, one line \
-                       midway between each -- [[\"silhouette:1\", \"silhouette:2\"]] for a cylinder \
-                       seen side-on. Without it: SolidWorks' own on the cylinders of `view`. \
-                       delete_drawing_annotations removes them."
+        description = "Add centerlines to a view of the active drawing: midway between each pair \
+                       of parallel edges or silhouettes in `between`, or without it SolidWorks' \
+                       own on the view's cylinders."
     )]
     async fn add_centerlines(
         &self,
@@ -2735,20 +2184,12 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Look at the active drawing (.SLDDRW) without changing it: its sheets \
-                       (paper size, scale, first/third-angle projection) and their drawing views \
-                       (type, orientation such as *Front, scale, the part or assembly shown, the \
-                       view's outline on the sheet, which model axes point right/up on the sheet, \
-                       and how many dimensions/notes it has). With view=\"Drawing View1\" it also \
-                       lists that view's visible edges with ids (\"view_edge:3\"; \"silhouette:1\" \
-                       for the outline of a curved face seen side-on, e.g. a cylinder's sides; \
-                       vertices with include_vertices) and what each looks like on the sheet: \
-                       lines with start/end, circles/arcs seen face-on with center and \
-                       diameter/radius, or seen edge-on as a line -- plus the view's dimensions \
-                       (name, value, tolerance, text position, the edges they're attached to) and \
-                       other annotations. Positions are sheet millimeters from the sheet's \
-                       lower-left corner; sizes are the model's true sizes. Use the ids with \
-                       add_drawing_dimensions."
+        description = "Look at the active drawing: its sheets (paper, scale, projection) and views \
+                       (type, orientation, scale, model, outline on the sheet, which model axes \
+                       point right / up). With `view`, also its visible edges with ids \
+                       (\"view_edge:3\"; \"silhouette:1\" for a curved face's outline) and sheet \
+                       positions, and its dimensions and annotations. Sheet mm from the lower-left \
+                       corner; sizes are the model's."
     )]
     async fn inspect_drawing(
         &self,
@@ -2770,19 +2211,10 @@ impl SolidWorksTools {
 
     #[tool(
         description = "Add dimensions to views of the active drawing, measuring the edges \
-                       inspect_drawing listed (call it with the view first for ids). Kinds: length (1 \
-                       straight edge), distance (2 entities: between parallel edges, from a point or \
-                       a circle's center to an edge, ...), horizontal / vertical (1 edge's extent or \
-                       the distance between 2 entities, along the sheet's x / y), diameter / radius \
-                       (1 circle or arc seen face-on), angle (2 straight edges). The entities of one \
-                       dimension must be in one view. Text goes at at_mm ([x, y] sheet mm) or by \
-                       default outside the view on the side nearer the measured edges (above/below \
-                       for horizontal, left/right for vertical), next to the circle for \
-                       diameter/radius, inside the corner for angles. Drawing dimensions show the model's sizes; \
-                       they don't change the model (to change a size, edit the part's own \
-                       dimensions). All dimensions of a call are added together, or none if one \
-                       fails. To bring in the model's own sketch/feature dimensions instead, use \
-                       insert_model_items."
+                       inspect_drawing lists for a view. They show the model's sizes and don't \
+                       change it; insert_model_items brings in the model's own, driving dimensions \
+                       instead. Text goes at at_mm or by default outside the view next to what it \
+                       measures. All of a call's dimensions are added, or none."
     )]
     async fn add_drawing_dimensions(
         &self,
@@ -2804,15 +2236,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "SolidWorks' Model Items for the active drawing: insert the model's own \
-                       dimensions (the sketch and feature dimensions that define the part, those \
-                       marked for drawing by default) into drawing views, placed where they sit in \
-                       the model's sketches. Optionally also hole callouts, Hole Wizard locations, \
-                       datums, geometric tolerances, surface finish symbols, notes or cosmetic \
-                       threads. Unlike add_drawing_dimensions these stay linked to the model: \
-                       changing one in the drawing changes the part. Defaults to every view of the \
-                       active sheet; dimensions already shown in another view are skipped unless \
-                       include_duplicates. Reports what each view gained."
+        description = "Insert the model's own dimensions (those marked for drawing by default) \
+                       into drawing views where they sit in its sketches, optionally also hole \
+                       callouts, datums, frames, symbols, notes and cosmetic threads. Unlike \
+                       add_drawing_dimensions they stay linked: changing one changes the part. \
+                       Skips dimensions shown in another view. Reports what each view gained."
     )]
     async fn insert_model_items(
         &self,
@@ -2831,15 +2259,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Look at a sheet of the active drawing as SolidWorks prints it: a PNG of the \
-                       sheet with rulers in sheet mm along the left and bottom edges and light grid \
-                       lines, so positions read the same as inspect_drawing's and at_mm. Use it \
-                       after placing views or dimensions to check the layout: overlapping or \
-                       crowded dimension text, dimensions crossing views or other dimensions, \
-                       things off the sheet or outside the border. `view` zooms to one view (and the \
-                       dimensions around it), `region_mm` to a rectangle; defaults to the whole \
-                       active sheet (`sheet` for another). Each picture costs about 1-2k tokens; \
-                       zoom in when the whole sheet is too small to read."
+        description = "A PNG of a sheet of the active drawing as printed, with rulers in sheet mm, \
+                       to check the layout: overlapping or crowded text, dimensions crossing \
+                       views, things off the sheet. `view` or `region_mm` zooms in. About 1-2k \
+                       tokens per picture."
     )]
     async fn render_drawing(
         &self,
@@ -2894,15 +2317,9 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Add a sheet to the active drawing and make it the active sheet (the one \
-                       render_drawing and insert_model_items work on by default). It starts as a \
-                       copy of the active sheet's setup -- paper size, sheet format (border and \
-                       title block), scale, projection -- unless given: `paper_size` or \
-                       `paper_size_mm`, `sheet_format` (an absolute .slddrt path or a name from \
-                       SolidWorks' sheet format folder such as \"a4 - iso\"; without a paper size \
-                       the sheet takes the format's own size), `scale` (\"1:2\"), `projection` \
-                       (first_angle / third_angle). `name` defaults to the next \"SheetN\". The \
-                       new sheet has no views."
+        description = "Add a sheet to the active drawing and make it active. It copies the active \
+                       sheet's paper size, sheet format, scale and projection unless given. It has \
+                       no views."
     )]
     async fn add_sheet(
         &self,
@@ -2912,9 +2329,8 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Show another sheet of the active drawing, making it the active sheet: \
-                       the one render_drawing and insert_model_items work on by default and \
-                       SolidWorks shows. Reports its setup and views."
+        description = "Make another sheet of the active drawing the active one (the one SolidWorks \
+                       shows and the drawing tools default to). Reports its setup and views."
     )]
     async fn activate_sheet(
         &self,
@@ -2924,16 +2340,9 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Change a sheet of the active drawing (default: the active sheet; others \
-                       stay in the background): `paper_size` or `paper_size_mm`, `sheet_format` \
-                       (border and title block, an absolute .slddrt path or a name from \
-                       SolidWorks' sheet format folder such as \"a3 - iso\"; without a paper size \
-                       the sheet takes the format's own size), `scale` (\"1:2\"; views using the \
-                       sheet scale follow it, and views projected from them), `projection` \
-                       (first_angle / third_angle; projected views keep their places and show \
-                       what that projection puts there), `rename`. Views keep their positions on \
-                       the sheet; the reply lists any that now reach past its edges. Changes \
-                       apply together, or not at all."
+        description = "Change a sheet of the active drawing (default: the active one): paper size, \
+                       sheet format, scale, projection, name. Views keep their positions; the \
+                       reply lists any now past the edges. Changes apply together, or not at all."
     )]
     async fn edit_sheet(
         &self,
@@ -2943,38 +2352,40 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Add a view of a part or assembly to a sheet of the active drawing \
-                       (default: the active sheet). `model`: an absolute .SLDPRT / .SLDASM path or \
-                       the name of an open one (default: the model the drawing already shows, else \
-                       the one open part or assembly; it must be saved). `configuration` (default: \
-                       the model's active one). `orientation`: front, back, left, right, top, \
-                       bottom, isometric, dimetric, trimetric or a view saved in the model \
-                       (default: front). `at_mm`: the view's center, [x, y] sheet mm (default: a \
-                       free spot clear of the other views). `scale`: \"1:2\" or \"sheet\" \
-                       (default: the sheet's scale; on an empty sheet SolidWorks may rescale the \
-                       sheet to fit the model, and says so). `display`: hidden_lines_removed, \
-                       hidden_lines_visible, wireframe, shaded, shaded_with_edges. Reports the \
-                       view's outline and which model axes point right / up on the sheet. Then \
-                       inspect_drawing with the view lists its edges for add_drawing_dimensions."
+        description = "Add a view to a sheet of the active drawing: `type` model (a part or \
+                       assembly), or from an existing `view` projected, section, detail or \
+                       auxiliary. Reports the view's outline and which model axes point right / up \
+                       on the sheet; inspect_drawing with the view then lists its edges."
     )]
     async fn create_drawing_view(
         &self,
-        Parameters(params): Parameters<view::CreateDrawingViewParams>,
+        Parameters(params): Parameters<derived_view::DrawingViewParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.setup_drawing_view(view::create_request(&params)?).await
+        use derived_view::ViewRequest;
+        let params = match params.split()? {
+            ViewRequest::Model(params) => return self.setup_drawing_view(view::create_request(&params)?).await,
+            derived => derived,
+        };
+        let drawing = self.inspect_views().await?;
+        let plan = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            match params {
+                ViewRequest::Model(_) => unreachable!("made above"),
+                ViewRequest::Projected(params) => derived_view::projected_plan(&drawing, &params)?,
+                ViewRequest::Section(params) => derived_view::section_plan(&drawing, &ids, &cache, &params)?,
+                ViewRequest::Detail(params) => derived_view::detail_plan(&drawing, &cache, &params)?,
+                ViewRequest::Auxiliary(params) => derived_view::auxiliary_plan(&drawing, &ids, &cache, &params)?,
+            }
+        };
+        self.derive_drawing_view(plan).await
     }
 
     #[tool(
-        description = "Change a view of the active drawing (on any sheet; the active sheet stays \
-                       as it is): `model` (show another part or assembly), `configuration`, \
-                       `orientation` (front, top, isometric, ... or a view saved in the model; \
-                       views projected from it turn with it, a projected view's own direction \
-                       follows its parent), `at_mm` (move its center to [x, y] sheet mm; views \
-                       aligned with another one only slide along the alignment), `scale` \
-                       (\"1:2\", \"sheet\", or \"parent\" for projected views), `display` \
-                       (hidden_lines_removed, hidden_lines_visible, wireframe, shaded, \
-                       shaded_with_edges, or \"parent\" for projected views), `rename`. Changes \
-                       apply together, or not at all."
+        description = "Change a view of the active drawing on any sheet: model, configuration, \
+                       orientation (views projected from it turn with it), position (aligned views \
+                       slide only along their alignment), scale, display, name. Changes apply \
+                       together, or not at all."
     )]
     async fn edit_drawing_view(
         &self,
@@ -2984,102 +2395,9 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Add a view projected from another view of the active drawing: a side, top \
-                       or bottom view, aligned with its parent and following its scale and \
-                       display. `view`: the parent (inspect_drawing lists them). `side`: right, \
-                       left, above or below it (default right) -- which face that shows follows \
-                       the sheet's projection (first / third angle). `at_mm`: the view's center, \
-                       [x, y] sheet mm, instead of `side` (it stays aligned, so only one \
-                       coordinate counts). Default placement clears the sheet's other views. \
-                       Reports which model axes point right / up."
-    )]
-    async fn create_projected_view(
-        &self,
-        Parameters(params): Parameters<derived_view::ProjectedViewParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let drawing = self.inspect_views().await?;
-        let plan = derived_view::projected_plan(&drawing, &params)?;
-        self.derive_drawing_view(plan).await
-    }
-
-    #[tool(
-        description = "Add a section view: `view` cut along a straight line, seen from one side, \
-                       with SolidWorks' hatching and the A-A arrows and label. The line: `through` \
-                       (a view entity id from inspect_drawing: a circle's center, a line's middle, \
-                       ...) or `through_mm` ([x, y] sheet mm; default the view's middle), at \
-                       `angle_deg` from the sheet's x axis (default 90, a vertical line; 0 = \
-                       horizontal). `side` (right, left, above, below; or `at_mm`) is where the \
-                       view goes (default the side with more room), and that sets which way it \
-                       looks by the sheet's projection: in third angle a view to the right looks \
-                       left, at what's left of the line; `flip_direction` looks the other way. \
-                       `label` (default the next free letter; it names the view, \"Section View \
-                       A-A\"), `surface_only` (only the cut faces, nothing behind them), `depth_mm` \
-                       (show only this far behind the cut). \
-                       Assembly views cut every component. Follows its parent's scale."
-    )]
-    async fn create_section_view(
-        &self,
-        Parameters(params): Parameters<derived_view::SectionViewParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let drawing = self.inspect_views().await?;
-        let plan = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            derived_view::section_plan(&drawing, &ids, &cache, &params)?
-        };
-        self.derive_drawing_view(plan).await
-    }
-
-    #[tool(
-        description = "Add a detail view: a circled part of `view` shown bigger, with SolidWorks' \
-                       circle and label on the parent. The circle: `center` (a view entity id from \
-                       inspect_drawing) or `center_mm` ([x, y] sheet mm), and `radius_mm` measured \
-                       on the sheet. `scale`: \"4:1\", ... (default twice the parent's). `at_mm`: \
-                       the view's center (default a free spot clear of the other views). `style`: \
-                       standard, broken, leader, no_leader, connected. `outline`: profile (default, \
-                       the circle), full, jagged or none. `label` (default the next free letter; it \
-                       names the view, \"Detail View A (2 : 1)\")."
-    )]
-    async fn create_detail_view(
-        &self,
-        Parameters(params): Parameters<derived_view::DetailViewParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let drawing = self.inspect_views().await?;
-        let plan = {
-            let cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            derived_view::detail_plan(&drawing, &cache, &params)?
-        };
-        self.derive_drawing_view(plan).await
-    }
-
-    #[tool(
-        description = "Add an auxiliary view: `view` seen square onto an inclined edge, which shows \
-                       an inclined face at its true shape, with an arrow and letter on the parent. \
-                       `edge`: a straight edge from inspect_drawing with the view (\"view_edge:3\"), \
-                       not along the sheet's axes (a projected view does those). `flip`: look from \
-                       the edge's other side. `at_mm`: the view's center (it stays aligned with the \
-                       edge's normal; default clear of the other views on the side the projection \
-                       puts it). `label` (default the next free letter), `name`."
-    )]
-    async fn create_auxiliary_view(
-        &self,
-        Parameters(params): Parameters<derived_view::AuxiliaryViewParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let drawing = self.inspect_views().await?;
-        let plan = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            derived_view::auxiliary_plan(&drawing, &ids, &cache, &params)?
-        };
-        self.derive_drawing_view(plan).await
-    }
-
-    #[tool(
-        description = "Crop a view of the active drawing to a circle or rectangle, hiding the rest \
-                       of it. `circle_center_mm` + `circle_radius_mm`, or `rectangle_mm` ([[x1, y1], \
-                       [x2, y2]] opposite corners), all in sheet mm. A crop the view has is replaced. \
-                       `outline`: profile (default), jagged or none. `remove`: take the crop off. A \
-                       detail or broken view can't be cropped."
+        description = "Crop a view of the active drawing to a circle or rectangle (sheet mm), \
+                       replacing any crop it has; `remove` takes it off. A detail or broken view \
+                       can't be cropped."
     )]
     async fn crop_view(
         &self,
@@ -3089,14 +2407,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Break a view of the active drawing: hide a range of a long part and close \
-                       the gap, to show it on less paper; dimensions keep the true lengths. \
-                       `breaks`: ranges to hide, each {along: \"x\" or \"y\" (sheet axis), from_mm, \
-                       to_mm}, in the sheet coordinates inspect_drawing lists for the view's entities \
-                       -- those don't move when a view is broken, also for a view already broken. \
-                       `style`: straight, zigzag (default), curve, small_zigzag, jagged. Adds to the \
-                       breaks it has. `remove`: take all its breaks off. A cropped view can't be \
-                       broken. render_drawing shows the result."
+        description = "Break a view of the active drawing: hide ranges of a long part and close \
+                       the gaps; dimensions keep the true lengths. Ranges are in the sheet \
+                       coordinates inspect_drawing lists for the view's entities, which don't move \
+                       when it's broken. Adds to its breaks; `remove` takes them all off. A \
+                       cropped view can't be broken."
     )]
     async fn break_view(
         &self,
@@ -3106,17 +2421,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "List the annotations of the active drawing -- notes, dimensions, balloons, \
-                       ... -- with what each belongs to (`in`): a view (it moves with the view), \
-                       the sheet (stays put on the paper) or the sheet format (the border / title \
-                       block layer; only counted unless asked for). Each has its name (for \
-                       edit_drawing_annotation / delete_drawing_annotations), text, at_mm (the \
-                       text's upper-left corner in sheet mm, as render_drawing's rulers read), for a \
-                       view's annotations at_view_mm (the view's own coordinates: mm at the model's \
-                       size from the model origin), its box on the sheet, style (font, height, \
-                       bold, angle, border), layer and leaders (style, arrow tips in both \
-                       coordinates, the view edges they're attached to). Filters: sheet, view, in, \
-                       kind (note, dimension, ...), contains (text)."
+        description = "List the annotations of the active drawing: name (for \
+                       edit_drawing_annotation / delete_drawing_annotations), whether it belongs \
+                       to a view, the sheet or the sheet format, text, position on the sheet and \
+                       in its view, box, style, layer and leaders with what they're attached to."
     )]
     async fn inspect_drawing_annotations(
         &self,
@@ -3136,22 +2444,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Add a note to the active drawing. Where it belongs (`in`): \"view\" -- in \
-                       `view`, moving with it (the default with `view` or `attach_to`); \"sheet\" -- \
-                       on the paper, staying put when views move (the default otherwise); \
-                       \"sheet_format\" -- the border / title block layer. Position: `at_mm` = the \
-                       text's upper-left corner in sheet mm from the sheet's lower-left corner (the \
-                       sheet format uses the same coordinates), or for a view note `at_view_mm` = \
-                       the view's own coordinates (mm at the model's size from the model origin as \
-                       the view shows it, x to the view's right; for a 1:2 view 10 view mm are 5 on \
-                       the paper). Leaders: `attach_to` view entity ids from inspect_drawing \
-                       (\"view_edge:3\"), one leader each, arrows at `arrow_at_mm` or a line's \
-                       middle / a circle's rim; without a position the text goes next to the first \
-                       arrow outside the view. Look: height_mm, font, bold, italic, underline, \
-                       justification, angle_deg, border (box, circle, ...), layer, leader \
-                       (straight, bent, underlined), arrow (closed, open, dot, ...). The reply says \
-                       where it ended up in both coordinates and flags notes over a view they \
-                       don't belong to, far from their view, or off the sheet."
+        description = "Add a note to the active drawing: in a view (moving with it), on the sheet, \
+                       or in the sheet format (title block layer); with leaders to view entities \
+                       if `attach_to`. The reply says where it ended up and flags notes over a \
+                       view they don't belong to, far from their view, or off the sheet."
     )]
     async fn add_drawing_note(
         &self,
@@ -3166,17 +2462,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Change an annotation of the active drawing, by the name \
-                       inspect_drawing_annotations lists (e.g. \"DetailItem12\", \"RD1@Drawing \
-                       View1\"). Any annotation: move it (`at_mm` sheet mm, `at_view_mm` in `view`'s \
-                       own coordinates, or `move_by_mm`), `layer`, `attach_to_view` (put it in a view \
-                       so it moves with it; it stays where it is on the paper). Notes also: `text`, \
-                       height_mm, font, bold, italic, underline, document_font (back to the \
-                       document's), justification, angle_deg, border, leaders (`attach_to` replaces \
-                       them with leaders to these view entities, `arrow_at_mm` moves the arrow tips \
-                       in order, `leader` straight / bent / underlined / none, `arrow`). Sheet \
-                       format (title block) notes can be changed too. Changes apply together, or \
-                       not at all."
+        description = "Change an annotation of the active drawing by the name \
+                       inspect_drawing_annotations lists: move it, change its layer, put it in a \
+                       view; for notes also text, font, border and leaders. Title block notes too. \
+                       Changes apply together, or not at all."
     )]
     async fn edit_drawing_annotation(
         &self,
@@ -3191,13 +2480,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Delete annotations of the active drawing -- notes, dimensions, balloons, \
-                       feature control frames, datum, surface finish and weld symbols, center marks, \
-                       centerlines, tables, sheet format (title block) notes, ... \
-                       -- by the names inspect_drawing_annotations lists; or of the active part or \
-                       assembly (frames, datum symbols, ... by the names inspect_annotations \
-                       lists). Nothing is deleted if a name isn't found; `sheet` / `view` narrow \
-                       the search when a name is on several sheets of a drawing."
+        description = "Delete annotations of the active drawing (notes, dimensions, balloons, \
+                       frames, symbols, center marks, centerlines, tables, title block notes) by \
+                       the names inspect_drawing_annotations lists, or of the active part or \
+                       assembly by the names inspect_annotations lists. Nothing is deleted if a \
+                       name isn't found."
     )]
     async fn delete_drawing_annotations(
         &self,
@@ -3212,13 +2499,9 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "List the tables of the active drawing -- bills of materials, hole tables, \
-                       general tables, revision tables -- with their name (for edit_drawing_table / \
-                       delete_drawing_annotations), kind, anchor corner and box on the sheet (mm), \
-                       columns (width, what a BOM / hole column shows) and every row's cells (rows[0] \
-                       = the top row); a BOM's rows also name the components they count. Filters: \
-                       sheet, name, kind. include_format_lines adds the sheet format's lines (border, \
-                       title block grid)."
+        description = "List the tables of the active drawing (BOMs, hole, general and revision \
+                       tables): name, kind, position and box, columns and every row's cells; BOM \
+                       rows name their components."
     )]
     async fn inspect_drawing_tables(
         &self,
@@ -3234,21 +2517,12 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Add a native table to the active drawing. kind=bom: SolidWorks' bill of \
-                       materials of an assembly `view` (item numbers, part numbers, quantities kept \
-                       up to date with the assembly; bom_type top_level / parts_only / indented; \
-                       balloons from add_balloons show its item numbers) -- use it instead of \
-                       composing a parts list from notes. kind=hole: a hole table (a coordinate \
-                       table) of `holes` (edge ids of hole circles in `view`, from inspect_drawing) \
-                       with their X / Y measured from `origin` (a vertex id of that view) and their \
-                       size; SolidWorks tags the holes A1, A2, ... kind=general: a table of `rows` of \
-                       text you give (coordinate lists, notes tables, ...). kind=revision: the sheet's \
-                       revision table (one per sheet), with `revisions` to start with: {revision \
-                       (default SolidWorks' next letter), description, zone, date (default today), \
-                       approved, symbols_at_mm}, `revision_symbol` their shape; a later sheet's only \
-                       says \"See Sheet1\", so revisions go on the first sheet's. Position: `at_mm` + \
-                       `anchor` corner, or a free spot clear of the views, other tables and the \
-                       title block. Optional template, column_widths_mm, title, layer."
+        description = "Add a native table to the active drawing: a bill of materials of an \
+                       assembly view (kept up to date by SolidWorks; use it instead of a parts \
+                       list of notes), a hole table, a general table of text, or the sheet's \
+                       revision table (only the first sheet's lists revisions; later sheets' say \
+                       \"See Sheet1\"). Placed clear of views, tables and the title block unless \
+                       at_mm."
     )]
     async fn add_drawing_table(
         &self,
@@ -3293,13 +2567,8 @@ impl SolidWorksTools {
 
     #[tool(
         description = "Change a table of the active drawing by the name inspect_drawing_tables \
-                       lists: `cells` [{row, column, text}] (in a BOM, typing over an item number \
-                       renumbers it and its balloons follow; computed cells such as quantities or \
-                       hole locations may be refused), general tables' add_rows / delete_rows, \
-                       revision tables' add_revisions / delete_rows (the revision and its symbols), \
-                       column_widths_mm, title (row indices never count it), layer, at_mm / \
-                       move_by_mm (the anchor corner), anchor. All or nothing. \
-                       Delete a table with delete_drawing_annotations."
+                       lists: cells, rows, revisions, column widths, title, layer, position. All \
+                       or nothing. Delete one with delete_drawing_annotations."
     )]
     async fn edit_drawing_table(
         &self,
@@ -3334,17 +2603,12 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Add BOM balloons to an assembly view of the active drawing: each points at \
-                       a component and shows its item number from the drawing's bill of materials \
-                       (add_drawing_table kind=bom first) -- use these instead of notes with \
-                       numbers. Default: every component of the view (Auto Balloon; `layout` square \
-                       / circle / top / bottom / left / right, every_instance). Or `components` by \
-                       name (as inspect_drawing lists them), or `attach_to` view entity ids (the \
-                       leader goes to that edge, arrow at arrow_at_mm), each placed at `at_mm`. \
-                       Look: style (circle, split_circle, box, ...), size_chars, text (item_number, \
-                       quantity, part_number, file_name, custom), lower_text for split circles, \
-                       layer. Balloons are notes: move / delete them with edit_drawing_annotation / \
-                       delete_drawing_annotations."
+        description = "Add BOM balloons to an assembly view of the active drawing, each showing a \
+                       component's item number from the drawing's BOM (add_drawing_table kind bom \
+                       first); use these, not numbered notes. Default: every component of the view \
+                       (Auto Balloon); or `components` by name, or `attach_to` view entities. \
+                       Balloons are notes: edit_drawing_annotation / delete_drawing_annotations \
+                       work on them."
     )]
     async fn add_balloons(
         &self,
@@ -3367,15 +2631,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Draw a drawing border into a sheet's format (shown behind the views on \
-                       every print): a frame `margins_mm` [left, right, top, bottom] in from the \
-                       edges, zones (even counts) with tick marks and labels, centering marks. \
-                       Defaults follow `standard`: iso (ISO 5457: margins 20, 10, 10, 10, zones \
-                       ~50 mm numbered from the left, lettered from the top) or asme (ASME Y14.1: \
-                       0.5 in margins, ~4.25 in zones from the lower right); asme for an inch \
-                       drawing. \
-                       On its own layer (BORDER): drawing it again replaces it, leaving the rest of \
-                       the format alone. Then draw_title_block."
+        description = "Draw a border into a sheet's format (behind the views on every print): a \
+                       frame, zones with labels, centering marks, with defaults by ISO 5457 or \
+                       ASME Y14.1. On its own layer: drawing it again replaces it. Then \
+                       draw_title_block."
     )]
     async fn draw_sheet_border(
         &self,
@@ -3400,15 +2659,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Draw a title block into a sheet's format: a grid of `rows` of cells, each a \
-                       small `label` plus a value that shows a custom `property` of the drawing (or \
-                       `of`: model -- the sheet's model, e.g. Material) so it updates by itself, or \
-                       fixed text (`value` without property). `value` with property sets it. \
-                       Default rows: TITLE, DWG NO., MATERIAL, FINISH, SCALE, SHEET, DRAWN / CHECKED \
-                       with dates, REV, COMPANY, FILE. Goes in the border's lower-right corner \
-                       (corner_mm otherwise), width_mm (default 180; 7 in for `standard` asme, \
-                       the default for an inch drawing). On its own layer (TITLE \
-                       BLOCK): drawing it again replaces it. Values: fill_title_block."
+        description = "Draw a title block into a sheet's format: rows of cells, each a label and a \
+                       value showing a custom property (updating by itself) or fixed text. In the \
+                       border's lower-right corner by default. On its own layer: drawing it again \
+                       replaces it. Fill it with fill_title_block."
     )]
     async fn draw_title_block(
         &self,
@@ -3465,10 +2719,8 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "List a sheet's title block fields: every custom property its sheet format's \
-                       notes show (the stock formats' and draw_title_block's alike) -- name, whether \
-                       it's the drawing's ($PRP) or the sheet model's ($PRPSHEET), its value, the \
-                       note and what it shows. SW-... properties are SolidWorks' own (read-only)."
+        description = "List a sheet's title block fields: each custom property its notes show, \
+                       whose it is (drawing or model), its value and the note."
     )]
     async fn inspect_title_block(
         &self,
@@ -3479,14 +2731,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Fill in a sheet's title block: `values` {property: value} for the fields \
-                       inspect_title_block lists, e.g. {\"DrawnBy\": \"MW\", \"Description\": \
-                       \"Bracket\"}. Each goes where the title block reads it from -- the drawing's \
-                       custom properties or the sheet's model's (save the model too) -- and the \
-                       notes update. Names the title block doesn't show are refused unless \
-                       allow_unlisted. A property linked to what SolidWorks works out (Material = \
-                       \"SW-Material@part\": the physical material) is refused unless replace_links. \
-                       Part number / revision / material by meaning: drawing_properties."
+        description = "Fill in a sheet's title block: values for the fields inspect_title_block \
+                       lists, each where the title block reads it from (drawing or model; save the \
+                       model too). Names it doesn't show are refused unless allow_unlisted; \
+                       properties linked to SolidWorks values unless replace_links. Part number, \
+                       revision, material by meaning: drawing_properties."
     )]
     async fn fill_title_block(
         &self,
@@ -3524,15 +2773,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Read and set custom properties (File > Properties) of the active document, \
-                       of an open `document` by title or path (e.g. a part a BOM lists: its \
-                       Description fills the BOM's DESCRIPTION column), or with `sheet` of the model \
-                       a drawing sheet takes $PRPSHEET values from. `set` {name: value}, `remove` \
-                       [names], `configuration` for configuration-specific ones, `bom_part_number` \
-                       for the part number BOMs list. Properties linked to what SolidWorks works out \
-                       (Material = \"SW-Material@part\" shows the physical material) are kept \
-                       unless replace_links. Lists every property and the BOM part number after \
-                       the change. Physical material: part_material."
+        description = "Read and set custom properties of the active document, an open `document`, \
+                       or the model a drawing `sheet` takes $PRPSHEET values from; also the part \
+                       number BOMs list. Properties linked to what SolidWorks works out (Material \
+                       = \"SW-Material@part\") are kept unless replace_links. Lists every property \
+                       afterwards. Physical material: part_material."
     )]
     async fn custom_properties(
         &self,
@@ -3547,17 +2792,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Set the properties a drawing shows, by meaning: `part_number`, `revision`, \
-                       `description` and `material` (a designation text, e.g. \"EN AW-6061-T6\") \
-                       go where the sheet's title block reads them from -- the drawing ($PRP) or \
-                       the model the sheet shows ($PRPSHEET), under the name its note uses (PartNo, \
-                       Rev, ...) -- else to the usual property (model PartNo / Description / \
-                       Material, drawing Revision). part_number also becomes the model's BOM part \
-                       number (bom: false to skip). `drawing` / `model` {name: value} for any other \
-                       custom properties. `material` is only text: the part's physical material \
-                       (density, mass) is part_material's, and a Material property that shows it \
-                       (a link) is kept unless replace_links. Nothing given: lists both sides' \
-                       properties. Requires a drawing; save the model too."
+        description = "Set the properties a drawing shows by meaning -- part number, revision, \
+                       description, material text -- each where the sheet's title block reads it \
+                       from (drawing or model, under its note's name), else the usual property; \
+                       plus any other drawing / model properties. Nothing given: lists both. \
+                       Physical material: part_material. Save the model too."
     )]
     async fn drawing_properties(
         &self,
@@ -3615,13 +2854,12 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Read or assign a part's physical material -- the material database entry \
-                       (e.g. \"AISI 1020\", \"6061-T6 (SS)\") that sets its density, mass, \
-                       appearance and hatch -- of the active part, an open `document`, or with \
-                       `sheet` the part a drawing sheet shows. `search` lists names (\"*\" the \
-                       classes); `remove` takes it off. Not the \"Material\" text a title block shows: \
-                       the reply says whether that property follows this material (a link) or is \
-                       separate text; link_property makes it follow. Reports density and mass."
+        description = "Read, assign, search or remove a part's physical material from the material \
+                       databases (\"AISI 1020\", \"6061-T6 (SS)\"), which sets density, mass, \
+                       appearance and hatch: the active part, an open `document`, or a drawing \
+                       sheet's part. Not the Material text a title block shows: the reply says \
+                       whether that follows this material; link_property makes it. Reports density \
+                       and mass."
     )]
     async fn part_material(
         &self,
@@ -3681,14 +2919,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Draw the active part or assembly as a picture: shaded, with edges, in \
-                       orthographic standard views (front/back/left/right/top/bottom/isometric) at \
-                       one shared scale, as a grid in one PNG. Use it to check the overall shape \
-                       after edits -- which side a cut went, where a boss landed, where a mate put \
-                       a component (highlight \"component:N\") -- and `highlight` \
-                       ids from inspect_model to see which face or edge an id is before using \
-                       it. Read exact sizes and positions from inspect_model, not the picture. \
-                       Doesn't change the model."
+        description = "A PNG of the active part or assembly, shaded, in orthographic standard \
+                       views at one scale, to check the shape after edits (which side a cut went, \
+                       where a component is) and, with `highlight`, which face or edge an id is. \
+                       Read sizes from inspect_model, not the picture."
     )]
     async fn render_views(
         &self,
@@ -3811,14 +3045,9 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Look at one sketch of the active part without changing it: every \
-                       segment and point with an id (\"line:3\", \"arc:1\", \"circle:2\", \
-                       \"point:7\" -- end points and centers are points) and its geometry in the \
-                       sketch's own 2D coordinates (mm; [x, y, z] model coordinates in a 3D \
-                       sketch), the sketch's dimensions (names like \
-                       \"D1@Sketch1\" and values) and relations, and whether the sketch is fully \
-                       defined; entities that can still move carry a status. Defaults to the last \
-                       sketch. Use the ids with dimension_sketch and add_sketch_relations."
+        description = "Look at one sketch: every segment and point with its id (\"line:3\"; end \
+                       points and centers are points) and geometry (sketch mm, model mm in a 3D \
+                       sketch), its dimensions and relations, and what can still move."
     )]
     async fn inspect_sketch(
         &self,
@@ -3839,7 +3068,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Look at one feature of the active part without changing it -- what Edit                        Feature would show: extrudes (end conditions, depths, draft, second                        direction), revolves (axis, angles), sweeps (profile, path, twist), lofts                        (profiles, guide curves, end tangency), fillets (radius, edges), chamfers                        (distances / angle, edges), shells (thickness, removed faces, walls of                        their own thickness), drafts (angle, neutral plane, faces), ribs                        (thickness, side, draft), mirrors (plane, what is mirrored), linear /                        circular patterns (counts, spacing, directions, what is copied), helixes                        (pitch, height, revolutions, taper) and Hole Wizard holes (fastener, size,                        diameters, depths). Every feature, of these kinds or any other, comes with                        its dimensions (names like \"D1@Revolve1\" for set_dimension). `feature` =                        \"feature:N\" from inspect_model or a feature-tree name. Edges and faces                        the feature uses come as ids of the model as it is just before the                        feature. Requires no sketch open for editing."
+        description = "Look at one feature of the active part as Edit Feature shows it: extrude, \
+                       revolve, sweep, loft, fillet, chamfer, shell, draft, rib, mirror, pattern, \
+                       helix or Hole Wizard settings, and for every feature its dimensions \
+                       (\"D1@Revolve1\" for set_dimension). Edge and face ids are of the model \
+                       just before the feature."
     )]
     async fn inspect_feature(
         &self,
@@ -3862,18 +3095,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Add dimensions to a sketch of the active part -- the way to give a sketch \
-                       exact sizes and positions (design intent) and toward making it fully \
-                       defined. Each dimension has a kind and the entities it measures: length (1 \
-                       line), distance (2 entities), horizontal / vertical (1 line, or 2 entities \
-                       along the sketch's X / Y axis), diameter / radius (1 circle or arc), angle \
-                       (2 lines). Entities are sketch ids from inspect_sketch or the sketch_* tools \
-                       (\"line:3\", \"point:7\"), \"origin\", or an edge/face id from \
-                       inspect_model. With value_mm (value_deg for angles) the dimension drives the \
-                       geometry to that size; without, it locks the current size. All dimensions of \
-                       a call are applied together, or none if any fails (e.g. one would \
-                       over-define the sketch). Reports the new dimension names and what in the \
-                       sketch can still move. Requires no sketch open for editing."
+        description = "Add dimensions to a sketch, to give it exact sizes and positions: with \
+                       value_mm / value_deg the geometry is driven to it, without the current size \
+                       is locked. All of a call's dimensions are added, or none (e.g. if one would \
+                       over-define). Reports the new dimension names and what can still move."
     )]
     async fn dimension_sketch(
         &self,
@@ -3921,17 +3146,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Add geometric relations between entities of a sketch of the active part: \
-                       horizontal, vertical, coincident, midpoint, collinear, parallel, \
-                       perpendicular, tangent, concentric, coradial, equal, fixed, symmetric \
-                       (2 entities then the line to mirror about), merge; in a 3D sketch along_x, \
-                       along_y, along_z instead of horizontal and vertical. Entities are sketch ids \
-                       from inspect_sketch or the sketch_* tools (\"line:3\", \"point:7\"), \
-                       \"origin\" (e.g. coincident a circle's center point with the origin), or \
-                       an edge/face id from inspect_model. Relations can move geometry to satisfy \
-                       them. Applied together; if one fails, the ones added by this call are \
-                       removed again. Reports what in the sketch can still move. Requires no \
-                       sketch open for editing."
+        description = "Add geometric relations between sketch entities (or with \"origin\" or \
+                       model edges / faces); they can move geometry to satisfy them. All of a \
+                       call's relations are added, or none. Reports what in the sketch can still \
+                       move."
     )]
     async fn add_sketch_relations(
         &self,
@@ -3977,14 +3195,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Fully define a sketch of the active part (SolidWorks' Fully Define \
-                       Sketch): adds the relations and dimensions still missing so nothing can \
-                       move, locking the geometry where it is. Dimensions are measured from the \
-                       sketch origin unless datums are given. Best after dimension_sketch / \
-                       add_sketch_relations have set the sizes that matter, since what this adds \
-                       just records the current geometry. Defaults to the last sketch. Reports the \
-                       dimensions it added and whether the sketch is now fully defined. Requires \
-                       no sketch open for editing."
+        description = "Fully define a sketch (Fully Define Sketch): adds the relations and \
+                       dimensions still missing, locking the geometry where it is, measured from \
+                       the origin or the given datums. Best after dimension_sketch / \
+                       add_sketch_relations set what matters. Reports what it added and whether \
+                       the sketch is now fully defined."
     )]
     async fn fully_define_sketch(
         &self,
@@ -4046,17 +3261,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Change the value of an existing dimension of the active part by its full \
-                       name -- a sketch dimension like \"D1@Sketch1\" (inspect_sketch lists them) \
-                       or a feature's, like \"D1@Boss-Extrude1\" -- and rebuild. In an assembly, \
-                       this changes a distance or angle mate, e.g. \"D1@Distance1\" (inspect_model \
-                       lists mates with their dimension names). value_mm for lengths, value_deg \
-                       for angles. With several configurations: `configurations` (names) or \
-                       all_configurations=true says where the value goes; by default SolidWorks \
-                       picks (all of them while the dimension has one value for all, else only the \
-                       active one), and the reply gives the value in each. A dimension driven by an \
-                       equation or a design table is refused: change those (equations, \
-                       design_table). Requires no sketch open for editing."
+        description = "Change a dimension of the active part (\"D1@Sketch1\", \
+                       \"D1@Boss-Extrude1\") or an assembly's mate (\"D1@Distance1\") and rebuild. \
+                       With several configurations, SolidWorks picks where unless `configurations` \
+                       or all_configurations; the reply gives each one's value. Dimensions driven \
+                       by equations or a design table are refused."
     )]
     async fn set_dimension(
         &self,
@@ -4100,20 +3309,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Set the tolerance of an existing dimension -- in a drawing (the names \
-                       inspect_drawing lists: \"RD1@Drawing View1\", or a model dimension like \
-                       \"D1@Boss-Extrude1@block.Part\"), a part (\"D1@Sketch1\", \
-                       \"D1@Boss-Extrude1\") or an assembly's mate dimension. tolerance = \
-                       \"bilateral\" (upper_mm / lower_mm, signed deviations: 0.1 and -0.05 for \
-                       40 +0.1/-0.05), \"limit\" (same deviations, shown as the two limits), \
-                       \"symmetric\" (plus_minus_mm), \"fit\" / \"fit_with_tolerance\" / \
-                       \"fit_tolerance_only\" (hole_fit like \"H7\" and/or shaft_fit like \"g6\"), \
-                       \"basic\", \"min\", \"max\" or \"none\" to remove it. Angle dimensions take \
-                       the _deg fields instead. Optionally decimals / tolerance_decimals (places \
-                       shown). A model dimension shown in a drawing is the model's own: its \
-                       tolerance changes in the model too. If SolidWorks refuses part of it, the \
-                       old tolerance is put back. Replies with the dimension as inspect_drawing \
-                       shows it, including the resulting limits."
+        description = "Set the tolerance of a dimension in a drawing, part or assembly: bilateral, \
+                       limit, symmetric, fits, basic, min, max or none; angles take the _deg \
+                       fields. A model dimension shown in a drawing is the model's: its tolerance \
+                       changes there too. A refused change is put back. Replies with the dimension \
+                       and its resulting limits."
     )]
     async fn set_dimension_tolerance(
         &self,
@@ -4130,20 +3330,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "SolidWorks Hole Wizard: add standard holes sized from a hole standard -- \
-                       screw clearance or drilled holes, counterbores, countersinks or tapped \
-                       (threaded) holes, e.g. kind=\"counterbore\", size=\"M5\". Usual way, as \
-                       done by hand: sketch_point the hole centers on the face, locate them with \
-                       dimension_sketch, then call this with that sketch_name -- the sketch \
-                       becomes the hole feature's placement sketch, so its dimensions keep \
-                       driving the holes. Quick alternative: `on` a planar face id from \
-                       inspect_model plus [x, y, z] model-mm `locations` (projected onto the \
-                       face; none = one hole mid-face), then dimension the placement sketch the \
-                       reply names. Blind to depth_mm, or through_all. All the holes are one \
-                       feature. Standard sizes can be overridden (diameter_mm, counterbore_*, \
-                       countersink_*, thread_depth_mm). For a non-standard round hole, \
-                       sketch_circle + cut_extrude_sketch is simpler. Requires an open part with \
-                       no sketch being edited."
+        description = "Add Hole Wizard holes: clearance or drilled, counterbore, countersink or \
+                       tapped, sized from a hole standard (kind=\"counterbore\", size=\"M5\"). At \
+                       the points of a sketch (sketch_name; its dimensions keep locating the \
+                       holes), or `on` a face at model `locations`. All the holes are one feature. \
+                       For a non-standard round hole, a circle and a cut extrude is simpler."
     )]
     async fn hole_wizard(
         &self,
@@ -4174,26 +3365,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Mate two components of the active assembly, the way the Mate command \
-                       does: coincident (faces flush / planes together), concentric (pin in \
-                       hole: round faces, circular edges or axes share an axis), parallel, \
-                       perpendicular, tangent, distance (distance_mm apart), angle (angle_deg), \
-                       or lock (two components held as they are). A limit mate is a distance \
-                       or angle mate with a range: min_mm / max_mm (a slider's stroke) or \
-                       min_deg / max_deg (how far a lid opens), starting at distance_mm / \
-                       angle_deg (default the minimum); sweep_mate then runs it through the \
-                       range checking for collisions. `entities` = two ids from \
-                       inspect_model on the assembly, on different components: faces or edges \
-                       (what=\"faces\" within=\"component:N\" lists a component's faces, in \
-                       assembly coordinates), or reference planes/axes as \"feature:N\" (a \
-                       component's own Front/Top/Right planes come from what=\"features\" \
-                       within=\"component:N\"; the assembly's from its overview). alignment: \
-                       \"closest\" (default), \"aligned\" or \"anti_aligned\" (face against \
-                       face). SolidWorks then moves the components that aren't fixed. If the \
-                       mate is rejected, conflicts with other mates or can't be solved, it's \
-                       removed again and the reason reported. Reports where the mated \
-                       components ended up; render_views shows the result. Requires an open \
-                       assembly with no sketch being edited."
+        description = "Mate two components of the active assembly, like the Mate command; distance \
+                       / angle mates with min and max are limit mates (sweep_mate runs them \
+                       through their range). SolidWorks moves the components that aren't fixed. A \
+                       mate that's rejected, conflicts or can't be solved is removed again and the \
+                       reason given. Reports where the mated components ended up."
     )]
     async fn add_mate(
         &self,
@@ -4216,7 +3392,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Insert a part, or an assembly as a subassembly, into the active assembly: `file` = an absolute .SLDPRT / .SLDASM path (save a new part with save_document first), or `copy_of` = a component already in it (\"component:N\") for another instance with the same file and configuration. `at` lists where each new component's own origin goes (origin_mm, assembly millimeters) and optionally which way its X / Z axes point; one component per entry, so the same part several times = several entries. Default: one at the assembly origin. The first component of an empty assembly is fixed, the others float until mated (`fixed` overrides). Reports the new components' ids and placements; mate them with add_mate. Requires an open assembly with no sketch being edited; create_assembly makes one."
+        description = "Insert parts or subassemblies into the active assembly from a saved `file`, \
+                       or more instances of a component (`copy_of`), one per `at` entry. The first \
+                       component of an empty assembly is fixed, the others float. Reports the new \
+                       components' ids and placements; mate them with add_mate."
     )]
     async fn insert_components(
         &self,
@@ -4234,7 +3413,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Replace components of the active assembly with another part or assembly file, like SolidWorks' Replace Components: `components` = the \"component:N\" ids to replace (top-level ones), `file` = the new absolute .SLDPRT / .SLDASM path, `all_instances` = true to also replace every other instance of the same file(s). Each replacement keeps the old component's place in the tree and its position. SolidWorks re-attaches each mate to the matching face / edge / plane of the new file where it can find one (same names or geometry, e.g. a revised version of the part); the replacement stays even when it can't. Reports the new component ids, which mates came through, and the unresolved ones with the reference each lost -- fix those with edit_mate (new entities) or delete_features. `configuration` picks the new file's configuration (default: the same name as before if it has one, else its active one). Requires an open assembly with no sketch being edited."
+        description = "Replace top-level components of the active assembly with another file, in \
+                       place. SolidWorks re-attaches mates to matching faces where it can; the \
+                       reply lists the mates that came through and the unresolved ones with what \
+                       each lost (fix with edit_mate or delete_features)."
     )]
     async fn replace_components(
         &self,
@@ -4252,7 +3434,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Fix or float components of the active assembly, like SolidWorks' Fix / Float: `components` = the \"component:N\" ids (inspect_model what=\"components\" lists them and whether each is fixed), `fixed` = true to fix them in place (they can't move; mates move the others to them), false to float them (free to be moved by mates and other tools). Components already in that state are left alone. After the change SolidWorks re-solves the mates: a floated component may move to satisfy its mates, and fixing one can make mates fail (they'd have to move it) -- both reported, the change is kept. Top-level components only: for a part inside a subassembly, fix / float the whole subassembly, or open its file (open_document) and do it there. A rigid subassembly's parts show as fixed exactly when the subassembly is. Requires an open assembly with no sketch being edited."
+        description = "Fix or float top-level components of the active assembly. SolidWorks then \
+                       re-solves: a floated component may move, and fixing one can make mates fail \
+                       -- both reported, the change kept. For a part in a subassembly, fix the \
+                       subassembly or open its file."
     )]
     async fn fix_components(
         &self,
@@ -4270,7 +3455,12 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Move a component of the active assembly while SolidWorks solves its mates, like dragging it: give `translate_mm` (assembly millimeters) and / or a turn (`axis` direction + `angle_deg`, about an axis through `center_mm`, default the component's bounding-box center; the turn happens first). The component goes as far as its mates let it -- the parts of the motion they forbid are dropped -- and components mated to it may follow. The reply gives the requested and the actual pose (origin and turn), the solver's outcome (reached the requested pose / held back by its mates, and how far off / didn't move at all), the other components that moved, and mates that now fail. `restore`=true puts every component back afterwards, to check whether the mates allow a motion (\"does the slider reach 50 mm?\", \"can this lever turn 90 degrees?\") without changing the assembly. Long turns go to the solver in steps (default one per 15 degrees, `steps` to change) so linkages follow the motion. `check_collisions`=true runs an interference check before the move and after every step and reports what comes to overlap on the way (first contact, how long, the biggest overlap); `stop_at_collision`=true stops at the first contact and goes back a step (\"move it until it hits\"). A limit mate holds its component at the mate's current value here (SolidWorks' solver doesn't drag along its range): use sweep_mate for motion along a limit mate. The component must float: fixed ones are refused (fix_components fixed=false first), and so are components inside a subassembly (move the whole subassembly). Requires an open assembly with no sketch being edited."
+        description = "Move a floating top-level component of the active assembly while its mates \
+                       solve, like dragging it: a turn, then a translation. It goes as far as the \
+                       mates allow, others may follow; the reply gives the asked and actual pose \
+                       and what else moved. restore=true checks a motion without keeping it; \
+                       check_collisions / stop_at_collision report what it hits. A limit mate \
+                       holds at its value here: use sweep_mate along its range."
     )]
     async fn move_component(
         &self,
@@ -4288,7 +3478,12 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Run a distance or angle mate of the active assembly through a range of values and check for collisions along the way, like dragging a mechanism through its travel: a limit mate over its own range by default (min..max), any distance / angle mate over from_mm..to_mm or from_deg..to_deg. At each of the steps + 1 values SolidWorks sets the mate's value, re-solves the assembly and runs an interference check; the reply lists the components that come to overlap (between which values they first touch, how long they overlap, the biggest overlap and where), the ones already overlapping before (left out), what the mate moved, and any value SolidWorks refuses (beyond a limit) or can't solve. Puts everything back afterwards unless restore=false; stop_at_collision=true stops at the first contact (\"how far does the lid open before it hits the hinge?\"). This is how to move along a limit mate: move_component and inspect_mobility treat one as held at its current value. `mate` = \"feature:N\" from inspect_model what=\"mates\" or a name like \"LimitAngle1\". About a second per value (a rebuild and an interference check) plus a few seconds per call; stops after 45 s and says how far it got, so keep steps to about 40 per call. Requires an open assembly with no sketch being edited."
+        description = "Run a distance or angle mate of the active assembly through a range (a \
+                       limit mate's own by default), checking for collisions at each step: the \
+                       reply gives what comes to overlap and between which values, what moved, and \
+                       values SolidWorks refuses. Puts everything back unless restore=false. The \
+                       way to move along a limit mate. About a second per step; stops after 45 s, \
+                       so keep to about 40 steps."
     )]
     async fn sweep_mate(
         &self,
@@ -4309,7 +3504,12 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Mobility inspection of the active assembly: each component's remaining degrees of freedom -- how many translations and rotations its mates still leave, and which: the directions it can slide along, the axes it can turn about (direction + a point on the axis, assembly mm; a screw's advance per turn). Use it to find under-defined components before adding mates, or to check that a mechanism moves the way it should (a hinge turns about its pin, a slider only slides). How: every component is nudged a little along and about the assembly X/Y/Z while SolidWorks solves its mates, as dragging it would, then put back -- nothing changes. Also reports which components drag others along (`drags_along` / `dragged_by`: a follower can move only by moving what it's mated to) and SolidWorks' own under / fully / over defined status. `components` narrows it to some top-level \"component:N\" ids (default: all; a subassembly counts as one rigid component); fixed components have 0. Takes under a second per component SolidWorks doesn't already call fully defined; a very big assembly may need several calls (the reply names any left unchecked). Limits: motion only possible beyond the nudge (a gap, a slot's far end) isn't seen; a limit mate counts as fixed at its current value (SolidWorks' solver keeps it there; sweep_mate drives it through its range). Requires an open assembly with no sketch being edited."
+        description = "Report each component's remaining degrees of freedom in the active \
+                       assembly: the directions it can slide along and axes it can turn about, \
+                       which components drag others along, and SolidWorks' defined status. Each is \
+                       nudged while the mates solve and put back, so nothing changes. Misses \
+                       motion only possible beyond the nudge; a limit mate counts as fixed at its \
+                       value (sweep_mate drives it). Under a second per component."
     )]
     async fn inspect_mobility(
         &self,
@@ -4329,20 +3529,12 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Check an assembly for interference, like SolidWorks' Interference \
-                       Detection: which components' solids overlap, by how much (volume in \
-                       mm³) and where (the box around each overlap, assembly mm), biggest \
-                       first. Works on the active assembly, or with a drawing active on the \
-                       assembly its views show (`view` picks one if there are several), so a \
-                       drawing can be checked before it's issued. `components` narrows it to \
-                       interferences involving those (ids from inspect_model, or names like \
-                       \"bracket-1\"; a subassembly covers its parts). Components are checked \
-                       where they are now (the saved / solved pose); for collisions along a \
-                       motion use move_component check_collisions=true or sweep_mate. \
-                       include_touching also lists faces that only touch; fasteners in \
-                       their holes are flagged, as SolidWorks recognises them. Changes \
-                       nothing, though SolidWorks marks the assembly modified afterwards. \
-                       Requires no sketch open for editing."
+        description = "Check an assembly for interference: which components' solids overlap, by \
+                       how much (mm³) and where, biggest first. On the active assembly, or from a \
+                       drawing on the assembly its views show. Components as they sit now; for \
+                       collisions along a motion use move_component check_collisions or \
+                       sweep_mate. Fasteners in their holes are flagged. SolidWorks marks the \
+                       assembly modified."
     )]
     async fn check_interference(
         &self,
@@ -4362,20 +3554,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Measure in the active part or assembly, like SolidWorks' Measure tool. \
-                       `entities` = inspect_model ids (faces, edges, vertices, components, \
-                       reference geometry), sketch entity ids, \"origin\", a default plane or a \
-                       reference feature's name. One entity gives its size: an edge's length \
-                       (an arc's radius / diameter), a face's area and perimeter. Two or more \
-                       give the minimum distance, center distance (arcs, circles, cylinders: \
-                       `arc` = center / min / max picks where distances to them are taken), \
-                       normal distance and angle between parallel faces / planes, whether they \
-                       are parallel or perpendicular, and with two the closest point on each and \
-                       the X / Y / Z offset between them. Lengths in mm, areas in mm², angles in \
-                       degrees, points in part (or assembly) coordinates. Only values that apply \
-                       are listed. For clearance between two components measure them directly; \
-                       for overlap use check_interference. Changes nothing. Requires no sketch \
-                       open for editing."
+        description = "Measure in the active part or assembly, like the Measure tool. One entity: \
+                       an edge's length or radius, a face's area and perimeter. More: minimum and \
+                       center distances, normal distance and angle of parallel planes, parallel / \
+                       perpendicular, closest points and X / Y / Z offsets. mm, degrees. Overlap: \
+                       check_interference."
     )]
     async fn measure(&self, Parameters(params): Parameters<measure::MeasureParams>) -> Result<CallToolResult, McpError> {
         let request = {
@@ -4387,25 +3570,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Mass properties of the active part or assembly, like SolidWorks' Mass \
-                       Properties: mass (kg), volume (mm³), surface area (mm²), density, the \
-                       center of mass / center of gravity (mm), and the moments of inertia in \
-                       kg·mm²: the principal moments and axes at the center of mass, the full \
-                       inertia tensor at the center of mass (aligned with the coordinate system) \
-                       and at the coordinate system itself (off the diagonal: the products of \
-                       inertia as SolidWorks shows them, Pxy = +∫xy dm; the inertia tensor has \
-                       their negatives). \
-                       An assembly's total mass and center \
-                       of gravity cover all its components (suppressed ones don't count; hidden \
-                       ones do unless exclude_hidden). `only` narrows it to some components of an \
-                       assembly or bodies of a multibody part (\"component:N\" / \"body:N\" from \
-                       inspect_model), e.g. the moving parts of a mechanism. \
-                       `coordinate_system` gives positions and moments relative to a coordinate \
-                       system feature (create_coordinate_system) instead of the origin. Mass \
-                       comes from each part's material (part_material sets one; without one \
-                       SolidWorks assumes 1000 kg/m³) and honours mass overrides. The active \
-                       configuration's values. Changes nothing. Requires no sketch open for \
-                       editing."
+        description = "Mass properties of the active part or assembly: mass, volume, area, \
+                       density, center of mass, principal moments and axes, and the inertia tensor \
+                       at the center of mass and at the origin or a coordinate system (products of \
+                       inertia as SolidWorks shows them, Pxy = +∫xy dm). Mass comes from the \
+                       materials (none: 1000 kg/m³) and mass overrides. kg, mm."
     )]
     async fn mass_properties(
         &self,
@@ -4420,22 +3589,12 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Delete features of the active part or assembly, like selecting them in \
-                       the FeatureManager tree and pressing Delete: sketches, extrudes, cuts, \
-                       holes, fillets, chamfers, patterns, reference planes/axes, ..., and in an \
-                       assembly its mates (and assembly features). `features` = \"feature:N\" \
-                       ids from inspect_model (what=\"features\", or what=\"mates\" in an \
-                       assembly) or feature-tree names like \"Cut-Extrude1\". If other features \
-                       depend on them (a fillet on the extrude's edges, a sketch on its face, \
-                       the extrude made from a sketch), nothing is deleted and they're named, \
-                       unless children=\"delete\" (delete those too) or \"keep\" (leave them; \
-                       they lose those references). An extrude's or cut's own sketch stays in \
-                       the tree unless delete_absorbed=true; a hole's own sketches always go \
-                       with it. The default planes, origin and \
-                       components can't be deleted, nor a component's features from the \
-                       assembly (open the part). Rebuilds, and reports what's gone and what now \
-                       fails to rebuild. To remove lines/arcs/points from a sketch, use \
-                       delete_sketch_entities. Requires no sketch open for editing."
+        description = "Delete features of the active part or assembly (sketches, extrudes, holes, \
+                       fillets, patterns, reference geometry, mates, ...), like Delete in the \
+                       feature tree. If other features depend on them nothing is deleted and \
+                       they're named, unless `children` says otherwise. The default planes, origin \
+                       and components can't be deleted. Reports what's gone and what now fails. \
+                       Sketch geometry: delete_sketch_entities."
     )]
     async fn delete_features(
         &self,
@@ -4459,16 +3618,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Delete entities from a sketch of the active part: segments (lines, \
-                       arcs, circles, splines, ...) and standalone points, by the sketch ids \
-                       inspect_sketch and the sketch_* tools report (\"line:3\", \"point:7\"), \
-                       all in one sketch. Their dimensions and relations go with them, and a \
-                       segment's end/center points go with the segment (they can't be deleted \
-                       on their own). Everything is checked before anything is deleted. \
-                       Reports what went, the sketch's contours and definition state, and \
-                       features (e.g. the sketch's extrude) that now fail to rebuild. To delete \
-                       a whole sketch, use delete_features with its name. Requires no sketch \
-                       open for editing."
+        description = "Delete segments and points from a sketch, with their dimensions and \
+                       relations (a segment's end and center points go with it). Reports what \
+                       went, the contours, the definition state and features that now fail. A \
+                       whole sketch: delete_features."
     )]
     async fn delete_sketch_entities(
         &self,
@@ -4492,17 +3645,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Mirror entities of a sketch of the active part about a line of the same \
-                       sketch (usually a centerline: sketch_line with construction=true). \
-                       entities = sketch ids from inspect_sketch or the sketch_* tools (\"line:3\", \
-                       \"arc:1\", \"point:7\"); the originals stay and each copy gets a symmetric \
-                       relation to its original, so dimensioning one half defines both. Copies \
-                       share the originals' end points on the axis, and a line that ends on the \
-                       axis at a right angle is extended across it instead of copied, so \
-                       mirroring an open half profile whose ends touch the centerline closes it. \
-                       Reports the new and extended entities' ids, the sketch's contours and \
-                       definition state, and features that now fail to rebuild. Requires no \
-                       sketch open for editing."
+        description = "Mirror sketch entities about a line of their sketch, usually a construction \
+                       centerline; each copy gets a symmetric relation, so dimensioning one half \
+                       defines both. A line ending square on the axis is extended across it, so \
+                       mirroring an open half profile closes it. Reports the new and extended ids, \
+                       the contours, the definition state and features that now fail."
     )]
     async fn mirror_sketch_entities(
         &self,
@@ -4523,21 +3670,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Offset entities of a sketch of the active part by a distance, like \
-                       SolidWorks' Offset Entities: copies that stay parallel to the originals \
-                       and follow them through an offset relation, e.g. a wall's inner outline. \
-                       entities = sketch ids from inspect_sketch or the sketch_* tools (\"line:3\", \
-                       \"arc:1\", \"circle:2\"), offset inside their sketch (chain=true takes a \
-                       whole contour from one of its entities), or omit them and give sketch_name \
-                       to offset everything in that sketch except construction geometry. Or model \
-                       edge and face ids from inspect_model (\"edge:4\", \"face:2\"), projected \
-                       into sketch_name or a new sketch on plane or on (a single face defaults to \
-                       a new sketch on itself); a face offsets its outer loop only. side = \
-                       \"outward\" (the default), \"inward\" or \"both\". Reports the new entities' \
-                       ids, the sketch's contours and definition state, and features that now \
-                       fail to rebuild; check an open chain's side with inspect_sketch. Refuses a \
-                       distance that leaves no shape or turns an arc inside out, leaving nothing \
-                       behind. Requires no sketch open for editing."
+        description = "Offset sketch entities by a distance (Offset Entities), the copies \
+                       following through an offset relation; or model edges and faces into a \
+                       sketch (a face: its outer loop). Reports the new ids, the contours, the \
+                       definition state and features that now fail; check an open chain's side \
+                       with inspect_sketch. Refuses a distance that leaves no shape."
     )]
     async fn offset_sketch_entities(
         &self,
@@ -4558,16 +3695,9 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Copy entities of a sketch of the active part in a row or grid inside the \
-                       same sketch, e.g. a row of slots or a grid of hole circles to cut in one \
-                       go. entities = sketch ids from inspect_sketch or the sketch_* tools \
-                       (\"circle:1\", \"line:3\", \"point:7\"); count instances (the originals \
-                       included) spacing_mm apart along angle_deg (degrees counterclockwise from \
-                       the sketch x axis, default 0), and for a grid count2 rows spacing2_mm \
-                       apart along angle2_deg (default 90). Reports the new entities' ids, the \
-                       sketch's contours and definition state, and features that now fail to \
-                       rebuild. To copy features of the part, use linear_pattern_features. \
-                       Requires no sketch open for editing."
+        description = "Copy sketch entities in a row or grid inside their sketch, e.g. hole \
+                       circles to cut in one go. Reports the new entities' ids, the contours, the \
+                       definition state and features that now fail."
     )]
     async fn linear_pattern_sketch_entities(
         &self,
@@ -4591,16 +3721,9 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Copy entities of a sketch of the active part round a point inside the \
-                       same sketch, e.g. bolt-hole circles on a pitch circle. entities = sketch \
-                       ids from inspect_sketch or the sketch_* tools (\"circle:1\", \"line:3\", \
-                       \"point:7\"); center = [x, y] in sketch coordinates (mm, default the \
-                       sketch origin); count = instances including the originals, spread evenly \
-                       all the way round unless angle_deg (the total) or spacing_deg (between \
-                       neighbours) says otherwise, counterclockwise unless reverse_direction. \
-                       Reports the new entities' ids, the sketch's contours and definition \
-                       state, and features that now fail to rebuild. To copy features of the \
-                       part, use circular_pattern_features. Requires no sketch open for editing."
+        description = "Copy sketch entities round a point inside their sketch, e.g. hole circles \
+                       on a pitch circle. count includes the originals. Reports the new entities' \
+                       ids, the contours, the definition state and features that now fail."
     )]
     async fn circular_pattern_sketch_entities(
         &self,
@@ -4625,18 +3748,10 @@ impl SolidWorksTools {
 
     #[tool(
         description = "Find out what's wrong with the active part's or assembly's feature tree, \
-                       e.g. after deleting a feature or mate, or when inspect_model shows \
-                       features with errors. Rebuilds (unless rebuild=false), then lists every \
-                       feature that fails or warns, every sketch with dangling, broken or \
-                       over-defining relations/dimensions or a missing sketch plane, and every \
-                       mate whose mated face/edge/plane is gone (with which one and on which \
-                       component). Each problem says what's wrong, its parents and children, \
-                       and whether it's a root cause (nothing it depends on fails -- usually what \
-                       referenced the deleted geometry, with a suggested fix) or only fails \
-                       because of a parent (`caused_by`); root causes come first. Sketch entity \
-                       ids work with inspect_sketch / delete_sketch_entities, feature ids with \
-                       delete_features. Changes nothing apart from the rebuild. Requires no \
-                       sketch open for editing."
+                       e.g. after a delete: rebuilds, then lists every failing feature, broken \
+                       sketch relation or dimension, and mate whose reference is gone, with its \
+                       parents and children. Root causes come first, with a suggested fix; the \
+                       rest say what they're `caused_by`."
     )]
     async fn diagnose_model(
         &self,
@@ -4655,20 +3770,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Change an existing boss-extrude or cut-extrude of the active part, like \
-                       Edit Feature: end_condition (\"blind\" to depth_mm, \"through_all\", \
-                       \"mid_plane\", \"up_to_next\", for cuts \"through_all_both\"), depth_mm, \
-                       reverse_direction, a draft (draft_deg, draft_outward), a second direction \
-                       (both_directions, end_condition2, depth2_mm), and for cuts \
-                       flip_side_to_cut. `feature` = \"feature:N\" from inspect_model or a name \
-                       like \"Cut-Extrude1\". Only what's given changes; with nothing else given \
-                       it just reports the extrude's current settings and dimension names. If \
-                       SolidWorks rejects the change or the extrude fails to rebuild with it (e.g. \
-                       a cut reversed into empty space), the old settings are put back and the \
-                       reason reported. Reports before/after and other features that now fail. \
-                       To change the profile, edit its sketch with the sketch tools; for just a \
-                       depth, set_dimension on D1@<feature> works too. Requires no sketch open for \
-                       editing."
+        description = "Change a boss- or cut-extrude of the active part (Edit Feature): end \
+                       condition, depth, direction, draft, a second direction, side to cut. Only \
+                       what's given changes; nothing given reports its settings. If it's rejected \
+                       or fails to rebuild the old settings are put back and the reason given. \
+                       Reports before / after and features that now fail."
     )]
     async fn edit_extrude(
         &self,
@@ -4688,22 +3794,11 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Change an existing mate of the active assembly, like Edit Mate: its kind \
-                       (e.g. coincident -> distance with distance_mm), the two entities it mates \
-                       (as in add_mate), alignment (\"aligned\"/\"anti_aligned\"/\"closest\" -- \
-                       turns a component around), flip (distance/angle), distance_mm, angle_deg, \
-                       limits (min_mm / max_mm or min_deg / max_deg: a distance / angle mate \
-                       becomes a limit mate; remove_limits=true makes it plain again) or \
-                       lock_rotation (concentric). `mate` = \"feature:N\" from inspect_model \
-                       what=\"mates\" or a name like \"Coincident1\". Only what's given changes. \
-                       A new kind replaces the mate with one named after the kind (Coincident1 -> \
-                       Distance1), and the mate's id changes with every edit: use the one in the \
-                       reply. SolidWorks then re-solves and moves the components that aren't fixed. If \
-                       the change is rejected, over-defines the assembly or can't be solved, the \
-                       mate is edited back and the reason reported. Reports before/after, the \
-                       mated entities and where the components ended up. For only a distance/angle \
-                       value, set_dimension on the mate's dimension works too. Requires an open \
-                       assembly with no sketch being edited."
+        description = "Change a mate of the active assembly (Edit Mate): kind, entities, \
+                       alignment, flip, value, limits, lock_rotation. Only what's given changes. A \
+                       new kind or any edit gives the mate a new id (and a new kind a new name): \
+                       use the reply's. A change that's rejected or can't be solved is undone and \
+                       the reason given. Reports before / after and where the components went."
     )]
     async fn edit_mate(
         &self,
@@ -4732,19 +3827,12 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Change an existing constant-radius fillet of the active part, like Edit \
-                       Feature: radius_mm, tangent_propagation, and what it rounds -- edges (all \
-                       new), add_edges or remove_edges. `feature` = \"feature:N\" from \
-                       inspect_model or a name like \"Fillet1\". With only feature it reports the \
-                       fillet, its edges and faces as ids (as the model is before the fillet: \
-                       give those to remove_edges). Edges to round are inspect_model edge/face ids \
-                       that exist before the fillet, not ones it or a later feature made; to pick \
-                       edges the fillet or a later feature hides, rollback before it, \
-                       inspect_model, then rollback to the end. If SolidWorks rejects the change \
-                       or the fillet fails to rebuild with it, the old settings are put back and \
-                       the reason reported. Reports before/after and other features that now \
-                       fail. For just the radius, set_dimension on D1@<fillet> works too. Requires \
-                       no sketch open for editing."
+        description = "Change a constant-radius fillet of the active part: radius, tangent \
+                       propagation, edges. Feature alone reports it, with its edges and faces as \
+                       ids of the model before the fillet. New edges must exist before the fillet \
+                       (to pick ones it hides: rollback, inspect_model, rollback to the end). A \
+                       rejected change is put back. Reports before / after and features that now \
+                       fail."
     )]
     async fn edit_fillet(
         &self,
@@ -4765,17 +3853,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Change an existing linear or circular feature pattern of the active part, \
-                       like Edit Feature: count, spacing_mm (linear) or angle_deg / spacing_deg \
-                       (circular), reverse_direction, a new direction (linear) or axis \
-                       (circular), a linear pattern's second direction (count2 -- 1 removes it \
-                       --, spacing2_mm, reverse_direction2, direction2), or the features it \
-                       copies. `feature` = \"feature:N\" from inspect_model or a name like \
-                       \"LPattern1\". Only what's given changes; with nothing else given it just \
-                       reports the pattern. If SolidWorks rejects the change or the pattern fails \
-                       to rebuild with it (e.g. copies of a cut that find no material), the old \
-                       settings are put back and the reason reported. Reports before/after and \
-                       other features that now fail. Requires no sketch open for editing."
+        description = "Change a linear or circular feature pattern of the active part: counts, \
+                       spacing, directions or axis, a second direction, the features copied. Only \
+                       what's given changes; nothing given reports it. A rejected change is put \
+                       back. Reports before / after and features that now fail."
     )]
     async fn edit_pattern(
         &self,
@@ -4797,16 +3878,10 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "Change an existing sweep or cut-sweep of the active part, like Edit \
-                       Feature: path (the feature-tree name of a sketch, 3D sketch or helix), the \
-                       profile (sketch_name, or circle_diameter_mm for a round section) or \
-                       twist_deg. `feature` = \"feature:N\" from inspect_model or a name like \
-                       \"Sweep1\". Only what's given changes; with nothing else given it just \
-                       reports the sweep. To change the profile's or the path's shape, edit their \
-                       sketches with the sketch tools instead. If SolidWorks rejects the change or \
-                       the sweep fails to rebuild with it, the old settings are put back and the \
-                       reason reported. Reports before/after and other features that now fail. \
-                       Requires no sketch open for editing."
+        description = "Change a sweep or cut-sweep of the active part: path, profile sketch or \
+                       circle, twist. Only what's given changes; nothing given reports it. Shapes: \
+                       edit the sketches. A rejected change is put back. Reports before / after \
+                       and features that now fail."
     )]
     async fn edit_sweep(
         &self,
@@ -4824,114 +3899,27 @@ impl SolidWorksTools {
         Ok(CallToolResult::success(vec![ContentBlock::text(feature_edit::sweep_reply_text(&params, &reply))]))
     }
     #[tool(
-        description = "Add a reference plane to the active part, like Insert > Reference Geometry \
-                       > Plane: from one to three references, each with how the plane relates to \
-                       it. References are model geometry (inspect_model ids: \"face:3\", \
-                       \"edge:7\", \"vertex:2\" from an edge's start_vertex/end_vertex, \
-                       \"feature:1\" for a plane/axis/point), sketch entities (\"line:3\", \
-                       \"point:7\", from the sketch_* tools or inspect_sketch), \"origin\", \
-                       \"front\"/\"top\"/\"right\", or a feature name like \"Plane1\". Common \
-                       cases: offset [{\"entity\": \"top\", \"offset_mm\": 20}]; through an edge \
-                       at an angle to a face [{\"entity\": \"face:3\", \"angle_deg\": 30}, \
-                       {\"entity\": \"edge:5\"}]; through three points; normal to a sketch line / \
-                       edge at a point [{\"entity\": \"line:2\", \"relation\": \"perpendicular\"}, \
-                       {\"entity\": \"point:3\"}]; midway between two faces (both \"mid_plane\"); \
-                       tangent to a cylinder at a line on it. Reports the plane's normal and a \
-                       point on it; sketch on it with the sketch tools' on=\"feature:N\". If \
-                       SolidWorks can't make the plane from the references (or it fails to \
-                       rebuild), nothing is added. Requires a part with no sketch open."
+        description = "Add a reference plane, axis, point or coordinate system to the active part \
+                       from faces, edges, vertices, sketch entities, the origin or the default \
+                       planes. Reports where it is and its \"feature:N\" id, a reference for more \
+                       reference geometry and add_mate; sketch on a plane with the sketch tool's \
+                       on=\"feature:N\". Adds nothing if SolidWorks can't make it."
     )]
-    async fn create_reference_plane(
+    async fn create_reference_geometry(
         &self,
-        Parameters(params): Parameters<refgeom::ReferencePlaneParams>,
+        Parameters(params): Parameters<refgeom::ReferenceGeometryParams>,
     ) -> Result<CallToolResult, McpError> {
-        let request = {
+        let (request, from, given) = {
             let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            refgeom::plane_request(&ids, &params)?
+            refgeom::geometry_request(&ids, params)?
         };
-        let given: Vec<String> = params.references.iter().map(|r| r.entity.clone()).collect();
-        self.reference_geometry(request, &refgeom::plane_from_text(&params), &given).await
-    }
-
-    #[tool(
-        description = "Add a reference axis to the active part, like Insert > Reference Geometry \
-                       > Axis, from one or two references: a straight edge or sketch line; a \
-                       cylindrical or conical face (its axis, e.g. through a hole); two planes or \
-                       planar faces (where they meet); two vertices / sketch points / \"origin\"; \
-                       or a point and a face/plane (through the point, normal to it). References \
-                       as in create_reference_plane (inspect_model ids, sketch entity ids, \
-                       \"origin\", \"front\"/\"top\"/\"right\", feature names). Reports the axis' \
-                       direction and a point on it; its \"feature:N\" id works as a reference for \
-                       planes, points and coordinate systems, and in add_mate. Requires a part \
-                       with no sketch open."
-    )]
-    async fn create_reference_axis(
-        &self,
-        Parameters(params): Parameters<refgeom::ReferenceAxisParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            refgeom::axis_request(&ids, &params)?
-        };
-        let refs: Vec<&str> = params.references.iter().map(String::as_str).collect();
-        self.reference_geometry(request, &refgeom::from_text(&refs), &params.references).await
-    }
-
-    #[tool(
-        description = "Add reference points to the active part, like Insert > Reference Geometry \
-                       > Point: at the center of a circular edge or sketch arc/circle \
-                       (kind=\"center\"), the center of a face (\"face_center\"), a vertex or \
-                       sketch point projected onto a face/plane (\"projection\"), where two \
-                       edges/sketch segments cross or an edge meets a face/plane \
-                       (\"intersection\"), at a vertex or sketch point (\"at\"), or along an edge \
-                       / sketch segment (\"along\": distance_mm or percent from one end, count \
-                       for several -- alone, count points spread evenly). kind can usually be left \
-                       out: it follows from the references. References as in \
-                       create_reference_plane. Reports each point's position; their \"feature:N\" \
-                       ids work as references for planes, axes and coordinate systems. Requires a \
-                       part with no sketch open."
-    )]
-    async fn create_reference_point(
-        &self,
-        Parameters(params): Parameters<refgeom::ReferencePointParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            refgeom::point_request(&ids, &params)?
-        };
-        let refs: Vec<&str> = params.references.iter().map(String::as_str).collect();
-        self.reference_geometry(request, &refgeom::from_text(&refs), &params.references).await
-    }
-
-    #[tool(
-        description = "Add a coordinate system to the active part, like Insert > Reference \
-                       Geometry > Coordinate System: `origin` at a vertex, sketch point or \
-                       reference point (default: the part origin), and up to two of x_axis / \
-                       y_axis / z_axis, each following an edge, sketch line or axis, a plane or \
-                       planar face's normal, or pointing at a vertex/point; flip_x/y/z reverse \
-                       one. References as in create_reference_plane. Reports the origin and axes \
-                       in model coordinates. Requires a part with no sketch open."
-    )]
-    async fn create_coordinate_system(
-        &self,
-        Parameters(params): Parameters<refgeom::CoordinateSystemParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            refgeom::coordinate_system_request(&ids, &params)?
-        };
-        let given: Vec<String> = [&params.origin, &params.x_axis, &params.y_axis, &params.z_axis]
-            .iter()
-            .filter_map(|r| (*r).clone())
-            .collect();
-        let refs: Vec<&str> = given.iter().map(String::as_str).collect();
-        self.reference_geometry(request, &refgeom::from_text(&refs), &[]).await
+        self.reference_geometry(request, &from, &given).await
     }
 }
 
 impl SolidWorksTools {
-    /// Shared by revolve_sketch and cut_revolve_sketch.
-    async fn revolve(&self, params: revolve::RevolveParams, cut: bool) -> Result<CallToolResult, McpError> {
+    async fn revolve(&self, params: revolve::RevolveParams) -> Result<CallToolResult, McpError> {
+        let cut = params.cut;
         let request = {
             let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             revolve::request(&ids, &params, cut)?
@@ -4947,8 +3935,8 @@ impl SolidWorksTools {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    /// Shared by sweep_sketch and cut_sweep_sketch.
-    async fn sweep(&self, params: sweep::SweepParams, cut: bool) -> Result<CallToolResult, McpError> {
+    async fn sweep(&self, params: sweep::SweepParams) -> Result<CallToolResult, McpError> {
+        let cut = params.cut;
         let request = sweep::request(&params, cut)?;
         let reply = self
             .addin
@@ -4962,8 +3950,8 @@ impl SolidWorksTools {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    /// Shared by loft_sketch and cut_loft_sketch.
-    async fn loft(&self, params: loft::LoftParams, cut: bool) -> Result<CallToolResult, McpError> {
+    async fn loft(&self, params: loft::LoftParams) -> Result<CallToolResult, McpError> {
+        let cut = params.cut;
         let request = loft::request(&params, cut)?;
         let reply = self
             .addin
@@ -4977,8 +3965,8 @@ impl SolidWorksTools {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    /// Shared by the reference geometry tools: `from` describes the
-    /// references for the reply, `given` numbers them for error messages.
+    /// `from` describes the references for the reply, `given` numbers them
+    /// for error messages.
     async fn reference_geometry(
         &self,
         request: proto::CreateReferenceGeometryRequest,
@@ -4995,13 +3983,13 @@ impl SolidWorksTools {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    /// Shared by the square and rectangle tools. Takes millimeters.
+    /// The sketch tool's rectangle: a new sketch of its own. Takes millimeters; `center` is
+    /// a sketch [x, y] or a model [x, y, z] point.
     async fn rectangle_sketch(
         &self,
         plane: SketchPlane,
-        placement: SketchPlacement,
-        center_x_mm: f64,
-        center_y_mm: f64,
+        on: Option<&str>,
+        center: Option<&[f64]>,
         width_mm: f64,
         height_mm: f64,
     ) -> Result<CallToolResult, McpError> {
@@ -5013,15 +4001,26 @@ impl SolidWorksTools {
                 ));
             }
         }
-        if !(center_x_mm.is_finite() && center_y_mm.is_finite())
-            || placement
-                .center_mm
-                .is_some_and(|c| !c.iter().all(|v| v.is_finite()))
-        {
+        let (center_x_mm, center_y_mm, center_mm) = match center {
+            None => (0.0, 0.0, None),
+            Some(&[x, y]) => (x, y, None),
+            Some(&[x, y, z]) => (0.0, 0.0, Some([x, y, z])),
+            Some(c) => {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "center has {} coordinates; give [x, y] in sketch coordinates or [x, y, z] in \
+                         model coordinates",
+                        c.len()
+                    ),
+                    None,
+                ));
+            }
+        };
+        if !center.unwrap_or_default().iter().all(|v| v.is_finite()) {
             return Err(McpError::invalid_params("center must be finite", None));
         }
 
-        let on = placement.on.as_deref().map(str::trim).filter(|on| !on.is_empty());
+        let on = on.map(str::trim).filter(|on| !on.is_empty());
         let on_persist_id = match on {
             Some(id) => self.resolve_id(id)?,
             None => Vec::new(),
@@ -5033,7 +4032,7 @@ impl SolidWorksTools {
             width: width_mm / MM_PER_M,
             height: height_mm / MM_PER_M,
             on_persist_id,
-            center_model: placement.center_mm.map(|[x, y, z]| proto::Vec3 {
+            center_model: center_mm.map(|[x, y, z]| proto::Vec3 {
                 x: x / MM_PER_M,
                 y: y / MM_PER_M,
                 z: z / MM_PER_M,
@@ -5077,7 +4076,7 @@ impl SolidWorksTools {
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
 
-    /// Shared by the sketch_* tools: draws `entities` (meters) into the target sketch and
+    /// Shared by the sketch tool: draws `entities` (meters) into the target sketch and
     /// describes the result. `what` names what was drawn, e.g. "3 lines".
     async fn draw_sketch(
         &self,
@@ -5214,7 +4213,7 @@ impl SolidWorksTools {
                         McpError::invalid_params(
                             ids.unknown_id(
                                 entity,
-                                "inspect_sketch and the sketch_* tools",
+                                "inspect_sketch and the sketch tool",
                                 "call inspect_sketch for current ones",
                             ),
                             None,
@@ -5381,7 +4380,7 @@ impl SolidWorksTools {
             .map_err(|status| self.addin_error(status))
     }
 
-    /// create_projected_view & co.: the RPC, then, unless placed by the
+    /// create_drawing_view's derived views: the RPC, then, unless placed by the
     /// caller, the new view is moved clear of the other views.
     async fn derive_drawing_view(&self, plan: derived_view::Plan) -> Result<CallToolResult, McpError> {
         let mut reply = self
@@ -5586,7 +4585,7 @@ impl ServerHandler for SolidWorksTools {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        Ok(ListToolsResult::with_all_items(self.tool_router.list_all())
+        Ok(ListToolsResult::with_all_items(self.tools.as_ref().clone())
             .with_ttl_ms(TOOL_LIST_TTL_MS)
             .with_cache_scope(CacheScope::Public))
     }
@@ -5599,85 +4598,24 @@ impl ServerHandler for SolidWorksTools {
             // client asks for, currently 2026-07-28 for Claude Code.
             .with_protocol_version(ProtocolVersion::V_2024_11_05)
             .with_instructions(
-                "Bridges to a running SolidWorks instance via the sld_mcp COM add-in, \
-                 over gRPC on localhost. Requires SolidWorks to be running with that \
-                 add-in enabled. Use inspect_model to see what's in the active part \
-                 (features, bodies, faces, edges with their geometry) before editing it; \
-                 the ids it returns let other tools target specific faces. Sketch with \
-                 create_rectangle_sketch / create_square_sketch or, for any other profile, \
-                 sketch_line, sketch_arc, sketch_circle, sketch_spline and sketch_point \
-                 (pass sketch_name to keep adding to one sketch), then extrude_sketch or \
-                 cut_extrude_sketch, or for round parts revolve_sketch / cut_revolve_sketch \
-                 about a centerline (sketch_line with construction=true), or sweep_sketch / \
-                 cut_sweep_sketch to run a profile (or a circle) along a path sketch, or                  loft_sketch / cut_loft_sketch to blend through profiles on several planes; \
-                 a path needn't lie in a plane: the sketch_* tools with sketch_3d=true draw a 3D \
-                 sketch, and create_helix turns a circle's sketch into a helix or spiral curve \
-                 (a spring, a coil, a thread); \
-                 fillet_edges / chamfer_edges round or bevel edges (by edge or face id); \
- \
-                 shell_body hollows out a solid into walls, with chosen faces left open; \
-                 rib_sketch grows a thin wall from a sketch to the body; draft_faces tapers \
-                 faces about a neutral plane; \
-                 mirror_features copies features or bodies about a plane, and \
-                 mirror_sketch_entities mirrors sketch geometry about a centerline; \
-                 offset_sketch_entities offsets sketch entities, or model edges and faces into \
-                 a sketch; convert_entities projects edges, faces or other sketches' entities \
-                 into a sketch; sketch_slot / sketch_polygon / sketch_ellipse draw those shapes; \
-                 sketch_fillet / sketch_chamfer round or cut sketch corners, and \
-                 trim_sketch_entity / extend_sketch_entity trim and extend sketch entities; \
-                 linear_pattern_features / circular_pattern_features copy features or bodies \
-                 in a row, grid or round an axis, and linear_pattern_sketch_entities / \
-                 circular_pattern_sketch_entities do the same inside a sketch. \
-                 hole_wizard adds standard clearance, counterbore, \
-                 countersink or tapped holes at the points of a (dimensioned) sketch, or at \
-                 locations on a face. To make a sketch fully defined: the drawing tools \
-                 report entity ids (\"line:1\", \"point:2\"; inspect_sketch lists them all), \
-                 dimension_sketch adds driving dimensions and add_sketch_relations adds \
-                 relations for the sizes and alignments that matter, then fully_define_sketch \
-                 locks whatever is left. set_dimension changes a dimension later. render_views \
-                 draws the part (optionally highlighting ids) to check its shape. \
-                 Assemblies: inspect_model lists the components and mates and, within a \
-                 component, its faces, edges and planes (in assembly coordinates); add_mate \
-                 mates two components by those ids, and render_views shows where they ended \
-                 up; inspect_mobility reports each component's remaining degrees of freedom \
-                 (what it can still slide along / turn about); check_interference finds \
-                 components that overlap (also from a drawing \
-                 of the assembly). measure gives distances, angles, lengths and areas of \
-                 faces, edges, vertices, planes or components (like SolidWorks' Measure); \
-                 mass_properties gives a part's or assembly's mass, center of gravity and \
-                 moments of inertia. Motion: move_component drags a component while its mates \
-                 solve (check_collisions=true reports what it hits on the way); add_mate \
-                 min_mm / max_mm or min_deg / max_deg makes a limit mate, and sweep_mate runs a \
-                 limit (or distance / angle) mate through its range checking for collisions. inspect_annotations reads the model's MBD / PMI (DimXpert dimensions, \
-                 tolerances, datums, feature control frames); add_datum_symbol and \
-                 add_geometric_tolerance add datums and feature control frames, to a part, \
-                 assembly or drawing. Drawings: inspect_drawing lists \
-                 the sheets and views and, for one view, its visible edges with ids and \
-                 sheet positions; add_drawing_dimensions dimensions those edges, \
-                 insert_model_items brings in the model's own dimensions, \
-                 set_dimension_tolerance tolerances a dimension (drawing or model), and \
-                 render_drawing shows the sheet as printed to check the layout. \
-                 set_visibility hides or shows bodies, components, sketches and reference \
-                 geometry; close_document closes a document. Configurations (variants of one \
-                 part or assembly, e.g. lengths of a bolt): the configurations tool lists, \
-                 creates, activates and deletes them, set_dimension `configurations` sets a value \
-                 in some of them, and set_suppression suppresses features or components per \
-                 configuration. The feature tree's history: rollback moves the rollback bar                  (to add a feature early, or look at the model as it was), reorder_feature                  moves a feature before or after another. Parameters: the equations tool sets global variables and \
-                 equations that drive dimensions; design_table sets values for many \
-                 configurations at once. To undo or rework: undo takes back \
-                 the last steps; delete_features removes features (sketches, extrudes, cuts, holes, \
-                 fillets, planes, mates, ...) by inspect_model id or name, refusing unless told \
-                 what to do with features that depend on them; delete_sketch_entities removes \
-                 lines, arcs, points, ... from a sketch. Reference geometry: \
-                 create_reference_plane / _axis / _point and create_coordinate_system build \
-                 planes, axes, points and coordinate systems from faces, edges, vertices, sketch \
-                 entities, the origin or the default planes; sketch on a new plane with \
-                 on=\"feature:N\". Lengths are in millimeters, angles in \
-                 degrees, whatever the document's units: for an inch (imperial) part, \
-                 assembly or drawing give create_part / create_assembly / create_drawing \
-                 units=\"ips\" (or change an open one with document_units) and keep passing \
-                 mm -- SolidWorks then shows dimensions, tolerances and sheets in inches. \
-                 If no tool does what's needed, run_macro runs VBA inside SolidWorks."
+                "Drives a running SolidWorks through its sld_mcp add-in, on localhost. Tools work \
+                 on the active document; those that change a part or assembly need no sketch open \
+                 for editing. Lengths are mm and angles degrees whatever the document's units \
+                 (document_units only changes what SolidWorks shows; create_part / create_assembly \
+                 / create_drawing take units=\"ips\" for an inch document). Ids: inspect_model \
+                 gives the model's (\"face:7\", \"edge:3\", \"feature:2\", \"component:1\"), \
+                 inspect_sketch and the sketch tool a sketch's (\"line:3\", \"point:7\"), \
+                 inspect_drawing with a view that view's (\"view_edge:3\"); they belong to the \
+                 active document and stay valid while the entity exists. Work in a loop: inspect, \
+                 change by id, check with render_views / render_drawing (shapes) and inspect_model \
+                 (sizes). A part: sketch closed profiles, then extrude_sketch, revolve_sketch, \
+                 sweep_sketch or loft_sketch (cut=true removes material), then fillets, patterns, \
+                 holes; dimension_sketch, add_sketch_relations and fully_define_sketch define a \
+                 sketch, set_dimension changes sizes later. Assemblies: insert_components, \
+                 add_mate, then inspect_mobility, move_component, check_interference. Drawings: \
+                 create_drawing, create_drawing_view, add_drawing_dimensions or \
+                 insert_model_items, then render_drawing. To rework: undo, delete_features, \
+                 diagnose_model. When no tool fits, run_macro runs VBA."
                     .to_string(),
             )
     }
@@ -5702,6 +4640,30 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sketch_params(args: serde_json::Value) -> SketchParams {
+        serde_json::from_value(args).unwrap()
+    }
+
+    #[test]
+    fn sketch_shapes_take_only_their_parameters() {
+        let ok = |args| sketch_params(args).check_applies().is_ok();
+        assert!(ok(serde_json::json!({"shape": "line", "points": [[0, 0], [1, 0]], "closed": true})));
+        assert!(ok(serde_json::json!({"shape": "rectangle", "width_mm": 10, "on": "face:1", "center": [0, 0, 5]})));
+        assert!(ok(serde_json::json!({"shape": "arc", "start": [0, 0, 0], "end": [1, 0, 0], "through": [0, 1, 0], "sketch_3d": true})));
+        assert!(!ok(serde_json::json!({"shape": "line", "points": [[0, 0], [1, 0]], "radius_mm": 3})));
+        assert!(!ok(serde_json::json!({"shape": "point", "points": [[0, 0]], "construction": true})));
+        assert!(!ok(serde_json::json!({"shape": "rectangle", "width_mm": 10, "sketch_name": "Sketch1"})));
+        assert!(!ok(serde_json::json!({"shape": "slot", "start": [0, 0], "end": [1, 0], "width_mm": 1, "sketch_3d": true})));
+
+        // What a shape needs, it asks for by name.
+        let p = sketch_params(serde_json::json!({"shape": "polygon", "center": [0, 0]}));
+        let error = p.entities(&mut PointConverter::default()).unwrap_err();
+        assert!(error.message.contains("needs sides"), "{}", error.message);
+        let p = sketch_params(serde_json::json!({"shape": "line", "points": [[0, 0], [10, 0], [10, 5]], "closed": true}));
+        let (entities, what) = p.entities(&mut PointConverter::default()).unwrap();
+        assert_eq!((entities.len(), what.as_str()), (3, "3 lines"));
+    }
 
     #[test]
     fn sketch_points_convert_to_meters() {
