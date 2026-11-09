@@ -4608,7 +4608,9 @@ impl SolidWorksTools {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for SolidWorksTools {
     // Written by hand to check which document is active first: ids belong to
-    // a document (see IdRegistry).
+    // a document (see IdRegistry), and so a tool's failure is an isError
+    // result the model sees and can correct, not a protocol error that some
+    // clients hide. Unknown or unloaded tools stay protocol errors.
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
@@ -4624,8 +4626,12 @@ impl ServerHandler for SolidWorksTools {
         if let Some(why) = refused {
             return Err(McpError::invalid_params(format!("tool {} {why}", request.name), None));
         }
+        if !self.tool_router.has_route(&request.name) {
+            return Err(McpError::invalid_params(format!("unknown tool {}", request.name), None));
+        }
         self.track_document(false).await;
-        self.tool_router.call(ToolCallContext::new(self, request, context)).await
+        let result = self.tool_router.call(ToolCallContext::new(self, request, context)).await;
+        Ok(result.unwrap_or_else(|error| CallToolResult::error(vec![ContentBlock::text(error.message)]).into()))
     }
 
     // Written by hand because the one #[tool_handler] generates leaves out

@@ -171,7 +171,7 @@ class Client:
         try:
             raw = self._request("tools/call", {"name": tool, "arguments": arguments})
         except ToolError as error:
-            # rmcp reports invalid_params and friends as JSON-RPC errors.
+            # Only an unknown or unloaded tool is a JSON-RPC error; other failures are isError results.
             raw = {"isError": True, "content": [{"type": "text", "text": str(error)}]}
         elapsed = time.monotonic() - started
 
