@@ -133,6 +133,33 @@ namespace
 		points.insert(points.end(), end.begin(), end.end());
 		return gap > 0.0;
 	}
+
+	// FNV-1a, 64-bit: GetMeshResponse.key.
+	class Fingerprint
+	{
+	public:
+		void Add(const void* data, size_t size)
+		{
+			const auto* bytes = static_cast<const unsigned char*>(data);
+			for (size_t i = 0; i < size; ++i)
+				m_hash = (m_hash ^ bytes[i]) * 1099511628211ull;
+		}
+		// Length first, so "ab" + "c" and "a" + "bc" differ.
+		void Add(const std::string& s)
+		{
+			Add(static_cast<uint64_t>(s.size()));
+			Add(s.data(), s.size());
+		}
+		template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>
+		void Add(T value)
+		{
+			Add(&value, sizeof value);
+		}
+		uint64_t Get() const { return m_hash ? m_hash : 1; }
+
+	private:
+		uint64_t m_hash = 14695981039346656037ull;
+	};
 }
 
 grpc::Status SolidWorksService::GetMesh(grpc::ServerContext* /*context*/,
@@ -213,6 +240,40 @@ grpc::Status SolidWorksService::GetMesh(grpc::ServerContext* /*context*/,
 				if (SUCCEEDED(body->GetBodyBox(&box)))
 					sizeBox.extend(ToAlignedBox(comvariant::ToDoubles(box)));
 			}
+	}
+
+	// What's drawn, fingerprinted without tessellating anything, so a caller
+	// that still has this mesh gets it confirmed instead of sent again. Update
+	// stamps change with every change to the document or a body; the body
+	// list changes when one is hidden or shown, the placements when a
+	// component moves. The process id tells SolidWorks sessions apart.
+	{
+		Fingerprint key;
+		key.Add(static_cast<uint64_t>(GetCurrentProcessId()));
+		key.Add(response->document().title());
+		ATL::CComBSTR path;
+		if (SUCCEEDED(doc->GetPathName(&path)))
+			key.Add(ToUtf8(path));
+		long stamp = 0;
+		if (SUCCEEDED(doc->GetUpdateStamp(&stamp)))
+			key.Add(stamp);
+		key.Add(request->include_edges());
+		for (const auto& [body, componentId] : bodies)
+		{
+			key.Add(componentId);
+			key.Add(ids.Get(body));
+			long bodyStamp = 0;
+			if (SUCCEEDED(body->GetUpdateStamp(&bodyStamp)))
+				key.Add(bodyStamp);
+		}
+		for (const auto& component : response->components())
+			key.Add(component.SerializeAsString());
+		response->set_key(key.Get());
+		if (request->cached_key() == response->key())
+		{
+			response->set_unchanged(true);
+			return grpc::Status::OK;
+		}
 	}
 
 	// Edge tessellation tolerances scale with the model: chords within 0.1%

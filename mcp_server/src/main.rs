@@ -795,18 +795,151 @@ const MAX_VIEWS: usize = 9;
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 struct RenderViewsParams {
-    /// Views to draw, in order, as a grid. Defaults to ["top", "isometric", "front", "right"]
-    /// in a 2x2 grid: top above front and right beside it, like a third-angle drawing.
+    /// Views to draw, in order, as a grid: a standard view's name, or {"direction": [x, y, z]}
+    /// to look from any direction (model axes, from the part toward the eye; optional "up").
+    /// Defaults to ["top", "isometric", "front", "right"] in a 2x2 grid: top above front and
+    /// right beside it, like a third-angle drawing; with `section`, straight at the cut and at
+    /// an angle.
     #[serde(default)]
-    views: Option<Vec<render::View>>,
+    views: Option<Vec<render::ViewSpec>>,
     /// Entities to color in, each an id from inspect_model ("face:7", "edge:3", "body:1",
     /// "feature:5", or in an assembly "component:2") or a feature name ("Cut-Extrude1", for the
     /// faces it made). Up to 6; each gets its own color, reported in the result.
     #[serde(default)]
     highlight: Vec<String>,
+    /// Entities to leave out of this picture (ids or feature names, as for highlight), e.g. a
+    /// housing to see inside an assembly. Nothing is hidden in SolidWorks.
+    #[serde(default)]
+    hide: Vec<String>,
+    /// Entities to draw see-through (ids or feature names), or ["others"] for everything not
+    /// highlighted.
+    #[serde(default)]
+    transparent: Vec<String>,
+    /// Frame these (ids or feature names) instead of the whole model, to zoom in on them.
+    #[serde(default)]
+    zoom_to: Vec<String>,
+    /// Cut the model with a plane; the cut material is drawn solid (tan, or a darker
+    /// highlight color).
+    #[serde(default)]
+    section: Option<SectionParams>,
     /// Size of each view in pixels (square), 256 to 1024. Defaults to 512.
     #[serde(default)]
     size_px: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct SectionParams {
+    /// The plane's normal, model axes; everything on the side it points to is cut away.
+    normal: [f32; 3],
+    /// A point on the plane, model mm. Defaults to the middle of what's shown.
+    #[serde(default)]
+    point_mm: Option<[f32; 3]>,
+}
+
+/// render_views' id lists, trimmed, as given: what its result names.
+struct PickNames {
+    highlight: Vec<String>,
+    hide: Vec<String>,
+    transparent: Vec<String>,
+    zoom_to: Vec<String>,
+    /// `transparent: ["others"]`.
+    others: bool,
+}
+
+/// render_views' tiles: `views`, else the default grid, or with a section
+/// the two section views.
+fn render_cameras(
+    views: Option<&[render::ViewSpec]>,
+    section_normal: Option<render::Vec3>,
+) -> Result<Vec<render::Camera>, McpError> {
+    match (views, section_normal) {
+        (None, None) => Ok(render::View::DEFAULT_GRID.map(render::Camera::standard).to_vec()),
+        (None, Some(normal)) => Ok(render::Camera::section_views(normal).to_vec()),
+        (Some(views), _) if views.is_empty() || views.len() > MAX_VIEWS => Err(McpError::invalid_params(
+            format!("give between 1 and {MAX_VIEWS} views"),
+            None,
+        )),
+        (Some(views), _) => views
+            .iter()
+            .map(|&view| render::Camera::from_spec(view))
+            .collect::<Result<_, _>>()
+            .map_err(|err| McpError::invalid_params(err, None)),
+    }
+}
+
+/// As square as possible: 1-3 in a row, 4 as 2x2, 5-6 as 3x2, ...
+fn grid_columns(views: usize) -> usize {
+    match views {
+        n @ 1..=3 => n,
+        4 => 2,
+        _ => 3,
+    }
+}
+
+/// "through (x, y, z) mm, normal (x, y, z)", for render_views' messages.
+fn describe_plane(plane: &render::Plane) -> String {
+    let (p, n) = (plane.point, plane.normal);
+    format!(
+        "through ({:.1}, {:.1}, {:.1}) mm, normal ({:.2}, {:.2}, {:.2})",
+        p.x, p.y, p.z, n.x, n.y, n.z
+    )
+}
+
+/// The section plane through `section.point_mm`, or the middle of `model`;
+/// refused if it cuts away all of `model`.
+fn section_plane(
+    section: &SectionParams,
+    normal: render::Vec3,
+    model: &render::Model,
+) -> Result<render::Plane, McpError> {
+    let point = section.point_mm.map_or_else(
+        || model.bounding_box().map_or(render::Vec3::ZERO, |b| b.center()),
+        render::Vec3::from_array,
+    );
+    let plane = render::Plane { point, normal };
+    if !plane.keeps_any(model) {
+        return Err(McpError::invalid_params(
+            format!(
+                "the section plane {} cuts away everything that's shown: the side its normal \
+                 points to is removed",
+                describe_plane(&plane)
+            ),
+            None,
+        ));
+    }
+    Ok(plane)
+}
+
+/// render_views' result lines for what `names` asked for: each one's color
+/// or what was done with it, or that it isn't visible.
+fn describe_picks(names: &PickNames, matched: &render::Matched) -> String {
+    let mut text = String::new();
+    if !names.zoom_to.is_empty() && matched.zoom.iter().any(|&n| n > 0) {
+        text += "\nZoomed in: tiles frame what zoom_to names.";
+    }
+    if names.others {
+        text += "\nEverything not highlighted is transparent.";
+    }
+    let not_visible = "not visible (deleted, hidden, or on a hidden body?)";
+    for ((name, count), (color, _)) in names.highlight.iter().zip(&matched.highlight).zip(render::HIGHLIGHTS) {
+        text += &match count {
+            0 => format!("\n{name}: {not_visible}"),
+            _ => format!("\n{name}: {color}"),
+        };
+    }
+    for (list, counts, done) in [
+        (&names.hide, &matched.hide, "left out"),
+        (&names.transparent, &matched.transparent, "transparent"),
+        (&names.zoom_to, &matched.zoom, "framed"),
+    ] {
+        for (name, count) in list.iter().zip(counts) {
+            text += &match count {
+                0 => format!("\n{name}: {not_visible}"),
+                _ => format!("\n{name}: {done}"),
+            };
+        }
+    }
+    text
 }
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
@@ -1083,6 +1216,9 @@ struct SolidWorksTools {
     /// Short IDs handed out by inspect_model, shared by every tool call.
     ids: Arc<Mutex<IdRegistry>>,
     renderer: Arc<render::Renderer>,
+    /// The last mesh render_views got, unplaced; the add-in confirms it's
+    /// still good (GetMeshResponse.key) instead of tessellating again.
+    mesh: Arc<Mutex<Option<proto::GetMeshResponse>>>,
     /// Sheet geometry of the drawing view entities inspect_drawing listed,
     /// for checking and placing drawing dimensions.
     drawings: Arc<Mutex<drawing::Cache>>,
@@ -1106,6 +1242,7 @@ impl SolidWorksTools {
             addin,
             ids: Arc::default(),
             renderer: Arc::default(),
+            mesh: Arc::default(),
             drawings: Arc::default(),
             units: Arc::default(),
         }
@@ -2949,33 +3086,26 @@ impl SolidWorksTools {
     }
 
     #[tool(
-        description = "A PNG of the active part or assembly, shaded, in orthographic standard \
-                       views at one scale, to check the shape after edits (which side a cut went, \
-                       where a component is) and, with `highlight`, which face or edge an id is. \
-                       Read sizes from inspect_model, not the picture."
+        description = "A PNG of the active part or assembly, shaded, in orthographic views at one \
+                       scale, to check the shape after edits (which side a cut went, where a \
+                       component is) and, with `highlight`, which face or edge an id is. To look \
+                       inside: `section`, `hide`, `transparent`; `zoom_to` for small details. Read \
+                       sizes from inspect_model, not the picture."
     )]
     async fn render_views(
         &self,
         Parameters(params): Parameters<RenderViewsParams>,
     ) -> Result<CallToolResult, McpError> {
-        let (views, columns) = match params.views {
-            None => (render::View::DEFAULT_GRID.to_vec(), 2),
-            Some(views) if views.is_empty() || views.len() > MAX_VIEWS => {
-                return Err(McpError::invalid_params(
-                    format!("give between 1 and {MAX_VIEWS} views"),
-                    None,
-                ));
-            }
-            Some(views) => {
-                // As square as possible: 1-3 in a row, 4 as 2x2, 5-6 as 3x2, ...
-                let columns = match views.len() {
-                    n @ 1..=3 => n,
-                    4 => 2,
-                    _ => 3,
-                };
-                (views, columns)
-            }
+        let section_normal = match &params.section {
+            None => None,
+            Some(section) => Some(
+                render::Vec3::from_array(section.normal)
+                    .try_normalize()
+                    .ok_or_else(|| McpError::invalid_params("section normal has no length", None))?,
+            ),
         };
+        let views = render_cameras(params.views.as_deref(), section_normal)?;
+        let columns = grid_columns(views.len());
         let tile_px = params.size_px.unwrap_or(DEFAULT_TILE_PX);
         if !TILE_PX_RANGE.contains(&tile_px) {
             return Err(McpError::invalid_params(
@@ -2987,46 +3117,37 @@ impl SolidWorksTools {
                 None,
             ));
         }
-        if params.highlight.len() > render::HIGHLIGHTS.len() {
-            return Err(McpError::invalid_params(
-                format!("at most {} highlights", render::HIGHLIGHTS.len()),
-                None,
-            ));
-        }
-        let highlight: Vec<String> = params
-            .highlight
-            .iter()
-            .map(|h| h.trim().to_string())
-            .collect();
-        let targets = highlight
-            .iter()
-            .map(|h| self.highlight_target(h))
-            .collect::<Result<Vec<_>, _>>()?;
+        let (picks, names) = self.render_picks(&params)?;
 
-        let mut mesh = self
-            .addin
-            .get_mesh(proto::GetMeshRequest {
-                include_edges: true,
-            })
-            .await
-            .map_err(|status| self.addin_error(status))?;
+        let mut mesh = self.mesh().await?;
         assembly::place_mesh(&mut mesh);
-        let (model, matched) = render::model_from_mesh(&mesh, &targets);
+        let (model, matched) = render::model_from_mesh(&mesh, &picks);
         if model.faces.is_empty() {
             return Err(McpError::invalid_params(
-                "the active document has nothing to draw yet (no visible bodies or components) \
-                 -- create some geometry first",
+                if mesh.faces.is_empty() {
+                    "the active document has nothing to draw yet (no visible bodies or components) \
+                     -- create some geometry first"
+                } else {
+                    "`hide` leaves nothing to draw"
+                },
                 None,
             ));
         }
         let triangles = model.triangle_count();
         let edge_count = model.edges.len();
+        let section = params
+            .section
+            .as_ref()
+            .zip(section_normal)
+            .map(|(section, normal)| section_plane(section, normal, &model))
+            .transpose()?;
 
         let request = render::Request {
             model,
             views: views.clone(),
             columns,
             tile_px,
+            section,
         };
         let rendered = self.renderer.render(request).await.map_err(|err| {
             McpError::internal_error(
@@ -3053,18 +3174,20 @@ impl SolidWorksTools {
             let tiles: Vec<String> = chunk
                 .iter()
                 .map(|v| match v.screen_axes() {
-                    Some(axes) => format!("{} ({axes})", v.label()),
-                    None => v.label().to_string(),
+                    Some(axes) => format!("{} ({axes})", v.label),
+                    None => v.label.clone(),
                 })
                 .collect();
             text += &format!("\n  row {}: {}", row + 1, tiles.join(" | "));
         }
-        for ((name, count), (color, _)) in highlight.iter().zip(&matched).zip(render::HIGHLIGHTS) {
-            text += &match count {
-                0 => format!("\n{name}: not visible (deleted, hidden, or on a hidden body?)"),
-                _ => format!("\n{name}: {color}"),
-            };
+        if let Some(plane) = section {
+            text += &format!(
+                "\nSection {}: the side the normal points to is cut away; cut material is tan \
+                 (highlighted: its color, darker).",
+                describe_plane(&plane)
+            );
         }
+        text += &describe_picks(&names, &matched);
         if mesh.truncated {
             text += "\nwarning: the model is too detailed to draw completely; some faces or edges are missing";
         }
@@ -4272,6 +4395,68 @@ impl SolidWorksTools {
                 None,
             )),
         }
+    }
+
+    /// The active document's mesh, from the add-in or, when the add-in says
+    /// it hasn't changed, from the last render (unplaced either way).
+    async fn mesh(&self) -> Result<proto::GetMeshResponse, McpError> {
+        let lock = || self.mesh.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut cached_key = lock().as_ref().map_or(0, |m| m.key);
+        loop {
+            let reply = self
+                .addin
+                .get_mesh(proto::GetMeshRequest {
+                    include_edges: true,
+                    cached_key,
+                })
+                .await
+                .map_err(|status| self.addin_error(status))?;
+            let mut cache = lock();
+            if !reply.unchanged {
+                *cache = Some(reply.clone());
+                return Ok(reply);
+            }
+            match cache.as_ref() {
+                Some(mesh) if mesh.key == reply.key => {
+                    tracing::debug!("render_views: geometry unchanged, using the cached mesh");
+                    return Ok(mesh.clone());
+                }
+                // Another render replaced the cache meanwhile: ask for all of it.
+                _ if cached_key != 0 => cached_key = 0,
+                _ => return Err(McpError::internal_error("the add-in sent an empty mesh", None)),
+            }
+        }
+    }
+
+    /// render_views' highlight / hide / transparent / zoom_to lists,
+    /// resolved, and their names for the result.
+    fn render_picks(&self, params: &RenderViewsParams) -> Result<(render::Picks, PickNames), McpError> {
+        if params.highlight.len() > render::HIGHLIGHTS.len() {
+            return Err(McpError::invalid_params(
+                format!("at most {} highlights", render::HIGHLIGHTS.len()),
+                None,
+            ));
+        }
+        let trimmed = |list: &[String]| list.iter().map(|h| h.trim().to_string()).collect::<Vec<_>>();
+        let (others, transparent): (Vec<String>, Vec<String>) = trimmed(&params.transparent)
+            .into_iter()
+            .partition(|t| t.eq_ignore_ascii_case("others"));
+        let names = PickNames {
+            highlight: trimmed(&params.highlight),
+            hide: trimmed(&params.hide),
+            transparent,
+            zoom_to: trimmed(&params.zoom_to),
+            others: !others.is_empty(),
+        };
+        let targets = |list: &[String]| list.iter().map(|h| self.highlight_target(h)).collect::<Result<Vec<_>, _>>();
+        let picks = render::Picks {
+            highlight: targets(&names.highlight)?,
+            hide: targets(&names.hide)?,
+            transparent: targets(&names.transparent)?,
+            transparent_rest: names.others,
+            zoom: targets(&names.zoom_to)?,
+        };
+        Ok((picks, names))
     }
 
     /// What a render_views highlight refers to: a short id, or else a

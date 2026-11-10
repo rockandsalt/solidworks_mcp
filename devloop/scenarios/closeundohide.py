@@ -66,8 +66,10 @@ assert "Boss-Extrude1" not in features() and "Sketch1" in features()
 assert not bodies()
 # The rectangle sketch is several steps of SolidWorks', taken back whole: one
 # alone would leave the sketch open for editing, and the other tools stuck.
+# 3 steps, plus one per dimension since the rectangle got its width and height
+# (2026-11-08, toolfixes.py).
 r = mcp.call("undo")
-assert "undid 3 steps" in r.text and "removed Sketch1 (sketch)" in r.text, r.text
+assert "undid 5 steps" in r.text and "removed Sketch1 (sketch)" in r.text, r.text
 assert "Sketch1" not in features()
 # Nothing left.
 r = mcp.call("undo", steps=5)

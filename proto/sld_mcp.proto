@@ -2501,6 +2501,10 @@ message EdgeInfo {
 message GetMeshRequest {
   // Also return the edges as polylines.
   bool include_edges = 1;
+  // `key` of a mesh the caller still has. If the geometry hasn't changed
+  // since, the reply is `unchanged`: document, components and key only, no
+  // faces or edges. 0 = no mesh cached.
+  uint64 cached_key = 2;
 }
 
 message GetMeshResponse {
@@ -2512,6 +2516,12 @@ message GetMeshResponse {
   // Assemblies: the components the faces/edges belong to, with their
   // placements (component coordinates -> assembly).
   repeated ComponentInfo components = 5;
+  // Fingerprint of what's drawn (SolidWorks process, document, update stamps
+  // of the document and of every shown body, body ids, component
+  // placements, include_edges). Never 0.
+  uint64 key = 6;
+  // The request's cached_key still matches: faces and edges are left out.
+  bool unchanged = 7;
 }
 
 message FaceMesh {
