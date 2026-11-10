@@ -82,8 +82,7 @@ use tonic::Code;
 use tracing_subscriber::EnvFilter;
 
 /// How long a client may cache the tool list. The list is fixed for the life
-/// of the process (with --dynamic, list_changed says when it grows), so this
-/// only bounds how long a cache outlives a rebuild.
+/// of the process, so this only bounds how long a cache outlives a rebuild.
 const TOOL_LIST_TTL_MS: u64 = 5 * 60 * 1000;
 
 /// How long the active-document check before each tool call may take. It's a
@@ -1078,8 +1077,8 @@ struct SolidWorksTools {
     /// The router's tools with slimmed schemas and annotations. tools/list
     /// sends, and calls may use, only those `filter` allows.
     tools: Arc<Vec<rmcp::model::Tool>>,
-    /// Which tools are listed; enable_toolset adds modes (--dynamic).
-    filter: Arc<Mutex<toolsets::Filter>>,
+    /// Which tools are listed and may be called (--modes, --inspect-only).
+    filter: Arc<toolsets::Filter>,
     addin: AddinClient,
     /// Short IDs handed out by inspect_model, shared by every tool call.
     ids: Arc<Mutex<IdRegistry>>,
@@ -1102,7 +1101,7 @@ impl SolidWorksTools {
         }
         Self {
             tools: Arc::new(tool_schema::slim_tools(tools)),
-            filter: Arc::new(Mutex::new(filter)),
+            filter: Arc::new(filter),
             tool_router,
             addin,
             ids: Arc::default(),
@@ -1110,37 +1109,6 @@ impl SolidWorksTools {
             drawings: Arc::default(),
             units: Arc::default(),
         }
-    }
-
-    fn filter(&self) -> std::sync::MutexGuard<'_, toolsets::Filter> {
-        self.filter.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    #[tool(
-        description = "Load the tools of SolidWorks modes: modeling (sketches, features, the \
-                       feature tree, measuring), assembly (components, mates, motion, the feature \
-                       tree) or drawing (sheets, views, annotations, tables, title block). \
-                       Documents, units, properties, undo, run_macro and the GD&T symbols are \
-                       always loaded. Load a mode before working in it; its tools are listed \
-                       from the next turn."
-    )]
-    async fn enable_toolset(
-        &self,
-        Parameters(params): Parameters<toolsets::EnableToolsetParams>,
-        context: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, McpError> {
-        let added = self.filter().enable(&params.modes);
-        if added.is_empty() {
-            return Ok(CallToolResult::success(vec![ContentBlock::text("Already loaded.")]));
-        }
-        if let Err(error) = context.peer.notify_tool_list_changed().await {
-            tracing::warn!("tools/list_changed not sent: {error}");
-        }
-        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-            "Loaded {} tools: {}.",
-            added.len(),
-            added.join(", ")
-        ))]))
     }
 
     #[tool(
@@ -4644,15 +4612,11 @@ impl ServerHandler for SolidWorksTools {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
-        let refused = {
-            let filter = self.filter();
-            (!filter.allows(&request.name)).then(|| match filter.dynamic && !filter.inspect_only {
-                true => "isn't loaded: enable_toolset loads its mode",
-                false => "isn't enabled on this server (--modes / --inspect-only)",
-            })
-        };
-        if let Some(why) = refused {
-            return Err(McpError::invalid_params(format!("tool {} {why}", request.name), None));
+        if !self.filter.allows(&request.name) {
+            return Err(McpError::invalid_params(
+                format!("tool {} isn't enabled on this server (--modes / --inspect-only)", request.name),
+                None,
+            ));
         }
         if !self.tool_router.has_route(&request.name) {
             return Err(McpError::invalid_params(format!("unknown tool {}", request.name), None));
@@ -4670,34 +4634,20 @@ impl ServerHandler for SolidWorksTools {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        let filter = self.filter();
-        let tools = self.tools.iter().filter(|tool| filter.allows(&tool.name)).cloned().collect();
-        // A dynamic list is this session's own; list_changed tells the client
-        // when to fetch it again.
-        let scope = if filter.dynamic { CacheScope::Private } else { CacheScope::Public };
-        Ok(ListToolsResult::with_all_items(tools).with_ttl_ms(TOOL_LIST_TTL_MS).with_cache_scope(scope))
+        let tools = self.tools.iter().filter(|tool| self.filter.allows(&tool.name)).cloned().collect();
+        Ok(ListToolsResult::with_all_items(tools)
+            .with_ttl_ms(TOOL_LIST_TTL_MS)
+            .with_cache_scope(CacheScope::Public))
     }
 
     fn get_info(&self) -> ServerInfo {
-        let dynamic = self.filter().dynamic;
-        let mut capabilities = ServerCapabilities::builder().enable_tools().build();
-        if let Some(tools) = capabilities.tools.as_mut() {
-            tools.list_changed = Some(dynamic);
-        }
-        let mut instructions = INSTRUCTIONS.to_string();
-        if dynamic {
-            instructions.push_str(
-                " Only the core tools are loaded at first: call enable_toolset with modeling, \
-                 assembly or drawing before working in that mode.",
-            );
-        }
-        ServerInfo::new(capabilities)
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             // from_build_env() expands rmcp's own Cargo env vars, so it reports "rmcp".
             .with_server_info(Implementation::new("solidworks-mcp", env!("CARGO_PKG_VERSION")))
             // Only a fallback: rmcp answers with whichever known version the
             // client asks for, currently 2026-07-28 for Claude Code.
             .with_protocol_version(ProtocolVersion::V_2024_11_05)
-            .with_instructions(instructions)
+            .with_instructions(INSTRUCTIONS)
     }
 }
 

@@ -1,16 +1,13 @@
 //! Tool groups: which SolidWorks mode(s) a tool works in, and whether it
 //! inspects, edits or can destroy work. The server can be started on a subset
-//! (`--modes`, `--inspect-only`) so a client lists fewer tools, or with
-//! `--dynamic` on the core tools plus enable_toolset, which adds a mode's tools
-//! when the model asks; access also gives each tool's MCP annotations.
+//! (`--modes`, `--inspect-only`) so a client without tool search lists fewer
+//! tools; access also gives each tool's MCP annotations.
 
-use rmcp::{model::ToolAnnotations, schemars};
-use serde::Deserialize;
+use rmcp::model::ToolAnnotations;
 use Access::{Destructive, Edit, Inspect};
 use Mode::{Assembly, Drawing, Modeling};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
     Modeling,
     Assembly,
@@ -40,8 +37,6 @@ pub const TOOLS: &[(&str, &[Mode], Access)] = &[
     // Any mode: documents, session, properties, annotations a part, assembly
     // or drawing can all carry.
     ("get_active_document_name", ALL, Inspect),
-    // Listed only with --dynamic.
-    ("enable_toolset", ALL, Edit),
     ("create_part", ALL, Edit),
     ("create_assembly", ALL, Edit),
     ("create_drawing", ALL, Edit),
@@ -159,30 +154,24 @@ pub const TOOLS: &[(&str, &[Mode], Access)] = &[
 pub struct Filter {
     pub modes: Vec<Mode>,
     pub inspect_only: bool,
-    /// enable_toolset is listed and can add modes.
-    pub dynamic: bool,
 }
 
 impl Default for Filter {
     fn default() -> Self {
-        Self { modes: ALL.to_vec(), inspect_only: false, dynamic: false }
+        Self { modes: ALL.to_vec(), inspect_only: false }
     }
 }
 
 impl Filter {
     /// From the command line: `--modes modeling,assembly,drawing`,
-    /// `--inspect-only`, `--dynamic` (starting on the core tools, or `--modes`
-    /// if given). No arguments: every tool.
+    /// `--inspect-only`. No arguments: every tool.
     pub fn from_args(args: impl IntoIterator<Item = String>) -> anyhow::Result<Self> {
         let mut filter = Self::default();
-        let mut modes_given = false;
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--inspect-only" => filter.inspect_only = true,
-                "--dynamic" => filter.dynamic = true,
                 "--modes" => {
-                    modes_given = true;
                     let list = args.next().ok_or_else(|| anyhow::anyhow!("--modes needs a list"))?;
                     filter.modes = list
                         .split(',')
@@ -196,13 +185,8 @@ impl Filter {
                         })
                         .collect::<anyhow::Result<_>>()?;
                 }
-                other => {
-                    anyhow::bail!("unknown argument {other:?}; use --modes, --inspect-only, --dynamic")
-                }
+                other => anyhow::bail!("unknown argument {other:?}; use --modes, --inspect-only"),
             }
-        }
-        if filter.dynamic && !modes_given {
-            filter.modes.clear();
         }
         Ok(filter)
     }
@@ -210,9 +194,6 @@ impl Filter {
     /// Whether to list `tool`. Tools missing from TOOLS are listed (the test
     /// keeps TOOLS complete).
     pub fn allows(&self, tool: &str) -> bool {
-        if tool == "enable_toolset" {
-            return self.dynamic;
-        }
         match TOOLS.iter().find(|(name, ..)| *name == tool) {
             Some((_, modes, access)) => {
                 let core = modes.len() == ALL.len();
@@ -222,28 +203,6 @@ impl Filter {
             None => true,
         }
     }
-
-    /// Add `modes`; returns the tools this lists that weren't listed before.
-    pub fn enable(&mut self, modes: &[Mode]) -> Vec<&'static str> {
-        let before: Vec<bool> = TOOLS.iter().map(|(name, ..)| self.allows(name)).collect();
-        for mode in modes {
-            if !self.modes.contains(mode) {
-                self.modes.push(*mode);
-            }
-        }
-        TOOLS
-            .iter()
-            .zip(before)
-            .filter(|((name, ..), was)| !was && self.allows(name))
-            .map(|((name, ..), _)| *name)
-            .collect()
-    }
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct EnableToolsetParams {
-    /// The modes whose tools to load.
-    pub modes: Vec<Mode>,
 }
 
 /// `tool`'s annotations: read-only, or destructive or not. None for a tool
@@ -269,11 +228,8 @@ mod tests {
     fn parses_arguments() {
         assert_eq!(Filter::from_args(args("")).unwrap(), Filter::default());
         let f = Filter::from_args(args("--modes drawing,assembly --inspect-only")).unwrap();
-        assert_eq!(f, Filter { modes: vec![Drawing, Assembly], inspect_only: true, dynamic: false });
-        let f = Filter::from_args(args("--dynamic")).unwrap();
-        assert_eq!(f, Filter { modes: vec![], inspect_only: false, dynamic: true });
-        let f = Filter::from_args(args("--dynamic --modes drawing")).unwrap();
-        assert_eq!(f, Filter { modes: vec![Drawing], inspect_only: false, dynamic: true });
+        assert_eq!(f, Filter { modes: vec![Drawing, Assembly], inspect_only: true });
+        assert!(Filter::from_args(args("--dynamic")).is_err());
         assert!(Filter::from_args(args("--modes part")).is_err());
         assert!(Filter::from_args(args("--modes")).is_err());
         assert!(Filter::from_args(args("--verbose")).is_err());
@@ -292,24 +248,6 @@ mod tests {
         assert!(!inspect.allows("sketch"));
         assert!(!inspect.allows("delete_features"));
         assert!(!inspect.allows("inspect_drawing"));
-        assert!(!inspect.allows("enable_toolset"));
-    }
-
-    #[test]
-    fn dynamic_starts_on_the_core_and_enables_modes() {
-        let mut f = Filter::from_args(args("--dynamic")).unwrap();
-        assert!(f.allows("enable_toolset"));
-        assert!(f.allows("save_document"));
-        assert!(f.allows("add_datum_symbol"));
-        assert!(!f.allows("inspect_model"));
-        assert!(!f.allows("check_interference"));
-        let added = f.enable(&[Drawing]);
-        assert!(added.contains(&"create_drawing_view") && added.contains(&"check_interference"));
-        assert!(!added.contains(&"save_document") && !added.contains(&"inspect_model"));
-        let added = f.enable(&[Assembly]);
-        assert!(added.contains(&"inspect_model") && added.contains(&"add_mate"));
-        assert!(!added.contains(&"check_interference"));
-        assert!(f.enable(&[Drawing]).is_empty());
     }
 
     #[test]

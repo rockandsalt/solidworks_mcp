@@ -28,17 +28,15 @@ For other MCP clients, point them at `C:\Program Files\SolidWorks MCP\mcp_server
 claude mcp add solidworks "C:\Program Files\SolidWorks MCP\mcp_server.exe"
 ```
 
-To list fewer tools (a smaller prompt), start it on a subset:
+Clients with tool search (Claude Code defers MCP tools by default) only load
+the tools a task needs. For a client without it, list fewer tools (a smaller
+prompt) by starting the server on a subset:
 `--modes modeling,assembly,drawing` (any of the three) and/or `--inspect-only`
 (tools that change nothing). For example, a drawings-only server:
 
 ```
 claude mcp add solidworks-drawing -- "C:\Program Files\SolidWorks MCP\mcp_server.exe" --modes drawing
 ```
-
-Or let the model choose: with `--dynamic` the server starts with only the tools
-every mode uses and an `enable_toolset` tool that loads a mode's tools when the
-model needs them (the client must support `tools/list_changed`; Claude Code does).
 
 ## What it can do
 
