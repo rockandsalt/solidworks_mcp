@@ -34,6 +34,7 @@ mod pattern;
 mod pmi;
 mod properties;
 mod recognize;
+mod references;
 mod refgeom;
 mod render;
 mod revolve;
@@ -1257,6 +1258,23 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(files::close_reply_text(&reply))]))
+    }
+
+    #[tool(
+        description = "List the files a part, assembly or drawing uses, every level: \
+                       subassemblies, parts, a drawing's models, a derived part's base part. \
+                       Gives where SolidWorks finds each one, and flags files that are missing or \
+                       were found somewhere other than their saved path. Works on an open document \
+                       or on a file on disk, which it doesn't open. With where_used_in it also \
+                       lists the files in a folder that use the document. Check this before \
+                       renaming, moving or copying files."
+    )]
+    async fn file_references(
+        &self,
+        Parameters(params): Parameters<references::FileReferencesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let reply = references::run(&self.addin, &params, |status| self.addin_error(status)).await?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(reply.to_string())]))
     }
 
     #[tool(

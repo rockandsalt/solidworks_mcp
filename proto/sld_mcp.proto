@@ -636,6 +636,15 @@ service SolidWorks {
   // it has unsaved changes and discard_changes isn't set.
   rpc CloseDocument(CloseDocumentRequest) returns (CloseDocumentResponse);
 
+  // The files a document uses directly (components, a drawing's models, a
+  // derived part's base part): of an open document, or of files on disk
+  // without opening them (ISldWorks::GetDocumentDependencies2), each as
+  // SolidWorks finds it now and as the file saved it. Files loaded in
+  // SolidWorks are read from memory, unsaved changes included. Read-only.
+  // NOT_FOUND if no open document goes by that name, FAILED_PRECONDITION if
+  // there's nothing open and no files are given.
+  rpc FileReferences(FileReferencesRequest) returns (FileReferencesResponse);
+
   // Takes back the active document's last steps (IModelDoc2::EditUndo2), and
   // more if it would stop inside a sketch, and reports what that changed.
   // FAILED_PRECONDITION if nothing is open or a sketch is open for editing.
@@ -961,6 +970,42 @@ message CloseDocumentResponse {
   bool still_loaded = 3;
   // The active document now; unset when none is left.
   Document active = 4;
+}
+
+message FileReferencesRequest {
+  // An open document by title, full path or file name; empty: the active
+  // one. Ignored when `files` is set.
+  string document = 1;
+  // Absolute paths of SolidWorks files, each read for the files it uses.
+  repeated string files = 2;
+}
+
+message FileReferencesResponse {
+  // The document read, when `files` was empty.
+  Document document = 1;
+  // One per file asked, in order; or one for the document.
+  repeated FileUses uses = 2;
+}
+
+message FileUses {
+  // Loaded in SolidWorks (open, or used by an open document): what it uses is
+  // what SolidWorks has in memory, and where it loaded each file from.
+  bool loaded = 1;
+  // Loaded, with changes not saved yet (IModelDoc2::GetSaveFlag).
+  bool unsaved_changes = 2;
+  // Empty also for a file that doesn't exist or isn't a SolidWorks document.
+  repeated FileReference references = 3;
+}
+
+message FileReference {
+  // As SolidWorks names it: the file name without its extension.
+  string name = 1;
+  // Where SolidWorks finds it now, by its search rules; for a loaded document,
+  // where it was loaded from. A file that isn't found keeps its saved path.
+  string path = 2;
+  // The path saved in the file. When a document of this name is loaded, the
+  // loaded one's path instead (SolidWorks answers from memory).
+  string saved_path = 3;
 }
 
 message UndoRequest {

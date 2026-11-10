@@ -299,6 +299,10 @@ public:
 		const sld_mcp::v1::CloseDocumentRequest* request,
 		sld_mcp::v1::CloseDocumentResponse* response) override;
 
+	grpc::Status FileReferences(grpc::ServerContext* context,
+		const sld_mcp::v1::FileReferencesRequest* request,
+		sld_mcp::v1::FileReferencesResponse* response) override;
+
 	grpc::Status Undo(grpc::ServerContext* context,
 		const sld_mcp::v1::UndoRequest* request,
 		sld_mcp::v1::UndoResponse* response) override;

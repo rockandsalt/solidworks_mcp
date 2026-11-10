@@ -48,6 +48,7 @@ pub const TOOLS: &[(&str, &[Mode], Access)] = &[
     ("open_document", ALL, Edit),
     ("save_document", ALL, Destructive),
     ("close_document", ALL, Destructive),
+    ("file_references", ALL, Inspect),
     ("document_units", ALL, Edit),
     ("custom_properties", ALL, Edit),
     ("undo", ALL, Destructive),

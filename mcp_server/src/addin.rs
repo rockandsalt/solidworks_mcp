@@ -754,6 +754,14 @@ impl AddinClient {
         Ok(client.close_document(request).await?.into_inner())
     }
 
+    pub async fn file_references(
+        &self,
+        request: proto::FileReferencesRequest,
+    ) -> Result<proto::FileReferencesResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.file_references(request).await?.into_inner())
+    }
+
     pub async fn undo(&self, request: proto::UndoRequest) -> Result<proto::UndoResponse, tonic::Status> {
         let mut client = self.client()?;
         Ok(client.undo(request).await?.into_inner())

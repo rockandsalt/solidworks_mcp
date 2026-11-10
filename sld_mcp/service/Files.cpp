@@ -1,4 +1,4 @@
-// Files.cpp : Documents: GetActiveDocument, NewPart, NewAssembly, NewDrawing, SetDocumentUnits, SaveDocument, OpenDocument, CloseDocument (see docs/notes/files.md, units.md).
+// Files.cpp : Documents: GetActiveDocument, NewPart, NewAssembly, NewDrawing, SetDocumentUnits, SaveDocument, OpenDocument, CloseDocument, FileReferences (see docs/notes/files.md, units.md).
 #include "pch.h"
 #include "Common.h"
 #include "AssemblyHelpers.h"
@@ -205,6 +205,67 @@ namespace
 				files.emplace_back(path.m_str);
 		}
 		return files;
+	}
+
+	// What GetDependencies2 / GetDocumentDependencies2 return: (name, path)
+	// pairs, one per file used, or nothing (no references, no such file, not
+	// a SolidWorks file). AddReadOnlyInfo isn't asked for: late-bound it adds
+	// a "TRUE" / "FALSE" per file, early-bound it seemed not to (seen
+	// 2026-11-09), so triples are recognised too.
+	struct Dependency
+	{
+		std::wstring name, path;
+	};
+
+	std::vector<Dependency> ToDependencies(const VARIANT& v)
+	{
+		const auto strings = comvariant::ToBstrs(v);
+		auto text = [&](size_t k) { return strings[k].Length() > 0 ? std::wstring(strings[k].m_str) : std::wstring(); };
+		bool triples = !strings.empty() && strings.size() % 3 == 0;
+		for (size_t i = 2; triples && i < strings.size(); i += 3)
+			triples = _wcsicmp(text(i).c_str(), L"TRUE") == 0 || _wcsicmp(text(i).c_str(), L"FALSE") == 0;
+		const size_t stride = triples ? 3 : 2;
+		std::vector<Dependency> out;
+		for (size_t i = 0; i + 1 < strings.size(); i += stride)
+			out.push_back({ text(i), text(i + 1) });
+		return out;
+	}
+
+	// `found` (search rules on) paired with `saved` (off) by name: both list
+	// the same files in the same order (seen 2026-11-09).
+	void AddReferences(const std::vector<Dependency>& found, const std::vector<Dependency>& saved,
+		sld_mcp::v1::FileUses* out)
+	{
+		for (size_t i = 0; i < found.size(); ++i)
+		{
+			const Dependency* match = i < saved.size() && _wcsicmp(saved[i].name.c_str(), found[i].name.c_str()) == 0
+				? &saved[i] : nullptr;
+			for (size_t k = 0; !match && k < saved.size(); ++k)
+				if (_wcsicmp(saved[k].name.c_str(), found[i].name.c_str()) == 0)
+					match = &saved[k];
+			auto* ref = out->add_references();
+			ref->set_name(ToUtf8(ATL::CComBSTR(found[i].name.c_str())));
+			ref->set_path(ToUtf8(ATL::CComBSTR(found[i].path.c_str())));
+			ref->set_saved_path(ToUtf8(ATL::CComBSTR((match ? match->path : found[i].path).c_str())));
+		}
+	}
+
+	// The files a loaded document uses directly, from memory.
+	grpc::Status LoadedReferences(IModelDoc2* doc, sld_mcp::v1::FileUses* out)
+	{
+		ATL::CComVariant found, saved;
+		HRESULT hr = doc->GetDependencies2(VARIANT_FALSE, VARIANT_TRUE, VARIANT_FALSE, &found);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::GetDependencies2", hr);
+		hr = doc->GetDependencies2(VARIANT_FALSE, VARIANT_FALSE, VARIANT_FALSE, &saved);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::GetDependencies2", hr);
+		VARIANT_BOOL dirty = VARIANT_FALSE;
+		doc->GetSaveFlag(&dirty);
+		out->set_loaded(true);
+		out->set_unsaved_changes(dirty != VARIANT_FALSE);
+		AddReferences(ToDependencies(found), ToDependencies(saved), out);
+		return grpc::Status::OK;
 	}
 
 	// This SolidWorks process: its id and start time (process ids get reused).
@@ -761,4 +822,69 @@ grpc::Status SolidWorksService::CloseDocument(grpc::ServerContext* /*context*/,
 	if (FAILED(hr))
 		return ComError("ISldWorks::IActiveDoc2", hr);
 	return active ? DescribeDocument(active, response->mutable_active()) : grpc::Status::OK;
+}
+
+grpc::Status SolidWorksService::FileReferences(grpc::ServerContext* context,
+	const sld_mcp::v1::FileReferencesRequest* request,
+	sld_mcp::v1::FileReferencesResponse* response)
+{
+	std::lock_guard<std::mutex> lock(m_editMutex);
+	ComApartment com;
+	if (!com.Ok())
+		return ComApartmentError();
+
+	ATL::CComPtr<ISldWorks> swApp;
+	if (grpc::Status status = GetSwApp(swApp); !status.ok())
+		return status;
+
+	if (request->files().empty())
+	{
+		ATL::CComPtr<IModelDoc2> doc;
+		if (!request->document().empty())
+		{
+			if (grpc::Status status = FindOpenDocument(swApp, request->document(), doc); !status.ok())
+				return status;
+		}
+		else
+		{
+			HRESULT hr = swApp->get_IActiveDoc2(&doc);
+			if (FAILED(hr))
+				return ComError("ISldWorks::IActiveDoc2", hr);
+			if (!doc)
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "no document is open in SolidWorks");
+		}
+		if (grpc::Status status = DescribeDocument(doc, response->mutable_document()); !status.ok())
+			return status;
+		return LoadedReferences(doc, response->add_uses());
+	}
+
+	// A loaded file is read from memory: GetDocumentDependencies2 on its path
+	// would read the file on disk, without the unsaved changes.
+	const auto loaded = LoadedDocuments(swApp);
+	for (const auto& file : request->files())
+	{
+		if (context->IsCancelled())
+			return grpc::Status::CANCELLED;
+		const ATL::CComBSTR path = FromUtf8(file);
+		auto* uses = response->add_uses();
+		const auto open = std::find_if(loaded.begin(), loaded.end(), [&](const ATL::CComPtr<IModelDoc2>& doc) {
+			ATL::CComBSTR docPath;
+			return SUCCEEDED(doc->GetPathName(&docPath)) && docPath.Length() > 0 && _wcsicmp(docPath, path) == 0;
+		});
+		if (open != loaded.end())
+		{
+			if (grpc::Status status = LoadedReferences(*open, uses); !status.ok())
+				return status;
+			continue;
+		}
+		ATL::CComVariant found, saved;
+		HRESULT hr = swApp->GetDocumentDependencies2(path, VARIANT_FALSE, VARIANT_TRUE, VARIANT_FALSE, &found);
+		if (FAILED(hr))
+			return ComError("ISldWorks::GetDocumentDependencies2", hr);
+		hr = swApp->GetDocumentDependencies2(path, VARIANT_FALSE, VARIANT_FALSE, VARIANT_FALSE, &saved);
+		if (FAILED(hr))
+			return ComError("ISldWorks::GetDocumentDependencies2", hr);
+		AddReferences(ToDependencies(found), ToDependencies(saved), uses);
+	}
+	return grpc::Status::OK;
 }

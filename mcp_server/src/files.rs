@@ -190,6 +190,11 @@ fn format_of(path: &str) -> Option<&'static Format> {
     FORMATS.iter().find(|f| f.extensions.contains(&extension.as_str()))
 }
 
+/// "part", "assembly" or "drawing" for a SolidWorks file, by its extension.
+pub fn native_type(path: &str) -> Option<&'static str> {
+    format_of(path).filter(|f| f.native).map(|f| f.name)
+}
+
 fn extension_list(native: bool) -> String {
     FORMATS
         .iter()
@@ -201,7 +206,7 @@ fn extension_list(native: bool) -> String {
 
 /// A Windows absolute path ("C:\dir\file", "C:/dir/file" or "\\server\share\file"),
 /// checked by hand so the tests behave the same off Windows.
-fn is_absolute(path: &str) -> bool {
+pub fn is_absolute(path: &str) -> bool {
     let b = path.as_bytes();
     (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/'))
         || path.starts_with("\\\\")
