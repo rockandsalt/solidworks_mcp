@@ -440,7 +440,7 @@ namespace
 	}
 }
 
-grpc::Status SolidWorksService::DeriveDrawingView(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::DeriveDrawingView(grpc::ServerContext* context,
 	const sld_mcp::v1::DeriveDrawingViewRequest* request,
 	sld_mcp::v1::SetupDrawingViewResponse* response)
 {
@@ -450,71 +450,69 @@ grpc::Status SolidWorksService::DeriveDrawingView(grpc::ServerContext* /*context
 	if (!request->has_position())
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "say where the view goes");
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-	ViewCall call;
-	if (grpc::Status status = GetSwApp(call.swApp); !status.ok())
-		return status;
-	if (grpc::Status status = OpenViewCall(request->view_name(), call); !status.ok())
-		return status;
-	if (!request->new_name().empty())
-	{
-		ATL::CComPtr<IView> taken;
-		std::string takenSheet;
-		if (FindDrawingView(DrawingSheets(call.drawing), request->new_name(), taken, takenSheet).ok())
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				"the drawing already has a view named \"" + request->new_name() + "\" (on " + takenSheet + ")");
-	}
-
-	std::string finalName;
-	{
-		SheetActivation activation(call.drawing);
-		if (!activation.Show(call.sheetName))
-			return Refused("couldn't switch to sheet " + call.sheetName);
-		ATL::CComPtr<IView> made;
-		grpc::Status status = grpc::Status::OK;
-		switch (request->kind_case())
-		{
-		case Request::kProjected:
-			status = MakeProjected(call, *request, made);
-			break;
-		case Request::kSection:
-			status = MakeSection(call, *request, made);
-			break;
-		case Request::kDetail:
-			status = MakeDetail(call, *request, made);
-			break;
-		default:
-			status = MakeAuxiliary(call, *request, made);
-			break;
-		}
-		if (!status.ok())
-		{
-			EndViewEdit(call);
+	return m_executor.Execute(context, "DeriveDrawingView", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ViewCall call;
+		call.swApp = swApp;
+		if (grpc::Status status = OpenViewCall(request->view_name(), call); !status.ok())
 			return status;
-		}
 		if (!request->new_name().empty())
 		{
-			VARIANT_BOOL ok = VARIANT_FALSE;
-			made->SetName2(FromUtf8(request->new_name()), &ok);
-			if (ViewName(made) != request->new_name())
-			{
-				DeleteDrawingView(call.doc, call.ext, ViewName(made));
-				EndViewEdit(call);
+			ATL::CComPtr<IView> taken;
+			std::string takenSheet;
+			if (FindDrawingView(DrawingSheets(call.drawing), request->new_name(), taken, takenSheet).ok())
 				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-					"SolidWorks didn't take \"" + request->new_name() + "\" as the view's name");
-			}
+					"the drawing already has a view named \"" + request->new_name() + "\" (on " + takenSheet + ")");
 		}
-		finalName = ViewName(made);
-		EndViewEdit(call);
-	}
-	FinishViewCall(call, finalName, true, response);
-	return grpc::Status::OK;
+
+		std::string finalName;
+		{
+			SheetActivation activation(call.drawing);
+			if (!activation.Show(call.sheetName))
+				return Refused("couldn't switch to sheet " + call.sheetName);
+			ATL::CComPtr<IView> made;
+			grpc::Status status = grpc::Status::OK;
+			switch (request->kind_case())
+			{
+			case Request::kProjected:
+				status = MakeProjected(call, *request, made);
+				break;
+			case Request::kSection:
+				status = MakeSection(call, *request, made);
+				break;
+			case Request::kDetail:
+				status = MakeDetail(call, *request, made);
+				break;
+			default:
+				status = MakeAuxiliary(call, *request, made);
+				break;
+			}
+			if (!status.ok())
+			{
+				EndViewEdit(call);
+				return status;
+			}
+			if (!request->new_name().empty())
+			{
+				VARIANT_BOOL ok = VARIANT_FALSE;
+				made->SetName2(FromUtf8(request->new_name()), &ok);
+				if (ViewName(made) != request->new_name())
+				{
+					DeleteDrawingView(call.doc, call.ext, ViewName(made));
+					EndViewEdit(call);
+					return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+						"SolidWorks didn't take \"" + request->new_name() + "\" as the view's name");
+				}
+			}
+			finalName = ViewName(made);
+			EndViewEdit(call);
+		}
+		FinishViewCall(call, finalName, true, response);
+		return grpc::Status::OK;
+	});
 }
 
-grpc::Status SolidWorksService::ShapeDrawingView(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::ShapeDrawingView(grpc::ServerContext* context,
 	const sld_mcp::v1::ShapeDrawingViewRequest* request,
 	sld_mcp::v1::SetupDrawingViewResponse* response)
 {
@@ -522,40 +520,38 @@ grpc::Status SolidWorksService::ShapeDrawingView(grpc::ServerContext* /*context*
 	if (request->change_case() == Request::CHANGE_NOT_SET)
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "say what to do to the view");
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-	ViewCall call;
-	if (grpc::Status status = GetSwApp(call.swApp); !status.ok())
-		return status;
-	if (grpc::Status status = OpenViewCall(request->view_name(), call); !status.ok())
-		return status;
-
-	{
-		SheetActivation activation(call.drawing);
-		if (!activation.Show(call.sheetName))
-			return Refused("couldn't switch to sheet " + call.sheetName);
-		grpc::Status status = grpc::Status::OK;
-		switch (request->change_case())
-		{
-		case Request::kCrop:
-			status = CropView(call, request->crop());
-			break;
-		case Request::kBreaks:
-			status = BreakView(call, request->breaks());
-			break;
-		case Request::kRemoveCrop:
-			status = IsCropped(call.view) ? RemoveCrop(call) : Refused(request->view_name() + " isn't cropped");
-			break;
-		default:
-			status = RemoveBreaks(call);
-			break;
-		}
-		EndViewEdit(call);
-		if (!status.ok())
+	return m_executor.Execute(context, "ShapeDrawingView", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ViewCall call;
+		call.swApp = swApp;
+		if (grpc::Status status = OpenViewCall(request->view_name(), call); !status.ok())
 			return status;
-	}
-	FinishViewCall(call, request->view_name(), false, response);
-	return grpc::Status::OK;
+
+		{
+			SheetActivation activation(call.drawing);
+			if (!activation.Show(call.sheetName))
+				return Refused("couldn't switch to sheet " + call.sheetName);
+			grpc::Status status = grpc::Status::OK;
+			switch (request->change_case())
+			{
+			case Request::kCrop:
+				status = CropView(call, request->crop());
+				break;
+			case Request::kBreaks:
+				status = BreakView(call, request->breaks());
+				break;
+			case Request::kRemoveCrop:
+				status = IsCropped(call.view) ? RemoveCrop(call) : Refused(request->view_name() + " isn't cropped");
+				break;
+			default:
+				status = RemoveBreaks(call);
+				break;
+			}
+			EndViewEdit(call);
+			if (!status.ok())
+				return status;
+		}
+		FinishViewCall(call, request->view_name(), false, response);
+		return grpc::Status::OK;
+	});
 }

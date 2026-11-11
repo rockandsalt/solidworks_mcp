@@ -1,12 +1,16 @@
-//! Opt-in integration check against a running patched add-in. No CAD edits.
+//! Opt-in integration checks against a running patched add-in. No CAD edits.
 //! Run: cargo test expired_queued_macro_never_launches -- --ignored --nocapture
+//! Run on a detailed model: cargo test expired_mesh_releases_model_lock -- --ignored --nocapture
 use super::*;
 use std::path::Path;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 fn vba_path(path: &Path) -> String {
     let text = path.to_string_lossy();
-    assert!(text.is_ascii(), "this .swb fixture needs an ASCII temporary path");
+    assert!(
+        text.is_ascii(),
+        "this .swb fixture needs an ASCII temporary path"
+    );
     format!("\"{}\"", text.replace('"', "\"\""))
 }
 
@@ -16,7 +20,10 @@ async fn expired_queued_macro_never_launches() {
     let folder = std::env::temp_dir().join(format!(
         "sld_mcp-live-cancel-{}-{}",
         std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis()
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
     ));
     std::fs::create_dir(&folder).unwrap();
     eprintln!("Live cancellation evidence: {}", folder.display());
@@ -82,7 +89,11 @@ async fn expired_queued_macro_never_launches() {
     queued_request.set_timeout(Duration::from_millis(250));
     let started = Instant::now();
     let queued_status = queued_client.run_macro(queued_request).await.unwrap_err();
-    eprintln!("Queued macro: {:?} after {:?}", queued_status.code(), started.elapsed());
+    eprintln!(
+        "Queued macro: {:?} after {:?}",
+        queued_status.code(),
+        started.elapsed()
+    );
     assert!(matches!(
         queued_status.code(),
         tonic::Code::Cancelled | tonic::Code::DeadlineExceeded
@@ -99,7 +110,10 @@ async fn expired_queued_macro_never_launches() {
     });
     inspection_request.set_timeout(Duration::from_millis(250));
     let started = Instant::now();
-    let inspection_status = inspection_client.inspect_model(inspection_request).await.unwrap_err();
+    let inspection_status = inspection_client
+        .inspect_model(inspection_request)
+        .await
+        .unwrap_err();
     eprintln!(
         "Queued inspection: {:?} after {:?}",
         inspection_status.code(),
@@ -114,6 +128,28 @@ async fn expired_queued_macro_never_launches() {
         "holder must still own the lock when inspection expires"
     );
 
+    let mut mesh_client = addin.client().unwrap();
+    let mut mesh_request = tonic::Request::new(proto::GetMeshRequest {
+        include_edges: true,
+        ..Default::default()
+    });
+    mesh_request.set_timeout(Duration::from_millis(250));
+    let started = Instant::now();
+    let mesh_status = mesh_client.get_mesh(mesh_request).await.unwrap_err();
+    eprintln!(
+        "Queued mesh: {:?} after {:?}",
+        mesh_status.code(),
+        started.elapsed()
+    );
+    assert!(matches!(
+        mesh_status.code(),
+        tonic::Code::Cancelled | tonic::Code::DeadlineExceeded
+    ));
+    assert!(
+        !finished.exists(),
+        "holder must still own the lock when the mesh expires"
+    );
+
     assert!(holder.await.unwrap().unwrap().into_inner().ran);
     assert!(finished.exists(), "holder must complete normally");
     // Let waiters resume after the holder releases the mutex. Checking the
@@ -121,14 +157,25 @@ async fn expired_queued_macro_never_launches() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     // A fresh macro acquires the same lock after expired handlers had a chance
     // to run. The marker must still be absent; a timeout alone cannot prove that.
-    let after = addin
-        .run_macro(proto::RunMacroRequest {
-            path: barrier_file.to_string_lossy().into_owned(),
-        })
-        .await
-        .unwrap();
-    assert!(after.ran);
-    assert!(!launched.exists(), "expired queued macro launched after its deadline");
+    // A late mesh on a detailed assembly would block this barrier. Use a
+    // shorter deadline than the ordinary 60 s request budget to detect it.
+    let mut barrier_client = addin.client().unwrap();
+    let mut barrier_request = tonic::Request::new(proto::RunMacroRequest {
+        path: barrier_file.to_string_lossy().into_owned(),
+    });
+    barrier_request.set_timeout(Duration::from_secs(2));
+    assert!(
+        barrier_client
+            .run_macro(barrier_request)
+            .await
+            .unwrap()
+            .into_inner()
+            .ran
+    );
+    assert!(
+        !launched.exists(),
+        "expired queued macro launched after its deadline"
+    );
     // Positive control: the exact same queued script runs under a fresh request.
     assert!(
         addin
@@ -139,7 +186,68 @@ async fn expired_queued_macro_never_launches() {
             .unwrap()
             .ran
     );
-    assert!(launched.exists(), "positive control must create the launch marker");
+    assert!(
+        launched.exists(),
+        "positive control must create the launch marker"
+    );
     eprintln!("Expired macro never launched; a fresh request ran successfully.");
     std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires patched add-in and an active detailed model whose mesh takes more than one second; run without other clients"]
+async fn expired_mesh_releases_model_lock() {
+    let addin = AddinClient::new();
+    let mut client = addin.client().unwrap();
+    let control = || {
+        let mut request = tonic::Request::new(proto::InspectModelRequest {
+            include_components: true,
+            include_bodies: true,
+            ..Default::default()
+        });
+        request.set_timeout(Duration::from_secs(10));
+        request
+    };
+    // Establish that geometry inspection works before starting a render.
+    let before = client.inspect_model(control()).await.unwrap().into_inner();
+    assert!(
+        before.document.is_some(),
+        "open a detailed part or assembly first"
+    );
+    assert!(
+        !before.bodies.is_empty() || !before.components.is_empty(),
+        "the active document must contain geometry"
+    );
+
+    let mut request = tonic::Request::new(proto::GetMeshRequest {
+        include_edges: true,
+        ..Default::default()
+    });
+    request.set_timeout(Duration::from_secs(1));
+    let started = Instant::now();
+    let status = client
+        .get_mesh(request)
+        .await
+        .expect_err("use a model whose mesh takes more than one second");
+    eprintln!(
+        "Mesh expired: {:?} after {:?}",
+        status.code(),
+        started.elapsed()
+    );
+    assert!(matches!(
+        status.code(),
+        tonic::Code::Cancelled | tonic::Code::DeadlineExceeded
+    ));
+
+    // A real geometry request must recover without restarting SolidWorks.
+    // Basic document queries now share the same execution gate too.
+    let started = Instant::now();
+    let after = client.inspect_model(control()).await.unwrap().into_inner();
+    eprintln!(
+        "Geometry inspection recovered after {:?}",
+        started.elapsed()
+    );
+    assert_eq!(after.document, before.document);
+    assert_eq!(after.components.len(), before.components.len());
+    assert_eq!(after.bodies.len(), before.bodies.len());
 }

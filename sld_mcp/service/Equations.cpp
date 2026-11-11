@@ -374,53 +374,47 @@ namespace
 	}
 }
 
-grpc::Status SolidWorksService::Equations(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::Equations(grpc::ServerContext* context,
 	const sld_mcp::v1::EquationsRequest* request,
 	sld_mcp::v1::EquationsResponse* response)
 {
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-
-	ATL::CComPtr<IModelDoc2> doc;
-	long docType = swDocNONE;
-	if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
-		return status;
-	ATL::CComPtr<IEquationMgr> equations;
-	if (grpc::Status status = GetEquationMgr(doc, equations); !status.ok())
-		return status;
-
-	if (!request->delete_().empty() || !request->set().empty())
-	{
-		if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
+	return m_executor.Execute(context, "Equations", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		long docType = swDocNONE;
+		if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
 			return status;
-		const std::vector<std::string> original = ReadEquations(equations);
-		const std::vector<TreeFeature> tree = FeatureTree(doc);
-		const auto errorsBefore = FeatureErrors(tree);
+		ATL::CComPtr<IEquationMgr> equations;
+		if (grpc::Status status = GetEquationMgr(doc, equations); !status.ok())
+			return status;
 
-		PreferenceToggles toggles(swApp);
-		toggles.Set(swShowErrorsEveryRebuild, false);
-		grpc::Status applied = ApplyEquations(doc, equations, *request);
-		if (!applied.ok())
-			RestoreEquations(equations, original);
-		// SolidWorks doesn't rebuild on its own (AutomaticRebuild is off).
-		VARIANT_BOOL rebuilt = VARIANT_FALSE;
-		doc->EditRebuild3(&rebuilt);
-		if (!applied.ok())
-			return applied;
-		AddNewErrors(errorsBefore, FeatureErrors(FeatureTree(doc)), response->mutable_new_errors());
-	}
+		if (!request->delete_().empty() || !request->set().empty())
+		{
+			if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
+				return status;
+			const std::vector<std::string> original = ReadEquations(equations);
+			const std::vector<TreeFeature> tree = FeatureTree(doc);
+			const auto errorsBefore = FeatureErrors(tree);
 
-	ListEquations(doc, equations, response);
-	return grpc::Status::OK;
+			PreferenceToggles toggles(swApp);
+			toggles.Set(swShowErrorsEveryRebuild, false);
+			grpc::Status applied = ApplyEquations(doc, equations, *request);
+			if (!applied.ok())
+				RestoreEquations(equations, original);
+			// SolidWorks doesn't rebuild on its own (AutomaticRebuild is off).
+			VARIANT_BOOL rebuilt = VARIANT_FALSE;
+			doc->EditRebuild3(&rebuilt);
+			if (!applied.ok())
+				return applied;
+			AddNewErrors(errorsBefore, FeatureErrors(FeatureTree(doc)), response->mutable_new_errors());
+		}
+
+		ListEquations(doc, equations, response);
+		return grpc::Status::OK;
+	});
 }
 
-grpc::Status SolidWorksService::DesignTable(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::DesignTable(grpc::ServerContext* context,
 	const sld_mcp::v1::DesignTableRequest* request,
 	sld_mcp::v1::DesignTableResponse* response)
 {
@@ -435,73 +429,67 @@ grpc::Status SolidWorksService::DesignTable(grpc::ServerContext* /*context*/,
 				"at most " + std::to_string(kMaxColumns) + " columns and " + std::to_string(kMaxRows) + " rows");
 	}
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-
-	ATL::CComPtr<IModelDoc2> doc;
-	long docType = swDocNONE;
-	if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-
-	const ConfigurationList before = ReadConfigurations(doc);
-	if (request->action_case() != Action::ACTION_NOT_SET)
-	{
-		if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
+	return m_executor.Execute(context, "DesignTable", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		long docType = swDocNONE;
+		if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
 			return status;
-		const std::vector<TreeFeature> tree = FeatureTree(doc);
-		const auto errorsBefore = FeatureErrors(tree);
-		PreferenceToggles toggles(swApp);
-		toggles.Set(swShowErrorsEveryRebuild, false);
-		if (request->action_case() == Action::kWrite)
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+
+		const ConfigurationList before = ReadConfigurations(doc);
+		if (request->action_case() != Action::ACTION_NOT_SET)
 		{
-			ATL::CComPtr<IEquationMgr> equations;
-			if (grpc::Status status = GetEquationMgr(doc, equations); !status.ok())
+			if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
 				return status;
-			const std::vector<std::string> globals = ReadEquations(equations);
-			for (const std::string& column : request->write().columns())
-				if (grpc::Status status = CheckColumn(doc, docType, globals, column); !status.ok())
+			const std::vector<TreeFeature> tree = FeatureTree(doc);
+			const auto errorsBefore = FeatureErrors(tree);
+			PreferenceToggles toggles(swApp);
+			toggles.Set(swShowErrorsEveryRebuild, false);
+			if (request->action_case() == Action::kWrite)
+			{
+				ATL::CComPtr<IEquationMgr> equations;
+				if (grpc::Status status = GetEquationMgr(doc, equations); !status.ok())
 					return status;
-			if (grpc::Status status = WriteTable(doc, ext, request->write(), response); !status.ok())
-				return status;
+				const std::vector<std::string> globals = ReadEquations(equations);
+				for (const std::string& column : request->write().columns())
+					if (grpc::Status status = CheckColumn(doc, docType, globals, column); !status.ok())
+						return status;
+				if (grpc::Status status = WriteTable(doc, ext, request->write(), response); !status.ok())
+					return status;
+			}
+			else if (HasDesignTable(ext))
+			{
+				HRESULT hr = doc->DeleteDesignTable();
+				if (FAILED(hr))
+					return ComError("IModelDoc2::DeleteDesignTable", hr);
+				if (HasDesignTable(ext))
+					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't delete the design table");
+			}
+			VARIANT_BOOL rebuilt = VARIANT_FALSE;
+			doc->EditRebuild3(&rebuilt);
+			AddNewErrors(errorsBefore, FeatureErrors(FeatureTree(doc)), response->mutable_new_errors());
 		}
-		else if (HasDesignTable(ext))
-		{
-			HRESULT hr = doc->DeleteDesignTable();
-			if (FAILED(hr))
-				return ComError("IModelDoc2::DeleteDesignTable", hr);
-			if (HasDesignTable(ext))
-				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't delete the design table");
-		}
-		VARIANT_BOOL rebuilt = VARIANT_FALSE;
-		doc->EditRebuild3(&rebuilt);
-		AddNewErrors(errorsBefore, FeatureErrors(FeatureTree(doc)), response->mutable_new_errors());
-	}
 
-	const ConfigurationList after = ReadConfigurations(doc);
-	for (const std::string& name : after.names)
-		if (std::find(before.names.begin(), before.names.end(), name) == before.names.end())
-			response->add_created_configurations(name);
-	response->set_active(after.active);
-	response->set_exists(HasDesignTable(ext));
-	if (response->exists())
-	{
-		ATL::CComPtr<IDesignTable> table;
-		if (grpc::Status status = GetDesignTable(doc, table); !status.ok())
-			return status;
-		OpenTable open(doc, table);
-		if (!open.Sheet())
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				"SolidWorks didn't open the design table's worksheet (is Microsoft Excel installed?)");
-		ReadSheet(open.Sheet(), response->mutable_table());
-	}
-	return grpc::Status::OK;
+		const ConfigurationList after = ReadConfigurations(doc);
+		for (const std::string& name : after.names)
+			if (std::find(before.names.begin(), before.names.end(), name) == before.names.end())
+				response->add_created_configurations(name);
+		response->set_active(after.active);
+		response->set_exists(HasDesignTable(ext));
+		if (response->exists())
+		{
+			ATL::CComPtr<IDesignTable> table;
+			if (grpc::Status status = GetDesignTable(doc, table); !status.ok())
+				return status;
+			OpenTable open(doc, table);
+			if (!open.Sheet())
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+					"SolidWorks didn't open the design table's worksheet (is Microsoft Excel installed?)");
+			ReadSheet(open.Sheet(), response->mutable_table());
+		}
+		return grpc::Status::OK;
+	});
 }

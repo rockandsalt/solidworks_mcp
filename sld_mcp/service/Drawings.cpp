@@ -86,70 +86,64 @@ namespace
 	};
 }
 
-grpc::Status SolidWorksService::InspectDrawing(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::InspectDrawing(grpc::ServerContext* context,
 	const sld_mcp::v1::InspectDrawingRequest* request,
 	sld_mcp::v1::InspectDrawingResponse* response)
 {
 	// Read-only, but serialized with edits like InspectModel.
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-
-	ATL::CComPtr<IModelDoc2> doc;
-	ATL::CComQIPtr<IDrawingDoc> drawing;
-	if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	ATL::CComQIPtr<IMathUtility> math;
-	if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
-		return status;
-
-	ATL::CComBSTR title;
-	HRESULT hr = doc->GetTitle(&title);
-	if (FAILED(hr))
-		return ComError("IModelDoc2::GetTitle", hr);
-	response->mutable_document()->set_title(ToUtf8(title));
-	response->mutable_document()->set_type(sld_mcp::v1::DOCUMENT_TYPE_DRAWING);
-
-	const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
-	const std::set<std::string> entityViews(request->entity_views().begin(), request->entity_views().end());
-	for (const auto& name : entityViews)
-	{
-		ATL::CComPtr<IView> view;
-		std::string sheetName;
-		if (grpc::Status status = FindDrawingView(sheets, name, view, sheetName); !status.ok())
+	return m_executor.Execute(context, "InspectDrawing", ExecutionPolicy::Cancellable,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		ATL::CComQIPtr<IDrawingDoc> drawing;
+		if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
 			return status;
-	}
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		ATL::CComQIPtr<IMathUtility> math;
+		if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
+			return status;
 
-	// A view's entities may only be listed while its sheet is showing, so
-	// sheets with requested views are shown in turn; the one the user had
-	// showing is put back after.
-	SheetActivation sheetActivation(drawing);
-	DrawingBudget budget;
-	for (const auto& sheet : sheets)
-	{
-		const bool wanted = std::any_of(sheet.views.begin(), sheet.views.end(),
-			[&](const ATL::CComPtr<IView>& view) { return entityViews.count(ViewName(view)) > 0; });
-		if (wanted)
-			sheetActivation.Show(sheet.name);
-		auto* info = response->add_sheets();
-		DescribeSheet(sheet, sheetActivation.Original(), ext, math, entityViews, request->include_vertices(),
-			request->include_annotations(), budget, info, !request->skip_sheet_format());
-		if (request->include_tables())
-			DescribeSheetLayout(sheet, info);
-	}
-	response->set_truncated(budget.truncated);
-	return grpc::Status::OK;
+		ATL::CComBSTR title;
+		HRESULT hr = doc->GetTitle(&title);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::GetTitle", hr);
+		response->mutable_document()->set_title(ToUtf8(title));
+		response->mutable_document()->set_type(sld_mcp::v1::DOCUMENT_TYPE_DRAWING);
+
+		const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
+		const std::set<std::string> entityViews(request->entity_views().begin(), request->entity_views().end());
+		for (const auto& name : entityViews)
+		{
+			ATL::CComPtr<IView> view;
+			std::string sheetName;
+			if (grpc::Status status = FindDrawingView(sheets, name, view, sheetName); !status.ok())
+				return status;
+		}
+
+		// A view's entities may only be listed while its sheet is showing, so
+		// sheets with requested views are shown in turn; the one the user had
+		// showing is put back after.
+		SheetActivation sheetActivation(drawing);
+		DrawingBudget budget;
+		for (const auto& sheet : sheets)
+		{
+			const bool wanted = std::any_of(sheet.views.begin(), sheet.views.end(),
+				[&](const ATL::CComPtr<IView>& view) { return entityViews.count(ViewName(view)) > 0; });
+			if (wanted)
+				sheetActivation.Show(sheet.name);
+			auto* info = response->add_sheets();
+			DescribeSheet(sheet, sheetActivation.Original(), ext, math, entityViews, request->include_vertices(),
+				request->include_annotations(), budget, info, !request->skip_sheet_format());
+			if (request->include_tables())
+				DescribeSheetLayout(sheet, info);
+		}
+		response->set_truncated(budget.truncated);
+		return grpc::Status::OK;
+	});
 }
 
-grpc::Status SolidWorksService::AddDrawingDimensions(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::AddDrawingDimensions(grpc::ServerContext* context,
 	const sld_mcp::v1::AddDrawingDimensionsRequest* request,
 	sld_mcp::v1::AddDrawingDimensionsResponse* response)
 {
@@ -162,247 +156,235 @@ grpc::Status SolidWorksService::AddDrawingDimensions(grpc::ServerContext* /*cont
 			!status.ok())
 			return status;
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "AddDrawingDimensions", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		ATL::CComQIPtr<IDrawingDoc> drawing;
+		if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
+			return status;
+		ATL::CComPtr<IModelDocExtension> drawingExt;
+		if (grpc::Status status = GetExtension(doc, drawingExt); !status.ok())
+			return status;
+		ATL::CComQIPtr<IMathUtility> math;
+		if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
+			return status;
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-
-	ATL::CComPtr<IModelDoc2> doc;
-	ATL::CComQIPtr<IDrawingDoc> drawing;
-	if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> drawingExt;
-	if (grpc::Status status = GetExtension(doc, drawingExt); !status.ok())
-		return status;
-	ATL::CComQIPtr<IMathUtility> math;
-	if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
-		return status;
-
-	const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
-	std::map<std::string, std::unique_ptr<DrawingViewContext>> contexts;
-	auto contextFor = [&](const std::string& viewName, DrawingViewContext*& ctx) -> grpc::Status {
-		if (auto it = contexts.find(viewName); it != contexts.end())
-		{
-			ctx = it->second.get();
+		const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
+		std::map<std::string, std::unique_ptr<DrawingViewContext>> contexts;
+		auto contextFor = [&](const std::string& viewName, DrawingViewContext*& ctx) -> grpc::Status {
+			if (auto it = contexts.find(viewName); it != contexts.end())
+			{
+				ctx = it->second.get();
+				return grpc::Status::OK;
+			}
+			auto made = std::make_unique<DrawingViewContext>();
+			if (grpc::Status status = FindDrawingView(sheets, viewName, made->view, made->sheetName); !status.ok())
+				return status;
+			made->model = ViewModelOf(made->view);
+			made->ids = std::make_unique<PersistIds>(drawingExt);
+			made->modelIds = std::make_unique<PersistIds>(made->model.ext);
+			made->components = ViewComponents(made->view, made->model);
+			if (made->model.type == swDocASSEMBLY)
+				made->componentList = std::make_unique<ComponentList>(*made->modelIds, math,
+					response->mutable_components(), ATL::CComQIPtr<IAssemblyDoc>(made->model.doc.p));
+			ctx = made.get();
+			contexts.emplace(viewName, std::move(made));
 			return grpc::Status::OK;
-		}
-		auto made = std::make_unique<DrawingViewContext>();
-		if (grpc::Status status = FindDrawingView(sheets, viewName, made->view, made->sheetName); !status.ok())
-			return status;
-		made->model = ViewModelOf(made->view);
-		made->ids = std::make_unique<PersistIds>(drawingExt);
-		made->modelIds = std::make_unique<PersistIds>(made->model.ext);
-		made->components = ViewComponents(made->view, made->model);
-		if (made->model.type == swDocASSEMBLY)
-			made->componentList = std::make_unique<ComponentList>(*made->modelIds, math,
-				response->mutable_components(), ATL::CComQIPtr<IAssemblyDoc>(made->model.doc.p));
-		ctx = made.get();
-		contexts.emplace(viewName, std::move(made));
-		return grpc::Status::OK;
-	};
-	// Every view is looked up before anything changes.
-	for (const auto& dim : request->dimensions())
-	{
-		DrawingViewContext* ctx = nullptr;
-		if (grpc::Status status = contextFor(dim.refs(0).view_name(), ctx); !status.ok())
-			return status;
-	}
-
-	// No Modify dialog for a new dimension (drawing dimensions shouldn't
-	// show one, but make sure nothing modal stalls the call).
-	PreferenceToggles toggles(swApp);
-	toggles.Set(swInputDimValOnCreate, false);
-	// Restores the sheet the user had showing, after.
-	SheetActivation sheetActivation(drawing);
-
-	std::vector<ATL::CComPtr<IDisplayDimension>> created;
-	grpc::Status failure = grpc::Status::OK;
-	for (int i = 0; i < count && failure.ok(); ++i)
-	{
-		const auto& dim = request->dimensions(i);
-		const std::string where = "dimension " + std::to_string(i + 1);
-		DrawingViewContext* ctx = nullptr;
-		if (failure = contextFor(dim.refs(0).view_name(), ctx); !failure.ok())
-			break;
-
-		// The view's sheet has to be showing for its entities to be listed
-		// and selected.
-		if (!sheetActivation.Show(ctx->sheetName))
+		};
+		// Every view is looked up before anything changes.
+		for (const auto& dim : request->dimensions())
 		{
-			failure = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				where + ": couldn't switch to sheet " + ctx->sheetName + ", which " + ViewName(ctx->view) + " is on");
-			break;
+			DrawingViewContext* ctx = nullptr;
+			if (grpc::Status status = contextFor(dim.refs(0).view_name(), ctx); !status.ok())
+				return status;
 		}
-		VARIANT_BOOL ok = VARIANT_FALSE;
-		drawing->ActivateView(FromUtf8(ViewName(ctx->view)), &ok);
 
-		std::vector<ViewEntityItem> items(static_cast<size_t>(dim.refs_size()));
-		for (int r = 0; r < dim.refs_size() && failure.ok(); ++r)
-			failure = ResolveDrawingRef(*ctx, dim.refs(r), where, items[static_cast<size_t>(r)]);
-		if (!failure.ok())
-			break;
+		// No Modify dialog for a new dimension (drawing dimensions shouldn't
+		// show one, but make sure nothing modal stalls the call).
+		PreferenceToggles toggles(swApp);
+		toggles.Set(swInputDimValOnCreate, false);
+		// Restores the sheet the user had showing, after.
+		SheetActivation sheetActivation(drawing);
 
-		doc->ClearSelection2(VARIANT_TRUE);
-		for (size_t r = 0; r < items.size() && failure.ok(); ++r)
-			if (!SelectViewEntity(ctx->view, items[r]))
+		std::vector<ATL::CComPtr<IDisplayDimension>> created;
+		grpc::Status failure = grpc::Status::OK;
+		for (int i = 0; i < count && failure.ok(); ++i)
+		{
+			const auto& dim = request->dimensions(i);
+			const std::string where = "dimension " + std::to_string(i + 1);
+			DrawingViewContext* ctx = nullptr;
+			if (failure = contextFor(dim.refs(0).view_name(), ctx); !failure.ok())
+				break;
+
+			// The view's sheet has to be showing for its entities to be listed
+			// and selected.
+			if (!sheetActivation.Show(ctx->sheetName))
+			{
 				failure = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-					where + ": SolidWorks wouldn't select entity " + std::to_string(r + 1) + " in " +
-					ViewName(ctx->view));
-		if (!failure.ok())
-			break;
+					where + ": couldn't switch to sheet " + ctx->sheetName + ", which " + ViewName(ctx->view) + " is on");
+				break;
+			}
+			VARIANT_BOOL ok = VARIANT_FALSE;
+			drawing->ActivateView(FromUtf8(ViewName(ctx->view)), &ok);
 
-		const double at[3] = { dim.text_x(), dim.text_y(), 0.0 };
-		ATL::CComPtr<IDispatch> createdDisp;
-		const HRESULT hr = CreateDimension(doc, dim.kind(), at, createdDisp);
-		ATL::CComQIPtr<IDisplayDimension> display(createdDisp.p);
-		if (FAILED(hr) || !display)
-		{
-			failure = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				where + ": SolidWorks couldn't add a " + std::string(DimensionKindName(dim.kind())) +
-				" dimension between those entities (do they suit that kind? e.g. diameter needs a circle "
-				"or arc seen face-on, angle two straight edges)");
-			break;
+			std::vector<ViewEntityItem> items(static_cast<size_t>(dim.refs_size()));
+			for (int r = 0; r < dim.refs_size() && failure.ok(); ++r)
+				failure = ResolveDrawingRef(*ctx, dim.refs(r), where, items[static_cast<size_t>(r)]);
+			if (!failure.ok())
+				break;
+
+			doc->ClearSelection2(VARIANT_TRUE);
+			for (size_t r = 0; r < items.size() && failure.ok(); ++r)
+				if (!SelectViewEntity(ctx->view, items[r]))
+					failure = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+						where + ": SolidWorks wouldn't select entity " + std::to_string(r + 1) + " in " +
+						ViewName(ctx->view));
+			if (!failure.ok())
+				break;
+
+			const double at[3] = { dim.text_x(), dim.text_y(), 0.0 };
+			ATL::CComPtr<IDispatch> createdDisp;
+			const HRESULT hr = CreateDimension(doc, dim.kind(), at, createdDisp);
+			ATL::CComQIPtr<IDisplayDimension> display(createdDisp.p);
+			if (FAILED(hr) || !display)
+			{
+				failure = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+					where + ": SolidWorks couldn't add a " + std::string(DimensionKindName(dim.kind())) +
+					" dimension between those entities (do they suit that kind? e.g. diameter needs a circle "
+					"or arc seen face-on, angle two straight edges)");
+				break;
+			}
+			created.push_back(ATL::CComPtr<IDisplayDimension>(display));
+
+			sld_mcp::v1::DrawingDimensionResult* result = response->add_dimensions();
+			result->set_view_name(ViewName(ctx->view));
+			ATL::CComPtr<IAnnotation> annotation;
+			if (SUCCEEDED(display->IGetAnnotation(&annotation)) && annotation)
+				DescribeAnnotation(annotation, *ctx->ids, ctx->componentList.get(), result->mutable_annotation());
+			else
+				DescribeDimension(display, result->mutable_annotation()->mutable_dimension()->mutable_dimension());
 		}
-		created.push_back(ATL::CComPtr<IDisplayDimension>(display));
+		doc->ClearSelection2(VARIANT_TRUE);
 
-		sld_mcp::v1::DrawingDimensionResult* result = response->add_dimensions();
-		result->set_view_name(ViewName(ctx->view));
-		ATL::CComPtr<IAnnotation> annotation;
-		if (SUCCEEDED(display->IGetAnnotation(&annotation)) && annotation)
-			DescribeAnnotation(annotation, *ctx->ids, ctx->componentList.get(), result->mutable_annotation());
-		else
-			DescribeDimension(display, result->mutable_annotation()->mutable_dimension()->mutable_dimension());
-	}
-	doc->ClearSelection2(VARIANT_TRUE);
-
-	if (!failure.ok())
-	{
-		DeleteDimensions(doc, created);
-		response->Clear();
-		return failure;
-	}
-	doc->GraphicsRedraw2();
-	return grpc::Status::OK;
+		if (!failure.ok())
+		{
+			DeleteDimensions(doc, created);
+			response->Clear();
+			return failure;
+		}
+		doc->GraphicsRedraw2();
+		return grpc::Status::OK;
+	});
 }
 
-grpc::Status SolidWorksService::InsertModelItems(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::InsertModelItems(grpc::ServerContext* context,
 	const sld_mcp::v1::InsertModelItemsRequest* request,
 	sld_mcp::v1::InsertModelItemsResponse* response)
 {
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "InsertModelItems", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		ATL::CComQIPtr<IDrawingDoc> drawing;
+		if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
+			return status;
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		ATL::CComQIPtr<IMathUtility> math;
+		if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
+			return status;
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-
-	ATL::CComPtr<IModelDoc2> doc;
-	ATL::CComQIPtr<IDrawingDoc> drawing;
-	if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	ATL::CComQIPtr<IMathUtility> math;
-	if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
-		return status;
-
-	// The target views: the named ones (all on one sheet), or every view of
-	// the active sheet.
-	const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
-	const bool allViews = request->view_names().empty();
-	std::vector<ATL::CComPtr<IView>> targets;
-	std::string sheetName;
-	if (allViews)
-	{
-		sheetName = ActiveSheetName(drawing);
-		for (const auto& sheet : sheets)
-			if (sheet.name == sheetName)
-				targets = sheet.views;
-		if (targets.empty())
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				"the active sheet (" + sheetName + ") has no drawing views -- add a view of the part first");
-	}
-	else
-		for (const auto& name : request->view_names())
+		// The target views: the named ones (all on one sheet), or every view of
+		// the active sheet.
+		const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
+		const bool allViews = request->view_names().empty();
+		std::vector<ATL::CComPtr<IView>> targets;
+		std::string sheetName;
+		if (allViews)
 		{
-			ATL::CComPtr<IView> view;
-			std::string viewSheet;
-			if (grpc::Status status = FindDrawingView(sheets, name, view, viewSheet); !status.ok())
-				return status;
-			if (!sheetName.empty() && viewSheet != sheetName)
-				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-					"the views must all be on one sheet (" + name + " is on " + viewSheet + ", not " + sheetName + ")");
-			sheetName = viewSheet;
-			targets.push_back(view);
-		}
-
-	SheetActivation sheetActivation(drawing);
-	if (!sheetActivation.Show(sheetName))
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "couldn't switch to sheet " + sheetName);
-
-	std::vector<AnnotationSnapshot> before(targets.size());
-	for (size_t i = 0; i < targets.size(); ++i)
-		before[i].Take(targets[i]);
-
-	doc->ClearSelection2(VARIANT_TRUE);
-	if (!allViews)
-		for (const auto& view : targets)
-		{
-			VARIANT_BOOL selected = VARIANT_FALSE;
-			if (FAILED(ext->SelectByID2(FromUtf8(ViewName(view)), ATL::CComBSTR(L"DRAWINGVIEW"), 0.0, 0.0, 0.0,
-				VARIANT_TRUE, 0, nullptr, swSelectOptionDefault, &selected)) || !selected)
-			{
-				doc->ClearSelection2(VARIANT_TRUE);
+			sheetName = ActiveSheetName(drawing);
+			for (const auto& sheet : sheets)
+				if (sheet.name == sheetName)
+					targets = sheet.views;
+			if (targets.empty())
 				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-					"SolidWorks wouldn't select view " + ViewName(view));
-			}
+					"the active sheet (" + sheetName + ") has no drawing views -- add a view of the part first");
 		}
+		else
+			for (const auto& name : request->view_names())
+			{
+				ATL::CComPtr<IView> view;
+				std::string viewSheet;
+				if (grpc::Status status = FindDrawingView(sheets, name, view, viewSheet); !status.ok())
+					return status;
+				if (!sheetName.empty() && viewSheet != sheetName)
+					return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+						"the views must all be on one sheet (" + name + " is on " + viewSheet + ", not " + sheetName + ")");
+				sheetName = viewSheet;
+				targets.push_back(view);
+			}
 
-	const long types = request->types() != 0 ? request->types() : static_cast<long>(swInsertDimensionsMarkedForDrawing);
-	ATL::CComVariant inserted;
-	HRESULT hr = drawing->InsertModelAnnotations3(swImportModelItemsFromEntireModel, types,
-		allViews ? VARIANT_TRUE : VARIANT_FALSE,
-		request->include_duplicates() ? VARIANT_TRUE : VARIANT_FALSE,
-		request->include_hidden_features() ? VARIANT_TRUE : VARIANT_FALSE,
-		VARIANT_TRUE,  // place dimensions where they are in the model's sketches
-		&inserted);
-	doc->ClearSelection2(VARIANT_TRUE);
-	if (FAILED(hr))
-		return ComError("IDrawingDoc::InsertModelAnnotations3", hr);
-	int insertedCount = 0;
-	for (const auto& disp : comvariant::ToDispatches(inserted))
-		if (disp)
-			++insertedCount;
-	response->set_inserted(insertedCount);
+		SheetActivation sheetActivation(drawing);
+		if (!sheetActivation.Show(sheetName))
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "couldn't switch to sheet " + sheetName);
 
-	for (size_t i = 0; i < targets.size(); ++i)
-	{
-		// Ids as DescribeView hands them out.
-		const ViewModel model = ViewModelOf(targets[i]);
-		PersistIds ids(ext);
-		PersistIds modelIds(model.ext);
-		sld_mcp::v1::ViewAnnotations* out = response->add_views();
-		out->set_view_name(ViewName(targets[i]));
-		std::optional<ComponentList> components;
-		if (model.type == swDocASSEMBLY)
-			components.emplace(modelIds, math, out->mutable_components(), ATL::CComQIPtr<IAssemblyDoc>(model.doc.p));
-		size_t described = 0;
-		for (const auto& annotation : ViewAnnotationList(targets[i]))
-			if (!before[i].Contains(annotation) && described++ < kMaxAnnotations)
-				DescribeAnnotation(annotation, ids, components ? &*components : nullptr, out->add_annotations());
-	}
-	doc->GraphicsRedraw2();
-	return grpc::Status::OK;
+		std::vector<AnnotationSnapshot> before(targets.size());
+		for (size_t i = 0; i < targets.size(); ++i)
+			before[i].Take(targets[i]);
+
+		doc->ClearSelection2(VARIANT_TRUE);
+		if (!allViews)
+			for (const auto& view : targets)
+			{
+				VARIANT_BOOL selected = VARIANT_FALSE;
+				if (FAILED(ext->SelectByID2(FromUtf8(ViewName(view)), ATL::CComBSTR(L"DRAWINGVIEW"), 0.0, 0.0, 0.0,
+					VARIANT_TRUE, 0, nullptr, swSelectOptionDefault, &selected)) || !selected)
+				{
+					doc->ClearSelection2(VARIANT_TRUE);
+					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+						"SolidWorks wouldn't select view " + ViewName(view));
+				}
+			}
+
+		const long types = request->types() != 0 ? request->types() : static_cast<long>(swInsertDimensionsMarkedForDrawing);
+		ATL::CComVariant inserted;
+		HRESULT hr = drawing->InsertModelAnnotations3(swImportModelItemsFromEntireModel, types,
+			allViews ? VARIANT_TRUE : VARIANT_FALSE,
+			request->include_duplicates() ? VARIANT_TRUE : VARIANT_FALSE,
+			request->include_hidden_features() ? VARIANT_TRUE : VARIANT_FALSE,
+			VARIANT_TRUE,  // place dimensions where they are in the model's sketches
+			&inserted);
+		doc->ClearSelection2(VARIANT_TRUE);
+		if (FAILED(hr))
+			return ComError("IDrawingDoc::InsertModelAnnotations3", hr);
+		int insertedCount = 0;
+		for (const auto& disp : comvariant::ToDispatches(inserted))
+			if (disp)
+				++insertedCount;
+		response->set_inserted(insertedCount);
+
+		for (size_t i = 0; i < targets.size(); ++i)
+		{
+			// Ids as DescribeView hands them out.
+			const ViewModel model = ViewModelOf(targets[i]);
+			PersistIds ids(ext);
+			PersistIds modelIds(model.ext);
+			sld_mcp::v1::ViewAnnotations* out = response->add_views();
+			out->set_view_name(ViewName(targets[i]));
+			std::optional<ComponentList> components;
+			if (model.type == swDocASSEMBLY)
+				components.emplace(modelIds, math, out->mutable_components(), ATL::CComQIPtr<IAssemblyDoc>(model.doc.p));
+			size_t described = 0;
+			for (const auto& annotation : ViewAnnotationList(targets[i]))
+				if (!before[i].Contains(annotation) && described++ < kMaxAnnotations)
+					DescribeAnnotation(annotation, ids, components ? &*components : nullptr, out->add_annotations());
+		}
+		doc->GraphicsRedraw2();
+		return grpc::Status::OK;
+	});
 }
 
-grpc::Status SolidWorksService::RenderDrawing(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::RenderDrawing(grpc::ServerContext* context,
 	const sld_mcp::v1::RenderDrawingRequest* request,
 	sld_mcp::v1::RenderDrawingResponse* response)
 {
@@ -414,142 +396,136 @@ grpc::Status SolidWorksService::RenderDrawing(grpc::ServerContext* /*context*/,
 	if (dpi < 100.0 || dpi > 300.0 || maxSide < 100.0 || maxSide > 8000.0)
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "dpi must be 100..300 and max_px 100..8000");
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-
-	ATL::CComPtr<IModelDoc2> doc;
-	ATL::CComQIPtr<IDrawingDoc> drawing;
-	if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-
-	const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
-	std::string wanted = request->sheet_name();
-	if (wanted.empty() && !request->view_name().empty())
-	{
-		ATL::CComPtr<IView> view;
-		if (grpc::Status status = FindDrawingView(sheets, request->view_name(), view, wanted); !status.ok())
+	return m_executor.Execute(context, "RenderDrawing", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		ATL::CComQIPtr<IDrawingDoc> drawing;
+		if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
 			return status;
-	}
-	if (wanted.empty())
-		wanted = ActiveSheetName(drawing);
-	auto sheet = std::find_if(sheets.begin(), sheets.end(), [&](const DrawingSheet& s) { return s.name == wanted; });
-	if (sheet == sheets.end())
-	{
-		std::string names;
-		for (const auto& s : sheets)
-			names += (names.empty() ? "" : ", ") + s.name;
-		return grpc::Status(grpc::StatusCode::NOT_FOUND, "the drawing has no sheet \"" + wanted + "\" (it has " +
-			names + ")");
-	}
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
 
-	// [paper size, template, scale 1, scale 2, first angle, width, height, ...]
-	double width = 0.0, height = 0.0;
-	ATL::CComVariant properties;
-	if (sheet->sheet && SUCCEEDED(sheet->sheet->GetProperties2(&properties)))
-		if (const std::vector<double> p = comvariant::ToDoubles(properties); p.size() >= 7)
+		const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
+		std::string wanted = request->sheet_name();
+		if (wanted.empty() && !request->view_name().empty())
 		{
-			width = p[5];
-			height = p[6];
+			ATL::CComPtr<IView> view;
+			if (grpc::Status status = FindDrawingView(sheets, request->view_name(), view, wanted); !status.ok())
+				return status;
 		}
-	if (!(width > 0.0 && height > 0.0))
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't give sheet " + wanted + "'s size");
-	dpi = std::max(100.0, std::floor(std::min(dpi, maxSide * kMetersPerInch / std::max(width, height))));
-
-	SheetActivation sheetActivation(drawing);
-	if (!sheetActivation.Show(sheet->name))
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "couldn't switch to sheet " + sheet->name);
-
-	// File > Save As image uses the TIF/PSD/JPG/PNG export options: print
-	// capture of the active sheet, in color, on a user-defined paper the
-	// size of the sheet. (swTiffPrintUseSheetSize alone was ignored: the
-	// image came out US Letter with the sheet scaled into it.)
-	PreferenceToggles prefs(swApp);
-	prefs.Set(swTiffPrintAllSheets, false);
-	prefs.SetInteger(swTiffScreenOrPrintCapture, 1);
-	prefs.SetInteger(swTiffPrintPaperSize, swDwgPapersUserDefined);
-	prefs.SetDouble(swTiffPrintDrawingPaperWidth, width);
-	prefs.SetDouble(swTiffPrintDrawingPaperHeight, height);
-	prefs.SetInteger(swTiffImageType, swTiffImageRGB);
-	prefs.SetInteger(swTiffPrintDPI, static_cast<long>(dpi));
-
-	// A folder of its own, since SolidWorks may name the file after the sheet.
-	std::error_code ec;
-	const std::filesystem::path dir = std::filesystem::temp_directory_path(ec) /
-		("sld_mcp_render_" + std::to_string(GetCurrentProcessId()) + "_" + std::to_string(GetTickCount64()));
-	if (ec || !std::filesystem::create_directories(dir, ec))
-		return grpc::Status(grpc::StatusCode::INTERNAL, "couldn't make a temporary folder: " + ec.message());
-	struct RemoveDir
-	{
-		std::filesystem::path path;
-		~RemoveDir() { std::error_code ignored; std::filesystem::remove_all(path, ignored); }
-	} removeDir{ dir };
-
-	std::string failures;
-	for (const char* format : { "png", "jpg" })
-	{
-		const std::filesystem::path file = dir / (std::string("sheet.") + format);
-		long errors = 0, warnings = 0;
-		VARIANT_BOOL ok = VARIANT_FALSE;
-		const HRESULT hr = ext->SaveAs(ATL::CComBSTR(file.wstring().c_str()), swSaveAsCurrentVersion,
-			swSaveAsOptions_Silent | swSaveAsOptions_Copy, nullptr, &errors, &warnings, &ok);
-		// The file SolidWorks wrote, whatever it called it.
-		std::filesystem::path written;
-		for (const auto& entry : std::filesystem::directory_iterator(dir, ec))
-			if (entry.is_regular_file() && entry.path().extension() == file.extension())
-				written = entry.path();
-		if (written.empty())
+		if (wanted.empty())
+			wanted = ActiveSheetName(drawing);
+		auto sheet = std::find_if(sheets.begin(), sheets.end(), [&](const DrawingSheet& s) { return s.name == wanted; });
+		if (sheet == sheets.end())
 		{
-			failures += std::string(failures.empty() ? "" : "; ") + format + ": SaveAs -> " +
-				(FAILED(hr) ? "HRESULT failure" : std::to_string(ok != VARIANT_FALSE)) + ", errors " +
-				std::to_string(errors);
-			continue;
+			std::string names;
+			for (const auto& s : sheets)
+				names += (names.empty() ? "" : ", ") + s.name;
+			return grpc::Status(grpc::StatusCode::NOT_FOUND, "the drawing has no sheet \"" + wanted + "\" (it has " +
+				names + ")");
 		}
-		std::ifstream in(written, std::ios::binary);
-		std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-		if (bytes.empty())
-		{
-			failures += std::string(failures.empty() ? "" : "; ") + format + ": empty file";
-			continue;
-		}
-		response->set_image(std::move(bytes));
-		response->set_format(format);
-		break;
-	}
-	if (response->image().empty())
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			"SolidWorks didn't save sheet " + sheet->name + " as an image (" + failures + ")");
 
-	ATL::CComBSTR title;
-	if (SUCCEEDED(doc->GetTitle(&title)))
-		response->set_document_title(ToUtf8(title));
-	response->set_sheet_name(sheet->name);
-	response->set_width(width);
-	response->set_height(height);
-	response->set_dpi(static_cast<int32_t>(dpi));
-	for (const auto& view : sheet->views)
-	{
-		ATL::CComVariant outline;
-		if (FAILED(view->GetOutline(&outline)))
-			continue;
-		const std::vector<double> o = comvariant::ToDoubles(outline);
-		if (o.size() < 4)
-			continue;
-		sld_mcp::v1::SheetViewOutline* out = response->add_views();
-		out->set_name(ViewName(view));
-		const double lo[3] = { o[0], o[1], 0.0 }, hi[3] = { o[2], o[3], 0.0 };
-		SetVec3(out->mutable_outline()->mutable_min(), lo);
-		SetVec3(out->mutable_outline()->mutable_max(), hi);
-	}
-	return grpc::Status::OK;
+		// [paper size, template, scale 1, scale 2, first angle, width, height, ...]
+		double width = 0.0, height = 0.0;
+		ATL::CComVariant properties;
+		if (sheet->sheet && SUCCEEDED(sheet->sheet->GetProperties2(&properties)))
+			if (const std::vector<double> p = comvariant::ToDoubles(properties); p.size() >= 7)
+			{
+				width = p[5];
+				height = p[6];
+			}
+		if (!(width > 0.0 && height > 0.0))
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't give sheet " + wanted + "'s size");
+		dpi = std::max(100.0, std::floor(std::min(dpi, maxSide * kMetersPerInch / std::max(width, height))));
+
+		SheetActivation sheetActivation(drawing);
+		if (!sheetActivation.Show(sheet->name))
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "couldn't switch to sheet " + sheet->name);
+
+		// File > Save As image uses the TIF/PSD/JPG/PNG export options: print
+		// capture of the active sheet, in color, on a user-defined paper the
+		// size of the sheet. (swTiffPrintUseSheetSize alone was ignored: the
+		// image came out US Letter with the sheet scaled into it.)
+		PreferenceToggles prefs(swApp);
+		prefs.Set(swTiffPrintAllSheets, false);
+		prefs.SetInteger(swTiffScreenOrPrintCapture, 1);
+		prefs.SetInteger(swTiffPrintPaperSize, swDwgPapersUserDefined);
+		prefs.SetDouble(swTiffPrintDrawingPaperWidth, width);
+		prefs.SetDouble(swTiffPrintDrawingPaperHeight, height);
+		prefs.SetInteger(swTiffImageType, swTiffImageRGB);
+		prefs.SetInteger(swTiffPrintDPI, static_cast<long>(dpi));
+
+		// A folder of its own, since SolidWorks may name the file after the sheet.
+		std::error_code ec;
+		const std::filesystem::path dir = std::filesystem::temp_directory_path(ec) /
+			("sld_mcp_render_" + std::to_string(GetCurrentProcessId()) + "_" + std::to_string(GetTickCount64()));
+		if (ec || !std::filesystem::create_directories(dir, ec))
+			return grpc::Status(grpc::StatusCode::INTERNAL, "couldn't make a temporary folder: " + ec.message());
+		struct RemoveDir
+		{
+			std::filesystem::path path;
+			~RemoveDir() { std::error_code ignored; std::filesystem::remove_all(path, ignored); }
+		} removeDir{ dir };
+
+		std::string failures;
+		for (const char* format : { "png", "jpg" })
+		{
+			const std::filesystem::path file = dir / (std::string("sheet.") + format);
+			long errors = 0, warnings = 0;
+			VARIANT_BOOL ok = VARIANT_FALSE;
+			const HRESULT hr = ext->SaveAs(ATL::CComBSTR(file.wstring().c_str()), swSaveAsCurrentVersion,
+				swSaveAsOptions_Silent | swSaveAsOptions_Copy, nullptr, &errors, &warnings, &ok);
+			// The file SolidWorks wrote, whatever it called it.
+			std::filesystem::path written;
+			for (const auto& entry : std::filesystem::directory_iterator(dir, ec))
+				if (entry.is_regular_file() && entry.path().extension() == file.extension())
+					written = entry.path();
+			if (written.empty())
+			{
+				failures += std::string(failures.empty() ? "" : "; ") + format + ": SaveAs -> " +
+					(FAILED(hr) ? "HRESULT failure" : std::to_string(ok != VARIANT_FALSE)) + ", errors " +
+					std::to_string(errors);
+				continue;
+			}
+			std::ifstream in(written, std::ios::binary);
+			std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+			if (bytes.empty())
+			{
+				failures += std::string(failures.empty() ? "" : "; ") + format + ": empty file";
+				continue;
+			}
+			response->set_image(std::move(bytes));
+			response->set_format(format);
+			break;
+		}
+		if (response->image().empty())
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"SolidWorks didn't save sheet " + sheet->name + " as an image (" + failures + ")");
+
+		ATL::CComBSTR title;
+		if (SUCCEEDED(doc->GetTitle(&title)))
+			response->set_document_title(ToUtf8(title));
+		response->set_sheet_name(sheet->name);
+		response->set_width(width);
+		response->set_height(height);
+		response->set_dpi(static_cast<int32_t>(dpi));
+		for (const auto& view : sheet->views)
+		{
+			ATL::CComVariant outline;
+			if (FAILED(view->GetOutline(&outline)))
+				continue;
+			const std::vector<double> o = comvariant::ToDoubles(outline);
+			if (o.size() < 4)
+				continue;
+			sld_mcp::v1::SheetViewOutline* out = response->add_views();
+			out->set_name(ViewName(view));
+			const double lo[3] = { o[0], o[1], 0.0 }, hi[3] = { o[2], o[3], 0.0 };
+			SetVec3(out->mutable_outline()->mutable_min(), lo);
+			SetVec3(out->mutable_outline()->mutable_max(), hi);
+		}
+		return grpc::Status::OK;
+	});
 }
 
 namespace
@@ -599,7 +575,7 @@ namespace
 	}
 }
 
-grpc::Status SolidWorksService::SetupSheet(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::SetupSheet(grpc::ServerContext* context,
 	const sld_mcp::v1::SetupSheetRequest* request,
 	sld_mcp::v1::SetupSheetResponse* response)
 {
@@ -614,179 +590,174 @@ grpc::Status SolidWorksService::SetupSheet(grpc::ServerContext* /*context*/,
 	if (request->add() && !request->new_name().empty())
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a new sheet is named by sheet_name, not new_name");
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDoc2> doc;
-	ATL::CComQIPtr<IDrawingDoc> drawing;
-	if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	ATL::CComQIPtr<IMathUtility> math;
-	if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
-		return status;
-
-	SheetChange change;
-	if (!request->sheet_format().empty())
-		if (grpc::Status status = FindTemplateFile(swApp, swFileLocationsSheetFormat, request->sheet_format(),
-			L".slddrt", "sheet format", change.format); !status.ok())
+	return m_executor.Execute(context, "SetupSheet", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		ATL::CComQIPtr<IDrawingDoc> drawing;
+		if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
 			return status;
-	if (request->has_paper_size())
-	{
-		change.paperSize = request->paper_size();
-		change.width = request->width();
-		change.height = request->height();
-	}
-	if (request->has_scale_numerator())
-		change.scale = std::make_pair(request->scale_numerator(), request->scale_denominator());
-	if (request->has_first_angle())
-		change.firstAngle = request->first_angle();
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		ATL::CComQIPtr<IMathUtility> math;
+		if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
+			return status;
 
-	const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
-	const std::string original = ActiveSheetName(drawing);
-	std::string target;
-	if (request->add())
-	{
-		target = request->sheet_name();
-		if (!target.empty())
+		SheetChange change;
+		if (!request->sheet_format().empty())
+			if (grpc::Status status = FindTemplateFile(swApp, swFileLocationsSheetFormat, request->sheet_format(),
+				L".slddrt", "sheet format", change.format); !status.ok())
+				return status;
+		if (request->has_paper_size())
 		{
-			if (const DrawingSheet* taken = FindSheet(sheets, target))
-				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-					"the drawing already has a sheet named \"" + taken->name + "\" (its sheets: " + SheetList(sheets) + ")");
+			change.paperSize = request->paper_size();
+			change.width = request->width();
+			change.height = request->height();
 		}
-		else
-			for (size_t n = sheets.size() + 1; target.empty() || FindSheet(sheets, target); ++n)
-				target = "Sheet" + std::to_string(n);
-	}
-	else
-	{
-		const std::string& wanted = request->sheet_name().empty() ? original : request->sheet_name();
-		const DrawingSheet* found = FindSheet(sheets, wanted);
-		if (!found)
-			return grpc::Status(grpc::StatusCode::NOT_FOUND,
-				"the drawing has no sheet named \"" + wanted + "\" (its sheets: " + SheetList(sheets) + ")");
-		target = found->name;
-		if (!request->new_name().empty() && request->new_name() != target)
-			for (const auto& s : sheets)
-				if (s.name != target && SameSheetName(s.name, request->new_name()))
-					return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-						"the drawing already has a sheet named \"" + s.name + "\"");
-	}
+		if (request->has_scale_numerator())
+			change.scale = std::make_pair(request->scale_numerator(), request->scale_denominator());
+		if (request->has_first_angle())
+			change.firstAngle = request->first_angle();
 
-	std::string finalName = target;
-	std::string activeAfter = original;
-	{
-		// SetupSheet5 only changes the active sheet: a changed sheet is
-		// shown for the call and the user's put back (unless `activate`).
-		SheetActivation activation(drawing);
-		SheetSetup before;
+		const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
+		const std::string original = ActiveSheetName(drawing);
+		std::string target;
 		if (request->add())
 		{
-			// A copy of the active sheet's setup, as SolidWorks' Add Sheet
-			// makes; NewSheet3 makes the new sheet the active one.
-			ATL::CComPtr<ISheet> current;
-			if (grpc::Status status = ActiveSheet(drawing, current); !status.ok())
-				return status;
-			if (grpc::Status status = ReadSheetSetup(current, before); !status.ok())
-				return status;
-			VARIANT_BOOL ok = VARIANT_FALSE;
-			HRESULT hr = drawing->NewSheet3(FromUtf8(target),
-				before.paperSize >= 0 ? before.paperSize : static_cast<long>(swDwgPapersUserDefined),
-				before.HasFormat() ? before.templateType : static_cast<long>(swDwgTemplateNone),
-				before.scaleNumerator, before.scaleDenominator, before.firstAngle ? VARIANT_TRUE : VARIANT_FALSE,
-				before.HasFormat() ? before.format : ATL::CComBSTR(L""), before.width, before.height,
-				ATL::CComBSTR(L""), &ok);
-			if (FAILED(hr))
-				return ComError("IDrawingDoc::NewSheet3", hr);
-			if (!ok)
-				return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks didn't add the sheet " + target);
-			if (ActiveSheetName(drawing) != target)
-				activation.Show(target);
+			target = request->sheet_name();
+			if (!target.empty())
+			{
+				if (const DrawingSheet* taken = FindSheet(sheets, target))
+					return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+						"the drawing already has a sheet named \"" + taken->name + "\" (its sheets: " + SheetList(sheets) + ")");
+			}
+			else
+				for (size_t n = sheets.size() + 1; target.empty() || FindSheet(sheets, target); ++n)
+					target = "Sheet" + std::to_string(n);
 		}
 		else
 		{
-			if (!activation.Show(target))
-				return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks wouldn't show the sheet " + target);
-			ATL::CComPtr<ISheet> current;
-			if (grpc::Status status = ActiveSheet(drawing, current); !status.ok())
-				return status;
-			if (grpc::Status status = ReadSheetSetup(current, before); !status.ok())
-				return status;
+			const std::string& wanted = request->sheet_name().empty() ? original : request->sheet_name();
+			const DrawingSheet* found = FindSheet(sheets, wanted);
+			if (!found)
+				return grpc::Status(grpc::StatusCode::NOT_FOUND,
+					"the drawing has no sheet named \"" + wanted + "\" (its sheets: " + SheetList(sheets) + ")");
+			target = found->name;
+			if (!request->new_name().empty() && request->new_name() != target)
+				for (const auto& s : sheets)
+					if (s.name != target && SameSheetName(s.name, request->new_name()))
+						return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+							"the drawing already has a sheet named \"" + s.name + "\"");
 		}
 
-		// The sheet is the active one from here on. On failure a new sheet
-		// is deleted again, a changed one set back.
-		auto undo = [&](grpc::Status failure) {
+		std::string finalName = target;
+		std::string activeAfter = original;
+		{
+			// SetupSheet5 only changes the active sheet: a changed sheet is
+			// shown for the call and the user's put back (unless `activate`).
+			SheetActivation activation(drawing);
+			SheetSetup before;
 			if (request->add())
 			{
-				// NewSheet3 showed the new sheet behind `activation`'s back.
-				VARIANT_BOOL shown = VARIANT_FALSE;
-				drawing->ActivateSheet(FromUtf8(original), &shown);
-				DeleteSheet(doc, ext, target);
+				// A copy of the active sheet's setup, as SolidWorks' Add Sheet
+				// makes; NewSheet3 makes the new sheet the active one.
+				ATL::CComPtr<ISheet> current;
+				if (grpc::Status status = ActiveSheet(drawing, current); !status.ok())
+					return status;
+				if (grpc::Status status = ReadSheetSetup(current, before); !status.ok())
+					return status;
+				VARIANT_BOOL ok = VARIANT_FALSE;
+				HRESULT hr = drawing->NewSheet3(FromUtf8(target),
+					before.paperSize >= 0 ? before.paperSize : static_cast<long>(swDwgPapersUserDefined),
+					before.HasFormat() ? before.templateType : static_cast<long>(swDwgTemplateNone),
+					before.scaleNumerator, before.scaleDenominator, before.firstAngle ? VARIANT_TRUE : VARIANT_FALSE,
+					before.HasFormat() ? before.format : ATL::CComBSTR(L""), before.width, before.height,
+					ATL::CComBSTR(L""), &ok);
+				if (FAILED(hr))
+					return ComError("IDrawingDoc::NewSheet3", hr);
+				if (!ok)
+					return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks didn't add the sheet " + target);
+				if (ActiveSheetName(drawing) != target)
+					activation.Show(target);
 			}
 			else
 			{
-				RestoreActiveSheet(drawing, target, before);
-				VARIANT_BOOL rebuilt = VARIANT_FALSE;
-				doc->EditRebuild3(&rebuilt);
+				if (!activation.Show(target))
+					return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks wouldn't show the sheet " + target);
+				ATL::CComPtr<ISheet> current;
+				if (grpc::Status status = ActiveSheet(drawing, current); !status.ok())
+					return status;
+				if (grpc::Status status = ReadSheetSetup(current, before); !status.ok())
+					return status;
 			}
-			return failure;
-		};
-		if (ActiveSheetName(drawing) != target)
-			return undo(grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks didn't show the sheet " + target));
 
-		SheetSetup after;
-		if (grpc::Status status = ChangeActiveSheet(drawing, change, after); !status.ok())
-			return undo(status);
-		if (!request->new_name().empty() && request->new_name() != target)
-		{
-			ATL::CComPtr<ISheet> current;
-			if (grpc::Status status = ActiveSheet(drawing, current); !status.ok())
+			// The sheet is the active one from here on. On failure a new sheet
+			// is deleted again, a changed one set back.
+			auto undo = [&](grpc::Status failure) {
+				if (request->add())
+				{
+					// NewSheet3 showed the new sheet behind `activation`'s back.
+					VARIANT_BOOL shown = VARIANT_FALSE;
+					drawing->ActivateSheet(FromUtf8(original), &shown);
+					DeleteSheet(doc, ext, target);
+				}
+				else
+				{
+					RestoreActiveSheet(drawing, target, before);
+					VARIANT_BOOL rebuilt = VARIANT_FALSE;
+					doc->EditRebuild3(&rebuilt);
+				}
+				return failure;
+			};
+			if (ActiveSheetName(drawing) != target)
+				return undo(grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks didn't show the sheet " + target));
+
+			SheetSetup after;
+			if (grpc::Status status = ChangeActiveSheet(drawing, change, after); !status.ok())
 				return undo(status);
-			// SetName ignores a name it doesn't take (empty, with "@", taken).
-			current->SetName(FromUtf8(request->new_name()));
-			if (SheetName(current) != request->new_name())
-				return undo(grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-					"SolidWorks didn't take \"" + request->new_name() + "\" as the sheet's name"));
-			finalName = request->new_name();
+			if (!request->new_name().empty() && request->new_name() != target)
+			{
+				ATL::CComPtr<ISheet> current;
+				if (grpc::Status status = ActiveSheet(drawing, current); !status.ok())
+					return undo(status);
+				// SetName ignores a name it doesn't take (empty, with "@", taken).
+				current->SetName(FromUtf8(request->new_name()));
+				if (SheetName(current) != request->new_name())
+					return undo(grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+						"SolidWorks didn't take \"" + request->new_name() + "\" as the sheet's name"));
+				finalName = request->new_name();
+			}
+
+			if (after.firstAngle != before.firstAngle)
+				for (const auto& s : DrawingSheets(drawing))
+					if (s.name == finalName)
+						RedrawProjectedViews(s);
+			// Views follow the sheet's scale on a rebuild.
+			VARIANT_BOOL rebuilt = VARIANT_FALSE;
+			doc->EditRebuild3(&rebuilt);
+			if (request->add() || request->activate())
+			{
+				activation.Keep();
+				activeAfter = finalName;
+			}
+			else if (target == original)
+				activeAfter = finalName;
+			response->set_sheet_format_path(after.HasFormat() ? ToUtf8(after.format) : std::string());
 		}
 
-		if (after.firstAngle != before.firstAngle)
-			for (const auto& s : DrawingSheets(drawing))
-				if (s.name == finalName)
-					RedrawProjectedViews(s);
-		// Views follow the sheet's scale on a rebuild.
-		VARIANT_BOOL rebuilt = VARIANT_FALSE;
-		doc->EditRebuild3(&rebuilt);
-		if (request->add() || request->activate())
+		for (const auto& s : DrawingSheets(drawing))
 		{
-			activation.Keep();
-			activeAfter = finalName;
+			response->add_sheet_names(s.name);
+			if (s.name == finalName)
+			{
+				DrawingBudget budget;
+				DescribeSheet(s, activeAfter, ext, math, {}, false, false, budget, response->mutable_sheet());
+			}
 		}
-		else if (target == original)
-			activeAfter = finalName;
-		response->set_sheet_format_path(after.HasFormat() ? ToUtf8(after.format) : std::string());
-	}
-
-	for (const auto& s : DrawingSheets(drawing))
-	{
-		response->add_sheet_names(s.name);
-		if (s.name == finalName)
-		{
-			DrawingBudget budget;
-			DescribeSheet(s, activeAfter, ext, math, {}, false, false, budget, response->mutable_sheet());
-		}
-	}
-	response->set_active_sheet(activeAfter);
-	response->set_added(request->add());
-	return grpc::Status::OK;
+		response->set_active_sheet(activeAfter);
+		response->set_added(request->add());
+		return grpc::Status::OK;
+	});
 }
 
 namespace
@@ -1292,7 +1263,7 @@ namespace
 	}
 }
 
-grpc::Status SolidWorksService::SetupDrawingView(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::SetupDrawingView(grpc::ServerContext* context,
 	const sld_mcp::v1::SetupDrawingViewRequest* request,
 	sld_mcp::v1::SetupDrawingViewResponse* response)
 {
@@ -1320,186 +1291,181 @@ grpc::Status SolidWorksService::SetupDrawingView(grpc::ServerContext* /*context*
 	if (request->has_position() && !(std::isfinite(request->position().x()) && std::isfinite(request->position().y())))
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "the view's position must be finite");
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDoc2> doc;
-	ATL::CComQIPtr<IDrawingDoc> drawing;
-	if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	ATL::CComQIPtr<IMathUtility> math;
-	if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
-		return status;
-
-	// Everything is looked up before anything changes.
-	const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
-	const std::string original = ActiveSheetName(drawing);
-	ATL::CComPtr<IView> view;
-	std::string sheetName;
-	if (create)
-	{
-		const std::string& wanted = request->sheet_name().empty() ? original : request->sheet_name();
-		const DrawingSheet* sheet = FindSheet(sheets, wanted);
-		if (!sheet)
-			return grpc::Status(grpc::StatusCode::NOT_FOUND,
-				"the drawing has no sheet named \"" + wanted + "\" (its sheets: " + SheetList(sheets) + ")");
-		sheetName = sheet->name;
-	}
-	else if (grpc::Status status = FindDrawingView(sheets, request->view_name(), view, sheetName); !status.ok())
-		return status;
-	const std::string& wantedName = create ? request->view_name() : request->new_name();
-	if (!wantedName.empty() && (create || wantedName != request->view_name()))
-	{
-		ATL::CComPtr<IView> taken;
-		std::string takenSheet;
-		if (FindDrawingView(sheets, wantedName, taken, takenSheet).ok())
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				"the drawing already has a view named \"" + wantedName + "\" (on " + takenSheet + ")");
-	}
-	if (view)
-	{
-		if (!request->orientation().empty() && !HasOwnOrientation(view))
-		{
-			ATL::CComPtr<IView> base = BaseViewOf(view);
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, request->view_name() + " is derived from " +
-				(base ? ViewName(base) : std::string("another view")) +
-				": it looks the way that view's orientation and the sheet's projection say -- change that view's "
-				"orientation instead");
-		}
-		if ((request->parent_display() || request->scale_case() == Request::kFollowParent) && !BaseViewOf(view))
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				request->view_name() + " isn't derived from another view: it has no parent scale or display");
-	}
-
-	ViewChange change;
-	if (create || !request->model().empty())
-		if (grpc::Status status = ResolveViewModel(swApp, sheets, request->model(), change.modelPath); !status.ok())
+	return m_executor.Execute(context, "SetupDrawingView", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		ATL::CComQIPtr<IDrawingDoc> drawing;
+		if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
 			return status;
-	const std::wstring modelPath = !change.modelPath.empty() ? change.modelPath
-		: std::wstring(FromUtf8(ViewModelPath(view)));
-	if (!request->configuration().empty())
-		if (grpc::Status status = FindConfiguration(swApp, modelPath, request->configuration(), change.configuration);
-			!status.ok())
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
 			return status;
-	if (!request->orientation().empty())
-		change.orientation = NamedViewSpelling(OpenModel(swApp, modelPath), request->orientation());
-	if (request->has_position())
-		change.position = std::make_pair(request->position().x(), request->position().y());
-	switch (request->scale_case())
-	{
-	case Request::kRatio:
-		change.scale = ViewChange::Scale::Ratio;
-		change.numerator = request->ratio().numerator();
-		change.denominator = request->ratio().denominator();
-		break;
-	case Request::kFollowSheet:
-		change.scale = ViewChange::Scale::Sheet;
-		break;
-	case Request::kFollowParent:
-		change.scale = ViewChange::Scale::Parent;
-		break;
-	default:
-		break;
-	}
-	if (request->has_display_mode())
-		change.mode = request->display_mode();
-	change.parentDisplay = request->parent_display();
-	change.name = wantedName;
-
-	std::string finalName;
-	{
-		// The view's sheet is shown for the call (views are selected by name
-		// on the active sheet); the user's is put back after.
-		SheetActivation activation(drawing);
-		if (!activation.Show(sheetName))
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "couldn't switch to sheet " + sheetName);
-		ATL::CComPtr<ISheet> sheet;
-		if (grpc::Status status = ActiveSheet(drawing, sheet); !status.ok())
+		ATL::CComQIPtr<IMathUtility> math;
+		if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
 			return status;
-		SheetSetup sheetBefore;
-		if (grpc::Status status = ReadSheetSetup(sheet, sheetBefore); !status.ok())
-			return status;
-		response->mutable_sheet_scale_before()->set_numerator(sheetBefore.scaleNumerator);
-		response->mutable_sheet_scale_before()->set_denominator(sheetBefore.scaleDenominator);
 
-		// SolidWorks rescales a sheet to fit its first view ("automatically
-		// scale new drawing views"); not when the caller gave the scale.
-		PreferenceToggles prefs(swApp);
-		if (create && request->scale_case() != Request::SCALE_NOT_SET)
-			prefs.Set(swAutomaticScaling3ViewDrawings, false);
-
-		ViewState before;
+		// Everything is looked up before anything changes.
+		const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
+		const std::string original = ActiveSheetName(drawing);
+		ATL::CComPtr<IView> view;
+		std::string sheetName;
 		if (create)
 		{
-			const std::string orientation = change.orientation.empty() ? "*Front" : change.orientation;
-			const auto [x, y] = change.position.value_or(std::make_pair(sheetBefore.width / 2, sheetBefore.height / 2));
-			doc->ClearSelection2(VARIANT_TRUE);
-			HRESULT hr = drawing->CreateDrawViewFromModelView3(ATL::CComBSTR(change.modelPath.c_str()),
-				FromUtf8(orientation), x, y, 0.0, &view);
-			if (FAILED(hr))
-				return ComError("IDrawingDoc::CreateDrawViewFromModelView3", hr);
-			// Null for a named view the model doesn't have.
-			if (!view)
-				return NoNamedView(OpenModel(swApp, change.modelPath), ToUtf8(ATL::CComBSTR(change.modelPath.c_str())),
-					orientation);
-			// Made as asked; the rest is the change.
-			change.modelPath.clear();
-			change.orientation.clear();
-			change.position.reset();
+			const std::string& wanted = request->sheet_name().empty() ? original : request->sheet_name();
+			const DrawingSheet* sheet = FindSheet(sheets, wanted);
+			if (!sheet)
+				return grpc::Status(grpc::StatusCode::NOT_FOUND,
+					"the drawing has no sheet named \"" + wanted + "\" (its sheets: " + SheetList(sheets) + ")");
+			sheetName = sheet->name;
 		}
-		else
-			before = ReadViewState(view);
+		else if (grpc::Status status = FindDrawingView(sheets, request->view_name(), view, sheetName); !status.ok())
+			return status;
+		const std::string& wantedName = create ? request->view_name() : request->new_name();
+		if (!wantedName.empty() && (create || wantedName != request->view_name()))
+		{
+			ATL::CComPtr<IView> taken;
+			std::string takenSheet;
+			if (FindDrawingView(sheets, wantedName, taken, takenSheet).ok())
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"the drawing already has a view named \"" + wantedName + "\" (on " + takenSheet + ")");
+		}
+		if (view)
+		{
+			if (!request->orientation().empty() && !HasOwnOrientation(view))
+			{
+				ATL::CComPtr<IView> base = BaseViewOf(view);
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, request->view_name() + " is derived from " +
+					(base ? ViewName(base) : std::string("another view")) +
+					": it looks the way that view's orientation and the sheet's projection say -- change that view's "
+					"orientation instead");
+			}
+			if ((request->parent_display() || request->scale_case() == Request::kFollowParent) && !BaseViewOf(view))
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					request->view_name() + " isn't derived from another view: it has no parent scale or display");
+		}
 
-		// On failure a new view is deleted again (and the sheet's scale, if
-		// SolidWorks changed it for the view, put back); a changed one is
-		// set back as it was.
-		auto undo = [&](grpc::Status failure) {
+		ViewChange change;
+		if (create || !request->model().empty())
+			if (grpc::Status status = ResolveViewModel(swApp, sheets, request->model(), change.modelPath); !status.ok())
+				return status;
+		const std::wstring modelPath = !change.modelPath.empty() ? change.modelPath
+			: std::wstring(FromUtf8(ViewModelPath(view)));
+		if (!request->configuration().empty())
+			if (grpc::Status status = FindConfiguration(swApp, modelPath, request->configuration(), change.configuration);
+				!status.ok())
+				return status;
+		if (!request->orientation().empty())
+			change.orientation = NamedViewSpelling(OpenModel(swApp, modelPath), request->orientation());
+		if (request->has_position())
+			change.position = std::make_pair(request->position().x(), request->position().y());
+		switch (request->scale_case())
+		{
+		case Request::kRatio:
+			change.scale = ViewChange::Scale::Ratio;
+			change.numerator = request->ratio().numerator();
+			change.denominator = request->ratio().denominator();
+			break;
+		case Request::kFollowSheet:
+			change.scale = ViewChange::Scale::Sheet;
+			break;
+		case Request::kFollowParent:
+			change.scale = ViewChange::Scale::Parent;
+			break;
+		default:
+			break;
+		}
+		if (request->has_display_mode())
+			change.mode = request->display_mode();
+		change.parentDisplay = request->parent_display();
+		change.name = wantedName;
+
+		std::string finalName;
+		{
+			// The view's sheet is shown for the call (views are selected by name
+			// on the active sheet); the user's is put back after.
+			SheetActivation activation(drawing);
+			if (!activation.Show(sheetName))
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "couldn't switch to sheet " + sheetName);
+			ATL::CComPtr<ISheet> sheet;
+			if (grpc::Status status = ActiveSheet(drawing, sheet); !status.ok())
+				return status;
+			SheetSetup sheetBefore;
+			if (grpc::Status status = ReadSheetSetup(sheet, sheetBefore); !status.ok())
+				return status;
+			response->mutable_sheet_scale_before()->set_numerator(sheetBefore.scaleNumerator);
+			response->mutable_sheet_scale_before()->set_denominator(sheetBefore.scaleDenominator);
+
+			// SolidWorks rescales a sheet to fit its first view ("automatically
+			// scale new drawing views"); not when the caller gave the scale.
+			PreferenceToggles prefs(swApp);
+			if (create && request->scale_case() != Request::SCALE_NOT_SET)
+				prefs.Set(swAutomaticScaling3ViewDrawings, false);
+
+			ViewState before;
 			if (create)
 			{
-				DeleteDrawingView(doc, ext, ViewName(view));
-				SheetSetup now;
-				ATL::CComPtr<ISheet> current;
-				if (ActiveSheet(drawing, current).ok() && ReadSheetSetup(current, now).ok() &&
-					(!CloseRatio(now.scaleNumerator, sheetBefore.scaleNumerator) ||
-						!CloseRatio(now.scaleDenominator, sheetBefore.scaleDenominator)))
-				{
-					SheetChange back;
-					back.scale = std::make_pair(sheetBefore.scaleNumerator, sheetBefore.scaleDenominator);
-					ChangeActiveSheet(drawing, back, now);
-				}
+				const std::string orientation = change.orientation.empty() ? "*Front" : change.orientation;
+				const auto [x, y] = change.position.value_or(std::make_pair(sheetBefore.width / 2, sheetBefore.height / 2));
+				doc->ClearSelection2(VARIANT_TRUE);
+				HRESULT hr = drawing->CreateDrawViewFromModelView3(ATL::CComBSTR(change.modelPath.c_str()),
+					FromUtf8(orientation), x, y, 0.0, &view);
+				if (FAILED(hr))
+					return ComError("IDrawingDoc::CreateDrawViewFromModelView3", hr);
+				// Null for a named view the model doesn't have.
+				if (!view)
+					return NoNamedView(OpenModel(swApp, change.modelPath), ToUtf8(ATL::CComBSTR(change.modelPath.c_str())),
+						orientation);
+				// Made as asked; the rest is the change.
+				change.modelPath.clear();
+				change.orientation.clear();
+				change.position.reset();
 			}
 			else
-				ApplyViewChange(doc, drawing, ext, view, ViewChange::Back(before, HasOwnOrientation(view)), true);
+				before = ReadViewState(view);
+
+			// On failure a new view is deleted again (and the sheet's scale, if
+			// SolidWorks changed it for the view, put back); a changed one is
+			// set back as it was.
+			auto undo = [&](grpc::Status failure) {
+				if (create)
+				{
+					DeleteDrawingView(doc, ext, ViewName(view));
+					SheetSetup now;
+					ATL::CComPtr<ISheet> current;
+					if (ActiveSheet(drawing, current).ok() && ReadSheetSetup(current, now).ok() &&
+						(!CloseRatio(now.scaleNumerator, sheetBefore.scaleNumerator) ||
+							!CloseRatio(now.scaleDenominator, sheetBefore.scaleDenominator)))
+					{
+						SheetChange back;
+						back.scale = std::make_pair(sheetBefore.scaleNumerator, sheetBefore.scaleDenominator);
+						ChangeActiveSheet(drawing, back, now);
+					}
+				}
+				else
+					ApplyViewChange(doc, drawing, ext, view, ViewChange::Back(before, HasOwnOrientation(view)), true);
+				doc->ClearSelection2(VARIANT_TRUE);
+				VARIANT_BOOL rebuilt = VARIANT_FALSE;
+				doc->EditRebuild3(&rebuilt);
+				return failure;
+			};
+			if (grpc::Status status = ApplyViewChange(doc, drawing, ext, view, change, false); !status.ok())
+				return undo(status);
 			doc->ClearSelection2(VARIANT_TRUE);
 			VARIANT_BOOL rebuilt = VARIANT_FALSE;
 			doc->EditRebuild3(&rebuilt);
-			return failure;
-		};
-		if (grpc::Status status = ApplyViewChange(doc, drawing, ext, view, change, false); !status.ok())
-			return undo(status);
-		doc->ClearSelection2(VARIANT_TRUE);
-		VARIANT_BOOL rebuilt = VARIANT_FALSE;
-		doc->EditRebuild3(&rebuilt);
-		doc->GraphicsRedraw2();
-		finalName = ViewName(view);
-	}
-
-	for (const auto& s : DrawingSheets(drawing))
-		if (s.name == sheetName)
-		{
-			DrawingBudget budget;
-			DescribeSheet(s, original, ext, math, {}, false, false, budget, response->mutable_sheet());
+			doc->GraphicsRedraw2();
+			finalName = ViewName(view);
 		}
-	response->set_view_name(finalName);
-	response->set_created(create);
-	response->set_active_sheet(original);
-	return grpc::Status::OK;
+
+		for (const auto& s : DrawingSheets(drawing))
+			if (s.name == sheetName)
+			{
+				DrawingBudget budget;
+				DescribeSheet(s, original, ext, math, {}, false, false, budget, response->mutable_sheet());
+			}
+		response->set_view_name(finalName);
+		response->set_created(create);
+		response->set_active_sheet(original);
+		return grpc::Status::OK;
+	});
 }

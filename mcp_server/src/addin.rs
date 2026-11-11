@@ -28,7 +28,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 /// long rebuild or a modal dialog can legitimately stall them for a while.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
-type Client = SolidWorksClient<InterceptedService<Channel, TokenInterceptor>>;
+type Client = SolidWorksClient<InterceptedService<Channel, RequestInterceptor>>;
 
 #[derive(Clone, Default)]
 pub struct AddinClient {
@@ -36,14 +36,18 @@ pub struct AddinClient {
     connection: Arc<Mutex<Option<(discovery::Target, Channel)>>>,
 }
 
-/// Puts the instance file's token on every call.
+/// Every RPC carries authentication and a server-visible deadline. Explicit
+/// shorter timeouts (e.g. discovery probes) must survive interception.
 #[derive(Clone)]
-pub struct TokenInterceptor(Option<AsciiMetadataValue>);
+pub struct RequestInterceptor(Option<AsciiMetadataValue>);
 
-impl Interceptor for TokenInterceptor {
+impl Interceptor for RequestInterceptor {
     fn call(&mut self, mut request: tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> {
         if let Some(token) = &self.0 {
             request.metadata_mut().insert(TOKEN_HEADER, token.clone());
+        }
+        if !request.metadata().contains_key("grpc-timeout") {
+            request.set_timeout(REQUEST_TIMEOUT);
         }
         Ok(request)
     }
@@ -81,7 +85,7 @@ impl AddinClient {
             }
         };
         let token = target.token.as_deref().and_then(|token| MetadataValue::try_from(token).ok());
-        Ok(SolidWorksClient::with_interceptor(channel, TokenInterceptor(token)))
+        Ok(SolidWorksClient::with_interceptor(channel, RequestInterceptor(token)))
     }
 
     /// Where the add-in last called is listening, for error messages; None
@@ -105,7 +109,7 @@ impl AddinClient {
         let mut client = self.client()?;
         let mut request = tonic::Request::new(proto::GetActiveDocumentRequest {});
         if let Some(timeout) = timeout {
-            request.set_timeout(timeout);
+            request.set_timeout(timeout.min(REQUEST_TIMEOUT));
         }
         Ok(client.get_active_document(request).await?.into_inner())
     }
@@ -325,8 +329,6 @@ impl AddinClient {
         request: proto::InspectModelRequest,
     ) -> Result<proto::InspectModelResponse, tonic::Status> {
         let mut client = self.client()?;
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(REQUEST_TIMEOUT);
         let response = client.inspect_model(request).await?;
         Ok(response.into_inner())
     }
@@ -769,10 +771,6 @@ impl AddinClient {
 
     pub async fn run_macro(&self, request: proto::RunMacroRequest) -> Result<proto::RunMacroResponse, tonic::Status> {
         let mut client = self.client()?;
-        // Send a deadline to the add-in as well as bounding the transport wait,
-        // so an expired macro can be discarded while it waits for the model lock.
-        let mut request = tonic::Request::new(request);
-        request.set_timeout(REQUEST_TIMEOUT);
         Ok(client.run_macro(request).await?.into_inner())
     }
 
@@ -840,6 +838,30 @@ impl AddinClient {
 
 /// Largest GetMesh reply accepted: about 5 million triangles with normals.
 const MAX_MESH_MESSAGE: usize = 256 * 1024 * 1024;
+
+#[cfg(test)]
+mod request_tests {
+    use super::*;
+
+    #[test]
+    fn all_calls_get_a_server_deadline_and_authentication() {
+        let token = MetadataValue::from_static("test-token");
+        let request = RequestInterceptor(Some(token.clone()))
+            .call(tonic::Request::new(()))
+            .unwrap();
+        assert_eq!(request.metadata().get(TOKEN_HEADER), Some(&token));
+        assert!(request.metadata().contains_key("grpc-timeout"));
+    }
+
+    #[test]
+    fn explicit_short_deadline_survives_interception() {
+        let mut request = tonic::Request::new(());
+        request.set_timeout(Duration::from_millis(250));
+        let timeout = request.metadata().get("grpc-timeout").unwrap().clone();
+        let request = RequestInterceptor(None).call(request).unwrap();
+        assert_eq!(request.metadata().get("grpc-timeout"), Some(&timeout));
+    }
+}
 
 #[cfg(test)]
 #[path = "addin_live_tests.rs"]

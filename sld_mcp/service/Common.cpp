@@ -12,11 +12,6 @@ namespace sld_mcp::service
 		return grpc::Status(grpc::StatusCode::INTERNAL, message);
 	}
 
-	grpc::Status ComApartmentError()
-	{
-		return grpc::Status(grpc::StatusCode::INTERNAL, "CoInitializeEx failed on gRPC worker thread");
-	}
-
 	std::string ToUtf8(const ATL::CComBSTR& s)
 	{
 		const int wideLen = static_cast<int>(s.Length());

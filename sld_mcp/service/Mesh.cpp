@@ -21,8 +21,9 @@ namespace
 	}
 
 	// The face's display tessellation. False if it has none (nothing to draw).
-	bool MeshFace(IFace2* face, sld_mcp::v1::FaceMesh* mesh)
+	bool MeshFace(RequestControl& control, IFace2* face, sld_mcp::v1::FaceMesh* mesh)
 	{
+		control.Checkpoint();
 		// 3 vertices x 3 coordinates per triangle, meters with NoConversion.
 		ATL::CComVariant triangles;
 		if (FAILED(face->GetTessTriangles(VARIANT_TRUE, &triangles)))
@@ -32,6 +33,7 @@ namespace
 		if (t.empty())
 			return false;
 		AppendFloats(t, mesh->mutable_triangles());
+		control.Checkpoint();
 
 		// One normal per vertex, same order; dropped if it doesn't line up.
 		ATL::CComVariant norms;
@@ -61,9 +63,11 @@ namespace
 	// two ends; curves use ICurve::GetTessPts between points on the edge.
 	// A closed edge (a full circle) starts and ends at the same point, which
 	// doesn't say which way round to go, so it's done in thirds.
-	bool TessellateEdge(IEdge* edge, double chordTolerance, double lengthTolerance, std::vector<double>& points)
+	bool TessellateEdge(RequestControl& control, IEdge* edge, double chordTolerance, double lengthTolerance,
+		std::vector<double>& points)
 	{
 		points.clear();
+		control.Checkpoint();
 		// [start point, end point, start param, end param, ...]
 		ATL::CComVariant curveParams;
 		if (FAILED(edge->GetCurveParams2(&curveParams)))
@@ -74,6 +78,7 @@ namespace
 		const std::array<double, 3> start = { c[0], c[1], c[2] };
 		const std::array<double, 3> end = { c[3], c[4], c[5] };
 		const double t0 = c[6], t1 = c[7];
+		control.Checkpoint();
 
 		ATL::CComPtr<ICurve> curve;
 		long identity = 0;
@@ -91,6 +96,7 @@ namespace
 		std::vector<std::array<double, 3>> stops = { start };
 		for (int i = 1; i < pieces; ++i)
 		{
+			control.Checkpoint();
 			std::array<double, 3> p{};
 			if (!CurvePoint(curve, t0 + (t1 - t0) * i / pieces, p))
 				break;
@@ -101,6 +107,7 @@ namespace
 		bool ok = stops.size() == static_cast<size_t>(pieces) + 1;
 		for (size_t i = 0; ok && i + 1 < stops.size(); ++i)
 		{
+			control.Checkpoint();
 			ATL::CComVariant from = comvariant::FromDoubles(stops[i].data(), 3);
 			ATL::CComVariant to = comvariant::FromDoubles(stops[i + 1].data(), 3);
 			ATL::CComVariant tess;
@@ -123,6 +130,7 @@ namespace
 		points.clear();
 		for (int i = 0; i <= kSamples; ++i)
 		{
+			control.Checkpoint();
 			std::array<double, 3> p{};
 			if (CurvePoint(curve, t0 + (t1 - t0) * i / kSamples, p))
 				points.insert(points.end(), p.begin(), p.end());
@@ -162,191 +170,203 @@ namespace
 	};
 }
 
-grpc::Status SolidWorksService::GetMesh(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::GetMesh(grpc::ServerContext* context,
 	const sld_mcp::v1::GetMeshRequest* request,
 	sld_mcp::v1::GetMeshResponse* response)
 {
 	// Read-only, but must not see a half-finished edit (see InspectModel).
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "GetMesh", ExecutionPolicy::Cancellable,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		control.Checkpoint();
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-
-	ATL::CComPtr<IModelDoc2> doc;
-	long docType = swDocNONE;
-	if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
-		return status;
-	const bool isAssembly = docType == swDocASSEMBLY;
-
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	PersistIds ids(ext);
-
-	ATL::CComBSTR title;
-	HRESULT hr = doc->GetTitle(&title);
-	if (FAILED(hr))
-		return ComError("IModelDoc2::GetTitle", hr);
-	response->mutable_document()->set_title(ToUtf8(title));
-	response->mutable_document()->set_type(isAssembly ? sld_mcp::v1::DOCUMENT_TYPE_ASSEMBLY
-	                                                  : sld_mcp::v1::DOCUMENT_TYPE_PART);
-
-	// Only what's shown: hidden bodies (or components) aren't in the picture
-	// either. In an assembly each body comes with its component, and its
-	// geometry may be in that component's coordinates; the overall size
-	// comes from the components' assembly-space boxes.
-	std::vector<std::pair<ATL::CComPtr<IBody2>, std::string>> bodies;  // body, component persist id
-	Eigen::AlignedBox3d sizeBox;
-	if (isAssembly)
-	{
-		ATL::CComQIPtr<IAssemblyDoc> assembly(doc.p);
-		if (!assembly)
-			return grpc::Status(grpc::StatusCode::INTERNAL, "active assembly has no IAssemblyDoc interface");
-		ATL::CComQIPtr<IMathUtility> math;
-		if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
+		ATL::CComPtr<IModelDoc2> doc;
+		long docType = swDocNONE;
+		if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
 			return status;
-		ComponentList components(ids, math, response->mutable_components());
-		for (const auto& component : GeometryComponents(assembly, true))
-		{
-			const std::vector<ATL::CComPtr<IBody2>> componentBodies = ComponentBodies(component);
-			if (componentBodies.empty())
-				continue;
-			const std::string pid = components.Add(component);
-			for (const auto& body : componentBodies)
-				bodies.emplace_back(body, pid);
-			ATL::CComVariant box;
-			if (SUCCEEDED(component->GetBox(VARIANT_FALSE, VARIANT_FALSE, &box)))
-				sizeBox.extend(ToAlignedBox(comvariant::ToDoubles(box)));
-		}
-	}
-	else
-	{
-		ATL::CComQIPtr<IPartDoc> part(doc.p);
-		if (!part)
-			return grpc::Status(grpc::StatusCode::INTERNAL, "active part has no IPartDoc interface");
-		ATL::CComVariant all;
-		hr = part->GetBodies2(swAllBodies, VARIANT_TRUE, &all);
+		control.Checkpoint();
+		const bool isAssembly = docType == swDocASSEMBLY;
+
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		PersistIds ids(ext);
+
+		ATL::CComBSTR title;
+		HRESULT hr = doc->GetTitle(&title);
 		if (FAILED(hr))
-			return ComError("IPartDoc::GetBodies2", hr);
-		for (const auto& disp : comvariant::ToDispatches(all))
-			if (ATL::CComQIPtr<IBody2> body(disp.p); body)
+			return ComError("IModelDoc2::GetTitle", hr);
+		response->mutable_document()->set_title(ToUtf8(title));
+		response->mutable_document()->set_type(isAssembly ? sld_mcp::v1::DOCUMENT_TYPE_ASSEMBLY
+		                                                  : sld_mcp::v1::DOCUMENT_TYPE_PART);
+
+		// Only what's shown: hidden bodies (or components) aren't in the picture
+		// either. In an assembly each body comes with its component, and its
+		// geometry may be in that component's coordinates; the overall size
+		// comes from the components' assembly-space boxes.
+		std::vector<std::pair<ATL::CComPtr<IBody2>, std::string>> bodies;  // body, component persist id
+		Eigen::AlignedBox3d sizeBox;
+		if (isAssembly)
+		{
+			ATL::CComQIPtr<IAssemblyDoc> assembly(doc.p);
+			if (!assembly)
+				return grpc::Status(grpc::StatusCode::INTERNAL, "active assembly has no IAssemblyDoc interface");
+			ATL::CComQIPtr<IMathUtility> math;
+			if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
+				return status;
+			ComponentList components(ids, math, response->mutable_components());
+			for (const auto& component : GeometryComponents(assembly, true, &control))
 			{
-				bodies.emplace_back(ATL::CComPtr<IBody2>(body), std::string());
+				control.Checkpoint();
+				const std::vector<ATL::CComPtr<IBody2>> componentBodies = ComponentBodies(component, &control);
+				control.Checkpoint();
+				if (componentBodies.empty())
+					continue;
+				const std::string pid = components.Add(component);
+				control.Checkpoint();
+				for (const auto& body : componentBodies)
+					bodies.emplace_back(body, pid);
 				ATL::CComVariant box;
-				if (SUCCEEDED(body->GetBodyBox(&box)))
+				if (SUCCEEDED(component->GetBox(VARIANT_FALSE, VARIANT_FALSE, &box)))
 					sizeBox.extend(ToAlignedBox(comvariant::ToDoubles(box)));
 			}
-	}
+		}
+		else
+		{
+			ATL::CComQIPtr<IPartDoc> part(doc.p);
+			if (!part)
+				return grpc::Status(grpc::StatusCode::INTERNAL, "active part has no IPartDoc interface");
+			ATL::CComVariant all;
+			hr = part->GetBodies2(swAllBodies, VARIANT_TRUE, &all);
+			if (FAILED(hr))
+				return ComError("IPartDoc::GetBodies2", hr);
+			for (const auto& disp : comvariant::ToDispatches(all))
+			{
+				control.Checkpoint();
+				if (ATL::CComQIPtr<IBody2> body(disp.p); body)
+				{
+					bodies.emplace_back(ATL::CComPtr<IBody2>(body), std::string());
+					ATL::CComVariant box;
+					if (SUCCEEDED(body->GetBodyBox(&box)))
+						sizeBox.extend(ToAlignedBox(comvariant::ToDoubles(box)));
+				}
+			}
+		}
+		control.Checkpoint();
 
-	// What's drawn, fingerprinted without tessellating anything, so a caller
-	// that still has this mesh gets it confirmed instead of sent again. Update
-	// stamps change with every change to the document or a body; the body
-	// list changes when one is hidden or shown, the placements when a
-	// component moves. The process id tells SolidWorks sessions apart.
-	{
-		Fingerprint key;
-		key.Add(static_cast<uint64_t>(GetCurrentProcessId()));
-		key.Add(response->document().title());
-		ATL::CComBSTR path;
-		if (SUCCEEDED(doc->GetPathName(&path)))
-			key.Add(ToUtf8(path));
-		long stamp = 0;
-		if (SUCCEEDED(doc->GetUpdateStamp(&stamp)))
-			key.Add(stamp);
-		key.Add(request->include_edges());
+		// What's drawn, fingerprinted without tessellating anything, so a caller
+		// that still has this mesh gets it confirmed instead of sent again. Update
+		// stamps change with every change to the document or a body; the body
+		// list changes when one is hidden or shown, the placements when a
+		// component moves. The process id tells SolidWorks sessions apart.
+		{
+			Fingerprint key;
+			key.Add(static_cast<uint64_t>(GetCurrentProcessId()));
+			key.Add(response->document().title());
+			ATL::CComBSTR path;
+			if (SUCCEEDED(doc->GetPathName(&path)))
+				key.Add(ToUtf8(path));
+			long stamp = 0;
+			if (SUCCEEDED(doc->GetUpdateStamp(&stamp)))
+				key.Add(stamp);
+			key.Add(request->include_edges());
+			for (const auto& [body, componentId] : bodies)
+			{
+				control.Checkpoint();
+				key.Add(componentId);
+				key.Add(ids.Get(body));
+				long bodyStamp = 0;
+				if (SUCCEEDED(body->GetUpdateStamp(&bodyStamp)))
+					key.Add(bodyStamp);
+			}
+			for (const auto& component : response->components())
+				key.Add(component.SerializeAsString());
+			response->set_key(key.Get());
+			if (request->cached_key() == response->key())
+			{
+				response->set_unchanged(true);
+				return grpc::Status::OK;
+			}
+		}
+
+		// Edge tessellation tolerances scale with the model: chords within 0.1%
+		// of its size, segments no longer than 5% of it.
+		double size = sizeBox.isEmpty() ? 0.0 : sizeBox.diagonal().norm();
+		if (!(size > 0.0) || !std::isfinite(size))
+			size = 0.1;
+		const double chordTolerance = size * 1e-3;
+		const double lengthTolerance = size * 0.05;
+
+		size_t faceCount = 0, edgeCount = 0;
+		bool truncated = false;
 		for (const auto& [body, componentId] : bodies)
 		{
-			key.Add(componentId);
-			key.Add(ids.Get(body));
-			long bodyStamp = 0;
-			if (SUCCEEDED(body->GetUpdateStamp(&bodyStamp)))
-				key.Add(bodyStamp);
-		}
-		for (const auto& component : response->components())
-			key.Add(component.SerializeAsString());
-		response->set_key(key.Get());
-		if (request->cached_key() == response->key())
-		{
-			response->set_unchanged(true);
-			return grpc::Status::OK;
-		}
-	}
+			control.Checkpoint();
+			const std::string bodyId = ids.Get(body);
 
-	// Edge tessellation tolerances scale with the model: chords within 0.1%
-	// of its size, segments no longer than 5% of it.
-	double size = sizeBox.isEmpty() ? 0.0 : sizeBox.diagonal().norm();
-	if (!(size > 0.0) || !std::isfinite(size))
-		size = 0.1;
-	const double chordTolerance = size * 1e-3;
-	const double lengthTolerance = size * 0.05;
-
-	size_t faceCount = 0, edgeCount = 0;
-	bool truncated = false;
-	for (const auto& [body, componentId] : bodies)
-	{
-		const std::string bodyId = ids.Get(body);
-
-		ATL::CComVariant faces;
-		if (SUCCEEDED(body->GetFaces(&faces)))
-		{
-			for (const auto& disp : comvariant::ToDispatches(faces))
+			ATL::CComVariant faces;
+			if (SUCCEEDED(body->GetFaces(&faces)))
 			{
-				ATL::CComQIPtr<IFace2> face(disp.p);
-				if (!face)
-					continue;
-				if (faceCount >= kMaxMeshFaces)
+				for (const auto& disp : comvariant::ToDispatches(faces))
 				{
-					truncated = true;
-					break;
+					control.Checkpoint();
+					ATL::CComQIPtr<IFace2> face(disp.p);
+					if (!face)
+						continue;
+					if (faceCount >= kMaxMeshFaces)
+					{
+						truncated = true;
+						break;
+					}
+					sld_mcp::v1::FaceMesh mesh;
+					if (!MeshFace(control, face, &mesh))
+						continue;
+					control.Checkpoint();
+					mesh.set_persist_id(ids.Get(face));
+					mesh.set_body_persist_id(bodyId);
+					mesh.set_component_persist_id(componentId);
+					ATL::CComPtr<IFeature> feature;
+					if (SUCCEEDED(face->IGetFeature(&feature)) && feature)
+					{
+						mesh.set_feature_persist_id(ids.Get(feature));
+						mesh.set_feature_name(FeatureName(feature));
+					}
+					response->add_faces()->Swap(&mesh);
+					++faceCount;
 				}
-				sld_mcp::v1::FaceMesh mesh;
-				if (!MeshFace(face, &mesh))
-					continue;
-				mesh.set_persist_id(ids.Get(face));
-				mesh.set_body_persist_id(bodyId);
-				mesh.set_component_persist_id(componentId);
-				ATL::CComPtr<IFeature> feature;
-				if (SUCCEEDED(face->IGetFeature(&feature)) && feature)
+			}
+
+			control.Checkpoint();
+			if (!request->include_edges())
+				continue;
+			ATL::CComVariant edges;
+			if (SUCCEEDED(body->GetEdges(&edges)))
+			{
+				std::vector<double> points;
+				for (const auto& disp : comvariant::ToDispatches(edges))
 				{
-					mesh.set_feature_persist_id(ids.Get(feature));
-					mesh.set_feature_name(FeatureName(feature));
+					control.Checkpoint();
+					ATL::CComQIPtr<IEdge> edge(disp.p);
+					if (!edge)
+						continue;
+					if (edgeCount >= kMaxMeshEdges)
+					{
+						truncated = true;
+						break;
+					}
+					if (!TessellateEdge(control, edge, chordTolerance, lengthTolerance, points))
+						continue;
+					control.Checkpoint();
+					sld_mcp::v1::EdgePolyline* polyline = response->add_edges();
+					polyline->set_persist_id(ids.Get(edge));
+					polyline->set_body_persist_id(bodyId);
+					polyline->set_component_persist_id(componentId);
+					AppendFloats(points, polyline->mutable_points());
+					++edgeCount;
 				}
-				response->add_faces()->Swap(&mesh);
-				++faceCount;
 			}
 		}
-
-		if (!request->include_edges())
-			continue;
-		ATL::CComVariant edges;
-		if (SUCCEEDED(body->GetEdges(&edges)))
-		{
-			std::vector<double> points;
-			for (const auto& disp : comvariant::ToDispatches(edges))
-			{
-				ATL::CComQIPtr<IEdge> edge(disp.p);
-				if (!edge)
-					continue;
-				if (edgeCount >= kMaxMeshEdges)
-				{
-					truncated = true;
-					break;
-				}
-				if (!TessellateEdge(edge, chordTolerance, lengthTolerance, points))
-					continue;
-				sld_mcp::v1::EdgePolyline* polyline = response->add_edges();
-				polyline->set_persist_id(ids.Get(edge));
-				polyline->set_body_persist_id(bodyId);
-				polyline->set_component_persist_id(componentId);
-				AppendFloats(points, polyline->mutable_points());
-				++edgeCount;
-			}
-		}
-	}
-	response->set_truncated(truncated);
-	return grpc::Status::OK;
+		response->set_truncated(truncated);
+		// Never publish an incomplete mesh as a successful cache entry on expiry.
+		return grpc::Status::OK;
+	});
 }

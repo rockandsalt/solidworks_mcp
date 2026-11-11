@@ -479,7 +479,7 @@ grpc::Status sld_mcp::service::DescribeExtrudeDefinition(IFeature* feature, sld_
 	return DescribeExtrudeNow(feature, out);
 }
 
-grpc::Status SolidWorksService::EditExtrude(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::EditExtrude(grpc::ServerContext* context,
 	const sld_mcp::v1::EditExtrudeRequest* request,
 	sld_mcp::v1::EditExtrudeResponse* response)
 {
@@ -504,157 +504,151 @@ grpc::Status SolidWorksService::EditExtrude(grpc::ServerContext* /*context*/,
 		request->has_reverse_direction() || request->has_draft_angle() || request->has_draft_outward() ||
 		request->has_flip_side_to_cut() || request->has_both_directions();
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "EditExtrude", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
+			return status;
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		PersistIds ids(ext);
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
+		const std::vector<TreeFeature> tree = FeatureTree(doc);
+		size_t index = 0;
+		if (grpc::Status status = ResolveFeatureTarget(ext, tree, ids, request->feature(), index); !status.ok())
+			return status;
+		ATL::CComPtr<IFeature> feature = tree[index].feature;
+		const std::string name = tree[index].name;
 
-	ATL::CComPtr<IModelDoc2> doc;
-	if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	PersistIds ids(ext);
+		ExtrudeSettings before;
+		if (grpc::Status status = DescribeExtrudeNow(feature, response->mutable_before(), &before); !status.ok())
+			return status;
+		if (!anyChange)
+			return grpc::Status::OK;
 
-	const std::vector<TreeFeature> tree = FeatureTree(doc);
-	size_t index = 0;
-	if (grpc::Status status = ResolveFeatureTarget(ext, tree, ids, request->feature(), index); !status.ok())
-		return status;
-	ATL::CComPtr<IFeature> feature = tree[index].feature;
-	const std::string name = tree[index].name;
-
-	ExtrudeSettings before;
-	if (grpc::Status status = DescribeExtrudeNow(feature, response->mutable_before(), &before); !status.ok())
-		return status;
-	if (!anyChange)
-		return grpc::Status::OK;
-
-	// What it should become: the current settings with the request's changes.
-	ExtrudeSettings target = before;
-	ExtrudeSide& side1 = target.side[0];
-	ExtrudeSide& side2 = target.side[1];
-	if (setEnd && endCondition != side1.endCondition)
-		side1.endCondition = endCondition;
-	if (request->has_depth())
-		side1.depth = request->depth();
-	if (request->has_reverse_direction())
-		target.reverse = request->reverse_direction();
-	if (request->has_draft_angle())
-	{
-		side1.draft = request->draft_angle() > 0.0;
-		side1.draftAngle = request->draft_angle();
-	}
-	if (request->has_draft_outward())
-		side1.draftOutward = request->draft_outward();
-	if (request->has_flip_side_to_cut())
-	{
-		if (!target.cut)
+		// What it should become: the current settings with the request's changes.
+		ExtrudeSettings target = before;
+		ExtrudeSide& side1 = target.side[0];
+		ExtrudeSide& side2 = target.side[1];
+		if (setEnd && endCondition != side1.endCondition)
+			side1.endCondition = endCondition;
+		if (request->has_depth())
+			side1.depth = request->depth();
+		if (request->has_reverse_direction())
+			target.reverse = request->reverse_direction();
+		if (request->has_draft_angle())
+		{
+			side1.draft = request->draft_angle() > 0.0;
+			side1.draftAngle = request->draft_angle();
+		}
+		if (request->has_draft_outward())
+			side1.draftOutward = request->draft_outward();
+		if (request->has_flip_side_to_cut())
+		{
+			if (!target.cut)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"\"" + name + "\" is a boss; flip_side_to_cut only applies to cuts");
+			target.flipSide = request->flip_side_to_cut();
+		}
+		if (request->has_both_directions())
+			target.both = request->both_directions();
+		if (IsTwoSided(side1.endCondition))
+		{
+			if (request->has_both_directions() && request->both_directions())
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"a mid plane or through-all-both extrude has no second direction");
+			target.both = false;
+		}
+		if ((setEnd2 || request->has_depth2()) && !target.both)
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				"\"" + name + "\" is a boss; flip_side_to_cut only applies to cuts");
-		target.flipSide = request->flip_side_to_cut();
-	}
-	if (request->has_both_directions())
-		target.both = request->both_directions();
-	if (IsTwoSided(side1.endCondition))
-	{
-		if (request->has_both_directions() && request->both_directions())
+				"\"" + name + "\" doesn't go in two directions -- set both_directions to add the second one");
+		if (target.both && !before.both)
+		{
+			// A new second direction starts blind, without draft, unless told
+			// otherwise.
+			side2.endCondition = swEndCondBlind;
+			side2.draft = false;
+		}
+		if (setEnd2)
+			side2.endCondition = endCondition2;
+		if (request->has_depth2())
+			side2.depth = request->depth2();
+		if (request->has_depth() && !UsesDepth(side1.endCondition))
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				"a mid plane or through-all-both extrude has no second direction");
-		target.both = false;
-	}
-	if ((setEnd2 || request->has_depth2()) && !target.both)
-		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-			"\"" + name + "\" doesn't go in two directions -- set both_directions to add the second one");
-	if (target.both && !before.both)
-	{
-		// A new second direction starts blind, without draft, unless told
-		// otherwise.
-		side2.endCondition = swEndCondBlind;
-		side2.draft = false;
-	}
-	if (setEnd2)
-		side2.endCondition = endCondition2;
-	if (request->has_depth2())
-		side2.depth = request->depth2();
-	if (request->has_depth() && !UsesDepth(side1.endCondition))
-		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-			"\"" + name + "\" doesn't end at a depth (" + EndConditionName(side1.endCondition) +
-			") -- give end_condition blind or mid plane with the depth");
-	if (request->has_depth2() && target.both && !UsesDepth(side2.endCondition))
-		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-			"the second direction doesn't end at a depth (" + EndConditionName(side2.endCondition) +
-			") -- give end_condition2 blind with depth2");
-	if (UsesDepth(side1.endCondition) && side1.depth <= 0.0)
-		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give a depth for that end condition");
-	if (target.both && UsesDepth(side2.endCondition) && side2.depth <= 0.0)
-		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give depth2 for the second direction");
-	if (!target.cut && side1.endCondition == swEndCondThroughAllBoth)
-		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "through all both only applies to cuts");
+				"\"" + name + "\" doesn't end at a depth (" + EndConditionName(side1.endCondition) +
+				") -- give end_condition blind or mid plane with the depth");
+		if (request->has_depth2() && target.both && !UsesDepth(side2.endCondition))
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"the second direction doesn't end at a depth (" + EndConditionName(side2.endCondition) +
+				") -- give end_condition2 blind with depth2");
+		if (UsesDepth(side1.endCondition) && side1.depth <= 0.0)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give a depth for that end condition");
+		if (target.both && UsesDepth(side2.endCondition) && side2.depth <= 0.0)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give depth2 for the second direction");
+		if (!target.cut && side1.endCondition == swEndCondThroughAllBoth)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "through all both only applies to cuts");
 
-	const auto errorsBefore = FeatureErrors(tree);
+		const auto errorsBefore = FeatureErrors(tree);
 
-	// No "What's Wrong" dialog for features the change breaks.
-	PreferenceToggles toggles(swApp);
-	toggles.Set(swShowErrorsEveryRebuild, false);
+		// No "What's Wrong" dialog for features the change breaks.
+		PreferenceToggles toggles(swApp);
+		toggles.Set(swShowErrorsEveryRebuild, false);
 
-	// Puts the old definition back (with any end-condition reference, as
-	// read with the selections accessed), then rebuilds.
-	ExtrudeSettings previous = before;
-	auto restore = [&]() {
-		bool ignored = false;
-		ApplyExtrude(doc, feature, previous, nullptr, ignored);
+		// Puts the old definition back (with any end-condition reference, as
+		// read with the selections accessed), then rebuilds.
+		ExtrudeSettings previous = before;
+		auto restore = [&]() {
+			bool ignored = false;
+			ApplyExtrude(doc, feature, previous, nullptr, ignored);
+			VARIANT_BOOL rebuilt = VARIANT_FALSE;
+			doc->EditRebuild3(&rebuilt);
+		};
+
+		bool modified = false;
+		if (grpc::Status status = ApplyExtrude(doc, feature, target, &previous, modified); !status.ok())
+			return status;
+		if (!modified)
+		{
+			// SolidWorks normally keeps the old definition; make sure.
+			sld_mcp::v1::ExtrudeDefinition now;
+			ExtrudeSettings settings;
+			if (DescribeExtrudeNow(feature, &now, &settings).ok() &&
+				(settings.side[0].endCondition != before.side[0].endCondition || settings.reverse != before.reverse ||
+					settings.both != before.both || Differs(settings.side[0].depth, before.side[0].depth)))
+				restore();
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"SolidWorks rejected that change to \"" + name + "\", so it's unchanged -- e.g. a cut that "
+				"would remove nothing (try the other direction), an end condition that can't be reached, or "
+				"a draft that can't be made");
+		}
+
 		VARIANT_BOOL rebuilt = VARIANT_FALSE;
-		doc->EditRebuild3(&rebuilt);
-	};
+		HRESULT hr = doc->EditRebuild3(&rebuilt);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::EditRebuild3", hr);
 
-	bool modified = false;
-	if (grpc::Status status = ApplyExtrude(doc, feature, target, &previous, modified); !status.ok())
-		return status;
-	if (!modified)
-	{
-		// SolidWorks normally keeps the old definition; make sure.
-		sld_mcp::v1::ExtrudeDefinition now;
-		ExtrudeSettings settings;
-		if (DescribeExtrudeNow(feature, &now, &settings).ok() &&
-			(settings.side[0].endCondition != before.side[0].endCondition || settings.reverse != before.reverse ||
-				settings.both != before.both || Differs(settings.side[0].depth, before.side[0].depth)))
+		VARIANT_BOOL warning = VARIANT_FALSE;
+		long errorCode = swFeatureErrorNone;
+		feature->GetErrorCode2(&warning, &errorCode);
+		if (errorCode != swFeatureErrorNone && !warning)
+		{
 			restore();
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			"SolidWorks rejected that change to \"" + name + "\", so it's unchanged -- e.g. a cut that "
-			"would remove nothing (try the other direction), an end condition that can't be reached, or "
-			"a draft that can't be made");
-	}
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"with that change \"" + name + "\" fails to rebuild (" + ExtrudeErrorText(errorCode) +
+				"), so the old definition was put back");
+		}
 
-	VARIANT_BOOL rebuilt = VARIANT_FALSE;
-	HRESULT hr = doc->EditRebuild3(&rebuilt);
-	if (FAILED(hr))
-		return ComError("IModelDoc2::EditRebuild3", hr);
-
-	VARIANT_BOOL warning = VARIANT_FALSE;
-	long errorCode = swFeatureErrorNone;
-	feature->GetErrorCode2(&warning, &errorCode);
-	if (errorCode != swFeatureErrorNone && !warning)
-	{
-		restore();
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			"with that change \"" + name + "\" fails to rebuild (" + ExtrudeErrorText(errorCode) +
-			"), so the old definition was put back");
-	}
-
-	if (grpc::Status status = DescribeExtrudeNow(feature, response->mutable_after()); !status.ok())
-		return status;
-	AddNewErrors(errorsBefore, FeatureErrors(FeatureTree(doc)), response->mutable_new_errors());
-	DropProblem(response->mutable_new_errors(), name);  // its own state is in `after`
-	doc->GraphicsRedraw2();
-	return grpc::Status::OK;
+		if (grpc::Status status = DescribeExtrudeNow(feature, response->mutable_after()); !status.ok())
+			return status;
+		AddNewErrors(errorsBefore, FeatureErrors(FeatureTree(doc)), response->mutable_new_errors());
+		DropProblem(response->mutable_new_errors(), name);  // its own state is in `after`
+		doc->GraphicsRedraw2();
+		return grpc::Status::OK;
+	});
 }
 
-grpc::Status SolidWorksService::EditMate(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::EditMate(grpc::ServerContext* context,
 	const sld_mcp::v1::EditMateRequest* request,
 	sld_mcp::v1::EditMateResponse* response)
 {
@@ -687,237 +681,231 @@ grpc::Status SolidWorksService::EditMate(grpc::ServerContext* /*context*/,
 			"nothing to change -- give a new type, entities, alignment, flip, distance, angle, limits or lock "
 			"rotation");
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "EditMate", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		if (grpc::Status status = GetEditableAssembly(swApp, doc); !status.ok())
+			return status;
+		ATL::CComQIPtr<IAssemblyDoc> assembly(doc.p);
+		if (!assembly)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "active assembly has no IAssemblyDoc interface");
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		ATL::CComQIPtr<IMathUtility> math;
+		if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
+			return status;
+		PersistIds ids(ext);
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
+		const std::vector<TreeFeature> tree = FeatureTree(doc);
+		size_t index = 0;
+		if (grpc::Status status = ResolveFeatureTarget(ext, tree, ids, request->mate(), index); !status.ok())
+			return status;
+		ATL::CComPtr<IFeature> feature = tree[index].feature;
+		const std::string name = tree[index].name;
 
-	ATL::CComPtr<IModelDoc2> doc;
-	if (grpc::Status status = GetEditableAssembly(swApp, doc); !status.ok())
-		return status;
-	ATL::CComQIPtr<IAssemblyDoc> assembly(doc.p);
-	if (!assembly)
-		return grpc::Status(grpc::StatusCode::INTERNAL, "active assembly has no IAssemblyDoc interface");
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	ATL::CComQIPtr<IMathUtility> math;
-	if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
-		return status;
-	PersistIds ids(ext);
+		MateSettings before;
+		if (grpc::Status status = ReadMate(assembly, ids, feature, before); !status.ok())
+			return status;
+		long unused = 0;
+		if (!ToSwMateType(ToMateType(before.type), unused))
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"\"" + name + "\" is a kind of mate this can't edit (" + tree[index].type + ") -- delete it and "
+				"add a new one");
+		DescribeMate(feature, ids, response->mutable_before());
 
-	const std::vector<TreeFeature> tree = FeatureTree(doc);
-	size_t index = 0;
-	if (grpc::Status status = ResolveFeatureTarget(ext, tree, ids, request->mate(), index); !status.ok())
-		return status;
-	ATL::CComPtr<IFeature> feature = tree[index].feature;
-	const std::string name = tree[index].name;
-
-	MateSettings before;
-	if (grpc::Status status = ReadMate(assembly, ids, feature, before); !status.ok())
-		return status;
-	long unused = 0;
-	if (!ToSwMateType(ToMateType(before.type), unused))
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			"\"" + name + "\" is a kind of mate this can't edit (" + tree[index].type + ") -- delete it and "
-			"add a new one");
-	DescribeMate(feature, ids, response->mutable_before());
-
-	// What it should become: the current mate with the request's changes.
-	MateSettings target = before;
-	if (setType)
-		target.type = newType;
-	if (request->alignment() != sld_mcp::v1::MATE_ALIGNMENT_UNSPECIFIED)
-		target.alignment = ToSwMateAlign(request->alignment());
-	if (request->has_flip())
-		target.flip = request->flip();
-	if (request->has_distance())
-	{
-		if (target.type != swMateDISTANCE)
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "only distance mates take a distance");
-		target.distance = request->distance();
-	}
-	else if (target.type == swMateDISTANCE && before.type != swMateDISTANCE)
-		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give the distance for a distance mate");
-	if (request->has_angle())
-	{
-		if (target.type != swMateANGLE)
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "only angle mates take an angle");
-		target.angle = request->angle();
-	}
-	else if (target.type == swMateANGLE && before.type != swMateANGLE)
-		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give the angle for an angle mate");
-	if (request->has_lock_rotation())
-	{
-		if (target.type != swMateCONCENTRIC)
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "lock rotation only applies to concentric mates");
-		target.lockRotation = request->lock_rotation();
-	}
-	// Limits: kept with the type (a distance range means nothing to an angle
-	// mate), set or removed as asked; the value must lie in them.
-	if (target.type != before.type)
-		target.limited = false;
-	if (request->remove_limits())
-	{
-		if (!before.limited)
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "\"" + name + "\" has no limits to remove");
-		target.limited = false;
-	}
-	if (setLimits)
-	{
-		if (!target.limited && !(request->has_min_limit() && request->has_max_limit()))
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				"\"" + name + "\" has no limits yet -- give both the minimum and the maximum");
-		target.limited = true;
-		if (request->has_min_limit())
-			target.minimum = request->min_limit();
-		if (request->has_max_limit())
-			target.maximum = request->max_limit();
-	}
-	if (target.limited)
-	{
-		if (grpc::Status status = CheckMateLimits(target.type, target.minimum, target.maximum,
-				target.type == swMateANGLE ? target.angle : target.distance); !status.ok())
-			return grpc::Status(status.error_code(), status.error_message() +
-				(request->has_distance() || request->has_angle() ? "" : " -- give a value in the range too"));
-	}
-	if (entityCount == 2)
-	{
-		target.refs.assign(2, MateRef());
-		target.newRefs = true;
-		for (int i = 0; i < 2; ++i)
+		// What it should become: the current mate with the request's changes.
+		MateSettings target = before;
+		if (setType)
+			target.type = newType;
+		if (request->alignment() != sld_mcp::v1::MATE_ALIGNMENT_UNSPECIFIED)
+			target.alignment = ToSwMateAlign(request->alignment());
+		if (request->has_flip())
+			target.flip = request->flip();
+		if (request->has_distance())
 		{
-			grpc::Status status =
-				ResolveMateRef(ext, assembly, ids, request->entity_persist_ids(i), target.type, target.refs[i]);
+			if (target.type != swMateDISTANCE)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "only distance mates take a distance");
+			target.distance = request->distance();
+		}
+		else if (target.type == swMateDISTANCE && before.type != swMateDISTANCE)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give the distance for a distance mate");
+		if (request->has_angle())
+		{
+			if (target.type != swMateANGLE)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "only angle mates take an angle");
+			target.angle = request->angle();
+		}
+		else if (target.type == swMateANGLE && before.type != swMateANGLE)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give the angle for an angle mate");
+		if (request->has_lock_rotation())
+		{
+			if (target.type != swMateCONCENTRIC)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "lock rotation only applies to concentric mates");
+			target.lockRotation = request->lock_rotation();
+		}
+		// Limits: kept with the type (a distance range means nothing to an angle
+		// mate), set or removed as asked; the value must lie in them.
+		if (target.type != before.type)
+			target.limited = false;
+		if (request->remove_limits())
+		{
+			if (!before.limited)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "\"" + name + "\" has no limits to remove");
+			target.limited = false;
+		}
+		if (setLimits)
+		{
+			if (!target.limited && !(request->has_min_limit() && request->has_max_limit()))
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"\"" + name + "\" has no limits yet -- give both the minimum and the maximum");
+			target.limited = true;
+			if (request->has_min_limit())
+				target.minimum = request->min_limit();
+			if (request->has_max_limit())
+				target.maximum = request->max_limit();
+		}
+		if (target.limited)
+		{
+			if (grpc::Status status = CheckMateLimits(target.type, target.minimum, target.maximum,
+					target.type == swMateANGLE ? target.angle : target.distance); !status.ok())
+				return grpc::Status(status.error_code(), status.error_message() +
+					(request->has_distance() || request->has_angle() ? "" : " -- give a value in the range too"));
+		}
+		if (entityCount == 2)
+		{
+			target.refs.assign(2, MateRef());
+			target.newRefs = true;
+			for (int i = 0; i < 2; ++i)
+			{
+				grpc::Status status =
+					ResolveMateRef(ext, assembly, ids, request->entity_persist_ids(i), target.type, target.refs[i]);
+				if (!status.ok())
+					return grpc::Status(status.error_code(),
+						"entity " + std::to_string(i + 1) + ": " + status.error_message());
+			}
+			const std::string a = ids.Get(target.refs[0].component), b = ids.Get(target.refs[1].component);
+			if (!a.empty() && a == b)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"both entities are on \"" + ComponentName(target.refs[0].component) + "\" -- a mate joins two "
+					"different components");
+		}
+		else
+		{
+			if (before.refs.size() != 2)
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+					"SolidWorks didn't hand out \"" + name + "\"'s mated entities (a lost reference? see "
+					"diagnose_model) -- give the two entities to mate");
+			const bool lockNow = before.type == swMateLOCK, lockAfter = target.type == swMateLOCK;
+			if (lockAfter && !lockNow)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"a lock mate takes two components -- give them as the entities");
+			if (lockNow && !lockAfter)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"\"" + name + "\" mates two whole components -- give the two faces/edges/planes to mate as "
+					"the entities");
+		}
+
+		const auto errorsBefore = FeatureErrors(tree);
+		PreferenceToggles toggles(swApp);
+		toggles.Set(swShowErrorsEveryRebuild, false);
+		VARIANT_BOOL rebuilt = VARIANT_FALSE;
+
+		if (target.type != before.type)
+		{
+			// A new type is a new mate (SolidWorks' own EditMate4 replaces the
+			// mate too, and names it after the new type -- seen in SOLIDWORKS
+			// 2026). Made all or nothing: the old mate is suppressed so it can't
+			// conflict, the new one added, and only then the old one deleted.
+			if (!SetSuppressed(feature, true))
+				return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks wouldn't suppress \"" + name + "\"");
+			ATL::CComPtr<IFeature> created;
+			grpc::Status status = CreateMate(doc, assembly, target, created);
 			if (!status.ok())
-				return grpc::Status(status.error_code(),
-					"entity " + std::to_string(i + 1) + ": " + status.error_message());
-		}
-		const std::string a = ids.Get(target.refs[0].component), b = ids.Get(target.refs[1].component);
-		if (!a.empty() && a == b)
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				"both entities are on \"" + ComponentName(target.refs[0].component) + "\" -- a mate joins two "
-				"different components");
-	}
-	else
-	{
-		if (before.refs.size() != 2)
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				"SolidWorks didn't hand out \"" + name + "\"'s mated entities (a lost reference? see "
-				"diagnose_model) -- give the two entities to mate");
-		const bool lockNow = before.type == swMateLOCK, lockAfter = target.type == swMateLOCK;
-		if (lockAfter && !lockNow)
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				"a lock mate takes two components -- give them as the entities");
-		if (lockNow && !lockAfter)
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				"\"" + name + "\" mates two whole components -- give the two faces/edges/planes to mate as "
-				"the entities");
-	}
-
-	const auto errorsBefore = FeatureErrors(tree);
-	PreferenceToggles toggles(swApp);
-	toggles.Set(swShowErrorsEveryRebuild, false);
-	VARIANT_BOOL rebuilt = VARIANT_FALSE;
-
-	if (target.type != before.type)
-	{
-		// A new type is a new mate (SolidWorks' own EditMate4 replaces the
-		// mate too, and names it after the new type -- seen in SOLIDWORKS
-		// 2026). Made all or nothing: the old mate is suppressed so it can't
-		// conflict, the new one added, and only then the old one deleted.
-		if (!SetSuppressed(feature, true))
-			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks wouldn't suppress \"" + name + "\"");
-		ATL::CComPtr<IFeature> created;
-		grpc::Status status = CreateMate(doc, assembly, target, created);
-		if (!status.ok())
-		{
-			SetSuppressed(feature, false);
+			{
+				SetSuppressed(feature, false);
+				doc->EditRebuild3(&rebuilt);
+				return grpc::Status(status.error_code(), "\"" + name + "\" is unchanged: " + status.error_message());
+			}
+			doc->ClearSelection2(VARIANT_TRUE);
+			VARIANT_BOOL selected = VARIANT_FALSE, deleted = VARIANT_FALSE;
+			if (SUCCEEDED(feature->Select2(VARIANT_FALSE, 0, &selected)) && selected)
+				ext->DeleteSelection2(0, &deleted);
+			doc->ClearSelection2(VARIANT_TRUE);
+			feature = created;
 			doc->EditRebuild3(&rebuilt);
-			return grpc::Status(status.error_code(), "\"" + name + "\" is unchanged: " + status.error_message());
 		}
-		doc->ClearSelection2(VARIANT_TRUE);
-		VARIANT_BOOL selected = VARIANT_FALSE, deleted = VARIANT_FALSE;
-		if (SUCCEEDED(feature->Select2(VARIANT_FALSE, 0, &selected)) && selected)
-			ext->DeleteSelection2(0, &deleted);
-		doc->ClearSelection2(VARIANT_TRUE);
-		feature = created;
-		doc->EditRebuild3(&rebuilt);
-	}
-	else
-	{
-		// Puts the old settings back, then rebuilds.
-		auto restore = [&]() {
-			bool ignored = false;
-			MateSettings old = before;
-			old.newRefs = target.newRefs;
-			ModifyMate(doc, feature, old, ignored);
-			doc->EditRebuild3(&rebuilt);
-		};
-
-		bool modified = false;
-		if (grpc::Status status = ModifyMate(doc, feature, target, modified); !status.ok())
-			return status;
-		if (!modified)
+		else
 		{
-			restore();
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				"SolidWorks rejected that change to \"" + name + "\", so it's unchanged -- e.g. entities this "
-				"kind of mate can't take, or a change that conflicts with other mates");
-		}
-		HRESULT hr = doc->EditRebuild3(&rebuilt);
-		if (FAILED(hr))
-			return ComError("IModelDoc2::EditRebuild3", hr);
+			// Puts the old settings back, then rebuilds.
+			auto restore = [&]() {
+				bool ignored = false;
+				MateSettings old = before;
+				old.newRefs = target.newRefs;
+				ModifyMate(doc, feature, old, ignored);
+				doc->EditRebuild3(&rebuilt);
+			};
 
-		VARIANT_BOOL warning = VARIANT_FALSE;
-		long errorCode = swFeatureErrorNone;
-		feature->GetErrorCode2(&warning, &errorCode);
-		if (errorCode != swFeatureErrorNone && !warning)
-		{
-			restore();
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				"with that change SolidWorks couldn't solve \"" + name + "\" -- " + MateErrorText(errorCode) +
-				" -- so it was put back");
+			bool modified = false;
+			if (grpc::Status status = ModifyMate(doc, feature, target, modified); !status.ok())
+				return status;
+			if (!modified)
+			{
+				restore();
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+					"SolidWorks rejected that change to \"" + name + "\", so it's unchanged -- e.g. entities this "
+					"kind of mate can't take, or a change that conflicts with other mates");
+			}
+			HRESULT hr = doc->EditRebuild3(&rebuilt);
+			if (FAILED(hr))
+				return ComError("IModelDoc2::EditRebuild3", hr);
+
+			VARIANT_BOOL warning = VARIANT_FALSE;
+			long errorCode = swFeatureErrorNone;
+			feature->GetErrorCode2(&warning, &errorCode);
+			if (errorCode != swFeatureErrorNone && !warning)
+			{
+				restore();
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+					"with that change SolidWorks couldn't solve \"" + name + "\" -- " + MateErrorText(errorCode) +
+					" -- so it was put back");
+			}
+
+			// Check that the definition took (a property the mate type doesn't
+			// have is skipped silently).
+			MateSettings after;
+			if (grpc::Status status = ReadMate(assembly, ids, feature, after); !status.ok())
+				return status;
+			std::string mismatch;
+			if (target.type == swMateDISTANCE && std::abs(after.distance - target.distance) > 1e-9)
+				mismatch = "distance " + std::to_string(after.distance * 1000.0) + " mm";
+			else if (target.type == swMateANGLE && std::abs(after.angle - target.angle) > 1e-7)
+				mismatch = "angle " + std::to_string(Degrees(after.angle)) + " deg";
+			else if (after.limited != target.limited ||
+				(target.limited && (std::abs(after.minimum - target.minimum) > 1e-9 ||
+					std::abs(after.maximum - target.maximum) > 1e-9)))
+				mismatch = after.limited ? "limits " + MateValueText(after.type, after.minimum) + " .. " +
+					MateValueText(after.type, after.maximum) : std::string("no limits");
+			else if (request->alignment() != sld_mcp::v1::MATE_ALIGNMENT_UNSPECIFIED &&
+				request->alignment() != sld_mcp::v1::MATE_ALIGNMENT_CLOSEST && after.alignment != target.alignment)
+				mismatch = "its alignment unchanged";
+			if (!mismatch.empty())
+			{
+				restore();
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+					"SolidWorks accepted the change but \"" + name + "\" came out with " + mismatch +
+					", so it was put back");
+			}
 		}
 
-		// Check that the definition took (a property the mate type doesn't
-		// have is skipped silently).
-		MateSettings after;
-		if (grpc::Status status = ReadMate(assembly, ids, feature, after); !status.ok())
-			return status;
-		std::string mismatch;
-		if (target.type == swMateDISTANCE && std::abs(after.distance - target.distance) > 1e-9)
-			mismatch = "distance " + std::to_string(after.distance * 1000.0) + " mm";
-		else if (target.type == swMateANGLE && std::abs(after.angle - target.angle) > 1e-7)
-			mismatch = "angle " + std::to_string(Degrees(after.angle)) + " deg";
-		else if (after.limited != target.limited ||
-			(target.limited && (std::abs(after.minimum - target.minimum) > 1e-9 ||
-				std::abs(after.maximum - target.maximum) > 1e-9)))
-			mismatch = after.limited ? "limits " + MateValueText(after.type, after.minimum) + " .. " +
-				MateValueText(after.type, after.maximum) : std::string("no limits");
-		else if (request->alignment() != sld_mcp::v1::MATE_ALIGNMENT_UNSPECIFIED &&
-			request->alignment() != sld_mcp::v1::MATE_ALIGNMENT_CLOSEST && after.alignment != target.alignment)
-			mismatch = "its alignment unchanged";
-		if (!mismatch.empty())
-		{
-			restore();
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				"SolidWorks accepted the change but \"" + name + "\" came out with " + mismatch +
-				", so it was put back");
-		}
-	}
-
-	DescribeMate(feature, ids, response->mutable_after());
-	DiagnoseMate(feature, ids, response->mutable_entities());
-	ComponentList components(ids, math, response->mutable_components());
-	for (const auto& ref : target.refs)
-		components.Add(ref.component);
-	AddNewErrors(errorsBefore, FeatureErrors(FeatureTree(doc)), response->mutable_new_errors());
-	DropProblem(response->mutable_new_errors(), FeatureName(feature));  // its own state is in `after`
-	doc->GraphicsRedraw2();
-	return grpc::Status::OK;
+		DescribeMate(feature, ids, response->mutable_after());
+		DiagnoseMate(feature, ids, response->mutable_entities());
+		ComponentList components(ids, math, response->mutable_components());
+		for (const auto& ref : target.refs)
+			components.Add(ref.component);
+		AddNewErrors(errorsBefore, FeatureErrors(FeatureTree(doc)), response->mutable_new_errors());
+		DropProblem(response->mutable_new_errors(), FeatureName(feature));  // its own state is in `after`
+		doc->GraphicsRedraw2();
+		return grpc::Status::OK;
+	});
 }

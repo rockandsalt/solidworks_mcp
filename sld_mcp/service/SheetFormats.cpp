@@ -147,202 +147,197 @@ namespace
 	}
 }
 
-grpc::Status SolidWorksService::DrawSheetFormat(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::DrawSheetFormat(grpc::ServerContext* context,
 	const sld_mcp::v1::DrawSheetFormatRequest* request,
 	sld_mcp::v1::DrawSheetFormatResponse* response)
 {
 	if (grpc::Status status = ValidateFormat(*request); !status.ok())
 		return status;
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDoc2> doc;
-	ATL::CComQIPtr<IDrawingDoc> drawing;
-	if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	ATL::CComQIPtr<IMathUtility> math;
-	if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
-		return status;
-
-	const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
-	const std::string original = ActiveSheetName(drawing);
-	const std::string& wanted = request->sheet_name().empty() ? original : request->sheet_name();
-	const DrawingSheet* sheet = FindSheet(sheets, wanted);
-	if (!sheet)
-		return grpc::Status(grpc::StatusCode::NOT_FOUND,
-			"the drawing has no sheet named \"" + wanted + "\" (its sheets: " + SheetList(sheets) + ")");
-	const std::string sheetName = sheet->name;
-	const std::string& layer = request->layer();
-
-	ATL::CComPtr<IDispatch> layerMgrDisp;
-	ATL::CComQIPtr<ILayerMgr> layers;
-	if (SUCCEEDED(doc->GetLayerManager(&layerMgrDisp)) && layerMgrDisp)
-		layers = layerMgrDisp;
-	if (!layers)
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks gave no layer manager");
-
-	std::vector<ATL::CComPtr<ISketchSegment>> addedLines;
-	std::vector<ATL::CComPtr<IAnnotation>> addedNotes;
-	{
-		SheetActivation activation(drawing);
-		if (!activation.Show(sheetName))
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "couldn't switch to sheet " + sheetName);
-
-		// The layer, made if missing; AddLayer makes the new layer the
-		// current one, which is put back after.
-		ATL::CComBSTR current;
-		layers->GetCurrentLayer(&current);
-		ATL::CComPtr<IDispatch> existing;
-		if (FAILED(layers->GetLayer(FromUtf8(layer), &existing)) || !existing)
-		{
-			int added = 0;
-			if (FAILED(layers->AddLayer(FromUtf8(layer), ATL::CComBSTR(L""), request->layer_color(), swLineCONTINUOUS,
-				request->layer_weight(), &added)) || !added)
-				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "SolidWorks wouldn't make a layer \"" + layer + "\"");
-			response->set_layer_created(true);
-			int ok = 0;
-			layers->SetCurrentLayer(current, &ok);
-		}
-
-		EditModeScope editMode(drawing);
-		editMode.Set(true);
-
-		if (request->clear())
-		{
-			std::vector<ATL::CComPtr<ISketchSegment>> segments;
-			for (const auto& segment : FormatSegments(sheet->sheet))
-			{
-				ATL::CComBSTR l;
-				if (SUCCEEDED(segment->get_Layer(&l)) && ToUtf8(l) == layer)
-					segments.push_back(segment);
-			}
-			std::vector<ATL::CComPtr<IAnnotation>> notes;
-			for (const auto& annotation : FormatAnnotations(*sheet))
-				if (LayerOf(annotation) == layer)
-					notes.push_back(annotation);
-			if (!DeleteItems(doc, ext, segments, notes))
-				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't delete what layer " + layer +
-					" had in " + sheetName + "'s format");
-			response->set_lines_deleted(static_cast<int32_t>(segments.size()));
-			response->set_notes_deleted(static_cast<int32_t>(notes.size()));
-		}
-
-		grpc::Status status = grpc::Status::OK;
-		ATL::CComPtr<ISketchManager> sketches;
-		if (FAILED(doc->get_SketchManager(&sketches)) || !sketches)
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks gave no sketch manager");
-		// Straight into the database: no snapping to (or relations with) what
-		// is already drawn.
-		sketches->put_AddToDB(VARIANT_TRUE);
-		sketches->put_DisplayWhenAdded(VARIANT_FALSE);
-		doc->ClearSelection2(VARIANT_TRUE);
-		for (int i = 0; i < request->lines_size() && status.ok(); ++i)
-		{
-			const auto& l = request->lines(i);
-			ATL::CComPtr<ISketchSegment> segment;
-			if (FAILED(sketches->CreateLine(l.start().x(), l.start().y(), 0.0, l.end().x(), l.end().y(), 0.0, &segment)) || !segment)
-			{
-				status = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't draw line " + std::to_string(i + 1));
-				break;
-			}
-			addedLines.push_back(segment);
-			segment->put_Layer(FromUtf8(layer));
-		}
-		sketches->put_AddToDB(VARIANT_FALSE);
-		sketches->put_DisplayWhenAdded(VARIANT_TRUE);
-		doc->ClearSelection2(VARIANT_TRUE);
-
-		std::vector<IDispatch*> fields;
-		std::vector<ATL::CComPtr<INote>> keep;
-		for (int i = 0; i < request->notes_size() && status.ok(); ++i)
-		{
-			const auto& n = request->notes(i);
-			const std::string which = "note " + std::to_string(i + 1);
-			// While the format is being edited, a new note goes into it
-			// (nothing selected, or it'd get a leader).
-			doc->ClearSelection2(VARIANT_TRUE);
-			ATL::CComPtr<IDispatch> noteDisp;
-			ATL::CComQIPtr<INote> note;
-			if (SUCCEEDED(doc->InsertNote(FromUtf8(n.text()), &noteDisp)) && noteDisp)
-				note = noteDisp;
-			ATL::CComPtr<IDispatch> annotationDisp;
-			ATL::CComQIPtr<IAnnotation> annotation;
-			if (note && SUCCEEDED(note->GetAnnotation(&annotationDisp)) && annotationDisp)
-				annotation = annotationDisp;
-			if (!annotation)
-			{
-				status = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't add " + which);
-				break;
-			}
-			addedNotes.push_back(ATL::CComPtr<IAnnotation>(annotation));
-			if (AnnotationOwnerOf(annotation, nullptr) != sld_mcp::v1::ANNOTATION_OWNER_SHEET_FORMAT)
-			{
-				status = grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks put " + which + " outside the sheet format");
-				break;
-			}
-			std::string problem;
-			if (!StyleNote(note, annotation, n, layer, problem))
-			{
-				status = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, which + ": " + problem);
-				break;
-			}
-			keep.push_back(ATL::CComPtr<INote>(note));
-			if (n.field())
-				fields.push_back(noteDisp);
-		}
-		doc->ClearSelection2(VARIANT_TRUE);
-		if (!status.ok())
-		{
-			DeleteItems(doc, ext, addedLines, addedNotes);
-			{ VARIANT_BOOL rebuilt = VARIANT_FALSE; doc->ForceRebuild3(VARIANT_FALSE, &rebuilt); }
+	return m_executor.Execute(context, "DrawSheetFormat", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		ATL::CComQIPtr<IDrawingDoc> drawing;
+		if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
 			return status;
-		}
-		response->set_lines_added(static_cast<int32_t>(addedLines.size()));
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		ATL::CComQIPtr<IMathUtility> math;
+		if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
+			return status;
 
-		// Title block fields: best effort, the drawing is fine without them.
-		if (!fields.empty())
+		const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
+		const std::string original = ActiveSheetName(drawing);
+		const std::string& wanted = request->sheet_name().empty() ? original : request->sheet_name();
+		const DrawingSheet* sheet = FindSheet(sheets, wanted);
+		if (!sheet)
+			return grpc::Status(grpc::StatusCode::NOT_FOUND,
+				"the drawing has no sheet named \"" + wanted + "\" (its sheets: " + SheetList(sheets) + ")");
+		const std::string sheetName = sheet->name;
+		const std::string& layer = request->layer();
+
+		ATL::CComPtr<IDispatch> layerMgrDisp;
+		ATL::CComQIPtr<ILayerMgr> layers;
+		if (SUCCEEDED(doc->GetLayerManager(&layerMgrDisp)) && layerMgrDisp)
+			layers = layerMgrDisp;
+		if (!layers)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks gave no layer manager");
+
+		std::vector<ATL::CComPtr<ISketchSegment>> addedLines;
+		std::vector<ATL::CComPtr<IAnnotation>> addedNotes;
 		{
-			ATL::CComPtr<ITitleBlock> block;
-			if (SUCCEEDED(sheet->sheet->get_TitleBlock(&block)) && block)
-				response->set_fields_problem("the sheet format already has title block fields (SolidWorks keeps one set; "
-					"define them again in Edit Sheet Format > Title Block Fields)");
-			else
+			SheetActivation activation(drawing);
+			if (!activation.Show(sheetName))
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "couldn't switch to sheet " + sheetName);
+
+			// The layer, made if missing; AddLayer makes the new layer the
+			// current one, which is put back after.
+			ATL::CComBSTR current;
+			layers->GetCurrentLayer(&current);
+			ATL::CComPtr<IDispatch> existing;
+			if (FAILED(layers->GetLayer(FromUtf8(layer), &existing)) || !existing)
 			{
-				block.Release();
-				HRESULT hr = sheet->sheet->InsertTitleBlock(comvariant::FromDispatches(fields), &block);
-				long count = 0;
-				if (SUCCEEDED(hr) && block && SUCCEEDED(block->GetNoteCount(&count)) && count > 0)
-					response->set_fields_defined(static_cast<int32_t>(count));
+				int added = 0;
+				if (FAILED(layers->AddLayer(FromUtf8(layer), ATL::CComBSTR(L""), request->layer_color(), swLineCONTINUOUS,
+					request->layer_weight(), &added)) || !added)
+					return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "SolidWorks wouldn't make a layer \"" + layer + "\"");
+				response->set_layer_created(true);
+				int ok = 0;
+				layers->SetCurrentLayer(current, &ok);
+			}
+
+			EditModeScope editMode(drawing);
+			editMode.Set(true);
+
+			if (request->clear())
+			{
+				std::vector<ATL::CComPtr<ISketchSegment>> segments;
+				for (const auto& segment : FormatSegments(sheet->sheet))
+				{
+					ATL::CComBSTR l;
+					if (SUCCEEDED(segment->get_Layer(&l)) && ToUtf8(l) == layer)
+						segments.push_back(segment);
+				}
+				std::vector<ATL::CComPtr<IAnnotation>> notes;
+				for (const auto& annotation : FormatAnnotations(*sheet))
+					if (LayerOf(annotation) == layer)
+						notes.push_back(annotation);
+				if (!DeleteItems(doc, ext, segments, notes))
+					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't delete what layer " + layer +
+						" had in " + sheetName + "'s format");
+				response->set_lines_deleted(static_cast<int32_t>(segments.size()));
+				response->set_notes_deleted(static_cast<int32_t>(notes.size()));
+			}
+
+			grpc::Status status = grpc::Status::OK;
+			ATL::CComPtr<ISketchManager> sketches;
+			if (FAILED(doc->get_SketchManager(&sketches)) || !sketches)
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks gave no sketch manager");
+			// Straight into the database: no snapping to (or relations with) what
+			// is already drawn.
+			sketches->put_AddToDB(VARIANT_TRUE);
+			sketches->put_DisplayWhenAdded(VARIANT_FALSE);
+			doc->ClearSelection2(VARIANT_TRUE);
+			for (int i = 0; i < request->lines_size() && status.ok(); ++i)
+			{
+				const auto& l = request->lines(i);
+				ATL::CComPtr<ISketchSegment> segment;
+				if (FAILED(sketches->CreateLine(l.start().x(), l.start().y(), 0.0, l.end().x(), l.end().y(), 0.0, &segment)) || !segment)
+				{
+					status = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't draw line " + std::to_string(i + 1));
+					break;
+				}
+				addedLines.push_back(segment);
+				segment->put_Layer(FromUtf8(layer));
+			}
+			sketches->put_AddToDB(VARIANT_FALSE);
+			sketches->put_DisplayWhenAdded(VARIANT_TRUE);
+			doc->ClearSelection2(VARIANT_TRUE);
+
+			std::vector<IDispatch*> fields;
+			std::vector<ATL::CComPtr<INote>> keep;
+			for (int i = 0; i < request->notes_size() && status.ok(); ++i)
+			{
+				const auto& n = request->notes(i);
+				const std::string which = "note " + std::to_string(i + 1);
+				// While the format is being edited, a new note goes into it
+				// (nothing selected, or it'd get a leader).
+				doc->ClearSelection2(VARIANT_TRUE);
+				ATL::CComPtr<IDispatch> noteDisp;
+				ATL::CComQIPtr<INote> note;
+				if (SUCCEEDED(doc->InsertNote(FromUtf8(n.text()), &noteDisp)) && noteDisp)
+					note = noteDisp;
+				ATL::CComPtr<IDispatch> annotationDisp;
+				ATL::CComQIPtr<IAnnotation> annotation;
+				if (note && SUCCEEDED(note->GetAnnotation(&annotationDisp)) && annotationDisp)
+					annotation = annotationDisp;
+				if (!annotation)
+				{
+					status = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't add " + which);
+					break;
+				}
+				addedNotes.push_back(ATL::CComPtr<IAnnotation>(annotation));
+				if (AnnotationOwnerOf(annotation, nullptr) != sld_mcp::v1::ANNOTATION_OWNER_SHEET_FORMAT)
+				{
+					status = grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks put " + which + " outside the sheet format");
+					break;
+				}
+				std::string problem;
+				if (!StyleNote(note, annotation, n, layer, problem))
+				{
+					status = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, which + ": " + problem);
+					break;
+				}
+				keep.push_back(ATL::CComPtr<INote>(note));
+				if (n.field())
+					fields.push_back(noteDisp);
+			}
+			doc->ClearSelection2(VARIANT_TRUE);
+			if (!status.ok())
+			{
+				DeleteItems(doc, ext, addedLines, addedNotes);
+				{ VARIANT_BOOL rebuilt = VARIANT_FALSE; doc->ForceRebuild3(VARIANT_FALSE, &rebuilt); }
+				return status;
+			}
+			response->set_lines_added(static_cast<int32_t>(addedLines.size()));
+
+			// Title block fields: best effort, the drawing is fine without them.
+			if (!fields.empty())
+			{
+				ATL::CComPtr<ITitleBlock> block;
+				if (SUCCEEDED(sheet->sheet->get_TitleBlock(&block)) && block)
+					response->set_fields_problem("the sheet format already has title block fields (SolidWorks keeps one set; "
+						"define them again in Edit Sheet Format > Title Block Fields)");
 				else
-					response->set_fields_problem("SolidWorks didn't make them title block fields (ISheet::InsertTitleBlock " +
-						std::string(SUCCEEDED(hr) ? "returned nothing" : "failed") + ")");
+				{
+					block.Release();
+					HRESULT hr = sheet->sheet->InsertTitleBlock(comvariant::FromDispatches(fields), &block);
+					long count = 0;
+					if (SUCCEEDED(hr) && block && SUCCEEDED(block->GetNoteCount(&count)) && count > 0)
+						response->set_fields_defined(static_cast<int32_t>(count));
+					else
+						response->set_fields_problem("SolidWorks didn't make them title block fields (ISheet::InsertTitleBlock " +
+							std::string(SUCCEEDED(hr) ? "returned nothing" : "failed") + ")");
+				}
 			}
 		}
-	}
-	// After editing the format, SolidWorks leaves the views out of the
-	// printed sheet until a rebuild (seen 2026-10-22).
-	{ VARIANT_BOOL rebuilt = VARIANT_FALSE; doc->ForceRebuild3(VARIANT_FALSE, &rebuilt); }
-	doc->GraphicsRedraw2();
+		// After editing the format, SolidWorks leaves the views out of the
+		// printed sheet until a rebuild (seen 2026-10-22).
+		{ VARIANT_BOOL rebuilt = VARIANT_FALSE; doc->ForceRebuild3(VARIANT_FALSE, &rebuilt); }
+		doc->GraphicsRedraw2();
 
-	PersistIds ids(ext);
-	for (const auto& annotation : addedNotes)
-		DescribeAnnotation(annotation, ids, nullptr, response->add_notes());
-	for (const auto& s : DrawingSheets(drawing))
-		if (s.name == sheetName)
-		{
-			DrawingBudget budget;
-			DescribeSheet(s, original, ext, math, {}, false, false, budget, response->mutable_sheet());
-			DescribeSheetLayout(s, response->mutable_sheet());
-		}
-	response->set_active_sheet(original);
-	return grpc::Status::OK;
+		PersistIds ids(ext);
+		for (const auto& annotation : addedNotes)
+			DescribeAnnotation(annotation, ids, nullptr, response->add_notes());
+		for (const auto& s : DrawingSheets(drawing))
+			if (s.name == sheetName)
+			{
+				DrawingBudget budget;
+				DescribeSheet(s, original, ext, math, {}, false, false, budget, response->mutable_sheet());
+				DescribeSheetLayout(s, response->mutable_sheet());
+			}
+		response->set_active_sheet(original);
+		return grpc::Status::OK;
+	});
 }

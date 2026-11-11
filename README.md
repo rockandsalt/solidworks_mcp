@@ -72,6 +72,54 @@ installed. For the installer you also need NSIS.
 .\build.ps1 -Target installer    # Release builds + setup .exe in installer\out
 ```
 
+Every CAD RPC runs through `CadExecutor`, which owns serialized admission,
+COM setup and teardown, cancellation translation, and lifecycle timing. Basic
+document queries share the same gate as geometry and edits. The Rust request
+interceptor supplies the 60 s deadline for every RPC, preserving explicit
+shorter deadlines.
+
+Expired queued requests never start CAD work. Inspections use `Cancellable`
+policy and call the transport-independent `RequestControl::Checkpoint()` in
+long traversals; cancelled reads cannot publish a successful partial result.
+Commands use `CompleteOperation`: once admitted, they finish their existing
+operation and cleanup even if the client stops waiting. Cancellation cannot
+interrupt an in-progress COM call or release its gate early. Consequently a
+timed-out command may still complete; do not automatically retry it.
+
+For a new RPC, validate arguments, then return `m_executor.Execute(...)` with
+the appropriate policy and a callback containing the CAD work. Keep COM objects
+inside that callback; handlers and geometry helpers must not acquire their own
+model lock, initialize COM, or retain a gRPC context. Lifecycle diagnostics go
+to `OutputDebugString` (debugger/DebugView): process/request IDs, method, phase,
+elapsed milliseconds, final status, and whether the deadline/cancellation was
+observed. A request without a finished event may still be executing inside COM.
+
+The execution regression checks coverage of all protocol operations, admission,
+inspection cancellation, edit completion, exception cleanup, and expired mesh,
+macro and document RPCs. It uses fake work/connections and the production RPC
+handlers, without SolidWorks running (installed C++ dependencies are required):
+
+```powershell
+.\build.ps1 -Target test -SwTypeLibDir 'C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS (2)'
+```
+
+The test target builds Release into a separate output directory and can run
+while SolidWorks is open. Omit `-SwTypeLibDir` to use the project's default
+type-library location. The C++ tests remain in `sld_mcp/tests/`; Python
+scenarios under `devloop/scenarios/` exercise a running SolidWorks instance.
+
+Opt-in cancellation checks against a running **rebuilt** add-in (no CAD edits):
+
+```powershell
+cargo test --manifest-path mcp_server/Cargo.toml expired_queued_macro_never_launches -- --ignored --nocapture
+cargo test --manifest-path mcp_server/Cargo.toml expired_mesh_releases_model_lock -- --ignored --nocapture
+```
+
+Run these sequentially with no other clients issuing requests. The second
+check needs an active detailed model whose mesh takes more than one second;
+it checks that geometry inspection works again after the mesh expires. Loading
+a rebuilt add-in requires restarting SolidWorks; preserve unsaved work first.
+
 ## License
 
 [AGPL-3.0](LICENSE)

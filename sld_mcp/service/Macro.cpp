@@ -8,30 +8,22 @@ grpc::Status SolidWorksService::RunMacro(grpc::ServerContext* context,
 	const sld_mcp::v1::RunMacroRequest* request,
 	sld_mcp::v1::RunMacroResponse* response)
 {
-	std::unique_lock<std::mutex> lock(m_editMutex, std::defer_lock);
-	if (grpc::Status status = LockForRequest(context, lock); !status.ok())
-		return status;
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "RunMacro", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		control.Checkpoint();
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-	if (grpc::Status status = CheckRequest(context); !status.ok())
-		return status;
-
-	// A .swb always starts at main, whatever the names passed here. Its false
-	// result comes with error 0 for a macro that doesn't compile, a missing file
-	// and a macro stopped by End (run a second time first!) alike (seen
-	// 2026-11-01), so the error isn't reported. Unloading lets the caller delete
-	// the file.
-	long error = 0;
-	VARIANT_BOOL ran = VARIANT_FALSE;
-	const HRESULT hr = swApp->RunMacro2(FromUtf8(request->path()), ATL::CComBSTR(L"macro"), ATL::CComBSTR(L"main"),
-		swRunMacroUnloadAfterRun, &error, &ran);
-	if (FAILED(hr))
-		return ComError("ISldWorks::RunMacro2", hr);
-	response->set_ran(ran != VARIANT_FALSE);
-	return grpc::Status::OK;
+		// A .swb always starts at main, whatever the names passed here. Its false
+		// result comes with error 0 for a macro that doesn't compile, a missing file
+		// and a macro stopped by End (run a second time first!) alike (seen
+		// 2026-11-01), so the error isn't reported. Unloading lets the caller delete
+		// the file.
+		long error = 0;
+		VARIANT_BOOL ran = VARIANT_FALSE;
+		const HRESULT hr = swApp->RunMacro2(FromUtf8(request->path()), ATL::CComBSTR(L"macro"), ATL::CComBSTR(L"main"),
+			swRunMacroUnloadAfterRun, &error, &ran);
+		if (FAILED(hr))
+			return ComError("ISldWorks::RunMacro2", hr);
+		response->set_ran(ran != VARIANT_FALSE);
+		return grpc::Status::OK;
+	});
 }

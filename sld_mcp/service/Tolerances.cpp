@@ -197,7 +197,7 @@ namespace
 	}
 }
 
-grpc::Status SolidWorksService::SetDimensionTolerance(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::SetDimensionTolerance(grpc::ServerContext* context,
 	const sld_mcp::v1::SetDimensionToleranceRequest* request,
 	sld_mcp::v1::SetDimensionToleranceResponse* response)
 {
@@ -217,117 +217,111 @@ grpc::Status SolidWorksService::SetDimensionTolerance(grpc::ServerContext* /*con
 		(request->tolerance_precision() < -3 || request->tolerance_precision() == -1 || request->tolerance_precision() > 8))
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "tolerance_precision must be -3, -2 or 0..8");
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "SetDimensionTolerance", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		HRESULT hr = swApp->get_IActiveDoc2(&doc);
+		if (FAILED(hr))
+			return ComError("ISldWorks::IActiveDoc2", hr);
+		if (!doc)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "no document is open in SolidWorks");
+		long docType = swDocNONE;
+		hr = doc->GetType(&docType);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::GetType", hr);
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
+		NamedDimension found;
+		if (grpc::Status status = FindNamedDimension(doc, docType, request->name(), found); !status.ok())
+			return status;
 
-	ATL::CComPtr<IModelDoc2> doc;
-	HRESULT hr = swApp->get_IActiveDoc2(&doc);
-	if (FAILED(hr))
-		return ComError("ISldWorks::IActiveDoc2", hr);
-	if (!doc)
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "no document is open in SolidWorks");
-	long docType = swDocNONE;
-	hr = doc->GetType(&docType);
-	if (FAILED(hr))
-		return ComError("IModelDoc2::GetType", hr);
-
-	NamedDimension found;
-	if (grpc::Status status = FindNamedDimension(doc, docType, request->name(), found); !status.ok())
-		return status;
-
-	long paramType = swDimensionParamTypeUnknown;
-	found.dim->GetType(&paramType);
-	if (ToleranceHasValues(type))
-	{
-		if (paramType == swDimensionParamTypeDoubleAngular && !request->angle())
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				"\"" + request->name() + "\" is an angle; give the deviations in degrees");
-		if (paramType == swDimensionParamTypeDoubleLinear && request->angle())
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				"\"" + request->name() + "\" is a length; give the deviations in millimeters");
-	}
-	const bool precision = request->has_value_precision() || request->has_tolerance_precision();
-	if (precision && !found.display)
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			"couldn't find where \"" + request->name() + "\" is displayed, so its decimal places can't be set");
-
-	ATL::CComPtr<IDimensionTolerance> tolerance;
-	hr = found.dim->get_Tolerance(&tolerance);
-	if (FAILED(hr))
-		return ComError("IDimension::Tolerance", hr);
-	if (!tolerance)
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			"SolidWorks gives no tolerance for \"" + request->name() + "\"");
-
-	const ToleranceState old = ReadTolerance(tolerance);
-	ToleranceState wanted;
-	wanted.type = type;
-	wanted.max = request->upper();
-	wanted.min = request->lower();
-	wanted.holeFit = FromUtf8(request->hole_fit());
-	wanted.shaftFit = FromUtf8(request->shaft_fit());
-	if (!WriteTolerance(tolerance, wanted))
-	{
-		WriteTolerance(tolerance, old);
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			"SolidWorks refused that tolerance for \"" + request->name() + "\" (an unknown fit class, or a "
-			"dimension that can't be toleranced?) -- the old tolerance was put back");
-	}
-
-	if (precision)
-	{
-		long oldValue = swDoNotChangePrecisionSetting, oldTolerance = swDoNotChangePrecisionSetting;
-		found.display->GetPrimaryPrecision2(&oldValue);
-		found.display->GetPrimaryTolPrecision2(&oldTolerance);
-		const long value = request->has_value_precision() ? request->value_precision() : swDoNotChangePrecisionSetting;
-		const long tol = request->has_tolerance_precision() ? request->tolerance_precision() : swDoNotChangePrecisionSetting;
-		long result = 0;
-		hr = found.display->SetPrecision3(value, swDoNotChangePrecisionSetting, tol, swDoNotChangePrecisionSetting, &result);
-		long nowValue = -1, nowTolerance = -1;
-		found.display->GetPrimaryPrecision2(&nowValue);
-		found.display->GetPrimaryTolPrecision2(&nowTolerance);
-		const bool valueOk = value < 0 || nowValue == value;
-		const bool tolOk = tol < 0 || nowTolerance == tol;
-		if (FAILED(hr) || !valueOk || !tolOk)
+		long paramType = swDimensionParamTypeUnknown;
+		found.dim->GetType(&paramType);
+		if (ToleranceHasValues(type))
 		{
-			found.display->SetPrecision3(oldValue, swDoNotChangePrecisionSetting, oldTolerance,
-				swDoNotChangePrecisionSetting, &result);
+			if (paramType == swDimensionParamTypeDoubleAngular && !request->angle())
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"\"" + request->name() + "\" is an angle; give the deviations in degrees");
+			if (paramType == swDimensionParamTypeDoubleLinear && request->angle())
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"\"" + request->name() + "\" is a length; give the deviations in millimeters");
+		}
+		const bool precision = request->has_value_precision() || request->has_tolerance_precision();
+		if (precision && !found.display)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"couldn't find where \"" + request->name() + "\" is displayed, so its decimal places can't be set");
+
+		ATL::CComPtr<IDimensionTolerance> tolerance;
+		hr = found.dim->get_Tolerance(&tolerance);
+		if (FAILED(hr))
+			return ComError("IDimension::Tolerance", hr);
+		if (!tolerance)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"SolidWorks gives no tolerance for \"" + request->name() + "\"");
+
+		const ToleranceState old = ReadTolerance(tolerance);
+		ToleranceState wanted;
+		wanted.type = type;
+		wanted.max = request->upper();
+		wanted.min = request->lower();
+		wanted.holeFit = FromUtf8(request->hole_fit());
+		wanted.shaftFit = FromUtf8(request->shaft_fit());
+		if (!WriteTolerance(tolerance, wanted))
+		{
 			WriteTolerance(tolerance, old);
 			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				"SolidWorks didn't take those decimal places for \"" + request->name() + "\" (SetPrecision3 -> " +
-				std::to_string(result) + ") -- the old tolerance was put back");
+				"SolidWorks refused that tolerance for \"" + request->name() + "\" (an unknown fit class, or a "
+				"dimension that can't be toleranced?) -- the old tolerance was put back");
 		}
-	}
 
-	doc->SetSaveFlag();
-	doc->GraphicsRedraw2();
+		if (precision)
+		{
+			long oldValue = swDoNotChangePrecisionSetting, oldTolerance = swDoNotChangePrecisionSetting;
+			found.display->GetPrimaryPrecision2(&oldValue);
+			found.display->GetPrimaryTolPrecision2(&oldTolerance);
+			const long value = request->has_value_precision() ? request->value_precision() : swDoNotChangePrecisionSetting;
+			const long tol = request->has_tolerance_precision() ? request->tolerance_precision() : swDoNotChangePrecisionSetting;
+			long result = 0;
+			hr = found.display->SetPrecision3(value, swDoNotChangePrecisionSetting, tol, swDoNotChangePrecisionSetting, &result);
+			long nowValue = -1, nowTolerance = -1;
+			found.display->GetPrimaryPrecision2(&nowValue);
+			found.display->GetPrimaryTolPrecision2(&nowTolerance);
+			const bool valueOk = value < 0 || nowValue == value;
+			const bool tolOk = tol < 0 || nowTolerance == tol;
+			if (FAILED(hr) || !valueOk || !tolOk)
+			{
+				found.display->SetPrecision3(oldValue, swDoNotChangePrecisionSetting, oldTolerance,
+					swDoNotChangePrecisionSetting, &result);
+				WriteTolerance(tolerance, old);
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+					"SolidWorks didn't take those decimal places for \"" + request->name() + "\" (SetPrecision3 -> " +
+					std::to_string(result) + ") -- the old tolerance was put back");
+			}
+		}
 
-	sld_mcp::v1::AnnotationDimension* out = response->mutable_dimension();
-	if (found.display)
-		DescribeAnnotationDimension(found.display, out);
-	else
-	{
-		DescribeDimensionValue(found.dim, out->mutable_dimension());
-		out->mutable_dimension()->set_type(paramType == swDimensionParamTypeDoubleAngular
-			? sld_mcp::v1::DIMENSION_TYPE_ANGULAR : sld_mcp::v1::DIMENSION_TYPE_LINEAR);
-		DescribeModelDimension(found.dim, out);
-	}
-	response->set_view_name(found.viewName);
-	for (const auto& view : found.otherViews)
-		response->add_other_views(view);
-	long nowValue = -1, nowTolerance = -1;
-	if (found.display)
-	{
-		found.display->GetPrimaryPrecision2(&nowValue);
-		found.display->GetPrimaryTolPrecision2(&nowTolerance);
-	}
-	response->set_value_precision(static_cast<int32_t>(nowValue));
-	response->set_tolerance_precision(static_cast<int32_t>(nowTolerance));
-	return grpc::Status::OK;
+		doc->SetSaveFlag();
+		doc->GraphicsRedraw2();
+
+		sld_mcp::v1::AnnotationDimension* out = response->mutable_dimension();
+		if (found.display)
+			DescribeAnnotationDimension(found.display, out);
+		else
+		{
+			DescribeDimensionValue(found.dim, out->mutable_dimension());
+			out->mutable_dimension()->set_type(paramType == swDimensionParamTypeDoubleAngular
+				? sld_mcp::v1::DIMENSION_TYPE_ANGULAR : sld_mcp::v1::DIMENSION_TYPE_LINEAR);
+			DescribeModelDimension(found.dim, out);
+		}
+		response->set_view_name(found.viewName);
+		for (const auto& view : found.otherViews)
+			response->add_other_views(view);
+		long nowValue = -1, nowTolerance = -1;
+		if (found.display)
+		{
+			found.display->GetPrimaryPrecision2(&nowValue);
+			found.display->GetPrimaryTolPrecision2(&nowTolerance);
+		}
+		response->set_value_precision(static_cast<int32_t>(nowValue));
+		response->set_tolerance_precision(static_cast<int32_t>(nowTolerance));
+		return grpc::Status::OK;
+	});
 }

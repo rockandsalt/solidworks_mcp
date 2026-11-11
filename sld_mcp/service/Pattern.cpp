@@ -580,7 +580,7 @@ grpc::Status sld_mcp::service::DescribePatternDefinition(IModelDoc2* doc, IModel
 	return DescribePattern(doc, ext, feature, out, nullptr);
 }
 
-grpc::Status SolidWorksService::PatternFeatures(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::PatternFeatures(grpc::ServerContext* context,
 	const sld_mcp::v1::PatternFeaturesRequest* request,
 	sld_mcp::v1::PatternFeaturesResponse* response)
 {
@@ -625,149 +625,143 @@ grpc::Status SolidWorksService::PatternFeatures(grpc::ServerContext* /*context*/
 		}
 	}
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "PatternFeatures", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
+			return status;
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		ATL::CComPtr<IFeatureManager> featureManager;
+		HRESULT hr = doc->get_FeatureManager(&featureManager);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::FeatureManager", hr);
+		if (!featureManager)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no feature manager");
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-
-	ATL::CComPtr<IModelDoc2> doc;
-	if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	ATL::CComPtr<IFeatureManager> featureManager;
-	HRESULT hr = doc->get_FeatureManager(&featureManager);
-	if (FAILED(hr))
-		return ComError("IModelDoc2::FeatureManager", hr);
-	if (!featureManager)
-		return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no feature manager");
-
-	// The direction(s) or the axis.
-	Selection directions;
-	if (circular)
-	{
-		if (grpc::Status status = directions.Add(doc, ext, request->circular().axis(), kDirection1Mark, "axis");
-			!status.ok())
-			return status;
-		if (grpc::Status status = CheckPatternAxis(directions.picks.front()); !status.ok())
-			return status;
-	}
-	else
-	{
-		if (grpc::Status status =
-				directions.Add(doc, ext, linear.direction1().direction(), kDirection1Mark, "direction");
-			!status.ok())
-			return status;
-		if (grpc::Status status = CheckDirection(directions.picks.front(), "direction"); !status.ok())
-			return status;
-		if (twoWays)
+		// The direction(s) or the axis.
+		Selection directions;
+		if (circular)
 		{
-			if (grpc::Status status =
-					directions.Add(doc, ext, linear.direction2().direction(), kDirection2Mark, "direction2");
+			if (grpc::Status status = directions.Add(doc, ext, request->circular().axis(), kDirection1Mark, "axis");
 				!status.ok())
 				return status;
-			if (grpc::Status status = CheckDirection(directions.picks.back(), "direction2"); !status.ok())
+			if (grpc::Status status = CheckPatternAxis(directions.picks.front()); !status.ok())
 				return status;
 		}
-	}
+		else
+		{
+			if (grpc::Status status =
+					directions.Add(doc, ext, linear.direction1().direction(), kDirection1Mark, "direction");
+				!status.ok())
+				return status;
+			if (grpc::Status status = CheckDirection(directions.picks.front(), "direction"); !status.ok())
+				return status;
+			if (twoWays)
+			{
+				if (grpc::Status status =
+						directions.Add(doc, ext, linear.direction2().direction(), kDirection2Mark, "direction2");
+					!status.ok())
+					return status;
+				if (grpc::Status status = CheckDirection(directions.picks.back(), "direction2"); !status.ok())
+					return status;
+			}
+		}
 
-	std::vector<ATL::CComPtr<IFeature>> features;
-	std::vector<ATL::CComPtr<IBody2>> bodies;
-	std::string patterned;
-	if (grpc::Status status = ResolveSeedFeatures(doc, ext, request->features(), "patterned",
-			"pattern the feature made from it, or pattern the sketch's entities inside it with "
-			"linear_pattern_sketch_entities / circular_pattern_sketch_entities",
-			features, patterned);
-		!status.ok())
-		return status;
-	if (grpc::Status status = ResolveSeedBodies(ext, request->bodies(), bodies, patterned); !status.ok())
-		return status;
+		std::vector<ATL::CComPtr<IFeature>> features;
+		std::vector<ATL::CComPtr<IBody2>> bodies;
+		std::string patterned;
+		if (grpc::Status status = ResolveSeedFeatures(doc, ext, request->features(), "patterned",
+				"pattern the feature made from it, or pattern the sketch's entities inside it with "
+				"linear_pattern_sketch_entities / circular_pattern_sketch_entities",
+				features, patterned);
+			!status.ok())
+			return status;
+		if (grpc::Status status = ResolveSeedBodies(ext, request->bodies(), bodies, patterned); !status.ok())
+			return status;
 
-	if (grpc::Status status = directions.Select(doc, ext); !status.ok())
-		return status;
-	if (grpc::Status status = SelectSeedFeatures(doc, features, kSeedFeatureMark); !status.ok())
-		return status;
-	if (grpc::Status status = SelectSeedBodies(doc, bodies, kSeedBodyMark); !status.ok())
-		return status;
+		if (grpc::Status status = directions.Select(doc, ext); !status.ok())
+			return status;
+		if (grpc::Status status = SelectSeedFeatures(doc, features, kSeedFeatureMark); !status.ok())
+			return status;
+		if (grpc::Status status = SelectSeedBodies(doc, bodies, kSeedBodyMark); !status.ok())
+			return status;
 
-	ATL::CComPtr<IFeature> pattern;
-	const ATL::CComBSTR noDimension(L"");
-	if (circular)
-	{
-		const auto& c = request->circular();
-		hr = featureManager->FeatureCircularPattern5(
-			c.count(),                                    // Number
-			c.angle(),                                    // Spacing (the total with EqualSpacing)
-			c.reverse() ? VARIANT_TRUE : VARIANT_FALSE,   // FlipDirection
-			noDimension,                                  // DName
-			VARIANT_FALSE,                                // GeometryPattern
-			c.equal_spacing() ? VARIANT_TRUE : VARIANT_FALSE, // EqualSpacing
-			VARIANT_FALSE,                                // VaryInstance
-			VARIANT_FALSE,                                // SyncSubAssemblies
-			VARIANT_FALSE,                                // BDir2
-			VARIANT_FALSE,                                // BSymmetric
-			1,                                            // Number2
-			0.0,                                          // Spacing2
-			noDimension,                                  // DName2
-			VARIANT_FALSE,                                // EqualSpacing2
-			&pattern);
-	}
-	else
-	{
-		const auto& d1 = linear.direction1();
-		const auto& d2 = linear.direction2();
-		hr = featureManager->FeatureLinearPattern5(
-			d1.count(),                                   // Num1
-			d1.spacing(),                                 // Spacing1
-			twoWays ? d2.count() : 1,                     // Num2
-			twoWays ? d2.spacing() : d1.spacing(),        // Spacing2 (unused with one)
-			d1.reverse() ? VARIANT_TRUE : VARIANT_FALSE,  // FlipDir1
-			twoWays && d2.reverse() ? VARIANT_TRUE : VARIANT_FALSE, // FlipDir2
-			noDimension,                                  // DName1
-			noDimension,                                  // DName2
-			VARIANT_FALSE,                                // GeometryPattern
-			VARIANT_FALSE,                                // VaryInstance
-			VARIANT_FALSE, VARIANT_FALSE,                 // HasOffset1/2
-			VARIANT_FALSE, VARIANT_FALSE,                 // CtrlByNum1/2 (spacing, not up to a reference)
-			VARIANT_FALSE, VARIANT_FALSE,                 // FromCentroid1/2
-			VARIANT_FALSE, VARIANT_FALSE,                 // RevOffset1/2
-			0.0, 0.0,                                     // Offset1/2
-			VARIANT_FALSE,                                // D2PatternSeedOnly
-			VARIANT_FALSE,                                // SyncSubAssemblies
-			&pattern);
-	}
-	doc->ClearSelection2(VARIANT_TRUE);
-	if (FAILED(hr))
-		return ComError(circular ? "IFeatureManager::FeatureCircularPattern5" : "IFeatureManager::FeatureLinearPattern5",
-			hr);
-	const std::string along = circular ? "round " + directions.Describe() : "along " + directions.Describe();
-	if (!pattern)
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			"SolidWorks couldn't pattern " + patterned + " " + along +
-			" -- e.g. copies of a cut or fillet that find no material, or copies of a boss that don't touch the "
-			"body; check the direction, spacing and count");
-	if (grpc::Status status = KeepIfBuilt(doc, pattern,
-			"the copies of " + patterned + " " + along +
-				" probably find no material there (a cut or fillet beyond the body) -- check the direction, "
-				"spacing and count");
-		!status.ok())
-		return status;
+		ATL::CComPtr<IFeature> pattern;
+		const ATL::CComBSTR noDimension(L"");
+		if (circular)
+		{
+			const auto& c = request->circular();
+			hr = featureManager->FeatureCircularPattern5(
+				c.count(),                                    // Number
+				c.angle(),                                    // Spacing (the total with EqualSpacing)
+				c.reverse() ? VARIANT_TRUE : VARIANT_FALSE,   // FlipDirection
+				noDimension,                                  // DName
+				VARIANT_FALSE,                                // GeometryPattern
+				c.equal_spacing() ? VARIANT_TRUE : VARIANT_FALSE, // EqualSpacing
+				VARIANT_FALSE,                                // VaryInstance
+				VARIANT_FALSE,                                // SyncSubAssemblies
+				VARIANT_FALSE,                                // BDir2
+				VARIANT_FALSE,                                // BSymmetric
+				1,                                            // Number2
+				0.0,                                          // Spacing2
+				noDimension,                                  // DName2
+				VARIANT_FALSE,                                // EqualSpacing2
+				&pattern);
+		}
+		else
+		{
+			const auto& d1 = linear.direction1();
+			const auto& d2 = linear.direction2();
+			hr = featureManager->FeatureLinearPattern5(
+				d1.count(),                                   // Num1
+				d1.spacing(),                                 // Spacing1
+				twoWays ? d2.count() : 1,                     // Num2
+				twoWays ? d2.spacing() : d1.spacing(),        // Spacing2 (unused with one)
+				d1.reverse() ? VARIANT_TRUE : VARIANT_FALSE,  // FlipDir1
+				twoWays && d2.reverse() ? VARIANT_TRUE : VARIANT_FALSE, // FlipDir2
+				noDimension,                                  // DName1
+				noDimension,                                  // DName2
+				VARIANT_FALSE,                                // GeometryPattern
+				VARIANT_FALSE,                                // VaryInstance
+				VARIANT_FALSE, VARIANT_FALSE,                 // HasOffset1/2
+				VARIANT_FALSE, VARIANT_FALSE,                 // CtrlByNum1/2 (spacing, not up to a reference)
+				VARIANT_FALSE, VARIANT_FALSE,                 // FromCentroid1/2
+				VARIANT_FALSE, VARIANT_FALSE,                 // RevOffset1/2
+				0.0, 0.0,                                     // Offset1/2
+				VARIANT_FALSE,                                // D2PatternSeedOnly
+				VARIANT_FALSE,                                // SyncSubAssemblies
+				&pattern);
+		}
+		doc->ClearSelection2(VARIANT_TRUE);
+		if (FAILED(hr))
+			return ComError(circular ? "IFeatureManager::FeatureCircularPattern5" : "IFeatureManager::FeatureLinearPattern5",
+				hr);
+		const std::string along = circular ? "round " + directions.Describe() : "along " + directions.Describe();
+		if (!pattern)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"SolidWorks couldn't pattern " + patterned + " " + along +
+				" -- e.g. copies of a cut or fillet that find no material, or copies of a boss that don't touch the "
+				"body; check the direction, spacing and count");
+		if (grpc::Status status = KeepIfBuilt(doc, pattern,
+				"the copies of " + patterned + " " + along +
+					" probably find no material there (a cut or fillet beyond the body) -- check the direction, "
+					"spacing and count");
+			!status.ok())
+			return status;
 
-	response->set_feature_name(FeatureName(pattern));
-	response->set_patterned(patterned);
-	response->set_direction1(directions.picks.front().what);
-	if (twoWays)
-		response->set_direction2(directions.picks.back().what);
-	response->set_body_count(SolidBodyCount(doc));
-	return grpc::Status::OK;
+		response->set_feature_name(FeatureName(pattern));
+		response->set_patterned(patterned);
+		response->set_direction1(directions.picks.front().what);
+		if (twoWays)
+			response->set_direction2(directions.picks.back().what);
+		response->set_body_count(SolidBodyCount(doc));
+		return grpc::Status::OK;
+	});
 }
 
-grpc::Status SolidWorksService::PatternSketchEntities(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::PatternSketchEntities(grpc::ServerContext* context,
 	const sld_mcp::v1::PatternSketchEntitiesRequest* request,
 	sld_mcp::v1::PatternSketchEntitiesResponse* response)
 {
@@ -806,202 +800,196 @@ grpc::Status SolidWorksService::PatternSketchEntities(grpc::ServerContext* /*con
 	}
 	auto where = [](int i) { return "entity " + std::to_string(i + 1); };
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-
-	ATL::CComPtr<IModelDoc2> doc;
-	if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-
-	ATL::CComPtr<IFeature> sketchFeature;
-	if (grpc::Status status = ResolveItemsSketch(doc, ext, request->sketch_name(), request->items(0), sketchFeature);
-		!status.ok())
-		return status;
-	const std::string sketchName = FeatureName(sketchFeature);
-	const std::string sketchPid = PersistIdOf(ext, sketchFeature);
-	response->set_sketch_name(sketchName);
-
-	for (int i = 0; i < count; ++i)
-	{
-		google::protobuf::RepeatedPtrField<sld_mcp::v1::SketchRef> one;
-		*one.Add()->mutable_item() = request->items(i);
-		if (grpc::Status status = CheckRefsInSketch(ext, one, sketchPid, sketchName, where(i)); !status.ok())
+	return m_executor.Execute(context, "PatternSketchEntities", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
 			return status;
-	}
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
 
-	// Check the entities against the closed sketch before opening it; for a
-	// circular pattern, also find their box and a point to check the copies
-	// by.
-	ATL::CComPtr<ISketch> sketch;
-	if (grpc::Status status = SketchOf(sketchFeature, sketch); !status.ok())
-		return status;
-	bool anyPoints = false;
-	Point2 lo, hi, probe;
-	bool anyBox = false, haveProbe = false;
-	{
-		SketchItems items;
-		items.Load(sketch);
+		ATL::CComPtr<IFeature> sketchFeature;
+		if (grpc::Status status = ResolveItemsSketch(doc, ext, request->sketch_name(), request->items(0), sketchFeature);
+			!status.ok())
+			return status;
+		const std::string sketchName = FeatureName(sketchFeature);
+		const std::string sketchPid = PersistIdOf(ext, sketchFeature);
+		response->set_sketch_name(sketchName);
+
 		for (int i = 0; i < count; ++i)
 		{
-			const auto& ref = request->items(i);
-			ATL::CComPtr<IDispatch> entity = items.Find(ref);
-			if (!entity)
-				return grpc::Status(grpc::StatusCode::NOT_FOUND,
-					where(i) + " isn't in sketch \"" + sketchName + "\" any more (deleted or merged?) -- inspect "
-					"the sketch again for current IDs");
-			anyPoints = anyPoints || ref.point();
-			sld_mcp::v1::SketchItem item;
-			if (!circular || !DescribeSketchItem(entity, sketchPid, &item))
-				continue;
-			AddToBox(entity, item, lo, hi, anyBox);
-			if (!haveProbe)
-				haveProbe = ProbePoint(item, probe);
+			google::protobuf::RepeatedPtrField<sld_mcp::v1::SketchRef> one;
+			*one.Add()->mutable_item() = request->items(i);
+			if (grpc::Status status = CheckRefsInSketch(ext, one, sketchPid, sketchName, where(i)); !status.ok())
+				return status;
 		}
-	}
-	// The circular pattern's center as SolidWorks takes it: ArcRadius and
-	// ArcAngle from the middle of the entities' box (seen 2026-10-20). It
-	// refuses a negative ArcAngle, so that is kept in [0, 2 pi).
-	const Point2 center = circular ? At(round.center()) : Point2{};
-	const Point2 boxMiddle{(lo.x + hi.x) / 2, (lo.y + hi.y) / 2};
-	const double arcRadius = std::hypot(center.x - boxMiddle.x, center.y - boxMiddle.y);
-	double arcAngle = std::atan2(center.y - boxMiddle.y, center.x - boxMiddle.x);
-	if (arcAngle < 0)
-		arcAngle += 2 * M_PI;
-	if (arcAngle >= 2 * M_PI)
-		arcAngle = 0.0;
 
-	const auto errorsBefore = FeatureErrors(FeatureTree(doc));
-
-	PreferenceToggles toggles(swApp);
-	toggles.Set(swShowErrorsEveryRebuild, false);
-
-	ATL::CComPtr<ISketchManager> sketchManager;
-	if (grpc::Status status = GetSketchManager(doc, sketchManager); !status.ok())
-		return status;
-	ATL::CComPtr<ISketch> openSketch;
-	if (grpc::Status status = OpenExistingSketch(doc, sketchFeature, openSketch); !status.ok())
-		return status;
-
-	std::set<SketchItemKey> added;
-	const grpc::Status failure = [&]() -> grpc::Status {
-		SketchItems open;
-		open.Load(openSketch);
-		const std::set<SketchItemKey> before = SketchKeys(open);
-		HRESULT hr = doc->ClearSelection2(VARIANT_TRUE);
-		if (FAILED(hr))
-			return ComError("IModelDoc2::ClearSelection2", hr);
-		const std::vector<sld_mcp::v1::SketchItemRef> refs(request->items().begin(), request->items().end());
-		if (size_t failed = 0; !SelectSketchItems(doc, open, refs, failed))
-			return grpc::Status(grpc::StatusCode::INTERNAL,
-				"SolidWorks wouldn't select " + where(static_cast<int>(failed)) +
-				" in the open sketch -- nothing was patterned");
-
-		VARIANT_BOOL made = VARIANT_FALSE;
-		const ATL::CComBSTR keepAll(L"");
-		if (circular)
-			// PatternSpacing turns clockwise (seen 2026-10-20). PatternRotate
-			// off moved the originals themselves, so copies are always
-			// rotated.
-			hr = sketchManager->CreateCircularSketchStepAndRepeat(arcRadius, arcAngle, round.count(), -round.spacing(),
-				VARIANT_TRUE, keepAll, VARIANT_FALSE, VARIANT_FALSE, VARIANT_FALSE, &made);
-		else
-			hr = sketchManager->CreateLinearSketchStepAndRepeat(std::max(linear.count(), 1),
-				std::max(linear.count2(), 1), linear.spacing(), linear.count2() > 1 ? linear.spacing2() : 0.0,
-				linear.angle(), linear.angle2(), keepAll, VARIANT_FALSE, VARIANT_FALSE, VARIANT_FALSE, VARIANT_FALSE,
-				VARIANT_FALSE, &made);
-		doc->ClearSelection2(VARIANT_TRUE);
-		if (FAILED(hr))
-			return ComError(circular ? "ISketchManager::CreateCircularSketchStepAndRepeat"
-									 : "ISketchManager::CreateLinearSketchStepAndRepeat",
-				hr);
-		open.Load(openSketch);
-		for (const SketchItemKey& key : SketchKeys(open))
-			if (!before.count(key))
-				added.insert(key);
-		if (!made || added.empty())
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				"SolidWorks didn't pattern anything in \"" + sketchName + "\"" +
-				(made ? std::string() : " (it refused the pattern)"));
-
-		// SolidWorks picks its own reference point on the entities; check
-		// that the copies of one of them are where they belong, else take
-		// the copies out again.
-		if (!circular || !haveProbe)
-			return grpc::Status::OK;
-		std::vector<Point2> addedPoints;
-		for (const auto& e : open.All())
+		// Check the entities against the closed sketch before opening it; for a
+		// circular pattern, also find their box and a point to check the copies
+		// by.
+		ATL::CComPtr<ISketch> sketch;
+		if (grpc::Status status = SketchOf(sketchFeature, sketch); !status.ok())
+			return status;
+		bool anyPoints = false;
+		Point2 lo, hi, probe;
+		bool anyBox = false, haveProbe = false;
 		{
-			sld_mcp::v1::SketchItem item;
-			if (e.point && added.count(SketchKeyOf(e)) && DescribeSketchItem(e.obj, sketchPid, &item))
-				addedPoints.push_back(At(item.position()));
+			SketchItems items;
+			items.Load(sketch);
+			for (int i = 0; i < count; ++i)
+			{
+				const auto& ref = request->items(i);
+				ATL::CComPtr<IDispatch> entity = items.Find(ref);
+				if (!entity)
+					return grpc::Status(grpc::StatusCode::NOT_FOUND,
+						where(i) + " isn't in sketch \"" + sketchName + "\" any more (deleted or merged?) -- inspect "
+						"the sketch again for current IDs");
+				anyPoints = anyPoints || ref.point();
+				sld_mcp::v1::SketchItem item;
+				if (!circular || !DescribeSketchItem(entity, sketchPid, &item))
+					continue;
+				AddToBox(entity, item, lo, hi, anyBox);
+				if (!haveProbe)
+					haveProbe = ProbePoint(item, probe);
+			}
 		}
-		for (int k = 1; k < round.count(); ++k)
-		{
-			const Point2 expected = Rotate(probe, center, k * round.spacing());
-			if (std::any_of(addedPoints.begin(), addedPoints.end(), [&](const Point2& p) {
-					return std::hypot(p.x - expected.x, p.y - expected.y) <= kPositionTolerance;
-				}))
-				continue;
-			for (const auto& e : open.All())
-				if (added.count(SketchKeyOf(e)))
-				{
-					VARIANT_BOOL selected = VARIANT_FALSE;
-					if (ATL::CComQIPtr<ISketchSegment> segment(e.obj.p); segment)
-						segment->Select4(VARIANT_TRUE, nullptr, &selected);
-					else if (ATL::CComQIPtr<ISketchPoint> point(e.obj.p); point)
-						point->Select4(VARIANT_TRUE, nullptr, &selected);
-				}
-			doc->EditDelete();
+		// The circular pattern's center as SolidWorks takes it: ArcRadius and
+		// ArcAngle from the middle of the entities' box (seen 2026-10-20). It
+		// refuses a negative ArcAngle, so that is kept in [0, 2 pi).
+		const Point2 center = circular ? At(round.center()) : Point2{};
+		const Point2 boxMiddle{(lo.x + hi.x) / 2, (lo.y + hi.y) / 2};
+		const double arcRadius = std::hypot(center.x - boxMiddle.x, center.y - boxMiddle.y);
+		double arcAngle = std::atan2(center.y - boxMiddle.y, center.x - boxMiddle.x);
+		if (arcAngle < 0)
+			arcAngle += 2 * M_PI;
+		if (arcAngle >= 2 * M_PI)
+			arcAngle = 0.0;
+
+		const auto errorsBefore = FeatureErrors(FeatureTree(doc));
+
+		PreferenceToggles toggles(swApp);
+		toggles.Set(swShowErrorsEveryRebuild, false);
+
+		ATL::CComPtr<ISketchManager> sketchManager;
+		if (grpc::Status status = GetSketchManager(doc, sketchManager); !status.ok())
+			return status;
+		ATL::CComPtr<ISketch> openSketch;
+		if (grpc::Status status = OpenExistingSketch(doc, sketchFeature, openSketch); !status.ok())
+			return status;
+
+		std::set<SketchItemKey> added;
+		const grpc::Status failure = [&]() -> grpc::Status {
+			SketchItems open;
+			open.Load(openSketch);
+			const std::set<SketchItemKey> before = SketchKeys(open);
+			HRESULT hr = doc->ClearSelection2(VARIANT_TRUE);
+			if (FAILED(hr))
+				return ComError("IModelDoc2::ClearSelection2", hr);
+			const std::vector<sld_mcp::v1::SketchItemRef> refs(request->items().begin(), request->items().end());
+			if (size_t failed = 0; !SelectSketchItems(doc, open, refs, failed))
+				return grpc::Status(grpc::StatusCode::INTERNAL,
+					"SolidWorks wouldn't select " + where(static_cast<int>(failed)) +
+					" in the open sketch -- nothing was patterned");
+
+			VARIANT_BOOL made = VARIANT_FALSE;
+			const ATL::CComBSTR keepAll(L"");
+			if (circular)
+				// PatternSpacing turns clockwise (seen 2026-10-20). PatternRotate
+				// off moved the originals themselves, so copies are always
+				// rotated.
+				hr = sketchManager->CreateCircularSketchStepAndRepeat(arcRadius, arcAngle, round.count(), -round.spacing(),
+					VARIANT_TRUE, keepAll, VARIANT_FALSE, VARIANT_FALSE, VARIANT_FALSE, &made);
+			else
+				hr = sketchManager->CreateLinearSketchStepAndRepeat(std::max(linear.count(), 1),
+					std::max(linear.count2(), 1), linear.spacing(), linear.count2() > 1 ? linear.spacing2() : 0.0,
+					linear.angle(), linear.angle2(), keepAll, VARIANT_FALSE, VARIANT_FALSE, VARIANT_FALSE, VARIANT_FALSE,
+					VARIANT_FALSE, &made);
 			doc->ClearSelection2(VARIANT_TRUE);
-			added.clear();
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				"SolidWorks put the circular pattern's center somewhere other than asked (copy " + std::to_string(k) +
-				" isn't where it belongs), so the copies were deleted again -- this happens with entity types whose "
-				"extent the add-in can't work out (splines, ellipses); pattern lines, arcs, circles and points");
-		}
+			if (FAILED(hr))
+				return ComError(circular ? "ISketchManager::CreateCircularSketchStepAndRepeat"
+										 : "ISketchManager::CreateLinearSketchStepAndRepeat",
+					hr);
+			open.Load(openSketch);
+			for (const SketchItemKey& key : SketchKeys(open))
+				if (!before.count(key))
+					added.insert(key);
+			if (!made || added.empty())
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+					"SolidWorks didn't pattern anything in \"" + sketchName + "\"" +
+					(made ? std::string() : " (it refused the pattern)"));
+
+			// SolidWorks picks its own reference point on the entities; check
+			// that the copies of one of them are where they belong, else take
+			// the copies out again.
+			if (!circular || !haveProbe)
+				return grpc::Status::OK;
+			std::vector<Point2> addedPoints;
+			for (const auto& e : open.All())
+			{
+				sld_mcp::v1::SketchItem item;
+				if (e.point && added.count(SketchKeyOf(e)) && DescribeSketchItem(e.obj, sketchPid, &item))
+					addedPoints.push_back(At(item.position()));
+			}
+			for (int k = 1; k < round.count(); ++k)
+			{
+				const Point2 expected = Rotate(probe, center, k * round.spacing());
+				if (std::any_of(addedPoints.begin(), addedPoints.end(), [&](const Point2& p) {
+						return std::hypot(p.x - expected.x, p.y - expected.y) <= kPositionTolerance;
+					}))
+					continue;
+				for (const auto& e : open.All())
+					if (added.count(SketchKeyOf(e)))
+					{
+						VARIANT_BOOL selected = VARIANT_FALSE;
+						if (ATL::CComQIPtr<ISketchSegment> segment(e.obj.p); segment)
+							segment->Select4(VARIANT_TRUE, nullptr, &selected);
+						else if (ATL::CComQIPtr<ISketchPoint> point(e.obj.p); point)
+							point->Select4(VARIANT_TRUE, nullptr, &selected);
+					}
+				doc->EditDelete();
+				doc->ClearSelection2(VARIANT_TRUE);
+				added.clear();
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+					"SolidWorks put the circular pattern's center somewhere other than asked (copy " + std::to_string(k) +
+					" isn't where it belongs), so the copies were deleted again -- this happens with entity types whose "
+					"extent the add-in can't work out (splines, ellipses); pattern lines, arcs, circles and points");
+			}
+			return grpc::Status::OK;
+		}();
+
+		// Closed without the exit rebuild, as DeleteSketchEntities does: when
+		// the new entities break the profile of the sketch's feature,
+		// InsertSketch(TRUE) would open the Repair Sketch dialog.
+		doc->ClearSelection2(VARIANT_TRUE);
+		const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_FALSE);
+		if (!failure.ok())
+			return failure;
+		if (FAILED(closeHr))
+			return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
+		if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
+			return grpc::Status(grpc::StatusCode::INTERNAL,
+				"the entities were patterned, but SolidWorks left \"" + sketchName + "\" open for editing");
+		VARIANT_BOOL rebuilt = VARIANT_FALSE;
+		doc->EditRebuild3(&rebuilt);
+
+		sketch.Release();
+		if (grpc::Status status = SketchOf(sketchFeature, sketch); !status.ok())
+			return status;
+		SketchItems after;
+		after.Load(sketch);
+		DescribeAddedItems(after, added, sketchPid, anyPoints, response->mutable_items());
+
+		sld_mcp::v1::SketchContours contours;
+		if (CountContours(sketch, contours))
+			*response->mutable_contours() = contours;
+		ReadSketchState(sketch, sketchPid, response->mutable_state());
+		AddNewErrors(errorsBefore, FeatureErrors(FeatureTree(doc)), response->mutable_new_errors());
 		return grpc::Status::OK;
-	}();
-
-	// Closed without the exit rebuild, as DeleteSketchEntities does: when
-	// the new entities break the profile of the sketch's feature,
-	// InsertSketch(TRUE) would open the Repair Sketch dialog.
-	doc->ClearSelection2(VARIANT_TRUE);
-	const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_FALSE);
-	if (!failure.ok())
-		return failure;
-	if (FAILED(closeHr))
-		return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
-	if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
-		return grpc::Status(grpc::StatusCode::INTERNAL,
-			"the entities were patterned, but SolidWorks left \"" + sketchName + "\" open for editing");
-	VARIANT_BOOL rebuilt = VARIANT_FALSE;
-	doc->EditRebuild3(&rebuilt);
-
-	sketch.Release();
-	if (grpc::Status status = SketchOf(sketchFeature, sketch); !status.ok())
-		return status;
-	SketchItems after;
-	after.Load(sketch);
-	DescribeAddedItems(after, added, sketchPid, anyPoints, response->mutable_items());
-
-	sld_mcp::v1::SketchContours contours;
-	if (CountContours(sketch, contours))
-		*response->mutable_contours() = contours;
-	ReadSketchState(sketch, sketchPid, response->mutable_state());
-	AddNewErrors(errorsBefore, FeatureErrors(FeatureTree(doc)), response->mutable_new_errors());
-	return grpc::Status::OK;
+	});
 }
 
-grpc::Status SolidWorksService::EditPattern(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::EditPattern(grpc::ServerContext* context,
 	const sld_mcp::v1::EditPatternRequest* request,
 	sld_mcp::v1::EditPatternResponse* response)
 {
@@ -1027,142 +1015,136 @@ grpc::Status SolidWorksService::EditPattern(grpc::ServerContext* /*context*/,
 	const bool anyChange = request->has_count() || request->has_spacing() || request->has_reverse() ||
 		request->has_equal_spacing() || newAxis || side2Change || request->features_size() > 0;
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "EditPattern", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
+			return status;
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		PersistIds ids(ext);
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
+		const std::vector<TreeFeature> tree = FeatureTree(doc);
+		size_t index = 0;
+		if (grpc::Status status = ResolveFeatureTarget(ext, tree, ids, request->feature(), index); !status.ok())
+			return status;
+		ATL::CComPtr<IFeature> feature = tree[index].feature;
+		const std::string name = tree[index].name;
 
-	ATL::CComPtr<IModelDoc2> doc;
-	if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	PersistIds ids(ext);
+		PatternSettings before;
+		if (grpc::Status status = DescribePattern(doc, ext, feature, response->mutable_before(), &before); !status.ok())
+			return status;
+		response->set_body_count(SolidBodyCount(doc));
+		if (!anyChange)
+			return grpc::Status::OK;
 
-	const std::vector<TreeFeature> tree = FeatureTree(doc);
-	size_t index = 0;
-	if (grpc::Status status = ResolveFeatureTarget(ext, tree, ids, request->feature(), index); !status.ok())
-		return status;
-	ATL::CComPtr<IFeature> feature = tree[index].feature;
-	const std::string name = tree[index].name;
-
-	PatternSettings before;
-	if (grpc::Status status = DescribePattern(doc, ext, feature, response->mutable_before(), &before); !status.ok())
-		return status;
-	response->set_body_count(SolidBodyCount(doc));
-	if (!anyChange)
-		return grpc::Status::OK;
-
-	// What it should become: the current settings with the request's changes.
-	PatternSettings target = before;
-	PatternSideSettings& side1 = target.side[0];
-	PatternSideSettings& side2 = target.side[1];
-	if (before.circular)
-	{
-		if (side2Change)
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				"\"" + name + "\" is a circular pattern: it has no second direction");
-		// An angle comes with whether it's the total or the step; a spacing
-		// without (a linear one, in meters) is a mistake.
-		if (request->has_spacing() && !request->has_equal_spacing())
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				"\"" + name + "\" is a circular pattern: give its spacing as an angle (angle_deg for the total, "
-				"spacing_deg between neighbours)");
-		if (request->has_spacing() && request->spacing() > 2 * M_PI + 1e-9)
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "the angle must be at most 360 degrees");
-		if (request->has_equal_spacing())
-			target.equal = request->equal_spacing();
-	}
-	else if (request->has_equal_spacing())
-		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-			"\"" + name + "\" is a linear pattern: give its spacing as a distance (spacing_mm); angles are for "
-			"circular ones");
-	if (request->has_count())
-		side1.count = request->count();
-	if (request->has_spacing())
-		side1.spacing = request->spacing();
-	if (request->has_reverse())
-		side1.reverse = request->reverse();
-	if (side2Change)
-	{
-		if (request->has_count2())
-			target.hasSide2 = request->count2() > 1;
-		else
-			target.hasSide2 = true;
-		if (!target.hasSide2 && (request->has_spacing2() || request->has_reverse2() || newAxis2))
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				"count2 = 1 removes the second direction; give nothing else for it");
-		if (target.hasSide2 && !before.hasSide2)
+		// What it should become: the current settings with the request's changes.
+		PatternSettings target = before;
+		PatternSideSettings& side1 = target.side[0];
+		PatternSideSettings& side2 = target.side[1];
+		if (before.circular)
 		{
-			if (!newAxis2 || !request->has_spacing2() || !request->has_count2())
+			if (side2Change)
 				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-					"\"" + name + "\" has no second direction yet -- give direction2, count2 and spacing2 to add one");
-			side2.reverse = false;
+					"\"" + name + "\" is a circular pattern: it has no second direction");
+			// An angle comes with whether it's the total or the step; a spacing
+			// without (a linear one, in meters) is a mistake.
+			if (request->has_spacing() && !request->has_equal_spacing())
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"\"" + name + "\" is a circular pattern: give its spacing as an angle (angle_deg for the total, "
+					"spacing_deg between neighbours)");
+			if (request->has_spacing() && request->spacing() > 2 * M_PI + 1e-9)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "the angle must be at most 360 degrees");
+			if (request->has_equal_spacing())
+				target.equal = request->equal_spacing();
 		}
-		if (request->has_count2() && target.hasSide2)
-			side2.count = request->count2();
-		if (request->has_spacing2())
-			side2.spacing = request->spacing2();
-		if (request->has_reverse2())
-			side2.reverse = request->reverse2();
-	}
-	if (static_cast<long long>(side1.count) * (target.hasSide2 ? side2.count : 1) > kMaxInstances)
-		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-			"at most " + std::to_string(kMaxInstances) + " instances in all");
-	if (target.circular && !target.equal && side1.spacing * (side1.count - 1) >= 2 * M_PI - 1e-9)
-		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-			std::to_string(side1.count) + " instances " + std::to_string(Degrees(side1.spacing)) +
-			" degrees apart don't fit in one turn");
-
-	std::vector<ATL::CComPtr<IFeature>> seeds;
-	if (request->features_size() > 0)
-	{
-		if (before.bodyPattern)
+		else if (request->has_equal_spacing())
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				"\"" + name + "\" patterns bodies, not features -- delete it and pattern the features instead");
-		std::string names;
-		if (grpc::Status status = ResolveSeedFeatures(doc, ext, request->features(), "patterned",
-				"pattern the feature made from it", seeds, names);
+				"\"" + name + "\" is a linear pattern: give its spacing as a distance (spacing_mm); angles are for "
+				"circular ones");
+		if (request->has_count())
+			side1.count = request->count();
+		if (request->has_spacing())
+			side1.spacing = request->spacing();
+		if (request->has_reverse())
+			side1.reverse = request->reverse();
+		if (side2Change)
+		{
+			if (request->has_count2())
+				target.hasSide2 = request->count2() > 1;
+			else
+				target.hasSide2 = true;
+			if (!target.hasSide2 && (request->has_spacing2() || request->has_reverse2() || newAxis2))
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"count2 = 1 removes the second direction; give nothing else for it");
+			if (target.hasSide2 && !before.hasSide2)
+			{
+				if (!newAxis2 || !request->has_spacing2() || !request->has_count2())
+					return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+						"\"" + name + "\" has no second direction yet -- give direction2, count2 and spacing2 to add one");
+				side2.reverse = false;
+			}
+			if (request->has_count2() && target.hasSide2)
+				side2.count = request->count2();
+			if (request->has_spacing2())
+				side2.spacing = request->spacing2();
+			if (request->has_reverse2())
+				side2.reverse = request->reverse2();
+		}
+		if (static_cast<long long>(side1.count) * (target.hasSide2 ? side2.count : 1) > kMaxInstances)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"at most " + std::to_string(kMaxInstances) + " instances in all");
+		if (target.circular && !target.equal && side1.spacing * (side1.count - 1) >= 2 * M_PI - 1e-9)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				std::to_string(side1.count) + " instances " + std::to_string(Degrees(side1.spacing)) +
+				" degrees apart don't fit in one turn");
+
+		std::vector<ATL::CComPtr<IFeature>> seeds;
+		if (request->features_size() > 0)
+		{
+			if (before.bodyPattern)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"\"" + name + "\" patterns bodies, not features -- delete it and pattern the features instead");
+			std::string names;
+			if (grpc::Status status = ResolveSeedFeatures(doc, ext, request->features(), "patterned",
+					"pattern the feature made from it", seeds, names);
+				!status.ok())
+				return status;
+		}
+
+		AxisChange axes[2];
+		if (newAxis)
+			axes[0].ref = &request->direction();
+		if (newAxis2)
+			axes[1].ref = &request->direction2();
+		// Putting it back: the old direction / axis entities where they changed.
+		AxisChange oldAxes[2];
+		if (newAxis)
+			oldAxes[0].persistId = before.side[0].persistId;
+		if (newAxis2 && before.hasSide2)
+			oldAxes[1].persistId = before.side[1].persistId;
+
+		DefinitionEdit edit;
+		edit.apply = [&](bool& modified) {
+			return ApplyPattern(doc, ext, feature, target, axes, seeds, modified);
+		};
+		edit.restore = [&]() {
+			bool ignored = false;
+			ApplyPattern(doc, ext, feature, before, oldAxes, seeds.empty() ? seeds : before.seeds, ignored);
+		};
+		edit.check = [&]() -> std::string {
+			PatternSettings now;
+			if (!ReadPatternNow(doc, ext, feature, now).ok())
+				return "no definition SolidWorks would hand out";
+			return PatternMismatch(now, target, seeds.size());
+		};
+		edit.rejected = "e.g. copies of a cut or fillet that find no material, copies of a boss that don't touch the "
+			"body, or a direction that doesn't suit";
+		if (grpc::Status status = EditDefinition(swApp, doc, feature, tree, edit, response->mutable_new_errors());
 			!status.ok())
 			return status;
-	}
-
-	AxisChange axes[2];
-	if (newAxis)
-		axes[0].ref = &request->direction();
-	if (newAxis2)
-		axes[1].ref = &request->direction2();
-	// Putting it back: the old direction / axis entities where they changed.
-	AxisChange oldAxes[2];
-	if (newAxis)
-		oldAxes[0].persistId = before.side[0].persistId;
-	if (newAxis2 && before.hasSide2)
-		oldAxes[1].persistId = before.side[1].persistId;
-
-	DefinitionEdit edit;
-	edit.apply = [&](bool& modified) {
-		return ApplyPattern(doc, ext, feature, target, axes, seeds, modified);
-	};
-	edit.restore = [&]() {
-		bool ignored = false;
-		ApplyPattern(doc, ext, feature, before, oldAxes, seeds.empty() ? seeds : before.seeds, ignored);
-	};
-	edit.check = [&]() -> std::string {
-		PatternSettings now;
-		if (!ReadPatternNow(doc, ext, feature, now).ok())
-			return "no definition SolidWorks would hand out";
-		return PatternMismatch(now, target, seeds.size());
-	};
-	edit.rejected = "e.g. copies of a cut or fillet that find no material, copies of a boss that don't touch the "
-		"body, or a direction that doesn't suit";
-	if (grpc::Status status = EditDefinition(swApp, doc, feature, tree, edit, response->mutable_new_errors());
-		!status.ok())
-		return status;
-	response->set_body_count(SolidBodyCount(doc));
-	return DescribePattern(doc, ext, feature, response->mutable_after(), nullptr);
+		response->set_body_count(SolidBodyCount(doc));
+		return DescribePattern(doc, ext, feature, response->mutable_after(), nullptr);
+	});
 }

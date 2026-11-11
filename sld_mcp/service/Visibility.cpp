@@ -118,7 +118,7 @@ namespace
 	}
 }
 
-grpc::Status SolidWorksService::SetVisibility(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::SetVisibility(grpc::ServerContext* context,
 	const sld_mcp::v1::SetVisibilityRequest* request,
 	sld_mcp::v1::SetVisibilityResponse* response)
 {
@@ -128,58 +128,52 @@ grpc::Status SolidWorksService::SetVisibility(grpc::ServerContext* /*context*/,
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
 			"at most " + std::to_string(kMaxItems) + " per call");
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "SetVisibility", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		long docType = swDocNONE;
+		if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
+			return status;
+		if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
+			return status;
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
+		PersistIds ids(ext);
+		const std::vector<TreeFeature> tree = FeatureTree(doc);
+		std::vector<Item> items;
+		for (int i = 0; i < request->items_size(); ++i)
+		{
+			Item item;
+			if (grpc::Status status = ResolveItem(ext, docType == swDocASSEMBLY, tree, ids, request->items(i), item);
+				!status.ok())
+				return grpc::Status(status.error_code(), "item " + std::to_string(i + 1) + ": " + status.error_message());
+			if (std::none_of(items.begin(), items.end(), [&](const Item& o) { return SameObject(o.Object(), item.Object()); }))
+				items.push_back(std::move(item));
+		}
 
-	ATL::CComPtr<IModelDoc2> doc;
-	long docType = swDocNONE;
-	if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
-		return status;
-	if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-
-	PersistIds ids(ext);
-	const std::vector<TreeFeature> tree = FeatureTree(doc);
-	std::vector<Item> items;
-	for (int i = 0; i < request->items_size(); ++i)
-	{
-		Item item;
-		if (grpc::Status status = ResolveItem(ext, docType == swDocASSEMBLY, tree, ids, request->items(i), item);
-			!status.ok())
-			return grpc::Status(status.error_code(), "item " + std::to_string(i + 1) + ": " + status.error_message());
-		if (std::none_of(items.begin(), items.end(), [&](const Item& o) { return SameObject(o.Object(), item.Object()); }))
-			items.push_back(std::move(item));
-	}
-
-	const bool visible = request->visible();
-	bool anyChanged = false, anyRefused = false;
-	for (const Item& item : items)
-	{
-		const bool wasVisible = item.Visible();
-		if (wasVisible != visible)
-			ApplyVisibility(doc, item, visible);
-		const bool isVisible = item.Visible();
-		anyChanged = anyChanged || isVisible != wasVisible;
-		anyRefused = anyRefused || isVisible != visible;
-		sld_mcp::v1::VisibilityChange* change = response->add_items();
-		change->set_name(item.name);
-		change->set_kind(item.Kind());
-		change->set_changed(isVisible != wasVisible);
-		change->set_visible(isVisible);
-	}
-	doc->GraphicsRedraw2();
-	if (anyRefused && !anyChanged)
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			std::string("SolidWorks didn't ") + (visible ? "show" : "hide") + " " + response->items(0).name() +
-			(items.size() > 1 ? " and the others" : ""));
-	return grpc::Status::OK;
+		const bool visible = request->visible();
+		bool anyChanged = false, anyRefused = false;
+		for (const Item& item : items)
+		{
+			const bool wasVisible = item.Visible();
+			if (wasVisible != visible)
+				ApplyVisibility(doc, item, visible);
+			const bool isVisible = item.Visible();
+			anyChanged = anyChanged || isVisible != wasVisible;
+			anyRefused = anyRefused || isVisible != visible;
+			sld_mcp::v1::VisibilityChange* change = response->add_items();
+			change->set_name(item.name);
+			change->set_kind(item.Kind());
+			change->set_changed(isVisible != wasVisible);
+			change->set_visible(isVisible);
+		}
+		doc->GraphicsRedraw2();
+		if (anyRefused && !anyChanged)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				std::string("SolidWorks didn't ") + (visible ? "show" : "hide") + " " + response->items(0).name() +
+				(items.size() > 1 ? " and the others" : ""));
+		return grpc::Status::OK;
+	});
 }

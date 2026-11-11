@@ -1,4 +1,4 @@
-// Common.h : COM plumbing shared by every RPC: the COM apartment, error statuses,
+// Common.h : COM plumbing shared by every RPC: error statuses,
 // UTF-8 conversion, the active-document getters, persist ids and small
 // geometry helpers.
 //
@@ -7,7 +7,6 @@
 
 #include "SolidWorksService.h"
 #include "ComVariant.h"
-#include "RequestLock.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -29,50 +28,7 @@
 
 namespace sld_mcp::service
 {
-	// Cooperative cancellation only: a COM call already marshaled to SolidWorks
-	// cannot be interrupted here. Check between calls and before launching work.
-	inline grpc::Status CheckRequest(grpc::ServerContext* context)
-	{
-		if (context->IsCancelled() || std::chrono::system_clock::now() >= context->deadline())
-			return grpc::Status(grpc::StatusCode::CANCELLED, "request cancelled or deadline expired; stopped between COM calls");
-		return grpc::Status::OK;
-	}
-
-	// A timed-out request must not sit behind another inspection then launch a
-	// macro after its client has stopped waiting. Other handlers still share the
-	// same mutex; these two handlers can abandon their own wait without acquiring it.
-	inline grpc::Status LockForRequest(grpc::ServerContext* context, std::unique_lock<std::mutex>& lock)
-	{
-		if (!LockUnlessCancelled(lock, [&] { return !CheckRequest(context).ok(); }))
-			return grpc::Status(grpc::StatusCode::CANCELLED, "request cancelled or deadline expired while waiting for the model lock; work not started");
-		return grpc::Status::OK;
-	}
-
-	// Joins the calling gRPC worker thread to the MTA for the duration of one
-	// RPC. COM objects (including the proxy from the GIT) must be released
-	// before this goes out of scope, so declare it first in each handler.
-	class ComApartment
-	{
-	public:
-		ComApartment() : m_hr(CoInitializeEx(nullptr, COINIT_MULTITHREADED)) {}
-		~ComApartment()
-		{
-			if (SUCCEEDED(m_hr))
-				CoUninitialize();
-		}
-		ComApartment(const ComApartment&) = delete;
-		ComApartment& operator=(const ComApartment&) = delete;
-
-		// RPC_E_CHANGED_MODE: the thread is already in an STA, which works too.
-		bool Ok() const { return SUCCEEDED(m_hr) || m_hr == RPC_E_CHANGED_MODE; }
-
-	private:
-		HRESULT m_hr;
-	};
-
 	grpc::Status ComError(const char* what, HRESULT hr);
-
-	grpc::Status ComApartmentError();
 
 	// protobuf strings are UTF-8; SolidWorks hands back UTF-16 BSTRs.
 	std::string ToUtf8(const ATL::CComBSTR& s);
@@ -101,7 +57,7 @@ namespace sld_mcp::service
 	// Hands out persist IDs (IModelDocExtension::GetPersistReference3) for
 	// entities of one document, caching them by COM identity: the same face
 	// shows up once per adjacent edge, and each lookup is a COM round trip.
-	// Holds COM references, so it must not outlive the RPC's ComApartment.
+	// Holds COM references, so it must stay inside the executor's work callback.
 	class PersistIds
 	{
 	public:

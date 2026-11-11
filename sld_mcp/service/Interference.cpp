@@ -166,74 +166,68 @@ namespace
 	};
 }
 
-grpc::Status SolidWorksService::CheckInterference(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::CheckInterference(grpc::ServerContext* context,
 	const sld_mcp::v1::CheckInterferenceRequest* request,
 	sld_mcp::v1::CheckInterferenceResponse* response)
 {
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-
-	CheckedAssembly target;
-	if (grpc::Status status = GetCheckedAssembly(swApp, request->view(), target); !status.ok())
-		return status;
-	ATL::CComQIPtr<IAssemblyDoc> assembly(target.doc.p);
-	if (!assembly)
-		return grpc::Status(grpc::StatusCode::INTERNAL, "the assembly has no IAssemblyDoc interface");
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(target.doc, ext); !status.ok())
-		return status;
-	ATL::CComQIPtr<IMathUtility> math;
-	if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
-		return status;
-	PersistIds ids(ext);
-
-	ATL::CComBSTR title, path;
-	target.doc->GetTitle(&title);
-	target.doc->GetPathName(&path);
-	response->mutable_document()->set_title(ToUtf8(title));
-	response->mutable_document()->set_type(sld_mcp::v1::DOCUMENT_TYPE_ASSEMBLY);
-	response->mutable_document()->set_path(ToUtf8(path));
-	response->set_configuration(ActiveConfigurationName(target.doc));
-	if (target.view)
-	{
-		response->set_view(ViewName(target.view));
-		ATL::CComBSTR config;
-		if (SUCCEEDED(target.view->get_ReferencedConfiguration(&config)))
-			response->set_view_configuration(ToUtf8(config));
-	}
-	response->set_checked_components(static_cast<int32_t>(GeometryComponents(assembly, false).size()));
-
-	ShownForCheck shown(swApp, target.doc, target.active);
-	ATL::CComPtr<IInterferenceDetectionMgr> mgr;
-	HRESULT hr = assembly->get_InterferenceDetectionManager(&mgr);
-	if (FAILED(hr))
-		return ComError("IAssemblyDoc::InterferenceDetectionManager", hr);
-	if (!mgr)
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			"SolidWorks has no interference detection for " + ToUtf8(title) +
-			(target.view ? " here -- open the assembly itself (open_document) and check it there" : ""));
-
-	VARIANT_BOOL dirtyBefore = VARIANT_FALSE;
-	target.doc->GetSaveFlag(&dirtyBefore);
-	{
-		InterferenceSession session(mgr);
-		session.Apply(request->include_coincident(), request->treat_subassemblies_as_components(),
-			request->include_multibody_parts(), request->include_hidden());
-		ComponentList components(ids, math, response->mutable_components());
-		bool truncated = false;
-		if (grpc::Status status = session.Check(ids, &components, kMaxInterferences,
-				response->mutable_interferences(), truncated); !status.ok())
+	return m_executor.Execute(context, "CheckInterference", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		CheckedAssembly target;
+		if (grpc::Status status = GetCheckedAssembly(swApp, request->view(), target); !status.ok())
 			return status;
-		response->set_truncated(truncated);
-	}
-	VARIANT_BOOL dirtyAfter = VARIANT_FALSE;
-	target.doc->GetSaveFlag(&dirtyAfter);
-	response->set_marked_modified(!dirtyBefore && dirtyAfter);
-	return grpc::Status::OK;
+		ATL::CComQIPtr<IAssemblyDoc> assembly(target.doc.p);
+		if (!assembly)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "the assembly has no IAssemblyDoc interface");
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(target.doc, ext); !status.ok())
+			return status;
+		ATL::CComQIPtr<IMathUtility> math;
+		if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
+			return status;
+		PersistIds ids(ext);
+
+		ATL::CComBSTR title, path;
+		target.doc->GetTitle(&title);
+		target.doc->GetPathName(&path);
+		response->mutable_document()->set_title(ToUtf8(title));
+		response->mutable_document()->set_type(sld_mcp::v1::DOCUMENT_TYPE_ASSEMBLY);
+		response->mutable_document()->set_path(ToUtf8(path));
+		response->set_configuration(ActiveConfigurationName(target.doc));
+		if (target.view)
+		{
+			response->set_view(ViewName(target.view));
+			ATL::CComBSTR config;
+			if (SUCCEEDED(target.view->get_ReferencedConfiguration(&config)))
+				response->set_view_configuration(ToUtf8(config));
+		}
+		response->set_checked_components(static_cast<int32_t>(GeometryComponents(assembly, false).size()));
+
+		ShownForCheck shown(swApp, target.doc, target.active);
+		ATL::CComPtr<IInterferenceDetectionMgr> mgr;
+		HRESULT hr = assembly->get_InterferenceDetectionManager(&mgr);
+		if (FAILED(hr))
+			return ComError("IAssemblyDoc::InterferenceDetectionManager", hr);
+		if (!mgr)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"SolidWorks has no interference detection for " + ToUtf8(title) +
+				(target.view ? " here -- open the assembly itself (open_document) and check it there" : ""));
+
+		VARIANT_BOOL dirtyBefore = VARIANT_FALSE;
+		target.doc->GetSaveFlag(&dirtyBefore);
+		{
+			InterferenceSession session(mgr);
+			session.Apply(request->include_coincident(), request->treat_subassemblies_as_components(),
+				request->include_multibody_parts(), request->include_hidden());
+			ComponentList components(ids, math, response->mutable_components());
+			bool truncated = false;
+			if (grpc::Status status = session.Check(ids, &components, kMaxInterferences,
+					response->mutable_interferences(), truncated); !status.ok())
+				return status;
+			response->set_truncated(truncated);
+		}
+		VARIANT_BOOL dirtyAfter = VARIANT_FALSE;
+		target.doc->GetSaveFlag(&dirtyAfter);
+		response->set_marked_modified(!dirtyBefore && dirtyAfter);
+		return grpc::Status::OK;
+	});
 }

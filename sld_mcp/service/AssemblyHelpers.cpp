@@ -38,16 +38,18 @@ namespace sld_mcp::service
 		return found;
 	}
 
-	std::vector<ATL::CComPtr<IComponent2>> AllComponents(IAssemblyDoc* assembly, grpc::ServerContext* context)
+	std::vector<ATL::CComPtr<IComponent2>> AllComponents(IAssemblyDoc* assembly, RequestControl* control)
 	{
 		std::vector<ATL::CComPtr<IComponent2>> out;
+		if (control)
+			control->Checkpoint();
 		ATL::CComVariant all;
 		if (FAILED(assembly->GetComponents(VARIANT_FALSE, &all)))
 			return out;
 		for (const auto& disp : comvariant::ToDispatches(all))
 		{
-			if (context && !CheckRequest(context).ok())
-				break;
+			if (control)
+				control->Checkpoint();
 			if (ATL::CComQIPtr<IComponent2> component(disp.p); component)
 				out.push_back(ATL::CComPtr<IComponent2>(component));
 		}
@@ -66,11 +68,14 @@ namespace sld_mcp::service
 		return SUCCEEDED(component->GetSuppression2(&state)) && state == swComponentSuppressed;
 	}
 
-	std::vector<ATL::CComPtr<IComponent2>> GeometryComponents(IAssemblyDoc* assembly, bool visibleOnly)
+	std::vector<ATL::CComPtr<IComponent2>> GeometryComponents(IAssemblyDoc* assembly, bool visibleOnly,
+		RequestControl* control)
 	{
 		std::vector<ATL::CComPtr<IComponent2>> out;
-		for (const auto& component : AllComponents(assembly))
+		for (const auto& component : AllComponents(assembly, control))
 		{
+			if (control)
+				control->Checkpoint();
 			if (IsSubassembly(component) || IsSuppressed(component))
 				continue;
 			// A hidden subassembly hides its parts, whose own state stays "shown"
@@ -78,6 +83,8 @@ namespace sld_mcp::service
 			bool hidden = false;
 			for (ATL::CComPtr<IComponent2> c = component; visibleOnly && c && !hidden; c = ParentOf(c))
 			{
+				if (control)
+					control->Checkpoint();
 				VARIANT_BOOL flag = VARIANT_FALSE;
 				hidden = SUCCEEDED(c->IsHidden(VARIANT_TRUE, &flag)) && flag;
 			}
@@ -87,17 +94,23 @@ namespace sld_mcp::service
 		return out;
 	}
 
-	std::vector<ATL::CComPtr<IBody2>> ComponentBodies(IComponent2* component)
+	std::vector<ATL::CComPtr<IBody2>> ComponentBodies(IComponent2* component, RequestControl* control)
 	{
 		std::vector<ATL::CComPtr<IBody2>> out;
 		for (long type : { static_cast<long>(swSolidBody), static_cast<long>(swSheetBody) })
 		{
+			if (control)
+				control->Checkpoint();
 			ATL::CComVariant info, bodies;
 			if (FAILED(component->GetBodies3(type, &info, &bodies)))
 				continue;
 			for (const auto& disp : comvariant::ToDispatches(bodies))
+			{
+				if (control)
+					control->Checkpoint();
 				if (ATL::CComQIPtr<IBody2> body(disp.p); body)
 					out.push_back(ATL::CComPtr<IBody2>(body));
+			}
 		}
 		return out;
 	}

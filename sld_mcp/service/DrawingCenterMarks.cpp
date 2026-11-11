@@ -254,7 +254,7 @@ namespace
 	}
 }
 
-grpc::Status SolidWorksService::AddCenterMarks(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::AddCenterMarks(grpc::ServerContext* context,
 	const sld_mcp::v1::AddCenterMarksRequest* request,
 	sld_mcp::v1::AddCenterMarksResponse* response)
 {
@@ -270,52 +270,48 @@ grpc::Status SolidWorksService::AddCenterMarks(grpc::ServerContext* /*context*/,
 	if (request->auto_types() < 0 || request->auto_types() > 7 || (request->circles_size() > 0 && request->auto_types() != 0))
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give circles, or the kinds to mark throughout the view");
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDoc2> doc;
-	ATL::CComQIPtr<IDrawingDoc> drawing;
-	if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	ATL::CComQIPtr<IMathUtility> math;
-	if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
-		return status;
-
-	const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
-	const std::string original = ActiveSheetName(drawing);
-	DrawingViewContext ctx;
-	if (grpc::Status status = MakeViewContext(sheets, ext, math, request->view_name(), response, ctx); !status.ok())
-		return status;
-
-	std::vector<ATL::CComPtr<IAnnotation>> added;
-	{
-		SheetActivation activation(drawing);
-		if (!activation.Show(ctx.sheetName))
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "couldn't switch to sheet " + ctx.sheetName);
-		EditModeScope editMode(drawing);
-		editMode.Set(false);
-		VARIANT_BOOL ok = VARIANT_FALSE;
-		drawing->ActivateView(FromUtf8(request->view_name()), &ok);
-		grpc::Status status = request->circles_size() > 0
-			? MarksOnCircles(doc, drawing, ext, ctx, *request, added, response)
-			: AutoMarks(doc, ext, ctx, request->auto_types() > 0 ? request->auto_types() : static_cast<long>(swAutoInsertCenterMarkType_Hole),
-				added, response);
-		doc->GraphicsRedraw2();
-		if (!status.ok())
+	return m_executor.Execute(context, "AddCenterMarks", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		ATL::CComQIPtr<IDrawingDoc> drawing;
+		if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
 			return status;
-	}
-	FinishReply(drawing, ext, math, ctx, original, added, response);
-	return grpc::Status::OK;
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		ATL::CComQIPtr<IMathUtility> math;
+		if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
+			return status;
+
+		const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
+		const std::string original = ActiveSheetName(drawing);
+		DrawingViewContext ctx;
+		if (grpc::Status status = MakeViewContext(sheets, ext, math, request->view_name(), response, ctx); !status.ok())
+			return status;
+
+		std::vector<ATL::CComPtr<IAnnotation>> added;
+		{
+			SheetActivation activation(drawing);
+			if (!activation.Show(ctx.sheetName))
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "couldn't switch to sheet " + ctx.sheetName);
+			EditModeScope editMode(drawing);
+			editMode.Set(false);
+			VARIANT_BOOL ok = VARIANT_FALSE;
+			drawing->ActivateView(FromUtf8(request->view_name()), &ok);
+			grpc::Status status = request->circles_size() > 0
+				? MarksOnCircles(doc, drawing, ext, ctx, *request, added, response)
+				: AutoMarks(doc, ext, ctx, request->auto_types() > 0 ? request->auto_types() : static_cast<long>(swAutoInsertCenterMarkType_Hole),
+					added, response);
+			doc->GraphicsRedraw2();
+			if (!status.ok())
+				return status;
+		}
+		FinishReply(drawing, ext, math, ctx, original, added, response);
+		return grpc::Status::OK;
+	});
 }
 
-grpc::Status SolidWorksService::AddCenterlines(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::AddCenterlines(grpc::ServerContext* context,
 	const sld_mcp::v1::AddCenterlinesRequest* request,
 	sld_mcp::v1::AddCenterMarksResponse* response)
 {
@@ -327,95 +323,91 @@ grpc::Status SolidWorksService::AddCenterlines(grpc::ServerContext* /*context*/,
 		if (request->pairs(i).entities_size() != 2)
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "centerline " + std::to_string(i + 1) + " goes between 2 entities");
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDoc2> doc;
-	ATL::CComQIPtr<IDrawingDoc> drawing;
-	if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	ATL::CComQIPtr<IMathUtility> math;
-	if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
-		return status;
+	return m_executor.Execute(context, "AddCenterlines", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		ATL::CComQIPtr<IDrawingDoc> drawing;
+		if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
+			return status;
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		ATL::CComQIPtr<IMathUtility> math;
+		if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
+			return status;
 
-	const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
-	const std::string original = ActiveSheetName(drawing);
-	DrawingViewContext ctx;
-	if (grpc::Status status = MakeViewContext(sheets, ext, math, request->view_name(), response, ctx); !status.ok())
-		return status;
+		const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
+		const std::string original = ActiveSheetName(drawing);
+		DrawingViewContext ctx;
+		if (grpc::Status status = MakeViewContext(sheets, ext, math, request->view_name(), response, ctx); !status.ok())
+			return status;
 
-	std::vector<ATL::CComPtr<IAnnotation>> added;
-	{
-		SheetActivation activation(drawing);
-		if (!activation.Show(ctx.sheetName))
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "couldn't switch to sheet " + ctx.sheetName);
-		EditModeScope editMode(drawing);
-		editMode.Set(false);
-		VARIANT_BOOL ok = VARIANT_FALSE;
-		drawing->ActivateView(FromUtf8(request->view_name()), &ok);
-
-		const std::vector<ATL::CComPtr<IAnnotation>> start = ViewAnnotationList(ctx.view);
-		auto fail = [&](grpc::Status why) {
-			doc->ClearSelection2(VARIANT_TRUE);
-			const auto made = NewAnnotations(ctx.view, start);
-			if (!made.empty())
-				DeleteAnnotations(doc, ext, made);
-			doc->GraphicsRedraw2();
-			return why;
-		};
-		if (request->pairs_size() == 0)
+		std::vector<ATL::CComPtr<IAnnotation>> added;
 		{
-			// With the view selected SolidWorks adds those it finds; none new
-			// is a null result, not an error.
-			if (!SelectDrawingView(doc, ext, request->view_name()))
-				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks wouldn't select " + request->view_name());
-			ATL::CComPtr<ICenterLine> line;
-			HRESULT hr = drawing->InsertCenterLine2(&line);
-			doc->ClearSelection2(VARIANT_TRUE);
-			if (FAILED(hr))
-				return ComError("IDrawingDoc::InsertCenterLine2", hr);
-		}
-		else
-		{
-			const std::vector<AttachedAnnotation> existing = AnnotationsOfType(ctx.view, swCenterLine, *ctx.ids);
-			for (int i = 0; i < request->pairs_size(); ++i)
-			{
-				const std::string which = "centerline " + std::to_string(i + 1);
-				ViewEntityItem a, b;
-				for (auto [ref, item] : { std::make_pair(&request->pairs(i).entities(0), &a), std::make_pair(&request->pairs(i).entities(1), &b) })
-					if (grpc::Status status = ResolveDrawingRef(ctx, *ref, which, *item); !status.ok())
-						return fail(status);
-				// (A silhouette has no persist id of its own to compare.)
-				if (a.kind == sld_mcp::v1::VIEW_ENTITY_KIND_EDGE && b.kind == sld_mcp::v1::VIEW_ENTITY_KIND_EDGE &&
-					std::any_of(existing.begin(), existing.end(), [&](const AttachedAnnotation& l) {
-						return l.on.count(a.persistId) > 0 && l.on.count(b.persistId) > 0; }))
-				{
-					response->add_already_marked(i);
-					continue;
-				}
+			SheetActivation activation(drawing);
+			if (!activation.Show(ctx.sheetName))
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "couldn't switch to sheet " + ctx.sheetName);
+			EditModeScope editMode(drawing);
+			editMode.Set(false);
+			VARIANT_BOOL ok = VARIANT_FALSE;
+			drawing->ActivateView(FromUtf8(request->view_name()), &ok);
+
+			const std::vector<ATL::CComPtr<IAnnotation>> start = ViewAnnotationList(ctx.view);
+			auto fail = [&](grpc::Status why) {
 				doc->ClearSelection2(VARIANT_TRUE);
-				if (!SelectViewEntityAt(doc, ctx.view, a, std::nullopt, 0) || !SelectViewEntityAt(doc, ctx.view, b, std::nullopt, 0))
-					return fail(grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks wouldn't select " + which + "'s entities"));
+				const auto made = NewAnnotations(ctx.view, start);
+				if (!made.empty())
+					DeleteAnnotations(doc, ext, made);
+				doc->GraphicsRedraw2();
+				return why;
+			};
+			if (request->pairs_size() == 0)
+			{
+				// With the view selected SolidWorks adds those it finds; none new
+				// is a null result, not an error.
+				if (!SelectDrawingView(doc, ext, request->view_name()))
+					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks wouldn't select " + request->view_name());
 				ATL::CComPtr<ICenterLine> line;
 				HRESULT hr = drawing->InsertCenterLine2(&line);
+				doc->ClearSelection2(VARIANT_TRUE);
 				if (FAILED(hr))
-					return fail(ComError("IDrawingDoc::InsertCenterLine2", hr));
-				if (!line)
-					return fail(grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-						"SolidWorks didn't add " + which + " (are the two parallel?)"));
+					return ComError("IDrawingDoc::InsertCenterLine2", hr);
 			}
-			doc->ClearSelection2(VARIANT_TRUE);
+			else
+			{
+				const std::vector<AttachedAnnotation> existing = AnnotationsOfType(ctx.view, swCenterLine, *ctx.ids);
+				for (int i = 0; i < request->pairs_size(); ++i)
+				{
+					const std::string which = "centerline " + std::to_string(i + 1);
+					ViewEntityItem a, b;
+					for (auto [ref, item] : { std::make_pair(&request->pairs(i).entities(0), &a), std::make_pair(&request->pairs(i).entities(1), &b) })
+						if (grpc::Status status = ResolveDrawingRef(ctx, *ref, which, *item); !status.ok())
+							return fail(status);
+					// (A silhouette has no persist id of its own to compare.)
+					if (a.kind == sld_mcp::v1::VIEW_ENTITY_KIND_EDGE && b.kind == sld_mcp::v1::VIEW_ENTITY_KIND_EDGE &&
+						std::any_of(existing.begin(), existing.end(), [&](const AttachedAnnotation& l) {
+							return l.on.count(a.persistId) > 0 && l.on.count(b.persistId) > 0; }))
+					{
+						response->add_already_marked(i);
+						continue;
+					}
+					doc->ClearSelection2(VARIANT_TRUE);
+					if (!SelectViewEntityAt(doc, ctx.view, a, std::nullopt, 0) || !SelectViewEntityAt(doc, ctx.view, b, std::nullopt, 0))
+						return fail(grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks wouldn't select " + which + "'s entities"));
+					ATL::CComPtr<ICenterLine> line;
+					HRESULT hr = drawing->InsertCenterLine2(&line);
+					if (FAILED(hr))
+						return fail(ComError("IDrawingDoc::InsertCenterLine2", hr));
+					if (!line)
+						return fail(grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+							"SolidWorks didn't add " + which + " (are the two parallel?)"));
+				}
+				doc->ClearSelection2(VARIANT_TRUE);
+			}
+			added = NewAnnotations(ctx.view, start);
+			doc->GraphicsRedraw2();
 		}
-		added = NewAnnotations(ctx.view, start);
-		doc->GraphicsRedraw2();
-	}
-	FinishReply(drawing, ext, math, ctx, original, added, response);
-	return grpc::Status::OK;
+		FinishReply(drawing, ext, math, ctx, original, added, response);
+		return grpc::Status::OK;
+	});
 }

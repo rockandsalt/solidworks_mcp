@@ -257,7 +257,7 @@ grpc::Status sld_mcp::service::DescribeFilletDefinition(IModelDoc2* doc, IModelD
 	return DescribeFillet(doc, ext, feature, out, nullptr);
 }
 
-grpc::Status SolidWorksService::FilletEdges(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::FilletEdges(grpc::ServerContext* context,
 	const sld_mcp::v1::FilletEdgesRequest* request,
 	sld_mcp::v1::EdgeFeatureResponse* response)
 {
@@ -265,58 +265,52 @@ grpc::Status SolidWorksService::FilletEdges(grpc::ServerContext* /*context*/,
 	if (!(std::isfinite(radius) && radius > 0.0))
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "radius must be positive");
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "FilletEdges", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		ATL::CComPtr<IFeatureManager> featureManager;
+		if (grpc::Status status = SelectEdges(swApp, request->edges(), kEdgeMark, doc, featureManager);
+			!status.ok())
+			return status;
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
+		// A constant-radius fillet, as the UI makes one: uniform radius, keep
+		// features, attach edges, plus tangent propagation if asked.
+		const long options = swFeatureFilletUniformRadius | swFeatureFilletAttachEdges |
+			swFeatureFilletKeepFeatures | (request->tangent_propagation() ? swFeatureFilletPropagate : 0);
+		ATL::CComVariant none;
+		ATL::CComPtr<IDispatch> filletObj;
+		HRESULT hr = featureManager->FeatureFillet3(
+			options,
+			radius,                        // R1
+			0.0,                           // R2 (asymmetric fillets)
+			0.0,                           // Rho (conic fillets)
+			swFeatureFilletType_Simple,    // Ftyp: constant radius
+			swFilletOverFlowType_Default,  // OverflowType
+			swFeatureFilletCircular,       // ConicRhoType: circular profile
+			none,                          // Radii (per-edge radii)
+			none,                          // Dist2Arr
+			none,                          // RhoArr
+			none,                          // SetBackDistances
+			none,                          // PointRadiusArray
+			none,                          // PointDist2Array
+			none,                          // PointRhoArray
+			&filletObj);
+		doc->ClearSelection2(VARIANT_TRUE);
+		if (FAILED(hr))
+			return ComError("IFeatureManager::FeatureFillet3", hr);
+		ATL::CComQIPtr<IFeature> fillet(filletObj);
+		if (grpc::Status status = CheckMadeFaces(doc, fillet,
+				"SolidWorks couldn't fillet those edges -- the radius is probably too big for them (it must "
+				"fit within the faces on both sides of each edge, and next to other fillets); try a smaller one");
+			!status.ok())
+			return status;
 
-	ATL::CComPtr<IModelDoc2> doc;
-	ATL::CComPtr<IFeatureManager> featureManager;
-	if (grpc::Status status = SelectEdges(swApp, request->edges(), kEdgeMark, doc, featureManager);
-		!status.ok())
-		return status;
-
-	// A constant-radius fillet, as the UI makes one: uniform radius, keep
-	// features, attach edges, plus tangent propagation if asked.
-	const long options = swFeatureFilletUniformRadius | swFeatureFilletAttachEdges |
-		swFeatureFilletKeepFeatures | (request->tangent_propagation() ? swFeatureFilletPropagate : 0);
-	ATL::CComVariant none;
-	ATL::CComPtr<IDispatch> filletObj;
-	HRESULT hr = featureManager->FeatureFillet3(
-		options,
-		radius,                        // R1
-		0.0,                           // R2 (asymmetric fillets)
-		0.0,                           // Rho (conic fillets)
-		swFeatureFilletType_Simple,    // Ftyp: constant radius
-		swFilletOverFlowType_Default,  // OverflowType
-		swFeatureFilletCircular,       // ConicRhoType: circular profile
-		none,                          // Radii (per-edge radii)
-		none,                          // Dist2Arr
-		none,                          // RhoArr
-		none,                          // SetBackDistances
-		none,                          // PointRadiusArray
-		none,                          // PointDist2Array
-		none,                          // PointRhoArray
-		&filletObj);
-	doc->ClearSelection2(VARIANT_TRUE);
-	if (FAILED(hr))
-		return ComError("IFeatureManager::FeatureFillet3", hr);
-	ATL::CComQIPtr<IFeature> fillet(filletObj);
-	if (grpc::Status status = CheckMadeFaces(doc, fillet,
-			"SolidWorks couldn't fillet those edges -- the radius is probably too big for them (it must "
-			"fit within the faces on both sides of each edge, and next to other fillets); try a smaller one");
-		!status.ok())
-		return status;
-
-	response->set_feature_name(FeatureName(fillet));
-	return grpc::Status::OK;
+		response->set_feature_name(FeatureName(fillet));
+		return grpc::Status::OK;
+	});
 }
 
-grpc::Status SolidWorksService::ChamferEdges(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::ChamferEdges(grpc::ServerContext* context,
 	const sld_mcp::v1::ChamferEdgesRequest* request,
 	sld_mcp::v1::EdgeFeatureResponse* response)
 {
@@ -332,56 +326,50 @@ grpc::Status SolidWorksService::ChamferEdges(grpc::ServerContext* /*context*/,
 	if (angle > 0.0 && otherDistance > 0.0)
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give an angle or a second distance, not both");
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "ChamferEdges", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		ATL::CComPtr<IFeatureManager> featureManager;
+		if (grpc::Status status = SelectEdges(swApp, request->edges(), kEdgeMark, doc, featureManager);
+			!status.ok())
+			return status;
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
+		// Equal distance = angle-distance at 45 degrees: swChamferEqualDistance
+		// makes an empty feature through this call. Distance-distance ignores
+		// swFeatureChamferFlipDirection, so flipping it swaps the distances
+		// (both seen 2026-10-19).
+		const bool equal = angle == 0.0 && otherDistance == 0.0;
+		const bool twoDistances = otherDistance > 0.0;
+		const bool swap = twoDistances && request->flip();
+		const long type = twoDistances ? swChamferDistanceDistance : swChamferAngleDistance;
+		const long options = (request->flip() && !equal && !twoDistances ? swFeatureChamferFlipDirection : 0) |
+			(request->tangent_propagation() ? swFeatureChamferTangentPropagation : 0);
+		ATL::CComPtr<IFeature> chamfer;
+		HRESULT hr = featureManager->InsertFeatureChamfer(
+			options,
+			type,                        // ChamferType
+			swap ? otherDistance : distance, // Width
+			equal ? M_PI_4 : angle, // Angle (angle-distance)
+			swap ? distance : otherDistance, // OtherDist (distance-distance)
+			0.0,                         // VertexChamDist1..3 (vertex chamfers)
+			0.0,
+			0.0,
+			&chamfer);
+		doc->ClearSelection2(VARIANT_TRUE);
+		if (FAILED(hr))
+			return ComError("IFeatureManager::InsertFeatureChamfer", hr);
+		if (grpc::Status status = CheckMadeFaces(doc, chamfer,
+				"SolidWorks couldn't chamfer those edges -- the chamfer is probably too big for them (it must "
+				"fit within the faces on both sides of each edge); try a smaller distance");
+			!status.ok())
+			return status;
 
-	ATL::CComPtr<IModelDoc2> doc;
-	ATL::CComPtr<IFeatureManager> featureManager;
-	if (grpc::Status status = SelectEdges(swApp, request->edges(), kEdgeMark, doc, featureManager);
-		!status.ok())
-		return status;
-
-	// Equal distance = angle-distance at 45 degrees: swChamferEqualDistance
-	// makes an empty feature through this call. Distance-distance ignores
-	// swFeatureChamferFlipDirection, so flipping it swaps the distances
-	// (both seen 2026-10-19).
-	const bool equal = angle == 0.0 && otherDistance == 0.0;
-	const bool twoDistances = otherDistance > 0.0;
-	const bool swap = twoDistances && request->flip();
-	const long type = twoDistances ? swChamferDistanceDistance : swChamferAngleDistance;
-	const long options = (request->flip() && !equal && !twoDistances ? swFeatureChamferFlipDirection : 0) |
-		(request->tangent_propagation() ? swFeatureChamferTangentPropagation : 0);
-	ATL::CComPtr<IFeature> chamfer;
-	HRESULT hr = featureManager->InsertFeatureChamfer(
-		options,
-		type,                        // ChamferType
-		swap ? otherDistance : distance, // Width
-		equal ? M_PI_4 : angle, // Angle (angle-distance)
-		swap ? distance : otherDistance, // OtherDist (distance-distance)
-		0.0,                         // VertexChamDist1..3 (vertex chamfers)
-		0.0,
-		0.0,
-		&chamfer);
-	doc->ClearSelection2(VARIANT_TRUE);
-	if (FAILED(hr))
-		return ComError("IFeatureManager::InsertFeatureChamfer", hr);
-	if (grpc::Status status = CheckMadeFaces(doc, chamfer,
-			"SolidWorks couldn't chamfer those edges -- the chamfer is probably too big for them (it must "
-			"fit within the faces on both sides of each edge); try a smaller distance");
-		!status.ok())
-		return status;
-
-	response->set_feature_name(FeatureName(chamfer));
-	return grpc::Status::OK;
+		response->set_feature_name(FeatureName(chamfer));
+		return grpc::Status::OK;
+	});
 }
 
-grpc::Status SolidWorksService::EditFillet(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::EditFillet(grpc::ServerContext* context,
 	const sld_mcp::v1::EditFilletRequest* request,
 	sld_mcp::v1::EditFilletResponse* response)
 {
@@ -397,101 +385,95 @@ grpc::Status SolidWorksService::EditFillet(grpc::ServerContext* /*context*/,
 	const bool newItems = request->edges_size() > 0 || request->add_edges_size() > 0 || request->remove_edges_size() > 0;
 	const bool anyChange = newItems || request->has_radius() || request->has_tangent_propagation();
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "EditFillet", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
+			return status;
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		PersistIds ids(ext);
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
+		const std::vector<TreeFeature> tree = FeatureTree(doc);
+		size_t index = 0;
+		if (grpc::Status status = ResolveFeatureTarget(ext, tree, ids, request->feature(), index); !status.ok())
+			return status;
+		ATL::CComPtr<IFeature> feature = tree[index].feature;
+		const std::string name = tree[index].name;
 
-	ATL::CComPtr<IModelDoc2> doc;
-	if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	PersistIds ids(ext);
-
-	const std::vector<TreeFeature> tree = FeatureTree(doc);
-	size_t index = 0;
-	if (grpc::Status status = ResolveFeatureTarget(ext, tree, ids, request->feature(), index); !status.ok())
-		return status;
-	ATL::CComPtr<IFeature> feature = tree[index].feature;
-	const std::string name = tree[index].name;
-
-	FilletSettings before;
-	if (grpc::Status status = DescribeFillet(doc, ext, feature, response->mutable_before(), &before); !status.ok())
-		return status;
-	if (!anyChange)
-		return grpc::Status::OK;
-	if (before.type != swFeatureFilletType_Simple)
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			"\"" + name + "\" isn't a constant-radius fillet (swFeatureFilletType_e " + std::to_string(before.type) +
-			"), which is all edit_fillet changes -- set_dimension for its sizes, or delete it and make it again");
-	if (request->has_radius() && before.multipleRadius)
-		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-			"\"" + name + "\" has a radius per edge -- set_dimension on the one to change");
-
-	// What it should become: the current settings with the request's changes.
-	FilletSettings target = before;
-	if (request->has_radius())
-		target.radius = request->radius();
-	if (request->has_tangent_propagation())
-		target.propagate = request->tangent_propagation();
-	std::vector<std::string> items = before.Items();
-	std::map<std::string, std::string> labels;
-	for (int i = 0; i < request->remove_edges_size(); ++i)
-	{
-		const auto it = std::find(items.begin(), items.end(), request->remove_edges(i));
-		if (it == items.end())
+		FilletSettings before;
+		if (grpc::Status status = DescribeFillet(doc, ext, feature, response->mutable_before(), &before); !status.ok())
+			return status;
+		if (!anyChange)
+			return grpc::Status::OK;
+		if (before.type != swFeatureFilletType_Simple)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"\"" + name + "\" isn't a constant-radius fillet (swFeatureFilletType_e " + std::to_string(before.type) +
+				"), which is all edit_fillet changes -- set_dimension for its sizes, or delete it and make it again");
+		if (request->has_radius() && before.multipleRadius)
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				"remove_edges entry " + std::to_string(i + 1) + " isn't one of the edges or faces \"" + name +
-				"\" rounds -- give ids from its own list (edit_fillet with only the feature reports it)");
-		items.erase(it);
-	}
-	auto addItems = [&](const google::protobuf::RepeatedPtrField<std::string>& list, const std::string& field) {
-		for (int i = 0; i < list.size(); ++i)
-			if (std::find(items.begin(), items.end(), list[i]) == items.end())
-			{
-				items.push_back(list[i]);
-				labels.emplace(list[i], field + " entry " + std::to_string(i + 1));
-			}
-	};
-	if (request->edges_size() > 0)
-		items.clear();
-	addItems(request->edges(), "edges");
-	addItems(request->add_edges(), "add_edges");
-	if (items.empty() && before.otherItems == 0)
-		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-			"that leaves \"" + name + "\" nothing to round -- delete it instead");
+				"\"" + name + "\" has a radius per edge -- set_dimension on the one to change");
 
-	const std::vector<std::string> oldItems = before.Items();
-	DefinitionEdit edit;
-	edit.apply = [&](bool& modified) {
-		return ApplyFillet(doc, ext, feature, target, items, labels, modified);
-	};
-	edit.restore = [&]() {
-		bool ignored = false;
-		ApplyFillet(doc, ext, feature, before, oldItems, {}, ignored);
-	};
-	edit.check = [&]() -> std::string {
-		FilletSettings now;
-		if (!ReadFilletNow(doc, ext, feature, now).ok())
-			return "no definition SolidWorks would hand out";
-		if (std::abs(now.radius - target.radius) > 1e-9)
-			return "radius " + std::to_string(now.radius * 1000.0) + " mm";
-		if (now.propagate != target.propagate)
-			return std::string("tangent propagation ") + (now.propagate ? "on" : "off");
-		if (newItems && now.Items().size() != items.size())
-			return std::to_string(now.Items().size()) + " edges and faces instead of " + std::to_string(items.size());
-		return {};
-	};
-	edit.rejected = "e.g. a radius too big for the edges (it must fit within the faces on both sides of each edge, "
-		"and next to other fillets), or edges SolidWorks can't round together";
-	if (grpc::Status status = EditDefinition(swApp, doc, feature, tree, edit, response->mutable_new_errors());
-		!status.ok())
-		return status;
-	return DescribeFillet(doc, ext, feature, response->mutable_after(), nullptr);
+		// What it should become: the current settings with the request's changes.
+		FilletSettings target = before;
+		if (request->has_radius())
+			target.radius = request->radius();
+		if (request->has_tangent_propagation())
+			target.propagate = request->tangent_propagation();
+		std::vector<std::string> items = before.Items();
+		std::map<std::string, std::string> labels;
+		for (int i = 0; i < request->remove_edges_size(); ++i)
+		{
+			const auto it = std::find(items.begin(), items.end(), request->remove_edges(i));
+			if (it == items.end())
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"remove_edges entry " + std::to_string(i + 1) + " isn't one of the edges or faces \"" + name +
+					"\" rounds -- give ids from its own list (edit_fillet with only the feature reports it)");
+			items.erase(it);
+		}
+		auto addItems = [&](const google::protobuf::RepeatedPtrField<std::string>& list, const std::string& field) {
+			for (int i = 0; i < list.size(); ++i)
+				if (std::find(items.begin(), items.end(), list[i]) == items.end())
+				{
+					items.push_back(list[i]);
+					labels.emplace(list[i], field + " entry " + std::to_string(i + 1));
+				}
+		};
+		if (request->edges_size() > 0)
+			items.clear();
+		addItems(request->edges(), "edges");
+		addItems(request->add_edges(), "add_edges");
+		if (items.empty() && before.otherItems == 0)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"that leaves \"" + name + "\" nothing to round -- delete it instead");
+
+		const std::vector<std::string> oldItems = before.Items();
+		DefinitionEdit edit;
+		edit.apply = [&](bool& modified) {
+			return ApplyFillet(doc, ext, feature, target, items, labels, modified);
+		};
+		edit.restore = [&]() {
+			bool ignored = false;
+			ApplyFillet(doc, ext, feature, before, oldItems, {}, ignored);
+		};
+		edit.check = [&]() -> std::string {
+			FilletSettings now;
+			if (!ReadFilletNow(doc, ext, feature, now).ok())
+				return "no definition SolidWorks would hand out";
+			if (std::abs(now.radius - target.radius) > 1e-9)
+				return "radius " + std::to_string(now.radius * 1000.0) + " mm";
+			if (now.propagate != target.propagate)
+				return std::string("tangent propagation ") + (now.propagate ? "on" : "off");
+			if (newItems && now.Items().size() != items.size())
+				return std::to_string(now.Items().size()) + " edges and faces instead of " + std::to_string(items.size());
+			return {};
+		};
+		edit.rejected = "e.g. a radius too big for the edges (it must fit within the faces on both sides of each edge, "
+			"and next to other fillets), or edges SolidWorks can't round together";
+		if (grpc::Status status = EditDefinition(swApp, doc, feature, tree, edit, response->mutable_new_errors());
+			!status.ok())
+			return status;
+		return DescribeFillet(doc, ext, feature, response->mutable_after(), nullptr);
+	});
 }

@@ -94,7 +94,7 @@ namespace
 	}
 }
 
-grpc::Status SolidWorksService::ShellBody(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::ShellBody(grpc::ServerContext* context,
 	const sld_mcp::v1::ShellBodyRequest* request,
 	sld_mcp::v1::EdgeFeatureResponse* response)
 {
@@ -111,102 +111,96 @@ grpc::Status SolidWorksService::ShellBody(grpc::ServerContext* /*context*/,
 		if (!(std::isfinite(entry.thickness()) && entry.thickness() > 0.0))
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "face thicknesses must be positive");
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-
-	ATL::CComPtr<IModelDoc2> doc;
-	if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-
-	Selection open;
-	for (int i = 0; i < request->open_faces_size(); ++i)
-		if (grpc::Status status = AddFace(doc, ext, request->open_faces(i), kOpenFaceMark,
-				"open_faces entry " + std::to_string(i + 1), open);
-			!status.ok())
+	return m_executor.Execute(context, "ShellBody", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
 			return status;
-	Selection thick;
-	for (int i = 0; i < request->face_thicknesses_size(); ++i)
-		if (grpc::Status status = AddFace(doc, ext, request->face_thicknesses(i).face(), kThickFaceMark,
-				"face_thicknesses entry " + std::to_string(i + 1), thick);
-			!status.ok())
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
 			return status;
-	std::vector<ATL::CComPtr<IBody2>> bodies;
-	if (!request->body().empty())
-	{
-		ATL::CComPtr<IDispatch> obj;
-		if (grpc::Status status = ResolvePersistId(ext, request->body(), obj); !status.ok())
-			return grpc::Status(status.error_code(), "body " + status.error_message());
-		ATL::CComQIPtr<IBody2> body(obj.p);
-		if (!body)
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "body: that isn't a body");
-		bodies.push_back(body);
-	}
 
-	// With nothing selected SolidWorks shells a lone body, and with several
-	// bodies makes nothing, without saying why. A closed shell with walls of
-	// their own thickness in such a part makes nothing either, and with the
-	// body selected too builds the wrong walls (6272 mm^3 for 4832). Faces of
-	// two bodies make nothing. (All seen 2026-10-31.)
-	const int bodyCount = SolidBodyCount(doc);
-	if (bodyCount == 0)
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "the active part has no solid body to shell");
-	if (bodyCount > 1 && open.picks.empty())
-	{
-		if (!thick.picks.empty())
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				"SolidWorks can't make a closed shell with face_thicknesses in a part with several solid bodies "
-				"(this one has " + std::to_string(bodyCount) + "): give open_faces too, or use one even thickness");
-		if (bodies.empty())
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				"this part has " + std::to_string(bodyCount) +
-				" solid bodies: say which to shell with `body` (a body id from inspect_model), or give open_faces");
-	}
-	if (grpc::Status status = CheckOneBody(open, thick); !status.ok())
-		return status;
+		Selection open;
+		for (int i = 0; i < request->open_faces_size(); ++i)
+			if (grpc::Status status = AddFace(doc, ext, request->open_faces(i), kOpenFaceMark,
+					"open_faces entry " + std::to_string(i + 1), open);
+				!status.ok())
+				return status;
+		Selection thick;
+		for (int i = 0; i < request->face_thicknesses_size(); ++i)
+			if (grpc::Status status = AddFace(doc, ext, request->face_thicknesses(i).face(), kThickFaceMark,
+					"face_thicknesses entry " + std::to_string(i + 1), thick);
+				!status.ok())
+				return status;
+		std::vector<ATL::CComPtr<IBody2>> bodies;
+		if (!request->body().empty())
+		{
+			ATL::CComPtr<IDispatch> obj;
+			if (grpc::Status status = ResolvePersistId(ext, request->body(), obj); !status.ok())
+				return grpc::Status(status.error_code(), "body " + status.error_message());
+			ATL::CComQIPtr<IBody2> body(obj.p);
+			if (!body)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "body: that isn't a body");
+			bodies.push_back(body);
+		}
 
-	PreferenceToggles toggles(swApp);
-	toggles.Set(swShowErrorsEveryRebuild, false);
+		// With nothing selected SolidWorks shells a lone body, and with several
+		// bodies makes nothing, without saying why. A closed shell with walls of
+		// their own thickness in such a part makes nothing either, and with the
+		// body selected too builds the wrong walls (6272 mm^3 for 4832). Faces of
+		// two bodies make nothing. (All seen 2026-10-31.)
+		const int bodyCount = SolidBodyCount(doc);
+		if (bodyCount == 0)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "the active part has no solid body to shell");
+		if (bodyCount > 1 && open.picks.empty())
+		{
+			if (!thick.picks.empty())
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"SolidWorks can't make a closed shell with face_thicknesses in a part with several solid bodies "
+					"(this one has " + std::to_string(bodyCount) + "): give open_faces too, or use one even thickness");
+			if (bodies.empty())
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"this part has " + std::to_string(bodyCount) +
+					" solid bodies: say which to shell with `body` (a body id from inspect_model), or give open_faces");
+		}
+		if (grpc::Status status = CheckOneBody(open, thick); !status.ok())
+			return status;
 
-	if (grpc::Status status = SelectForShell(doc, ext, *request, thick, open, bodies); !status.ok())
-		return status;
+		PreferenceToggles toggles(swApp);
+		toggles.Set(swShowErrorsEveryRebuild, false);
 
-	// InsertFeatureShell returns nothing: the new feature is the new last one.
-	const double volumeBefore = SolidVolume(doc);
-	ATL::CComPtr<IFeature> lastBefore;
-	doc->IFeatureByPositionReverse(0, &lastBefore);
-	HRESULT hr = doc->InsertFeatureShell(thickness, request->outward() ? VARIANT_TRUE : VARIANT_FALSE);
-	doc->ClearSelection2(VARIANT_TRUE);
-	if (FAILED(hr))
-		return ComError("IModelDoc2::InsertFeatureShell", hr);
-	ATL::CComPtr<IFeature> shell;
-	doc->IFeatureByPositionReverse(0, &shell);
+		if (grpc::Status status = SelectForShell(doc, ext, *request, thick, open, bodies); !status.ok())
+			return status;
 
-	const std::string tooThick =
-		"the walls are probably too thick for the body (inward walls must leave room inside: less than half "
-		"its thinnest part when closed, and no more than its smallest curve radius); try thinner ones, or outward";
-	if (!shell || SameObject(shell, lastBefore))
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks couldn't shell that body -- " + tooThick);
-	if (grpc::Status status = KeepIfBuilt(doc, shell, tooThick); !status.ok())
-		return status;
-	// Walls that fill a closed body exactly make a feature with faces and no
-	// error that leaves the body as it was (seen 2026-10-31).
-	if (std::abs(SolidVolume(doc) - volumeBefore) < kVolumeTolerance)
-	{
-		const std::string name = FeatureName(shell);
-		DeleteFeature(doc, shell);
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			"SolidWorks made " + name + " but it changed nothing, so it was deleted again -- " + tooThick);
-	}
+		// InsertFeatureShell returns nothing: the new feature is the new last one.
+		const double volumeBefore = SolidVolume(doc);
+		ATL::CComPtr<IFeature> lastBefore;
+		doc->IFeatureByPositionReverse(0, &lastBefore);
+		HRESULT hr = doc->InsertFeatureShell(thickness, request->outward() ? VARIANT_TRUE : VARIANT_FALSE);
+		doc->ClearSelection2(VARIANT_TRUE);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::InsertFeatureShell", hr);
+		ATL::CComPtr<IFeature> shell;
+		doc->IFeatureByPositionReverse(0, &shell);
 
-	response->set_feature_name(FeatureName(shell));
-	return grpc::Status::OK;
+		const std::string tooThick =
+			"the walls are probably too thick for the body (inward walls must leave room inside: less than half "
+			"its thinnest part when closed, and no more than its smallest curve radius); try thinner ones, or outward";
+		if (!shell || SameObject(shell, lastBefore))
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks couldn't shell that body -- " + tooThick);
+		if (grpc::Status status = KeepIfBuilt(doc, shell, tooThick); !status.ok())
+			return status;
+		// Walls that fill a closed body exactly make a feature with faces and no
+		// error that leaves the body as it was (seen 2026-10-31).
+		if (std::abs(SolidVolume(doc) - volumeBefore) < kVolumeTolerance)
+		{
+			const std::string name = FeatureName(shell);
+			DeleteFeature(doc, shell);
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"SolidWorks made " + name + " but it changed nothing, so it was deleted again -- " + tooThick);
+		}
+
+		response->set_feature_name(FeatureName(shell));
+		return grpc::Status::OK;
+	});
 }

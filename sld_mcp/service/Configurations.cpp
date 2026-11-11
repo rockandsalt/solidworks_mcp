@@ -281,52 +281,46 @@ namespace
 	}
 }
 
-grpc::Status SolidWorksService::Configurations(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::Configurations(grpc::ServerContext* context,
 	const sld_mcp::v1::ConfigurationsRequest* request,
 	sld_mcp::v1::ConfigurationsResponse* response)
 {
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-
-	ATL::CComPtr<IModelDoc2> doc;
-	long docType = swDocNONE;
-	if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
-		return status;
-
-	const ConfigurationList before = ReadConfigurations(doc);
-	using Action = sld_mcp::v1::ConfigurationsRequest;
-	if (request->action_case() != Action::ACTION_NOT_SET)
-		if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
+	return m_executor.Execute(context, "Configurations", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		long docType = swDocNONE;
+		if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
 			return status;
-	grpc::Status status = grpc::Status::OK;
-	switch (request->action_case())
-	{
-	case Action::kCreate:
-		status = Create(doc, before, request->create());
-		break;
-	case Action::kActivate:
-		status = Activate(doc, before, request->activate());
-		break;
-	case Action::kDelete:
-		status = Delete(doc, before, request->delete_(), response);
-		break;
-	default:
-		break;
-	}
-	if (!status.ok())
-		return status;
 
-	ListConfigurations(doc, ReadConfigurations(doc), response);
-	return grpc::Status::OK;
+		const ConfigurationList before = ReadConfigurations(doc);
+		using Action = sld_mcp::v1::ConfigurationsRequest;
+		if (request->action_case() != Action::ACTION_NOT_SET)
+			if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
+				return status;
+		grpc::Status status = grpc::Status::OK;
+		switch (request->action_case())
+		{
+		case Action::kCreate:
+			status = Create(doc, before, request->create());
+			break;
+		case Action::kActivate:
+			status = Activate(doc, before, request->activate());
+			break;
+		case Action::kDelete:
+			status = Delete(doc, before, request->delete_(), response);
+			break;
+		default:
+			break;
+		}
+		if (!status.ok())
+			return status;
+
+		ListConfigurations(doc, ReadConfigurations(doc), response);
+		return grpc::Status::OK;
+	});
 }
 
-grpc::Status SolidWorksService::SetSuppression(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::SetSuppression(grpc::ServerContext* context,
 	const sld_mcp::v1::SetSuppressionRequest* request,
 	sld_mcp::v1::SetSuppressionResponse* response)
 {
@@ -336,154 +330,148 @@ grpc::Status SolidWorksService::SetSuppression(grpc::ServerContext* /*context*/,
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
 			"at most " + std::to_string(kMaxItems) + " per call");
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "SetSuppression", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		long docType = swDocNONE;
+		if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
+			return status;
+		if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
+			return status;
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		ATL::CComQIPtr<IAssemblyDoc> assembly;
+		if (docType == swDocASSEMBLY)
+			assembly = doc;
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
+		const ConfigurationList configs = ReadConfigurations(doc);
+		std::vector<std::string> targets;
+		const auto scope = request->scope() == sld_mcp::v1::CONFIGURATION_SCOPE_UNSPECIFIED
+			? sld_mcp::v1::CONFIGURATION_SCOPE_ACTIVE : request->scope();
+		if (grpc::Status status = ScopeConfigurations(configs, scope, request->configurations(), targets); !status.ok())
+			return status;
 
-	ATL::CComPtr<IModelDoc2> doc;
-	long docType = swDocNONE;
-	if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
-		return status;
-	if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	ATL::CComQIPtr<IAssemblyDoc> assembly;
-	if (docType == swDocASSEMBLY)
-		assembly = doc;
-
-	const ConfigurationList configs = ReadConfigurations(doc);
-	std::vector<std::string> targets;
-	const auto scope = request->scope() == sld_mcp::v1::CONFIGURATION_SCOPE_UNSPECIFIED
-		? sld_mcp::v1::CONFIGURATION_SCOPE_ACTIVE : request->scope();
-	if (grpc::Status status = ScopeConfigurations(configs, scope, request->configurations(), targets); !status.ok())
-		return status;
-
-	PersistIds ids(ext);
-	const std::vector<TreeFeature> tree = FeatureTree(doc);
-	std::vector<Item> items;
-	for (int i = 0; i < request->items_size(); ++i)
-	{
-		Item item;
-		if (grpc::Status status = ResolveItem(ext, assembly, tree, ids, request->items(i), item); !status.ok())
-			return grpc::Status(status.error_code(), "item " + std::to_string(i + 1) + ": " + status.error_message());
-		if (std::none_of(items.begin(), items.end(), [&](const Item& o) { return o.name == item.name; }))
-			items.push_back(std::move(item));
-	}
-
-	const bool suppress = request->suppressed();
-	std::map<IFeature*, bool> activeBefore;
-	for (const TreeFeature& f : tree)
-		activeBefore[f.feature] = ActiveSuppressed(f.feature);
-	const auto errorsBefore = FeatureErrors(tree);
-
-	PreferenceToggles toggles(swApp);
-	toggles.Set(swShowErrorsEveryRebuild, false);
-
-	// Features: all configurations at once, without activating them.
-	std::map<std::string, sld_mcp::v1::SuppressionChange> changes;
-	for (const Item& item : items)
-	{
-		if (!item.feature)
-			continue;
-		const std::vector<bool> was = FeatureSuppression(item.feature, targets);
-		VARIANT_BOOL ok = VARIANT_FALSE;
-		item.feature->SetSuppression2(suppress ? swSuppressFeature : swUnSuppressFeature, swSpecifyConfiguration,
-			ToBstrArray(targets), &ok);
-		const std::vector<bool> now = FeatureSuppression(item.feature, targets);
-		sld_mcp::v1::SuppressionChange& change = changes[item.name];
-		change.set_name(item.name);
-		change.set_kind("feature");
-		for (size_t i = 0; i < targets.size(); ++i)
+		PersistIds ids(ext);
+		const std::vector<TreeFeature> tree = FeatureTree(doc);
+		std::vector<Item> items;
+		for (int i = 0; i < request->items_size(); ++i)
 		{
-			sld_mcp::v1::SuppressionState* state = change.add_states();
-			state->set_configuration(targets[i]);
-			const bool isSuppressed = i < now.size() && now[i];
-			state->set_suppressed(isSuppressed);
-			state->set_changed(i < was.size() && i < now.size() && was[i] != isSuppressed);
+			Item item;
+			if (grpc::Status status = ResolveItem(ext, assembly, tree, ids, request->items(i), item); !status.ok())
+				return grpc::Status(status.error_code(), "item " + std::to_string(i + 1) + ": " + status.error_message());
+			if (std::none_of(items.begin(), items.end(), [&](const Item& o) { return o.name == item.name; }))
+				items.push_back(std::move(item));
 		}
-	}
 
-	// Components: IComponent2::SetSuppression2 acts on the active
-	// configuration only, and a component reached through another
-	// configuration's root refuses it (seen 2026-11-02), so each
-	// configuration in turn is activated.
-	const bool anyComponent = std::any_of(items.begin(), items.end(), [](const Item& i) { return !i.component.empty(); });
-	std::string shownNow = configs.active;
-	grpc::Status failure = grpc::Status::OK;
-	for (const std::string& configuration : anyComponent ? targets : std::vector<std::string>())
-	{
-		if (configuration != shownNow)
-		{
-			VARIANT_BOOL shown = VARIANT_FALSE;
-			if (FAILED(doc->ShowConfiguration2(FromUtf8(configuration), &shown)) || !shown)
-			{
-				failure = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-					"SolidWorks didn't activate the configuration \"" + configuration + "\" to change its components");
-				break;
-			}
-			shownNow = configuration;
-		}
+		const bool suppress = request->suppressed();
+		std::map<IFeature*, bool> activeBefore;
+		for (const TreeFeature& f : tree)
+			activeBefore[f.feature] = ActiveSuppressed(f.feature);
+		const auto errorsBefore = FeatureErrors(tree);
+
+		PreferenceToggles toggles(swApp);
+		toggles.Set(swShowErrorsEveryRebuild, false);
+
+		// Features: all configurations at once, without activating them.
+		std::map<std::string, sld_mcp::v1::SuppressionChange> changes;
 		for (const Item& item : items)
 		{
-			if (item.component.empty())
+			if (!item.feature)
 				continue;
-			ATL::CComPtr<IComponent2> component;
-			assembly->GetComponentByName(FromUtf8(item.component), &component);
-			const bool was = component && IsSuppressed(component);
-			if (component && was != suppress)
-			{
-				long result = 0;
-				component->SetSuppression2(suppress ? swComponentSuppressed : swComponentFullyResolved, &result);
-			}
-			const bool now = component && IsSuppressed(component);
+			const std::vector<bool> was = FeatureSuppression(item.feature, targets);
+			VARIANT_BOOL ok = VARIANT_FALSE;
+			item.feature->SetSuppression2(suppress ? swSuppressFeature : swUnSuppressFeature, swSpecifyConfiguration,
+				ToBstrArray(targets), &ok);
+			const std::vector<bool> now = FeatureSuppression(item.feature, targets);
 			sld_mcp::v1::SuppressionChange& change = changes[item.name];
 			change.set_name(item.name);
-			change.set_kind("component");
-			sld_mcp::v1::SuppressionState* state = change.add_states();
-			state->set_configuration(configuration);
-			state->set_suppressed(now);
-			state->set_changed(component && was != now);
+			change.set_kind("feature");
+			for (size_t i = 0; i < targets.size(); ++i)
+			{
+				sld_mcp::v1::SuppressionState* state = change.add_states();
+				state->set_configuration(targets[i]);
+				const bool isSuppressed = i < now.size() && now[i];
+				state->set_suppressed(isSuppressed);
+				state->set_changed(i < was.size() && i < now.size() && was[i] != isSuppressed);
+			}
 		}
-	}
-	if (shownNow != configs.active)
-	{
-		VARIANT_BOOL shown = VARIANT_FALSE;
-		doc->ShowConfiguration2(FromUtf8(configs.active), &shown);
-	}
 
-	VARIANT_BOOL rebuilt = VARIANT_FALSE;
-	doc->EditRebuild3(&rebuilt);
-
-	bool anyChanged = false, anyRefused = false;
-	for (const Item& item : items)
-	{
-		const sld_mcp::v1::SuppressionChange& change = changes[item.name];
-		for (const auto& state : change.states())
+		// Components: IComponent2::SetSuppression2 acts on the active
+		// configuration only, and a component reached through another
+		// configuration's root refuses it (seen 2026-11-02), so each
+		// configuration in turn is activated.
+		const bool anyComponent = std::any_of(items.begin(), items.end(), [](const Item& i) { return !i.component.empty(); });
+		std::string shownNow = configs.active;
+		grpc::Status failure = grpc::Status::OK;
+		for (const std::string& configuration : anyComponent ? targets : std::vector<std::string>())
 		{
-			anyChanged = anyChanged || state.changed();
-			anyRefused = anyRefused || state.suppressed() != suppress;
+			if (configuration != shownNow)
+			{
+				VARIANT_BOOL shown = VARIANT_FALSE;
+				if (FAILED(doc->ShowConfiguration2(FromUtf8(configuration), &shown)) || !shown)
+				{
+					failure = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+						"SolidWorks didn't activate the configuration \"" + configuration + "\" to change its components");
+					break;
+				}
+				shownNow = configuration;
+			}
+			for (const Item& item : items)
+			{
+				if (item.component.empty())
+					continue;
+				ATL::CComPtr<IComponent2> component;
+				assembly->GetComponentByName(FromUtf8(item.component), &component);
+				const bool was = component && IsSuppressed(component);
+				if (component && was != suppress)
+				{
+					long result = 0;
+					component->SetSuppression2(suppress ? swComponentSuppressed : swComponentFullyResolved, &result);
+				}
+				const bool now = component && IsSuppressed(component);
+				sld_mcp::v1::SuppressionChange& change = changes[item.name];
+				change.set_name(item.name);
+				change.set_kind("component");
+				sld_mcp::v1::SuppressionState* state = change.add_states();
+				state->set_configuration(configuration);
+				state->set_suppressed(now);
+				state->set_changed(component && was != now);
+			}
 		}
-		*response->add_items() = change;
-	}
-	for (const TreeFeature& f : tree)
-		if (f.type != kComponentType && ActiveSuppressed(f.feature) != activeBefore[f.feature] &&
-			std::none_of(items.begin(), items.end(), [&](const Item& i) { return i.name == f.name; }))
-			response->add_also_changed(f.name);
-	response->set_active(configs.active);
-	AddNewErrors(errorsBefore, FeatureErrors(tree), response->mutable_new_errors());
+		if (shownNow != configs.active)
+		{
+			VARIANT_BOOL shown = VARIANT_FALSE;
+			doc->ShowConfiguration2(FromUtf8(configs.active), &shown);
+		}
 
-	if (!failure.ok())
-		return failure;
-	if (anyRefused && !anyChanged)
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			std::string("SolidWorks didn't ") + (suppress ? "suppress " : "unsuppress ") + items[0].name +
-			(items.size() > 1 ? " or the others" : "") + " in " + (targets.size() > 1 ? "those configurations" : "\"" + targets[0] + "\""));
-	return grpc::Status::OK;
+		VARIANT_BOOL rebuilt = VARIANT_FALSE;
+		doc->EditRebuild3(&rebuilt);
+
+		bool anyChanged = false, anyRefused = false;
+		for (const Item& item : items)
+		{
+			const sld_mcp::v1::SuppressionChange& change = changes[item.name];
+			for (const auto& state : change.states())
+			{
+				anyChanged = anyChanged || state.changed();
+				anyRefused = anyRefused || state.suppressed() != suppress;
+			}
+			*response->add_items() = change;
+		}
+		for (const TreeFeature& f : tree)
+			if (f.type != kComponentType && ActiveSuppressed(f.feature) != activeBefore[f.feature] &&
+				std::none_of(items.begin(), items.end(), [&](const Item& i) { return i.name == f.name; }))
+				response->add_also_changed(f.name);
+		response->set_active(configs.active);
+		AddNewErrors(errorsBefore, FeatureErrors(tree), response->mutable_new_errors());
+
+		if (!failure.ok())
+			return failure;
+		if (anyRefused && !anyChanged)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				std::string("SolidWorks didn't ") + (suppress ? "suppress " : "unsuppress ") + items[0].name +
+				(items.size() > 1 ? " or the others" : "") + " in " + (targets.size() > 1 ? "those configurations" : "\"" + targets[0] + "\""));
+		return grpc::Status::OK;
+	});
 }

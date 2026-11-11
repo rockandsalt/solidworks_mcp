@@ -133,114 +133,109 @@ namespace
 	}
 }
 
-grpc::Status SolidWorksService::AddModelAnnotation(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::AddModelAnnotation(grpc::ServerContext* context,
 	const sld_mcp::v1::AddModelAnnotationRequest* request,
 	sld_mcp::v1::AddModelAnnotationResponse* response)
 {
 	if (grpc::Status status = ValidateRequest(*request); !status.ok())
 		return status;
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDoc2> doc;
-	long docType = swDocNONE;
-	if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
-		return status;
-	if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	const sld_mcp::v1::GdtSymbol& symbol = request->symbol();
-
-	// Everything looked up before anything changes.
-	{
-		bool truncated = false;
-		if (grpc::Status status = CheckDatumLabelFree(symbol, DatumLabels(AllAnnotations(doc, ext, truncated)));
-			!status.ok())
+	return m_executor.Execute(context, "AddModelAnnotation", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		long docType = swDocNONE;
+		if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
 			return status;
-	}
-	ATL::CComPtr<IDispatch> entity;
-	if (!request->attach_to().empty())
-	{
-		if (grpc::Status status = ResolvePersistId(ext, request->attach_to(), entity); !status.ok())
+		if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
 			return status;
-		if (!ATL::CComQIPtr<IFace2>(entity.p) && !ATL::CComQIPtr<IEdge>(entity.p))
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				"the symbol goes on a face or an edge");
-	}
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		const sld_mcp::v1::GdtSymbol& symbol = request->symbol();
 
-	// Selected, then inserted: SolidWorks attaches a new frame / datum
-	// symbol to what's selected. A face picked at a point gets the arrow
-	// there; picked as a whole, at its middle (probed 2026-10-24).
-	doc->ClearSelection2(VARIANT_TRUE);
-	if (entity)
-	{
-		ATL::CComPtr<ISelectionMgr> selections;
-		ATL::CComPtr<ISelectData> data;
-		if (request->has_arrow_at() && SUCCEEDED(doc->get_ISelectionManager(&selections)) && selections &&
-			SUCCEEDED(selections->CreateSelectData(&data)) && data)
+		// Everything looked up before anything changes.
 		{
-			data->put_X(request->arrow_at().x());
-			data->put_Y(request->arrow_at().y());
-			data->put_Z(request->arrow_at().z());
+			bool truncated = false;
+			if (grpc::Status status = CheckDatumLabelFree(symbol, DatumLabels(AllAnnotations(doc, ext, truncated)));
+				!status.ok())
+				return status;
 		}
-		VARIANT_BOOL selected = VARIANT_FALSE;
-		ATL::CComQIPtr<IEntity> selectable(entity.p);
-		if (!selectable || FAILED(selectable->Select4(VARIANT_FALSE, data, &selected)) || !selected)
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks wouldn't select the face / edge");
-	}
+		ATL::CComPtr<IDispatch> entity;
+		if (!request->attach_to().empty())
+		{
+			if (grpc::Status status = ResolvePersistId(ext, request->attach_to(), entity); !status.ok())
+				return status;
+			if (!ATL::CComQIPtr<IFace2>(entity.p) && !ATL::CComQIPtr<IEdge>(entity.p))
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"the symbol goes on a face or an edge");
+		}
 
-	ATL::CComPtr<IAnnotation> annotation;
-	const sld_mcp::v1::Vec3& insertAt = request->has_position() ? request->position() : request->arrow_at();
-	grpc::Status status = InsertGdtSymbol(doc, ext, symbol, Eigen::Vector3d(insertAt.x(), insertAt.y(), insertAt.z()), annotation);
-	doc->ClearSelection2(VARIANT_TRUE);
-	if (!status.ok())
-		return status;
-	auto fail = [&](grpc::Status why) {
-		DeleteAnnotations(doc, ext, { annotation });
-		doc->GraphicsRedraw2();
-		return why;
-	};
-	if (entity && !GdtAttached(annotation))
-		return fail(grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			"SolidWorks didn't attach the symbol to the face / edge; it was deleted again"));
+		// Selected, then inserted: SolidWorks attaches a new frame / datum
+		// symbol to what's selected. A face picked at a point gets the arrow
+		// there; picked as a whole, at its middle (probed 2026-10-24).
+		doc->ClearSelection2(VARIANT_TRUE);
+		if (entity)
+		{
+			ATL::CComPtr<ISelectionMgr> selections;
+			ATL::CComPtr<ISelectData> data;
+			if (request->has_arrow_at() && SUCCEEDED(doc->get_ISelectionManager(&selections)) && selections &&
+				SUCCEEDED(selections->CreateSelectData(&data)) && data)
+			{
+				data->put_X(request->arrow_at().x());
+				data->put_Y(request->arrow_at().y());
+				data->put_Z(request->arrow_at().z());
+			}
+			VARIANT_BOOL selected = VARIANT_FALSE;
+			ATL::CComQIPtr<IEntity> selectable(entity.p);
+			if (!selectable || FAILED(selectable->Select4(VARIANT_FALSE, data, &selected)) || !selected)
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks wouldn't select the face / edge");
+		}
 
-	// Where the text goes. SolidWorks puts a frame's text on its arrow; a
-	// datum symbol already stands off its face.
-	std::optional<Eigen::Vector3d> position;
-	if (request->has_position())
-		position = Eigen::Vector3d(request->position().x(), request->position().y(), request->position().z());
-	else if (!symbol.has_datum() && !symbol.surface_finish().no_leader() && entity)
-		if (const auto tip = LeaderTip(annotation); tip)
-			if (const auto out = OutwardAt(entity, docType, *tip, ModelCenter(doc, docType)); out)
-				position = *tip + *out * kTextOffset;
-	if (position)
-	{
-		// It lands in the annotation view's plane (the depth along that view
-		// stays, probed 2026-10-24), so it isn't compared; the reply has
-		// where it went.
-		VARIANT_BOOL ok = VARIANT_FALSE;
-		Eigen::Vector3d now;
-		if (FAILED(annotation->SetPosition2(position->x(), position->y(), position->z(), &ok)) || !ok ||
-			!ReadPosition(annotation, now))
+		ATL::CComPtr<IAnnotation> annotation;
+		const sld_mcp::v1::Vec3& insertAt = request->has_position() ? request->position() : request->arrow_at();
+		grpc::Status status = InsertGdtSymbol(doc, ext, symbol, Eigen::Vector3d(insertAt.x(), insertAt.y(), insertAt.z()), annotation);
+		doc->ClearSelection2(VARIANT_TRUE);
+		if (!status.ok())
+			return status;
+		auto fail = [&](grpc::Status why) {
+			DeleteAnnotations(doc, ext, { annotation });
+			doc->GraphicsRedraw2();
+			return why;
+		};
+		if (entity && !GdtAttached(annotation))
 			return fail(grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				"SolidWorks didn't move the symbol's text; it was deleted again"));
-	}
-	doc->GraphicsRedraw2();
+				"SolidWorks didn't attach the symbol to the face / edge; it was deleted again"));
 
-	PersistIds ids(ext);
-	ATL::CComQIPtr<IMathUtility> math;
-	std::optional<ComponentList> components;
-	if (docType == swDocASSEMBLY && GetMathUtility(swApp, math).ok())
-		components.emplace(ids, math, response->mutable_components());
-	DescribeAnnotation(annotation, ids, components ? &*components : nullptr, response->mutable_annotation());
-	DescribeAnnotationView(annotation, response);
-	return grpc::Status::OK;
+		// Where the text goes. SolidWorks puts a frame's text on its arrow; a
+		// datum symbol already stands off its face.
+		std::optional<Eigen::Vector3d> position;
+		if (request->has_position())
+			position = Eigen::Vector3d(request->position().x(), request->position().y(), request->position().z());
+		else if (!symbol.has_datum() && !symbol.surface_finish().no_leader() && entity)
+			if (const auto tip = LeaderTip(annotation); tip)
+				if (const auto out = OutwardAt(entity, docType, *tip, ModelCenter(doc, docType)); out)
+					position = *tip + *out * kTextOffset;
+		if (position)
+		{
+			// It lands in the annotation view's plane (the depth along that view
+			// stays, probed 2026-10-24), so it isn't compared; the reply has
+			// where it went.
+			VARIANT_BOOL ok = VARIANT_FALSE;
+			Eigen::Vector3d now;
+			if (FAILED(annotation->SetPosition2(position->x(), position->y(), position->z(), &ok)) || !ok ||
+				!ReadPosition(annotation, now))
+				return fail(grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+					"SolidWorks didn't move the symbol's text; it was deleted again"));
+		}
+		doc->GraphicsRedraw2();
+
+		PersistIds ids(ext);
+		ATL::CComQIPtr<IMathUtility> math;
+		std::optional<ComponentList> components;
+		if (docType == swDocASSEMBLY && GetMathUtility(swApp, math).ok())
+			components.emplace(ids, math, response->mutable_components());
+		DescribeAnnotation(annotation, ids, components ? &*components : nullptr, response->mutable_annotation());
+		DescribeAnnotationView(annotation, response);
+		return grpc::Status::OK;
+	});
 }

@@ -273,7 +273,7 @@ namespace
 	}
 }
 
-grpc::Status SolidWorksService::SketchCorners(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::SketchCorners(grpc::ServerContext* context,
 	const sld_mcp::v1::SketchCornersRequest* request,
 	sld_mcp::v1::SketchEditResponse* response)
 {
@@ -283,67 +283,62 @@ grpc::Status SolidWorksService::SketchCorners(grpc::ServerContext* /*context*/,
 	std::vector<sld_mcp::v1::SketchItemRef> refs(request->items().begin(), request->items().end());
 	const int corners = refs.front().point() ? static_cast<int>(refs.size()) : 1;
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
+	return m_executor.Execute(context, "SketchCorners", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		return RunSketchEdit(swApp, request->sketch_name(), refs, response, [&](OpenEdit& open) -> grpc::Status {
+			// SolidWorks puts the first distance on the segment selected last.
+			std::vector<sld_mcp::v1::SketchItemRef> order = refs;
+			if (!fillet && !refs.front().point())
+				std::reverse(order.begin(), order.end());
+			if (size_t failed = 0; !SelectSketchItems(open.doc, open.items, order, failed))
+				return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks wouldn't select an entity -- nothing was changed");
 
-	return RunSketchEdit(swApp, request->sketch_name(), refs, response, [&](OpenEdit& open) -> grpc::Status {
-		// SolidWorks puts the first distance on the segment selected last.
-		std::vector<sld_mcp::v1::SketchItemRef> order = refs;
-		if (!fillet && !refs.front().point())
-			std::reverse(order.begin(), order.end());
-		if (size_t failed = 0; !SelectSketchItems(open.doc, open.items, order, failed))
-			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks wouldn't select an entity -- nothing was changed");
-
-		ATL::CComPtr<ISketchSegment> made;
-		HRESULT hr = S_OK;
-		if (fillet)
-			// Whatever a dimension or relation holds onto at the corner stays, on a
-			// point there (the fillet command's default; 0 would ask in a dialog).
-			hr = open.sketchManager->CreateFillet(request->fillet_radius(), swConstrainedCornerKeepGeometry, &made);
-		else
-		{
-			const auto& chamfer = request->chamfer();
-			long type = swSketchChamfer_DistanceEqual;
-			double second = chamfer.distance();
-			if (chamfer.kind() != sld_mcp::v1::SKETCH_CHAMFER_KIND_EQUAL)
+			ATL::CComPtr<ISketchSegment> made;
+			HRESULT hr = S_OK;
+			if (fillet)
+				// Whatever a dimension or relation holds onto at the corner stays, on a
+				// point there (the fillet command's default; 0 would ask in a dialog).
+				hr = open.sketchManager->CreateFillet(request->fillet_radius(), swConstrainedCornerKeepGeometry, &made);
+			else
 			{
-				type = chamfer.kind() == sld_mcp::v1::SKETCH_CHAMFER_KIND_ANGLE ? swSketchChamfer_DistanceAngle
-				                                                                 : swSketchChamfer_DistanceDistance;
-				second = chamfer.second();
+				const auto& chamfer = request->chamfer();
+				long type = swSketchChamfer_DistanceEqual;
+				double second = chamfer.distance();
+				if (chamfer.kind() != sld_mcp::v1::SKETCH_CHAMFER_KIND_EQUAL)
+				{
+					type = chamfer.kind() == sld_mcp::v1::SKETCH_CHAMFER_KIND_ANGLE ? swSketchChamfer_DistanceAngle
+					                                                                 : swSketchChamfer_DistanceDistance;
+					second = chamfer.second();
+				}
+				hr = open.sketchManager->CreateChamfer(type, chamfer.distance(), second, &made);
 			}
-			hr = open.sketchManager->CreateChamfer(type, chamfer.distance(), second, &made);
-		}
-		if (FAILED(hr))
-			return ComError(fillet ? "ISketchManager::CreateFillet" : "ISketchManager::CreateChamfer", hr);
+			if (FAILED(hr))
+				return ComError(fillet ? "ISketchManager::CreateFillet" : "ISketchManager::CreateChamfer", hr);
 
-		// Of two corners with no room for both it makes one and returns as usual
-		// (seen 2026-10-31), so count what came out.
-		const int count = open.CountNew(fillet ? swSketchARC : swSketchLINE);
-		if (count != corners)
-		{
-			if (count > 0)
-				open.Undo();
-			const std::string what = fillet ? "fillet" : "chamfer";
-			if (count > 0)
-				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-					"only " + std::to_string(count) + " of the " + std::to_string(corners) + " corners had room for this " +
-					what + "; nothing was changed -- make it smaller");
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, fillet
-				? "SolidWorks couldn't fillet that: the radius may be too big for the entities, or they're parallel, "
-				  "tangent or cross each other (trim_sketch_entity first); nothing was changed"
-				: "SolidWorks couldn't chamfer that: the sizes may be too big for the entities, or they don't touch "
-				  "(extend or trim them first); nothing was changed");
-		}
-		return grpc::Status::OK;
+			// Of two corners with no room for both it makes one and returns as usual
+			// (seen 2026-10-31), so count what came out.
+			const int count = open.CountNew(fillet ? swSketchARC : swSketchLINE);
+			if (count != corners)
+			{
+				if (count > 0)
+					open.Undo();
+				const std::string what = fillet ? "fillet" : "chamfer";
+				if (count > 0)
+					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+						"only " + std::to_string(count) + " of the " + std::to_string(corners) + " corners had room for this " +
+						what + "; nothing was changed -- make it smaller");
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, fillet
+					? "SolidWorks couldn't fillet that: the radius may be too big for the entities, or they're parallel, "
+					  "tangent or cross each other (trim_sketch_entity first); nothing was changed"
+					: "SolidWorks couldn't chamfer that: the sizes may be too big for the entities, or they don't touch "
+					  "(extend or trim them first); nothing was changed");
+			}
+			return grpc::Status::OK;
+		});
 	});
 }
 
-grpc::Status SolidWorksService::TrimSketchEntity(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::TrimSketchEntity(grpc::ServerContext* context,
 	const sld_mcp::v1::TrimSketchEntityRequest* request,
 	sld_mcp::v1::SketchEditResponse* response)
 {
@@ -368,92 +363,87 @@ grpc::Status SolidWorksService::TrimSketchEntity(grpc::ServerContext* /*context*
 	if (corner)
 		refs.push_back(request->other());
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-
-	return RunSketchEdit(swApp, request->sketch_name(), refs, response, [&](OpenEdit& open) -> grpc::Status {
-		// SketchTrim and SketchExtend take sketch coordinates.
-		double at[3] = {request->at().x(), request->at().y(), 0.0};
-		if (request->model_space())
-		{
-			SketchSpace space;
-			if (grpc::Status status = space.Init(swApp); !status.ok())
-				return status;
-			space.Attach(open.sketch);
-			const double model[3] = {request->at().x(), request->at().y(), request->at().z()};
-			double local[3];
-			if (!space.ToSketch(model, local))
-				return grpc::Status(grpc::StatusCode::INTERNAL, "couldn't map the point into the sketch's coordinates");
-			at[0] = local[0];
-			at[1] = local[1];
-		}
-
-		if (size_t failed = 0; !SelectSketchItems(open.doc, open.items, refs, failed))
-			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks wouldn't select an entity -- nothing was changed");
-
-		// SketchTrim's result says nothing: false for a piece it did remove, so
-		// what counts is what changed (seen 2026-10-31).
-		VARIANT_BOOL ok = VARIANT_FALSE;
-		const HRESULT hr = kind == sld_mcp::v1::SKETCH_TRIM_KIND_EXTEND
-			? open.sketchManager->SketchExtend(at[0], at[1], at[2], &ok)
-			: open.sketchManager->SketchTrim(corner ? swSketchTrimCorner : swSketchTrimClosest, at[0], at[1], at[2], &ok);
-		if (FAILED(hr))
-			return ComError(kind == sld_mcp::v1::SKETCH_TRIM_KIND_EXTEND ? "ISketchManager::SketchExtend"
-			                                                              : "ISketchManager::SketchTrim", hr);
-		if (!open.Changed())
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				corner ? "those two can't meet in a corner (parallel, or they already do?); nothing was changed"
-				: kind == sld_mcp::v1::SKETCH_TRIM_KIND_EXTEND ? "nothing is in the way of that entity to extend it to; nothing was changed"
-				: "SolidWorks couldn't trim that; nothing was changed");
-
-		SketchItems now;
-		now.Load(open.sketch);
-		const auto after = SegmentsOf(now);
-		if (corner)
-		{
-			// With entities that cross it keeps the part of each it chooses, whichever
-			// parts were picked (seen 2026-10-31), so only growing is left to it.
-			for (const auto& ref : refs)
+	return m_executor.Execute(context, "TrimSketchEntity", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		return RunSketchEdit(swApp, request->sketch_name(), refs, response, [&](OpenEdit& open) -> grpc::Status {
+			// SketchTrim and SketchExtend take sketch coordinates.
+			double at[3] = {request->at().x(), request->at().y(), 0.0};
+			if (request->model_space())
 			{
-				auto then = after.find(SketchKeyOf(ref));
-				const auto* old = open.Old(ref);
-				if (old && (then == after.end() || then->second.length() < old->length() - kEditTolerance))
+				SketchSpace space;
+				if (grpc::Status status = space.Init(swApp); !status.ok())
+					return status;
+				space.Attach(open.sketch);
+				const double model[3] = {request->at().x(), request->at().y(), request->at().z()};
+				double local[3];
+				if (!space.ToSketch(model, local))
+					return grpc::Status(grpc::StatusCode::INTERNAL, "couldn't map the point into the sketch's coordinates");
+				at[0] = local[0];
+				at[1] = local[1];
+			}
+
+			if (size_t failed = 0; !SelectSketchItems(open.doc, open.items, refs, failed))
+				return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks wouldn't select an entity -- nothing was changed");
+
+			// SketchTrim's result says nothing: false for a piece it did remove, so
+			// what counts is what changed (seen 2026-10-31).
+			VARIANT_BOOL ok = VARIANT_FALSE;
+			const HRESULT hr = kind == sld_mcp::v1::SKETCH_TRIM_KIND_EXTEND
+				? open.sketchManager->SketchExtend(at[0], at[1], at[2], &ok)
+				: open.sketchManager->SketchTrim(corner ? swSketchTrimCorner : swSketchTrimClosest, at[0], at[1], at[2], &ok);
+			if (FAILED(hr))
+				return ComError(kind == sld_mcp::v1::SKETCH_TRIM_KIND_EXTEND ? "ISketchManager::SketchExtend"
+				                                                              : "ISketchManager::SketchTrim", hr);
+			if (!open.Changed())
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+					corner ? "those two can't meet in a corner (parallel, or they already do?); nothing was changed"
+					: kind == sld_mcp::v1::SKETCH_TRIM_KIND_EXTEND ? "nothing is in the way of that entity to extend it to; nothing was changed"
+					: "SolidWorks couldn't trim that; nothing was changed");
+
+			SketchItems now;
+			now.Load(open.sketch);
+			const auto after = SegmentsOf(now);
+			if (corner)
+			{
+				// With entities that cross it keeps the part of each it chooses, whichever
+				// parts were picked (seen 2026-10-31), so only growing is left to it.
+				for (const auto& ref : refs)
 				{
-					open.Undo();
-					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-						"those two cross, and a corner would keep the wrong parts as likely as the right ones; nothing "
-						"was changed -- give `at` to remove the pieces you don't want, one by one");
+					auto then = after.find(SketchKeyOf(ref));
+					const auto* old = open.Old(ref);
+					if (old && (then == after.end() || then->second.length() < old->length() - kEditTolerance))
+					{
+						open.Undo();
+						return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+							"those two cross, and a corner would keep the wrong parts as likely as the right ones; nothing "
+							"was changed -- give `at` to remove the pieces you don't want, one by one");
+					}
 				}
 			}
-		}
-		else if (kind == sld_mcp::v1::SKETCH_TRIM_KIND_EXTEND)
-		{
-			// With nothing beyond the end asked for it grows the other one.
-			const auto* old = open.Old(refs.front());
-			auto then = after.find(SketchKeyOf(refs.front()));
-			if (old && then != after.end() && old->has_start() && old->has_end() && then->second.has_start() &&
-				then->second.has_end())
+			else if (kind == sld_mcp::v1::SKETCH_TRIM_KIND_EXTEND)
 			{
-				sld_mcp::v1::Vec3 pick;
-				pick.set_x(at[0]);
-				pick.set_y(at[1]);
-				const bool startAsked = Length(old->start(), pick) <= Length(old->end(), pick);
-				const auto& was = startAsked ? old->start() : old->end();
-				const auto& is = startAsked ? then->second.start() : then->second.end();
-				if (Length(was, is) <= kEditTolerance)
+				// With nothing beyond the end asked for it grows the other one.
+				const auto* old = open.Old(refs.front());
+				auto then = after.find(SketchKeyOf(refs.front()));
+				if (old && then != after.end() && old->has_start() && old->has_end() && then->second.has_start() &&
+					then->second.has_end())
 				{
-					open.Undo();
-					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-						"nothing is in the way of that end to extend it to (the other end would grow instead); nothing "
-						"was changed -- give `at` near the other end if that's what you want");
+					sld_mcp::v1::Vec3 pick;
+					pick.set_x(at[0]);
+					pick.set_y(at[1]);
+					const bool startAsked = Length(old->start(), pick) <= Length(old->end(), pick);
+					const auto& was = startAsked ? old->start() : old->end();
+					const auto& is = startAsked ? then->second.start() : then->second.end();
+					if (Length(was, is) <= kEditTolerance)
+					{
+						open.Undo();
+						return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+							"nothing is in the way of that end to extend it to (the other end would grow instead); nothing "
+							"was changed -- give `at` near the other end if that's what you want");
+					}
 				}
 			}
-		}
-		return grpc::Status::OK;
+			return grpc::Status::OK;
+		});
 	});
 }

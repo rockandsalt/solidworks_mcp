@@ -307,6 +307,9 @@
     <ClInclude Include="RpcServer.h" />
     <ClInclude Include="InstanceFile.h" />
     <ClInclude Include="SolidWorksService.h" />
+    <ClInclude Include="CadExecutor.h" />
+    <ClInclude Include="RequestControl.h" />
+    <ClInclude Include="service\RequestLock.h" />
     <ClInclude Include="ComVariant.h" />
     <ClInclude Include="service\AnnotationHelpers.h" />
     <ClInclude Include="service\AssemblyHelpers.h" />
@@ -360,6 +363,7 @@
     <ClCompile Include="RpcServer.cpp" />
     <ClCompile Include="InstanceFile.cpp" />
     <ClCompile Include="SolidWorksService.cpp" />
+    <ClCompile Include="CadExecutor.cpp" />
     <ClCompile Include="service\AnnotationHelpers.cpp" />
     <ClCompile Include="service\Annotations.cpp" />
     <ClCompile Include="service\AssemblyHelpers.cpp" />

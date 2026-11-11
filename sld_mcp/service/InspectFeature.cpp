@@ -360,46 +360,40 @@ namespace
 	}
 }
 
-grpc::Status SolidWorksService::InspectFeature(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::InspectFeature(grpc::ServerContext* context,
 	const sld_mcp::v1::InspectFeatureRequest* request,
 	sld_mcp::v1::InspectFeatureResponse* response)
 {
 	// Read-only, but accessing a definition's selections rolls the model back
 	// for a moment: no other RPC in between.
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "InspectFeature", ExecutionPolicy::Cancellable,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
+			return status;
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		PersistIds ids(ext);
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
+		const std::vector<TreeFeature> tree = FeatureTree(doc);
+		size_t index = 0;
+		if (grpc::Status status = ResolveFeatureTarget(ext, tree, ids, request->feature(), index); !status.ok())
+			return status;
+		IFeature* feature = tree[index].feature;
 
-	ATL::CComPtr<IModelDoc2> doc;
-	if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	PersistIds ids(ext);
-
-	const std::vector<TreeFeature> tree = FeatureTree(doc);
-	size_t index = 0;
-	if (grpc::Status status = ResolveFeatureTarget(ext, tree, ids, request->feature(), index); !status.ok())
-		return status;
-	IFeature* feature = tree[index].feature;
-
-	response->set_name(tree[index].name);
-	response->set_type_name(tree[index].type);
-	VARIANT_BOOL suppressed = VARIANT_FALSE;
-	if (SUCCEEDED(feature->IsSuppressed(&suppressed)))
-		response->set_suppressed(suppressed != VARIANT_FALSE);
-	int32_t code = 0;
-	bool warning = false;
-	SetFeatureError(feature, code, warning);
-	response->set_error_code(code);
-	response->set_error_is_warning(warning);
-	for (const auto& display : FeatureDimensions(feature))
-		DescribeDimension(display, response->add_dimensions());
-	return DescribeDefinition(doc, ext, feature, response);
+		response->set_name(tree[index].name);
+		response->set_type_name(tree[index].type);
+		VARIANT_BOOL suppressed = VARIANT_FALSE;
+		if (SUCCEEDED(feature->IsSuppressed(&suppressed)))
+			response->set_suppressed(suppressed != VARIANT_FALSE);
+		int32_t code = 0;
+		bool warning = false;
+		SetFeatureError(feature, code, warning);
+		response->set_error_code(code);
+		response->set_error_is_warning(warning);
+		for (const auto& display : FeatureDimensions(feature))
+			DescribeDimension(display, response->add_dimensions());
+		return DescribeDefinition(doc, ext, feature, response);
+	});
 }

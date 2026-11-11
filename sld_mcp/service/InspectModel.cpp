@@ -53,7 +53,7 @@ namespace
 	// (an assembly's own tree; they're listed separately). With
 	// `referenceExt` (the document's own tree), reference features say where
 	// they are.
-	grpc::Status InspectFeatureList(grpc::ServerContext* context, ATL::CComPtr<IFeature> feature, PersistIds& ids,
+	grpc::Status InspectFeatureList(RequestControl& control, ATL::CComPtr<IFeature> feature, PersistIds& ids,
 		const std::string& componentPid, bool skipAssemblyItems, IModelDocExtension* referenceExt,
 		sld_mcp::v1::InspectModelResponse* response)
 	{
@@ -61,8 +61,7 @@ namespace
 		bool started = false;
 		while (feature)
 		{
-			if (grpc::Status status = CheckRequest(context); !status.ok())
-				return status;
+			control.Checkpoint();
 			ATL::CComBSTR typeName;
 			hr = feature->GetTypeName2(&typeName);
 			if (FAILED(hr))
@@ -120,14 +119,14 @@ namespace
 		return grpc::Status::OK;
 	}
 
-	grpc::Status InspectFeatures(grpc::ServerContext* context, IModelDoc2* doc, IModelDocExtension* ext, PersistIds& ids, bool skipAssemblyItems,
+	grpc::Status InspectFeatures(RequestControl& control, IModelDoc2* doc, IModelDocExtension* ext, PersistIds& ids, bool skipAssemblyItems,
 		sld_mcp::v1::InspectModelResponse* response)
 	{
 		ATL::CComPtr<IFeature> feature;
 		HRESULT hr = doc->IFirstFeature(&feature);
 		if (FAILED(hr))
 			return ComError("IModelDoc2::IFirstFeature", hr);
-		return InspectFeatureList(context, feature, ids, {}, skipAssemblyItems, ext, response);
+		return InspectFeatureList(control, feature, ids, {}, skipAssemblyItems, ext, response);
 	}
 
 	void InspectBody(IBody2* body, PersistIds& ids, sld_mcp::v1::BodyInfo* info)
@@ -361,7 +360,7 @@ namespace
 	}
 
 	// InspectModel for an assembly; see the .proto for what's listed.
-	grpc::Status InspectAssembly(grpc::ServerContext* context, IModelDoc2* doc, IModelDocExtension* ext, PersistIds& ids, IMathUtility* math,
+	grpc::Status InspectAssembly(RequestControl& control, IModelDoc2* doc, IModelDocExtension* ext, PersistIds& ids, IMathUtility* math,
 		const sld_mcp::v1::InspectModelRequest& request, sld_mcp::v1::InspectModelResponse* response)
 	{
 		if (!request.scope_feature_name().empty())
@@ -375,19 +374,16 @@ namespace
 		ComponentList components(ids, math, response->mutable_components());
 
 		if (request.include_components())
-			for (const auto& component : AllComponents(assembly, context))
+			for (const auto& component : AllComponents(assembly, &control))
 			{
-				if (grpc::Status status = CheckRequest(context); !status.ok())
-					return status;
+				control.Checkpoint();
 				components.Add(component);
 			}
-		if (grpc::Status status = CheckRequest(context); !status.ok())
-			return status;
+		control.Checkpoint();
 		if (request.include_mates())
 			for (const auto& mate : MateFeatures(doc))
 			{
-				if (grpc::Status status = CheckRequest(context); !status.ok())
-					return status;
+				control.Checkpoint();
 				DescribeMate(mate, ids, response->add_mates());
 			}
 
@@ -415,10 +411,10 @@ namespace
 				if (FAILED(hr))
 					return ComError("IComponent2::FirstFeature", hr);
 				const std::string pid = components.Add(scopeComponent);
-				if (grpc::Status status = InspectFeatureList(context, first, ids, pid, false, nullptr, response); !status.ok())
+				if (grpc::Status status = InspectFeatureList(control, first, ids, pid, false, nullptr, response); !status.ok())
 					return status;
 			}
-			else if (grpc::Status status = InspectFeatures(context, doc, ext, ids, true, response); !status.ok())
+			else if (grpc::Status status = InspectFeatures(control, doc, ext, ids, true, response); !status.ok())
 				return status;
 		}
 
@@ -436,10 +432,9 @@ namespace
 			else
 			{
 				const std::string scopePid = scopeComponent ? ids.Get(scopeComponent) : std::string();
-				for (const auto& component : AllComponents(assembly, context))
+				for (const auto& component : AllComponents(assembly, &control))
 				{
-					if (grpc::Status status = CheckRequest(context); !status.ok())
-						return status;
+					control.Checkpoint();
 					if (!IsSubassembly(component) && !IsSuppressed(component) &&
 						(scopePid.empty() || IsWithin(component, scopePid, ids)))
 						owners.push_back(component);
@@ -447,24 +442,22 @@ namespace
 			}
 			for (const auto& owner : owners)
 			{
-				if (grpc::Status status = CheckRequest(context); !status.ok())
-					return status;
-				for (const auto& body : ComponentBodies(owner))
+				control.Checkpoint();
+				for (const auto& body : ComponentBodies(owner, &control))
 					bodies.emplace_back(body, owner);
 			}
 		}
 		if (listBodies)
 			for (const auto& [body, owner] : bodies)
 			{
-				if (grpc::Status status = CheckRequest(context); !status.ok())
-					return status;
+				control.Checkpoint();
 				sld_mcp::v1::BodyInfo* info = response->add_bodies();
 				InspectBody(body, ids, info);
 				info->set_component_persist_id(components.Add(owner));
 			}
 
 		if (!wantGeometry)
-			return CheckRequest(context);
+			return grpc::Status::OK;
 
 		EntitySet<IFace2> faces;
 		EntitySet<IEdge> edges;
@@ -506,30 +499,27 @@ namespace
 		{
 			for (const auto& [body, owner] : bodies)
 			{
-				if (grpc::Status status = CheckRequest(context); !status.ok())
-					return status;
+				control.Checkpoint();
 				addBody(body);
 			}
 		}
 
 		for (const auto& face : faces.Items())
 		{
-			if (grpc::Status status = CheckRequest(context); !status.ok())
-				return status;
+			control.Checkpoint();
 			sld_mcp::v1::FaceInfo* info = response->add_faces();
 			InspectFace(face, ids, info);
 			info->set_component_persist_id(components.Add(ComponentOf(face)));
 		}
 		for (const auto& edge : edges.Items())
 		{
-			if (grpc::Status status = CheckRequest(context); !status.ok())
-				return status;
+			control.Checkpoint();
 			sld_mcp::v1::EdgeInfo* info = response->add_edges();
 			InspectEdge(edge, ids, info);
 			info->set_component_persist_id(components.Add(ComponentOf(edge)));
 		}
 		response->set_truncated(faces.Truncated() || edges.Truncated());
-		return CheckRequest(context);
+		return grpc::Status::OK;
 	}
 }
 
@@ -544,159 +534,147 @@ grpc::Status SolidWorksService::InspectModel(grpc::ServerContext* context,
 
 	// Read-only, but an edit running at the same time could leave the model
 	// half-built (a sketch open, a feature not yet created) mid-walk.
-	std::unique_lock<std::mutex> lock(m_editMutex, std::defer_lock);
-	if (grpc::Status status = LockForRequest(context, lock); !status.ok())
-		return status;
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "InspectModel", ExecutionPolicy::Cancellable,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		control.Checkpoint();
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-	if (grpc::Status status = CheckRequest(context); !status.ok())
-		return status;
-
-	ATL::CComPtr<IModelDoc2> doc;
-	long docType = swDocNONE;
-	if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
-		return status;
-
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	PersistIds ids(ext);
-
-	ATL::CComBSTR title;
-	HRESULT hr = doc->GetTitle(&title);
-	if (FAILED(hr))
-		return ComError("IModelDoc2::GetTitle", hr);
-	response->mutable_document()->set_title(ToUtf8(title));
-
-	if (docType == swDocASSEMBLY)
-	{
-		response->mutable_document()->set_type(sld_mcp::v1::DOCUMENT_TYPE_ASSEMBLY);
-		ATL::CComQIPtr<IMathUtility> math;
-		if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
-			return status;
-		return InspectAssembly(context, doc, ext, ids, math, *request, response);
-	}
-	response->mutable_document()->set_type(sld_mcp::v1::DOCUMENT_TYPE_PART);
-	ATL::CComQIPtr<IPartDoc> part(doc.p);
-	if (!part)
-		return grpc::Status(grpc::StatusCode::INTERNAL, "active part has no IPartDoc interface");
-
-	if (request->include_features())
-		if (grpc::Status status = InspectFeatures(context, doc, ext, ids, false, response); !status.ok())
+		ATL::CComPtr<IModelDoc2> doc;
+		long docType = swDocNONE;
+		if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
 			return status;
 
-	// Every body, for the body list and as the default face/edge scope.
-	std::vector<ATL::CComPtr<IBody2>> bodies;
-	if (request->include_bodies() ||
-		(wantGeometry && request->scope_persist_id().empty() && request->scope_feature_name().empty()))
-	{
-		ATL::CComVariant all;
-		hr = part->GetBodies2(swAllBodies, VARIANT_FALSE, &all);
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		PersistIds ids(ext);
+
+		ATL::CComBSTR title;
+		HRESULT hr = doc->GetTitle(&title);
 		if (FAILED(hr))
-			return ComError("IPartDoc::GetBodies2", hr);
-		for (const auto& disp : comvariant::ToDispatches(all))
-			if (ATL::CComQIPtr<IBody2> body(disp.p); body)
-				bodies.push_back(body);
-	}
-	if (request->include_bodies())
-		for (const auto& body : bodies)
+			return ComError("IModelDoc2::GetTitle", hr);
+		response->mutable_document()->set_title(ToUtf8(title));
+
+		if (docType == swDocASSEMBLY)
 		{
-			if (grpc::Status status = CheckRequest(context); !status.ok())
+			response->mutable_document()->set_type(sld_mcp::v1::DOCUMENT_TYPE_ASSEMBLY);
+			ATL::CComQIPtr<IMathUtility> math;
+			if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
 				return status;
-			InspectBody(body, ids, response->add_bodies());
+			return InspectAssembly(control, doc, ext, ids, math, *request, response);
 		}
+		response->mutable_document()->set_type(sld_mcp::v1::DOCUMENT_TYPE_PART);
+		ATL::CComQIPtr<IPartDoc> part(doc.p);
+		if (!part)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "active part has no IPartDoc interface");
 
-	if (!wantGeometry)
-		return CheckRequest(context);
+		if (request->include_features())
+			if (grpc::Status status = InspectFeatures(control, doc, ext, ids, false, response); !status.ok())
+				return status;
 
-	// Resolve the scope into the faces and edges to report.
-	EntitySet<IFace2> faces;
-	EntitySet<IEdge> edges;
-	auto addBody = [&](IBody2* body) {
-		ATL::CComVariant array;
-		if (request->include_faces() && SUCCEEDED(body->GetFaces(&array)))
-			faces.AddAll(array);
-		array.Clear();
-		if (request->include_edges() && SUCCEEDED(body->GetEdges(&array)))
-			edges.AddAll(array);
-	};
-	// A feature's edges are the edges of the faces it created.
-	auto addFeature = [&](IFeature* feature) {
-		ATL::CComVariant array;
-		if (FAILED(feature->GetFaces(&array)))
-			return;
-		for (const auto& disp : comvariant::ToDispatches(array))
+		// Every body, for the body list and as the default face/edge scope.
+		std::vector<ATL::CComPtr<IBody2>> bodies;
+		if (request->include_bodies() ||
+			(wantGeometry && request->scope_persist_id().empty() && request->scope_feature_name().empty()))
 		{
-			ATL::CComQIPtr<IFace2> face(disp.p);
-			if (!face)
-				continue;
-			if (request->include_faces())
-				faces.Add(face);
-			ATL::CComVariant faceEdges;
-			if (request->include_edges() && SUCCEEDED(face->GetEdges(&faceEdges)))
-				edges.AddAll(faceEdges);
+			ATL::CComVariant all;
+			hr = part->GetBodies2(swAllBodies, VARIANT_FALSE, &all);
+			if (FAILED(hr))
+				return ComError("IPartDoc::GetBodies2", hr);
+			for (const auto& disp : comvariant::ToDispatches(all))
+				if (ATL::CComQIPtr<IBody2> body(disp.p); body)
+					bodies.push_back(body);
 		}
-	};
+		if (request->include_bodies())
+			for (const auto& body : bodies)
+			{
+				control.Checkpoint();
+				InspectBody(body, ids, response->add_bodies());
+			}
 
-	if (!request->scope_feature_name().empty())
-	{
-		ATL::CComPtr<IFeature> feature;
-		hr = part->IFeatureByName(FromUtf8(request->scope_feature_name()), &feature);
-		if (FAILED(hr))
-			return ComError("IPartDoc::IFeatureByName", hr);
-		if (!feature)
-			return grpc::Status(grpc::StatusCode::NOT_FOUND,
-				"the active part has no feature named \"" + request->scope_feature_name() + "\"");
-		addFeature(feature);
-	}
-	else if (!request->scope_persist_id().empty())
-	{
-		ATL::CComPtr<IDispatch> scope;
-		if (grpc::Status status = ResolvePersistId(ext, request->scope_persist_id(), scope); !status.ok())
-			return status;
-		if (ATL::CComQIPtr<IBody2> body(scope.p); body)
-			addBody(body);
-		else if (ATL::CComQIPtr<IFeature> feature(scope.p); feature)
+		if (!wantGeometry)
+			return grpc::Status::OK;
+
+		// Resolve the scope into the faces and edges to report.
+		EntitySet<IFace2> faces;
+		EntitySet<IEdge> edges;
+		auto addBody = [&](IBody2* body) {
+			ATL::CComVariant array;
+			if (request->include_faces() && SUCCEEDED(body->GetFaces(&array)))
+				faces.AddAll(array);
+			array.Clear();
+			if (request->include_edges() && SUCCEEDED(body->GetEdges(&array)))
+				edges.AddAll(array);
+		};
+		// A feature's edges are the edges of the faces it created.
+		auto addFeature = [&](IFeature* feature) {
+			ATL::CComVariant array;
+			if (FAILED(feature->GetFaces(&array)))
+				return;
+			for (const auto& disp : comvariant::ToDispatches(array))
+			{
+				ATL::CComQIPtr<IFace2> face(disp.p);
+				if (!face)
+					continue;
+				if (request->include_faces())
+					faces.Add(face);
+				ATL::CComVariant faceEdges;
+				if (request->include_edges() && SUCCEEDED(face->GetEdges(&faceEdges)))
+					edges.AddAll(faceEdges);
+			}
+		};
+
+		if (!request->scope_feature_name().empty())
+		{
+			ATL::CComPtr<IFeature> feature;
+			hr = part->IFeatureByName(FromUtf8(request->scope_feature_name()), &feature);
+			if (FAILED(hr))
+				return ComError("IPartDoc::IFeatureByName", hr);
+			if (!feature)
+				return grpc::Status(grpc::StatusCode::NOT_FOUND,
+					"the active part has no feature named \"" + request->scope_feature_name() + "\"");
 			addFeature(feature);
-		else if (ATL::CComQIPtr<IFace2> face(scope.p); face)
+		}
+		else if (!request->scope_persist_id().empty())
 		{
-			if (request->include_faces())
-				faces.Add(face);
-			ATL::CComVariant faceEdges;
-			if (request->include_edges() && SUCCEEDED(face->GetEdges(&faceEdges)))
-				edges.AddAll(faceEdges);
+			ATL::CComPtr<IDispatch> scope;
+			if (grpc::Status status = ResolvePersistId(ext, request->scope_persist_id(), scope); !status.ok())
+				return status;
+			if (ATL::CComQIPtr<IBody2> body(scope.p); body)
+				addBody(body);
+			else if (ATL::CComQIPtr<IFeature> feature(scope.p); feature)
+				addFeature(feature);
+			else if (ATL::CComQIPtr<IFace2> face(scope.p); face)
+			{
+				if (request->include_faces())
+					faces.Add(face);
+				ATL::CComVariant faceEdges;
+				if (request->include_edges() && SUCCEEDED(face->GetEdges(&faceEdges)))
+					edges.AddAll(faceEdges);
+			}
+			else
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+					"the scope must be a body, a feature or a face");
 		}
 		else
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-				"the scope must be a body, a feature or a face");
-	}
-	else
-	{
-		for (const auto& body : bodies)
 		{
-			if (grpc::Status status = CheckRequest(context); !status.ok())
-				return status;
-			addBody(body);
+			for (const auto& body : bodies)
+			{
+				control.Checkpoint();
+				addBody(body);
+			}
 		}
-	}
 
-	for (const auto& face : faces.Items())
-	{
-		if (grpc::Status status = CheckRequest(context); !status.ok())
-			return status;
-		InspectFace(face, ids, response->add_faces());
-	}
-	for (const auto& edge : edges.Items())
-	{
-		if (grpc::Status status = CheckRequest(context); !status.ok())
-			return status;
-		InspectEdge(edge, ids, response->add_edges());
-	}
-	response->set_truncated(faces.Truncated() || edges.Truncated());
-	return CheckRequest(context);
+		for (const auto& face : faces.Items())
+		{
+			control.Checkpoint();
+			InspectFace(face, ids, response->add_faces());
+		}
+		for (const auto& edge : edges.Items())
+		{
+			control.Checkpoint();
+			InspectEdge(edge, ids, response->add_edges());
+		}
+		response->set_truncated(faces.Truncated() || edges.Truncated());
+		return grpc::Status::OK;
+	});
 }

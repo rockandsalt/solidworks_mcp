@@ -23,7 +23,7 @@ namespace sld_mcp::service
 	void DeleteDimensions(IModelDoc2* doc, const std::vector<ATL::CComPtr<IDisplayDimension>>& dims);
 
 	// Sets user preference toggles for one RPC and puts them back after.
-	// Declare after the ComApartment so it's restored before COM goes away.
+	// Keep inside the executor's callback so restoration precedes COM teardown.
 	class PreferenceToggles
 	{
 	public:

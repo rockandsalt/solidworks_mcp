@@ -627,7 +627,7 @@ namespace
 	}
 }
 
-grpc::Status SolidWorksService::AddSketchDimensions(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::AddSketchDimensions(grpc::ServerContext* context,
 	const sld_mcp::v1::AddSketchDimensionsRequest* request,
 	sld_mcp::v1::AddSketchDimensionsResponse* response)
 {
@@ -642,180 +642,174 @@ grpc::Status SolidWorksService::AddSketchDimensions(grpc::ServerContext* /*conte
 		if (grpc::Status status = ValidateSketchDimension(request->dimensions(i)); !status.ok())
 			return grpc::Status(status.error_code(), where(i) + ": " + status.error_message());
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-
-	ATL::CComPtr<IModelDoc2> doc;
-	if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-
-	// Resolve everything that can fail before the sketch is opened.
-	ATL::CComPtr<IFeature> sketchFeature;
-	if (grpc::Status status = ResolveConstraintSketch(doc, ext, request->sketch_name(), request->dimensions(),
-		sketchFeature); !status.ok())
-		return status;
-	const std::string sketchName = FeatureName(sketchFeature);
-	const std::string sketchPid = PersistIdOf(ext, sketchFeature);
-	for (int i = 0; i < count; ++i)
-		if (grpc::Status status = CheckRefsInSketch(ext, request->dimensions(i).refs(), sketchPid, sketchName,
-			where(i)); !status.ok())
+	return m_executor.Execute(context, "AddSketchDimensions", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
+			return status;
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
 			return status;
 
-	ATL::CComPtr<ISketchPoint> originPoint;
-	std::string originName;
-	FindOrigin(doc, originPoint, originName);
+		// Resolve everything that can fail before the sketch is opened.
+		ATL::CComPtr<IFeature> sketchFeature;
+		if (grpc::Status status = ResolveConstraintSketch(doc, ext, request->sketch_name(), request->dimensions(),
+			sketchFeature); !status.ok())
+			return status;
+		const std::string sketchName = FeatureName(sketchFeature);
+		const std::string sketchPid = PersistIdOf(ext, sketchFeature);
+		for (int i = 0; i < count; ++i)
+			if (grpc::Status status = CheckRefsInSketch(ext, request->dimensions(i).refs(), sketchPid, sketchName,
+				where(i)); !status.ok())
+				return status;
 
-	SketchSpace space;
-	if (grpc::Status status = space.Init(swApp); !status.ok())
-		return status;
-	ATL::CComPtr<ISketchManager> sketchManager;
-	if (grpc::Status status = GetSketchManager(doc, sketchManager); !status.ok())
-		return status;
+		ATL::CComPtr<ISketchPoint> originPoint;
+		std::string originName;
+		FindOrigin(doc, originPoint, originName);
 
-	PreferenceToggles toggles(swApp);
-	SilenceDimensionPrompts(toggles);
+		SketchSpace space;
+		if (grpc::Status status = space.Init(swApp); !status.ok())
+			return status;
+		ATL::CComPtr<ISketchManager> sketchManager;
+		if (grpc::Status status = GetSketchManager(doc, sketchManager); !status.ok())
+			return status;
 
-	ATL::CComPtr<ISketch> sketch;
-	if (grpc::Status status = OpenExistingSketch(doc, sketchFeature, sketch); !status.ok())
-		return status;
+		PreferenceToggles toggles(swApp);
+		SilenceDimensionPrompts(toggles);
 
-	// The sketch is open: the work below returns its status instead of
-	// returning from the RPC, so the sketch is always closed after.
-	space.Attach(sketch);
-	std::vector<ATL::CComPtr<IDisplayDimension>> created;
-	std::vector<double> originalValues;
-	const grpc::Status failure = [&]() -> grpc::Status {
-		SketchItems items;
-		items.Load(sketch);
-		const RefContext ctx{ext, items, space, sketchPid, sketchName};
+		ATL::CComPtr<ISketch> sketch;
+		if (grpc::Status status = OpenExistingSketch(doc, sketchFeature, sketch); !status.ok())
+			return status;
 
-		// Rolls back: values first (moving the geometry back), then the
-		// dimensions themselves.
-		auto rollback = [&](const grpc::Status& why) {
-			for (size_t i = created.size(); i-- > 0;)
+		// The sketch is open: the work below returns its status instead of
+		// returning from the RPC, so the sketch is always closed after.
+		space.Attach(sketch);
+		std::vector<ATL::CComPtr<IDisplayDimension>> created;
+		std::vector<double> originalValues;
+		const grpc::Status failure = [&]() -> grpc::Status {
+			SketchItems items;
+			items.Load(sketch);
+			const RefContext ctx{ext, items, space, sketchPid, sketchName};
+
+			// Rolls back: values first (moving the geometry back), then the
+			// dimensions themselves.
+			auto rollback = [&](const grpc::Status& why) {
+				for (size_t i = created.size(); i-- > 0;)
+				{
+					ATL::CComPtr<IDimension> dim;
+					long result = 0;
+					if (i < originalValues.size() && SUCCEEDED(created[i]->GetDimension2(0, &dim)) && dim)
+						dim->SetSystemValue3(originalValues[i], swSetValue_UseCurrentSetting, ATL::CComVariant(), &result);
+				}
+				VARIANT_BOOL rebuilt = VARIANT_FALSE;
+				doc->EditRebuild3(&rebuilt);
+				DeleteDimensions(doc, created);
+				return why;
+			};
+
+			// Create every dimension at the geometry's current value first, so
+			// setting values afterwards solves with all of them in place.
+			for (int i = 0; i < count; ++i)
 			{
-				ATL::CComPtr<IDimension> dim;
-				long result = 0;
-				if (i < originalValues.size() && SUCCEEDED(created[i]->GetDimension2(0, &dim)) && dim)
-					dim->SetSystemValue3(originalValues[i], swSetValue_UseCurrentSetting, ATL::CComVariant(), &result);
-			}
-			VARIANT_BOOL rebuilt = VARIANT_FALSE;
-			doc->EditRebuild3(&rebuilt);
-			DeleteDimensions(doc, created);
-			return why;
-		};
+				const auto& dimension = request->dimensions(i);
+				if (IsSketch3D(sketch) && (dimension.kind() == sld_mcp::v1::DIMENSION_KIND_HORIZONTAL ||
+					dimension.kind() == sld_mcp::v1::DIMENSION_KIND_VERTICAL))
+					return rollback(grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+						where(i) + ": a 3D sketch has no horizontal or vertical -- use length or distance"));
+				std::vector<ResolvedRef> refs(dimension.refs_size());
+				for (int r = 0; r < dimension.refs_size(); ++r)
+					if (grpc::Status status = ResolveRef(ctx, dimension.refs(r), refs[r]); !status.ok())
+						return rollback(grpc::Status(status.error_code(),
+							where(i) + ", reference " + std::to_string(r + 1) + ": " + status.error_message()));
+				if (grpc::Status status = CheckDimensionRefs(dimension.kind(), refs); !status.ok())
+					return rollback(grpc::Status(status.error_code(), where(i) + ": " + status.error_message()));
 
-		// Create every dimension at the geometry's current value first, so
-		// setting values afterwards solves with all of them in place.
-		for (int i = 0; i < count; ++i)
-		{
-			const auto& dimension = request->dimensions(i);
-			if (IsSketch3D(sketch) && (dimension.kind() == sld_mcp::v1::DIMENSION_KIND_HORIZONTAL ||
-				dimension.kind() == sld_mcp::v1::DIMENSION_KIND_VERTICAL))
-				return rollback(grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-					where(i) + ": a 3D sketch has no horizontal or vertical -- use length or distance"));
-			std::vector<ResolvedRef> refs(dimension.refs_size());
-			for (int r = 0; r < dimension.refs_size(); ++r)
-				if (grpc::Status status = ResolveRef(ctx, dimension.refs(r), refs[r]); !status.ok())
-					return rollback(grpc::Status(status.error_code(),
-						where(i) + ", reference " + std::to_string(r + 1) + ": " + status.error_message()));
-			if (grpc::Status status = CheckDimensionRefs(dimension.kind(), refs); !status.ok())
-				return rollback(grpc::Status(status.error_code(), where(i) + ": " + status.error_message()));
-
-			double text2d[2];
-			if (grpc::Status status = PlaceDimension(dimension.kind(), refs, text2d); !status.ok())
-				return rollback(grpc::Status(status.error_code(), where(i) + ": " + status.error_message()));
-			const double textSketch[3] = {text2d[0], text2d[1], 0.0};
-			double text[3];
-			if (!space.ToModel(textSketch, text))
-				return rollback(grpc::Status(grpc::StatusCode::INTERNAL,
-					"couldn't map a point out of the sketch's coordinates"));
-
-			doc->ClearSelection2(VARIANT_TRUE);
-			for (int r = 0; r < static_cast<int>(refs.size()); ++r)
-				if (!SelectRef(ext, refs[r], originPoint, originName))
+				double text2d[2];
+				if (grpc::Status status = PlaceDimension(dimension.kind(), refs, text2d); !status.ok())
+					return rollback(grpc::Status(status.error_code(), where(i) + ": " + status.error_message()));
+				const double textSketch[3] = {text2d[0], text2d[1], 0.0};
+				double text[3];
+				if (!space.ToModel(textSketch, text))
 					return rollback(grpc::Status(grpc::StatusCode::INTERNAL,
-						where(i) + ": SolidWorks wouldn't select reference " + std::to_string(r + 1)));
+						"couldn't map a point out of the sketch's coordinates"));
 
-			ATL::CComPtr<IDispatch> dimDisp;
-			const HRESULT hr = CreateDimension(doc, dimension.kind(), text, dimDisp);
-			doc->ClearSelection2(VARIANT_TRUE);
-			ATL::CComQIPtr<IDisplayDimension> display(dimDisp.p);
-			if (FAILED(hr))
-				return rollback(ComError("IModelDoc2::Add*Dimension2", hr));
-			if (!display)
-				return rollback(grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-					where(i) + ": SolidWorks couldn't make a " + DimensionKindName(dimension.kind()) +
-					" dimension from those entities"));
-			created.push_back(display);
+				doc->ClearSelection2(VARIANT_TRUE);
+				for (int r = 0; r < static_cast<int>(refs.size()); ++r)
+					if (!SelectRef(ext, refs[r], originPoint, originName))
+						return rollback(grpc::Status(grpc::StatusCode::INTERNAL,
+							where(i) + ": SolidWorks wouldn't select reference " + std::to_string(r + 1)));
 
-			ATL::CComPtr<IDimension> dim;
-			if (FAILED(display->GetDimension2(0, &dim)) || !dim)
-				return rollback(grpc::Status(grpc::StatusCode::INTERNAL, where(i) + ": the new dimension has no value"));
-			double value = 0.0;
-			dim->get_SystemValue(&value);
-			originalValues.push_back(value);
-			long driven = swDimensionDrivenUnknown;
-			if (SUCCEEDED(dim->get_DrivenState(&driven)) && driven == swDimensionDriven)
+				ATL::CComPtr<IDispatch> dimDisp;
+				const HRESULT hr = CreateDimension(doc, dimension.kind(), text, dimDisp);
+				doc->ClearSelection2(VARIANT_TRUE);
+				ATL::CComQIPtr<IDisplayDimension> display(dimDisp.p);
+				if (FAILED(hr))
+					return rollback(ComError("IModelDoc2::Add*Dimension2", hr));
+				if (!display)
+					return rollback(grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+						where(i) + ": SolidWorks couldn't make a " + DimensionKindName(dimension.kind()) +
+						" dimension from those entities"));
+				created.push_back(display);
+
+				ATL::CComPtr<IDimension> dim;
+				if (FAILED(display->GetDimension2(0, &dim)) || !dim)
+					return rollback(grpc::Status(grpc::StatusCode::INTERNAL, where(i) + ": the new dimension has no value"));
+				double value = 0.0;
+				dim->get_SystemValue(&value);
+				originalValues.push_back(value);
+				long driven = swDimensionDrivenUnknown;
+				if (SUCCEEDED(dim->get_DrivenState(&driven)) && driven == swDimensionDriven)
+					return rollback(grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+						where(i) + ": that would over-define the sketch -- what it measures is already fixed by "
+						"other dimensions or relations"));
+			}
+
+			// Now drive them to the requested values.
+			bool anyValue = false;
+			for (int i = 0; i < count; ++i)
+			{
+				if (!request->dimensions(i).has_value())
+					continue;
+				anyValue = true;
+				ATL::CComPtr<IDimension> dim;
+				long result = swSetValue_Failure;
+				if (FAILED(created[i]->GetDimension2(0, &dim)) || !dim ||
+					FAILED(dim->SetSystemValue3(request->dimensions(i).value(), swSetValue_UseCurrentSetting,
+						ATL::CComVariant(), &result)) || result != swSetValue_Successful)
+					return rollback(grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+						where(i) + ": SolidWorks wouldn't take that value (error " + std::to_string(result) + ")"));
+			}
+			if (anyValue)
+			{
+				VARIANT_BOOL rebuilt = VARIANT_FALSE;
+				doc->EditRebuild3(&rebuilt);
+			}
+
+			const sld_mcp::v1::DefinitionStatus status = SketchStatus(sketch);
+			if (status == sld_mcp::v1::DEFINITION_STATUS_OVER || status == sld_mcp::v1::DEFINITION_STATUS_NO_SOLUTION ||
+				status == sld_mcp::v1::DEFINITION_STATUS_INVALID)
 				return rollback(grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-					where(i) + ": that would over-define the sketch -- what it measures is already fixed by "
-					"other dimensions or relations"));
-		}
+					std::string("with those values the sketch is ") + DefinitionStatusText(status) +
+					" -- nothing was changed; check the values against the sketch's other dimensions"));
 
-		// Now drive them to the requested values.
-		bool anyValue = false;
-		for (int i = 0; i < count; ++i)
-		{
-			if (!request->dimensions(i).has_value())
-				continue;
-			anyValue = true;
-			ATL::CComPtr<IDimension> dim;
-			long result = swSetValue_Failure;
-			if (FAILED(created[i]->GetDimension2(0, &dim)) || !dim ||
-				FAILED(dim->SetSystemValue3(request->dimensions(i).value(), swSetValue_UseCurrentSetting,
-					ATL::CComVariant(), &result)) || result != swSetValue_Successful)
-				return rollback(grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-					where(i) + ": SolidWorks wouldn't take that value (error " + std::to_string(result) + ")"));
-		}
-		if (anyValue)
-		{
-			VARIANT_BOOL rebuilt = VARIANT_FALSE;
-			doc->EditRebuild3(&rebuilt);
-		}
+			for (const auto& display : created)
+				DescribeDimension(display, response->add_dimensions());
+			ReadSketchState(sketch, sketchPid, response->mutable_state());
+			return grpc::Status::OK;
+		}();
 
-		const sld_mcp::v1::DefinitionStatus status = SketchStatus(sketch);
-		if (status == sld_mcp::v1::DEFINITION_STATUS_OVER || status == sld_mcp::v1::DEFINITION_STATUS_NO_SOLUTION ||
-			status == sld_mcp::v1::DEFINITION_STATUS_INVALID)
-			return rollback(grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				std::string("with those values the sketch is ") + DefinitionStatusText(status) +
-				" -- nothing was changed; check the values against the sketch's other dimensions"));
-
-		for (const auto& display : created)
-			DescribeDimension(display, response->add_dimensions());
-		ReadSketchState(sketch, sketchPid, response->mutable_state());
+		doc->ClearSelection2(VARIANT_TRUE);
+		const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_TRUE);
+		if (!failure.ok())
+			return failure;
+		if (FAILED(closeHr))
+			return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
+		response->set_sketch_name(sketchName);
 		return grpc::Status::OK;
-	}();
-
-	doc->ClearSelection2(VARIANT_TRUE);
-	const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_TRUE);
-	if (!failure.ok())
-		return failure;
-	if (FAILED(closeHr))
-		return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
-	response->set_sketch_name(sketchName);
-	return grpc::Status::OK;
+	});
 }
 
-grpc::Status SolidWorksService::AddSketchRelations(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::AddSketchRelations(grpc::ServerContext* context,
 	const sld_mcp::v1::AddSketchRelationsRequest* request,
 	sld_mcp::v1::AddSketchRelationsResponse* response)
 {
@@ -829,136 +823,130 @@ grpc::Status SolidWorksService::AddSketchRelations(grpc::ServerContext* /*contex
 		if (grpc::Status status = ValidateSketchRelation(request->relations(i)); !status.ok())
 			return grpc::Status(status.error_code(), where(i) + ": " + status.error_message());
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-
-	ATL::CComPtr<IModelDoc2> doc;
-	if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-
-	ATL::CComPtr<IFeature> sketchFeature;
-	if (grpc::Status status = ResolveConstraintSketch(doc, ext, request->sketch_name(), request->relations(),
-		sketchFeature); !status.ok())
-		return status;
-	const std::string sketchName = FeatureName(sketchFeature);
-	const std::string sketchPid = PersistIdOf(ext, sketchFeature);
-	for (int i = 0; i < count; ++i)
-		if (grpc::Status status = CheckRefsInSketch(ext, request->relations(i).refs(), sketchPid, sketchName,
-			where(i)); !status.ok())
+	return m_executor.Execute(context, "AddSketchRelations", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
+			return status;
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
 			return status;
 
-	ATL::CComPtr<ISketchPoint> originPoint;
-	std::string originName;
-	FindOrigin(doc, originPoint, originName);
+		ATL::CComPtr<IFeature> sketchFeature;
+		if (grpc::Status status = ResolveConstraintSketch(doc, ext, request->sketch_name(), request->relations(),
+			sketchFeature); !status.ok())
+			return status;
+		const std::string sketchName = FeatureName(sketchFeature);
+		const std::string sketchPid = PersistIdOf(ext, sketchFeature);
+		for (int i = 0; i < count; ++i)
+			if (grpc::Status status = CheckRefsInSketch(ext, request->relations(i).refs(), sketchPid, sketchName,
+				where(i)); !status.ok())
+				return status;
 
-	SketchSpace space;
-	if (grpc::Status status = space.Init(swApp); !status.ok())
-		return status;
-	ATL::CComPtr<ISketchManager> sketchManager;
-	if (grpc::Status status = GetSketchManager(doc, sketchManager); !status.ok())
-		return status;
+		ATL::CComPtr<ISketchPoint> originPoint;
+		std::string originName;
+		FindOrigin(doc, originPoint, originName);
 
-	ATL::CComPtr<ISketch> sketch;
-	if (grpc::Status status = OpenExistingSketch(doc, sketchFeature, sketch); !status.ok())
-		return status;
+		SketchSpace space;
+		if (grpc::Status status = space.Init(swApp); !status.ok())
+			return status;
+		ATL::CComPtr<ISketchManager> sketchManager;
+		if (grpc::Status status = GetSketchManager(doc, sketchManager); !status.ok())
+			return status;
 
-	space.Attach(sketch);
-	int added = 0;
-	const grpc::Status failure = [&]() -> grpc::Status {
-		SketchItems items;
-		items.Load(sketch);
-		const RefContext ctx{ext, items, space, sketchPid, sketchName};
-		const size_t before = SketchRelations(sketch).size();
-		auto rollback = [&](const grpc::Status& why) {
-			DeleteRelationsAfter(sketch, before);
+		ATL::CComPtr<ISketch> sketch;
+		if (grpc::Status status = OpenExistingSketch(doc, sketchFeature, sketch); !status.ok())
+			return status;
+
+		space.Attach(sketch);
+		int added = 0;
+		const grpc::Status failure = [&]() -> grpc::Status {
+			SketchItems items;
+			items.Load(sketch);
+			const RefContext ctx{ext, items, space, sketchPid, sketchName};
+			const size_t before = SketchRelations(sketch).size();
+			auto rollback = [&](const grpc::Status& why) {
+				DeleteRelationsAfter(sketch, before);
+				VARIANT_BOOL rebuilt = VARIANT_FALSE;
+				doc->EditRebuild3(&rebuilt);
+				return why;
+			};
+
+			for (int i = 0; i < count; ++i)
+			{
+				const auto& relation = request->relations(i);
+				const bool is3D = IsSketch3D(sketch);
+				if (IsAlongAxis(relation.kind()) && !is3D)
+					return rollback(grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+						where(i) + ": along_x / along_y / along_z are for 3D sketches -- use horizontal or vertical"));
+				if (is3D && (relation.kind() == sld_mcp::v1::RELATION_KIND_HORIZONTAL ||
+					relation.kind() == sld_mcp::v1::RELATION_KIND_VERTICAL))
+					return rollback(grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+						where(i) + ": a 3D sketch has no horizontal or vertical -- use along_x, along_y or along_z"));
+				std::vector<ResolvedRef> refs(relation.refs_size());
+				bool allPoints = true;
+				for (int r = 0; r < relation.refs_size(); ++r)
+				{
+					if (grpc::Status status = ResolveRef(ctx, relation.refs(r), refs[r]); !status.ok())
+						return rollback(grpc::Status(status.error_code(),
+							where(i) + ", reference " + std::to_string(r + 1) + ": " + status.error_message()));
+					allPoints = allPoints && refs[r].isPoint;
+				}
+				if (relation.kind() == sld_mcp::v1::RELATION_KIND_SYMMETRIC && !refs.back().isLine)
+					return rollback(grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+						where(i) + ": the last entity of a symmetric relation must be the line to mirror about"));
+				// Horizontal/vertical between points needs exactly two of them.
+				if (allPoints && refs.size() != 2 &&
+					(relation.kind() == sld_mcp::v1::RELATION_KIND_HORIZONTAL ||
+					 relation.kind() == sld_mcp::v1::RELATION_KIND_VERTICAL))
+					return rollback(grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+						where(i) + ": horizontal/vertical relations take lines, or exactly 2 points"));
+
+				doc->ClearSelection2(VARIANT_TRUE);
+				for (int r = 0; r < static_cast<int>(refs.size()); ++r)
+					if (!SelectRef(ext, refs[r], originPoint, originName))
+						return rollback(grpc::Status(grpc::StatusCode::INTERNAL,
+							where(i) + ": SolidWorks wouldn't select reference " + std::to_string(r + 1)));
+
+				const size_t relationsBefore = SketchRelations(sketch).size();
+				const HRESULT hr = doc->SketchAddConstraints(ATL::CComBSTR(RelationCommand(relation.kind(), allPoints)));
+				doc->ClearSelection2(VARIANT_TRUE);
+				if (FAILED(hr))
+					return rollback(ComError("IModelDoc2::SketchAddConstraints", hr));
+				if (SketchRelations(sketch).size() <= relationsBefore)
+					return rollback(grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+						where(i) + ": SolidWorks didn't add the " + RelationKindName(relation.kind()) +
+						" relation -- the entities may not suit it, already have it, or it would over-define "
+						"the sketch"));
+				++added;
+			}
+
 			VARIANT_BOOL rebuilt = VARIANT_FALSE;
 			doc->EditRebuild3(&rebuilt);
-			return why;
-		};
-
-		for (int i = 0; i < count; ++i)
-		{
-			const auto& relation = request->relations(i);
-			const bool is3D = IsSketch3D(sketch);
-			if (IsAlongAxis(relation.kind()) && !is3D)
-				return rollback(grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-					where(i) + ": along_x / along_y / along_z are for 3D sketches -- use horizontal or vertical"));
-			if (is3D && (relation.kind() == sld_mcp::v1::RELATION_KIND_HORIZONTAL ||
-				relation.kind() == sld_mcp::v1::RELATION_KIND_VERTICAL))
-				return rollback(grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-					where(i) + ": a 3D sketch has no horizontal or vertical -- use along_x, along_y or along_z"));
-			std::vector<ResolvedRef> refs(relation.refs_size());
-			bool allPoints = true;
-			for (int r = 0; r < relation.refs_size(); ++r)
-			{
-				if (grpc::Status status = ResolveRef(ctx, relation.refs(r), refs[r]); !status.ok())
-					return rollback(grpc::Status(status.error_code(),
-						where(i) + ", reference " + std::to_string(r + 1) + ": " + status.error_message()));
-				allPoints = allPoints && refs[r].isPoint;
-			}
-			if (relation.kind() == sld_mcp::v1::RELATION_KIND_SYMMETRIC && !refs.back().isLine)
-				return rollback(grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-					where(i) + ": the last entity of a symmetric relation must be the line to mirror about"));
-			// Horizontal/vertical between points needs exactly two of them.
-			if (allPoints && refs.size() != 2 &&
-				(relation.kind() == sld_mcp::v1::RELATION_KIND_HORIZONTAL ||
-				 relation.kind() == sld_mcp::v1::RELATION_KIND_VERTICAL))
-				return rollback(grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-					where(i) + ": horizontal/vertical relations take lines, or exactly 2 points"));
-
-			doc->ClearSelection2(VARIANT_TRUE);
-			for (int r = 0; r < static_cast<int>(refs.size()); ++r)
-				if (!SelectRef(ext, refs[r], originPoint, originName))
-					return rollback(grpc::Status(grpc::StatusCode::INTERNAL,
-						where(i) + ": SolidWorks wouldn't select reference " + std::to_string(r + 1)));
-
-			const size_t relationsBefore = SketchRelations(sketch).size();
-			const HRESULT hr = doc->SketchAddConstraints(ATL::CComBSTR(RelationCommand(relation.kind(), allPoints)));
-			doc->ClearSelection2(VARIANT_TRUE);
-			if (FAILED(hr))
-				return rollback(ComError("IModelDoc2::SketchAddConstraints", hr));
-			if (SketchRelations(sketch).size() <= relationsBefore)
+			const sld_mcp::v1::DefinitionStatus status = SketchStatus(sketch);
+			if (status == sld_mcp::v1::DEFINITION_STATUS_OVER || status == sld_mcp::v1::DEFINITION_STATUS_NO_SOLUTION ||
+				status == sld_mcp::v1::DEFINITION_STATUS_INVALID)
 				return rollback(grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-					where(i) + ": SolidWorks didn't add the " + RelationKindName(relation.kind()) +
-					" relation -- the entities may not suit it, already have it, or it would over-define "
-					"the sketch"));
-			++added;
-		}
+					std::string("with those relations the sketch is ") + DefinitionStatusText(status) +
+					" -- they were removed again"));
 
-		VARIANT_BOOL rebuilt = VARIANT_FALSE;
-		doc->EditRebuild3(&rebuilt);
-		const sld_mcp::v1::DefinitionStatus status = SketchStatus(sketch);
-		if (status == sld_mcp::v1::DEFINITION_STATUS_OVER || status == sld_mcp::v1::DEFINITION_STATUS_NO_SOLUTION ||
-			status == sld_mcp::v1::DEFINITION_STATUS_INVALID)
-			return rollback(grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				std::string("with those relations the sketch is ") + DefinitionStatusText(status) +
-				" -- they were removed again"));
+			ReadSketchState(sketch, sketchPid, response->mutable_state());
+			return grpc::Status::OK;
+		}();
 
-		ReadSketchState(sketch, sketchPid, response->mutable_state());
+		doc->ClearSelection2(VARIANT_TRUE);
+		const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_TRUE);
+		if (!failure.ok())
+			return failure;
+		if (FAILED(closeHr))
+			return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
+		response->set_sketch_name(sketchName);
+		response->set_added(added);
 		return grpc::Status::OK;
-	}();
-
-	doc->ClearSelection2(VARIANT_TRUE);
-	const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_TRUE);
-	if (!failure.ok())
-		return failure;
-	if (FAILED(closeHr))
-		return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
-	response->set_sketch_name(sketchName);
-	response->set_added(added);
-	return grpc::Status::OK;
+	});
 }
 
-grpc::Status SolidWorksService::FullyDefineSketch(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::FullyDefineSketch(grpc::ServerContext* context,
 	const sld_mcp::v1::FullyDefineSketchRequest* request,
 	sld_mcp::v1::FullyDefineSketchResponse* response)
 {
@@ -976,160 +964,154 @@ grpc::Status SolidWorksService::FullyDefineSketch(grpc::ServerContext* /*context
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "unknown dimension scheme");
 	}
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "FullyDefineSketch", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
+			return status;
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
+		ATL::CComPtr<IFeature> sketchFeature;
+		if (grpc::Status status = ResolveSketchFeature(doc, request->sketch_name(), sketchFeature); !status.ok())
+			return status;
+		const std::string sketchName = FeatureName(sketchFeature);
+		const std::string sketchPid = PersistIdOf(ext, sketchFeature);
 
-	ATL::CComPtr<IModelDoc2> doc;
-	if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
+		// Datums, as refs (checked like a dimension's).
+		google::protobuf::RepeatedPtrField<sld_mcp::v1::SketchRef> datums;
+		if (request->has_horizontal_datum())
+			*datums.Add() = request->horizontal_datum();
+		if (request->has_vertical_datum())
+			*datums.Add() = request->vertical_datum();
+		if (grpc::Status status = CheckRefsInSketch(ext, datums, sketchPid, sketchName, "datum"); !status.ok())
+			return status;
 
-	ATL::CComPtr<IFeature> sketchFeature;
-	if (grpc::Status status = ResolveSketchFeature(doc, request->sketch_name(), sketchFeature); !status.ok())
-		return status;
-	const std::string sketchName = FeatureName(sketchFeature);
-	const std::string sketchPid = PersistIdOf(ext, sketchFeature);
+		ATL::CComPtr<ISketchPoint> originPoint;
+		std::string originName;
+		FindOrigin(doc, originPoint, originName);
 
-	// Datums, as refs (checked like a dimension's).
-	google::protobuf::RepeatedPtrField<sld_mcp::v1::SketchRef> datums;
-	if (request->has_horizontal_datum())
-		*datums.Add() = request->horizontal_datum();
-	if (request->has_vertical_datum())
-		*datums.Add() = request->vertical_datum();
-	if (grpc::Status status = CheckRefsInSketch(ext, datums, sketchPid, sketchName, "datum"); !status.ok())
-		return status;
+		SketchSpace space;
+		if (grpc::Status status = space.Init(swApp); !status.ok())
+			return status;
+		ATL::CComPtr<ISketchManager> sketchManager;
+		if (grpc::Status status = GetSketchManager(doc, sketchManager); !status.ok())
+			return status;
 
-	ATL::CComPtr<ISketchPoint> originPoint;
-	std::string originName;
-	FindOrigin(doc, originPoint, originName);
+		const std::set<std::string> dimensionsBefore = DimensionNames(sketchFeature);
 
-	SketchSpace space;
-	if (grpc::Status status = space.Init(swApp); !status.ok())
-		return status;
-	ATL::CComPtr<ISketchManager> sketchManager;
-	if (grpc::Status status = GetSketchManager(doc, sketchManager); !status.ok())
-		return status;
+		PreferenceToggles toggles(swApp);
+		SilenceDimensionPrompts(toggles);
 
-	const std::set<std::string> dimensionsBefore = DimensionNames(sketchFeature);
+		ATL::CComPtr<ISketch> sketch;
+		if (grpc::Status status = OpenExistingSketch(doc, sketchFeature, sketch); !status.ok())
+			return status;
 
-	PreferenceToggles toggles(swApp);
-	SilenceDimensionPrompts(toggles);
+		space.Attach(sketch);
+		size_t relationsBefore = 0;
+		const grpc::Status failure = [&]() -> grpc::Status {
+			relationsBefore = SketchRelations(sketch).size();
+			const sld_mcp::v1::DefinitionStatus initial = SketchStatus(sketch);
+			if (initial == sld_mcp::v1::DEFINITION_STATUS_FULLY)
+				return grpc::Status::OK;  // nothing to do
+			if (initial == sld_mcp::v1::DEFINITION_STATUS_OVER || initial == sld_mcp::v1::DEFINITION_STATUS_NO_SOLUTION)
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+					std::string("the sketch is ") + DefinitionStatusText(initial) +
+					" -- fix the conflicting dimensions or relations first");
 
-	ATL::CComPtr<ISketch> sketch;
-	if (grpc::Status status = OpenExistingSketch(doc, sketchFeature, sketch); !status.ok())
-		return status;
+			SketchItems items;
+			items.Load(sketch);
+			const RefContext ctx{ext, items, space, sketchPid, sketchName};
+			ATL::CComPtr<IDispatch> datum[2];  // horizontal, vertical; null = sketch origin
+			const sld_mcp::v1::SketchRef* datumRefs[2] = {
+				request->has_horizontal_datum() ? &request->horizontal_datum() : nullptr,
+				request->has_vertical_datum() ? &request->vertical_datum() : nullptr};
+			for (int d = 0; d < 2; ++d)
+			{
+				if (!datumRefs[d] || datumRefs[d]->has_origin())
+					continue;
+				ResolvedRef ref;
+				if (grpc::Status status = ResolveRef(ctx, *datumRefs[d], ref); !status.ok())
+					return grpc::Status(status.error_code(),
+						std::string(d == 0 ? "horizontal" : "vertical") + " datum: " + status.error_message());
+				datum[d] = ref.obj;
+			}
 
-	space.Attach(sketch);
-	size_t relationsBefore = 0;
-	const grpc::Status failure = [&]() -> grpc::Status {
-		relationsBefore = SketchRelations(sketch).size();
-		const sld_mcp::v1::DefinitionStatus initial = SketchStatus(sketch);
-		if (initial == sld_mcp::v1::DEFINITION_STATUS_FULLY)
-			return grpc::Status::OK;  // nothing to do
-		if (initial == sld_mcp::v1::DEFINITION_STATUS_OVER || initial == sld_mcp::v1::DEFINITION_STATUS_NO_SOLUTION)
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				std::string("the sketch is ") + DefinitionStatusText(initial) +
-				" -- fix the conflicting dimensions or relations first");
+			const VARIANT_BOOL relations = request->skip_relations() ? VARIANT_FALSE : VARIANT_TRUE;
+			const VARIANT_BOOL dimensions = request->skip_dimensions() ? VARIANT_FALSE : VARIANT_TRUE;
+			const long allRelations = swSketchFullyDefineRelationType_Equal | swSketchFullyDefineRelationType_Horizontal |
+				swSketchFullyDefineRelationType_Vertical | swSketchFullyDefineRelationType_Tangent |
+				swSketchFullyDefineRelationType_Perpendicular | swSketchFullyDefineRelationType_Colinear |
+				swSketchFullyDefineRelationType_Concentric | swSketchFullyDefineRelationType_Parallel |
+				swSketchFullyDefineRelationType_Midpoint | swSketchFullyDefineRelationType_Coincident;
+			auto run = [&](VARIANT_BOOL allEntities, long& code) {
+				doc->ClearSelection2(VARIANT_TRUE);
+				if (allEntities == VARIANT_FALSE)
+					for (const auto& entry : items.All())
+					{
+						VARIANT_BOOL selected = VARIANT_FALSE;
+						if (ATL::CComQIPtr<ISketchSegment> segment(entry.obj.p); segment)
+							segment->Select4(VARIANT_TRUE, nullptr, &selected);
+					}
+				code = swAutodimStatusSuccess;
+				const HRESULT hr = sketchManager->FullyDefineSketch(allEntities, relations, allRelations, dimensions,
+					scheme, datum[0], scheme, datum[1], swAutodimHorizontalPlacementBelow,
+					swAutodimVerticalPlacementLeft, &code);
+				doc->ClearSelection2(VARIANT_TRUE);
+				return hr;
+			};
 
-		SketchItems items;
-		items.Load(sketch);
-		const RefContext ctx{ext, items, space, sketchPid, sketchName};
-		ATL::CComPtr<IDispatch> datum[2];  // horizontal, vertical; null = sketch origin
-		const sld_mcp::v1::SketchRef* datumRefs[2] = {
-			request->has_horizontal_datum() ? &request->horizontal_datum() : nullptr,
-			request->has_vertical_datum() ? &request->vertical_datum() : nullptr};
-		for (int d = 0; d < 2; ++d)
+			long code = swAutodimStatusSuccess;
+			HRESULT hr = run(VARIANT_TRUE, code);
+			// If SolidWorks wants the entities selected after all, select them all.
+			if (SUCCEEDED(hr) && code == swAutodimStatusNoEntities)
+				hr = run(VARIANT_FALSE, code);
+			// If it insists on explicit datums, use the origin for the missing ones.
+			if (SUCCEEDED(hr) && code == swAutodimStatusDatumNotSupplied && originPoint)
+			{
+				for (auto& d : datum)
+					if (!d)
+						d = originPoint.p;
+				hr = run(VARIANT_TRUE, code);
+			}
+			if (FAILED(hr))
+				return ComError("ISketchManager::FullyDefineSketch", hr);
+			if (code != swAutodimStatusSuccess)
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+					"SolidWorks couldn't fully define the sketch: " + AutodimError(code));
+
+			VARIANT_BOOL rebuilt = VARIANT_FALSE;
+			doc->EditRebuild3(&rebuilt);
+			ReadSketchState(sketch, sketchPid, response->mutable_state());
+			return grpc::Status::OK;
+		}();
+
+		if (failure.ok() && !response->has_state())
+			ReadSketchState(sketch, sketchPid, response->mutable_state());
+		const size_t relationsAfter = SketchRelations(sketch).size();
+
+		doc->ClearSelection2(VARIANT_TRUE);
+		const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_TRUE);
+		if (!failure.ok())
+			return failure;
+		if (FAILED(closeHr))
+			return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
+
+		// What it added, read from the closed sketch.
+		for (const auto& display : FeatureDimensions(sketchFeature))
 		{
-			if (!datumRefs[d] || datumRefs[d]->has_origin())
-				continue;
-			ResolvedRef ref;
-			if (grpc::Status status = ResolveRef(ctx, *datumRefs[d], ref); !status.ok())
-				return grpc::Status(status.error_code(),
-					std::string(d == 0 ? "horizontal" : "vertical") + " datum: " + status.error_message());
-			datum[d] = ref.obj;
+			sld_mcp::v1::DimensionInfo info;
+			if (DescribeDimension(display, &info) && !dimensionsBefore.count(info.name()))
+				response->add_added_dimensions()->Swap(&info);
 		}
-
-		const VARIANT_BOOL relations = request->skip_relations() ? VARIANT_FALSE : VARIANT_TRUE;
-		const VARIANT_BOOL dimensions = request->skip_dimensions() ? VARIANT_FALSE : VARIANT_TRUE;
-		const long allRelations = swSketchFullyDefineRelationType_Equal | swSketchFullyDefineRelationType_Horizontal |
-			swSketchFullyDefineRelationType_Vertical | swSketchFullyDefineRelationType_Tangent |
-			swSketchFullyDefineRelationType_Perpendicular | swSketchFullyDefineRelationType_Colinear |
-			swSketchFullyDefineRelationType_Concentric | swSketchFullyDefineRelationType_Parallel |
-			swSketchFullyDefineRelationType_Midpoint | swSketchFullyDefineRelationType_Coincident;
-		auto run = [&](VARIANT_BOOL allEntities, long& code) {
-			doc->ClearSelection2(VARIANT_TRUE);
-			if (allEntities == VARIANT_FALSE)
-				for (const auto& entry : items.All())
-				{
-					VARIANT_BOOL selected = VARIANT_FALSE;
-					if (ATL::CComQIPtr<ISketchSegment> segment(entry.obj.p); segment)
-						segment->Select4(VARIANT_TRUE, nullptr, &selected);
-				}
-			code = swAutodimStatusSuccess;
-			const HRESULT hr = sketchManager->FullyDefineSketch(allEntities, relations, allRelations, dimensions,
-				scheme, datum[0], scheme, datum[1], swAutodimHorizontalPlacementBelow,
-				swAutodimVerticalPlacementLeft, &code);
-			doc->ClearSelection2(VARIANT_TRUE);
-			return hr;
-		};
-
-		long code = swAutodimStatusSuccess;
-		HRESULT hr = run(VARIANT_TRUE, code);
-		// If SolidWorks wants the entities selected after all, select them all.
-		if (SUCCEEDED(hr) && code == swAutodimStatusNoEntities)
-			hr = run(VARIANT_FALSE, code);
-		// If it insists on explicit datums, use the origin for the missing ones.
-		if (SUCCEEDED(hr) && code == swAutodimStatusDatumNotSupplied && originPoint)
-		{
-			for (auto& d : datum)
-				if (!d)
-					d = originPoint.p;
-			hr = run(VARIANT_TRUE, code);
-		}
-		if (FAILED(hr))
-			return ComError("ISketchManager::FullyDefineSketch", hr);
-		if (code != swAutodimStatusSuccess)
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				"SolidWorks couldn't fully define the sketch: " + AutodimError(code));
-
-		VARIANT_BOOL rebuilt = VARIANT_FALSE;
-		doc->EditRebuild3(&rebuilt);
-		ReadSketchState(sketch, sketchPid, response->mutable_state());
+		response->set_added_relations(static_cast<int32_t>(relationsAfter > relationsBefore ? relationsAfter - relationsBefore : 0));
+		response->set_sketch_name(sketchName);
 		return grpc::Status::OK;
-	}();
-
-	if (failure.ok() && !response->has_state())
-		ReadSketchState(sketch, sketchPid, response->mutable_state());
-	const size_t relationsAfter = SketchRelations(sketch).size();
-
-	doc->ClearSelection2(VARIANT_TRUE);
-	const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_TRUE);
-	if (!failure.ok())
-		return failure;
-	if (FAILED(closeHr))
-		return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
-
-	// What it added, read from the closed sketch.
-	for (const auto& display : FeatureDimensions(sketchFeature))
-	{
-		sld_mcp::v1::DimensionInfo info;
-		if (DescribeDimension(display, &info) && !dimensionsBefore.count(info.name()))
-			response->add_added_dimensions()->Swap(&info);
-	}
-	response->set_added_relations(static_cast<int32_t>(relationsAfter > relationsBefore ? relationsAfter - relationsBefore : 0));
-	response->set_sketch_name(sketchName);
-	return grpc::Status::OK;
+	});
 }
 
-grpc::Status SolidWorksService::SetDimensionValue(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::SetDimensionValue(grpc::ServerContext* context,
 	const sld_mcp::v1::SetDimensionValueRequest* request,
 	sld_mcp::v1::SetDimensionValueResponse* response)
 {
@@ -1142,107 +1124,101 @@ grpc::Status SolidWorksService::SetDimensionValue(grpc::ServerContext* /*context
 	if (request->name().empty())
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give the dimension's name, e.g. D1@Sketch1");
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "SetDimensionValue", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		if (grpc::Status status = GetEditableModel(swApp, doc); !status.ok())
+			return status;
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
+		ATL::CComPtr<IDispatch> param;
+		HRESULT hr = doc->Parameter(FromUtf8(request->name()), &param);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::Parameter", hr);
+		ATL::CComQIPtr<IDimension> dim(param.p);
+		if (!dim)
+			return grpc::Status(grpc::StatusCode::NOT_FOUND,
+				"the active document has no dimension named \"" + request->name() + "\" -- names look like "
+				"D1@Sketch1");
 
-	ATL::CComPtr<IModelDoc2> doc;
-	if (grpc::Status status = GetEditableModel(swApp, doc); !status.ok())
-		return status;
+		long paramType = swDimensionParamTypeUnknown;
+		dim->GetType(&paramType);
+		if (paramType == swDimensionParamTypeDoubleAngular && !angle)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "\"" + request->name() + "\" is an angle; give degrees");
+		if (paramType == swDimensionParamTypeDoubleLinear && angle)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "\"" + request->name() + "\" is a length; give millimeters");
 
-	ATL::CComPtr<IDispatch> param;
-	HRESULT hr = doc->Parameter(FromUtf8(request->name()), &param);
-	if (FAILED(hr))
-		return ComError("IModelDoc2::Parameter", hr);
-	ATL::CComQIPtr<IDimension> dim(param.p);
-	if (!dim)
-		return grpc::Status(grpc::StatusCode::NOT_FOUND,
-			"the active document has no dimension named \"" + request->name() + "\" -- names look like "
-			"D1@Sketch1");
+		// SetSystemValue3 succeeds on these, and the next rebuild or table
+		// update puts the old value back (seen 2026-11-02).
+		if (const std::string equation = EquationDriving(doc, request->name()); !equation.empty())
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"\"" + request->name() + "\" is driven by the equation " + equation +
+				" -- change or delete the equation (equations tool) instead");
+		VARIANT_BOOL inTable = VARIANT_FALSE;
+		if (SUCCEEDED(dim->IsDesignTableDimension(&inTable)) && inTable)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"\"" + request->name() + "\" is a column of the design table, which sets it in each configuration -- "
+				"change its cells (design_table tool) instead");
 
-	long paramType = swDimensionParamTypeUnknown;
-	dim->GetType(&paramType);
-	if (paramType == swDimensionParamTypeDoubleAngular && !angle)
-		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "\"" + request->name() + "\" is an angle; give degrees");
-	if (paramType == swDimensionParamTypeDoubleLinear && angle)
-		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "\"" + request->name() + "\" is a length; give millimeters");
-
-	// SetSystemValue3 succeeds on these, and the next rebuild or table
-	// update puts the old value back (seen 2026-11-02).
-	if (const std::string equation = EquationDriving(doc, request->name()); !equation.empty())
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			"\"" + request->name() + "\" is driven by the equation " + equation +
-			" -- change or delete the equation (equations tool) instead");
-	VARIANT_BOOL inTable = VARIANT_FALSE;
-	if (SUCCEEDED(dim->IsDesignTableDimension(&inTable)) && inTable)
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			"\"" + request->name() + "\" is a column of the design table, which sets it in each configuration -- "
-			"change its cells (design_table tool) instead");
-
-	const ConfigurationList configs = ReadConfigurations(doc);
-	std::vector<std::string> targets;
-	if (grpc::Status status = ScopeConfigurations(configs, request->scope(), request->configurations(), targets);
-		!status.ok())
-		return status;
-	long which = swSetValue_UseCurrentSetting;
-	ATL::CComVariant names;
-	switch (request->scope())
-	{
-	case sld_mcp::v1::CONFIGURATION_SCOPE_ACTIVE:
-		which = swSetValue_InThisConfiguration;
-		break;
-	case sld_mcp::v1::CONFIGURATION_SCOPE_ALL:
-		which = swSetValue_InAllConfigurations;
-		break;
-	case sld_mcp::v1::CONFIGURATION_SCOPE_NAMED:
-		which = swSetValue_InSpecificConfigurations;
-		names = ToBstrArray(targets);
-		break;
-	default:
-		break;
-	}
-
-	long result = swSetValue_Failure;
-	hr = dim->SetSystemValue3(value, which, names, &result);
-	if (FAILED(hr))
-		return ComError("IDimension::SetSystemValue3", hr);
-	switch (result)
-	{
-	case swSetValue_Successful:
-		break;
-	case swSetValue_DrivenDimension:
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			"\"" + request->name() + "\" is a driven (reference) dimension; it only measures");
-	case swSetValue_InvalidValue:
-		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "SolidWorks rejected that value");
-	default:
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			"SolidWorks couldn't set \"" + request->name() + "\" (error " + std::to_string(result) + ")");
-	}
-
-	VARIANT_BOOL rebuilt = VARIANT_FALSE;
-	hr = doc->EditRebuild3(&rebuilt);
-	if (FAILED(hr))
-		return ComError("IModelDoc2::EditRebuild3", hr);
-
-	sld_mcp::v1::DimensionInfo* info = response->mutable_dimension();
-	DescribeDimensionValue(dim, info);
-	info->set_type(paramType == swDimensionParamTypeDoubleAngular ? sld_mcp::v1::DIMENSION_TYPE_ANGULAR
-	                                                              : sld_mcp::v1::DIMENSION_TYPE_LINEAR);
-	if (configs.names.size() > 1)
-	{
-		const std::vector<double> values = DimensionValues(dim, configs);
-		for (size_t i = 0; i < values.size(); ++i)
+		const ConfigurationList configs = ReadConfigurations(doc);
+		std::vector<std::string> targets;
+		if (grpc::Status status = ScopeConfigurations(configs, request->scope(), request->configurations(), targets);
+			!status.ok())
+			return status;
+		long which = swSetValue_UseCurrentSetting;
+		ATL::CComVariant names;
+		switch (request->scope())
 		{
-			sld_mcp::v1::ConfigurationValue* v = response->add_values();
-			v->set_configuration(configs.names[i]);
-			v->set_value(values[i]);
+		case sld_mcp::v1::CONFIGURATION_SCOPE_ACTIVE:
+			which = swSetValue_InThisConfiguration;
+			break;
+		case sld_mcp::v1::CONFIGURATION_SCOPE_ALL:
+			which = swSetValue_InAllConfigurations;
+			break;
+		case sld_mcp::v1::CONFIGURATION_SCOPE_NAMED:
+			which = swSetValue_InSpecificConfigurations;
+			names = ToBstrArray(targets);
+			break;
+		default:
+			break;
 		}
-	}
-	return grpc::Status::OK;
+
+		long result = swSetValue_Failure;
+		hr = dim->SetSystemValue3(value, which, names, &result);
+		if (FAILED(hr))
+			return ComError("IDimension::SetSystemValue3", hr);
+		switch (result)
+		{
+		case swSetValue_Successful:
+			break;
+		case swSetValue_DrivenDimension:
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"\"" + request->name() + "\" is a driven (reference) dimension; it only measures");
+		case swSetValue_InvalidValue:
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "SolidWorks rejected that value");
+		default:
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"SolidWorks couldn't set \"" + request->name() + "\" (error " + std::to_string(result) + ")");
+		}
+
+		VARIANT_BOOL rebuilt = VARIANT_FALSE;
+		hr = doc->EditRebuild3(&rebuilt);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::EditRebuild3", hr);
+
+		sld_mcp::v1::DimensionInfo* info = response->mutable_dimension();
+		DescribeDimensionValue(dim, info);
+		info->set_type(paramType == swDimensionParamTypeDoubleAngular ? sld_mcp::v1::DIMENSION_TYPE_ANGULAR
+		                                                              : sld_mcp::v1::DIMENSION_TYPE_LINEAR);
+		if (configs.names.size() > 1)
+		{
+			const std::vector<double> values = DimensionValues(dim, configs);
+			for (size_t i = 0; i < values.size(); ++i)
+			{
+				sld_mcp::v1::ConfigurationValue* v = response->add_values();
+				v->set_configuration(configs.names[i]);
+				v->set_value(values[i]);
+			}
+		}
+		return grpc::Status::OK;
+	});
 }

@@ -744,7 +744,7 @@ void sld_mcp::service::DescribeHoleSpec(IFeature* hole, sld_mcp::v1::HoleSpec* s
 	ReadHoleSpec(hole, spec);
 }
 
-grpc::Status SolidWorksService::HoleWizard(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::HoleWizard(grpc::ServerContext* context,
 	const sld_mcp::v1::HoleWizardRequest* request,
 	sld_mcp::v1::HoleWizardResponse* response)
 {
@@ -752,40 +752,34 @@ grpc::Status SolidWorksService::HoleWizard(grpc::ServerContext* /*context*/,
 	if (grpc::Status status = ValidateHoleRequest(*request, genericType); !status.ok())
 		return status;
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "HoleWizard", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
+			return status;
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
 
-	ATL::CComPtr<IModelDoc2> doc;
-	if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
-		return status;
+		ATL::CComPtr<IFeatureManager> featureManager;
+		const HRESULT hr = doc->get_FeatureManager(&featureManager);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::FeatureManager", hr);
+		if (!featureManager)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no feature manager");
 
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
+		SketchSpace space;
+		if (grpc::Status status = space.Init(swApp); !status.ok())
+			return status;
 
-	ATL::CComPtr<IFeatureManager> featureManager;
-	const HRESULT hr = doc->get_FeatureManager(&featureManager);
-	if (FAILED(hr))
-		return ComError("IModelDoc2::FeatureManager", hr);
-	if (!featureManager)
-		return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no feature manager");
-
-	SketchSpace space;
-	if (grpc::Status status = space.Init(swApp); !status.ok())
-		return status;
-
-	const HoleWizardCall wizard(featureManager, *request, genericType);
-	HoleResult result;
-	const grpc::Status status = request->sketch_name().empty()
-		? HolesOnFace(doc, ext, wizard, space, *request, result)
-		: HolesFromSketch(doc, ext, wizard, request->sketch_name(), result);
-	if (!status.ok())
-		return status;
-	return DescribeHoles(ext, space, result, response);
+		const HoleWizardCall wizard(featureManager, *request, genericType);
+		HoleResult result;
+		const grpc::Status status = request->sketch_name().empty()
+			? HolesOnFace(doc, ext, wizard, space, *request, result)
+			: HolesFromSketch(doc, ext, wizard, request->sketch_name(), result);
+		if (!status.ok())
+			return status;
+		return DescribeHoles(ext, space, result, response);
+	});
 }

@@ -102,7 +102,7 @@ namespace
 	}
 }
 
-grpc::Status SolidWorksService::CreateHelix(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::CreateHelix(grpc::ServerContext* context,
 	const sld_mcp::v1::CreateHelixRequest* request,
 	sld_mcp::v1::CreateHelixResponse* response)
 {
@@ -119,109 +119,103 @@ grpc::Status SolidWorksService::CreateHelix(grpc::ServerContext* /*context*/,
 	if (tapered && definedBy == swHelixDefinedBySpiral)
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a spiral can't be tapered");
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-
-	ATL::CComPtr<IModelDoc2> doc;
-	if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
-		return status;
-
-	ATL::CComPtr<IFeature> sketchFeature;
-	if (request->sketch_name().empty())
-	{
-		if (grpc::Status status = FindLatestUnusedSketch(doc, sketchFeature); !status.ok())
+	return m_executor.Execute(context, "CreateHelix", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
 			return status;
-	}
-	else if (grpc::Status status = FindSketchByName(doc, request->sketch_name(), sketchFeature); !status.ok())
-		return status;
-	const std::string sketchName = FeatureName(sketchFeature);
 
-	ATL::CComPtr<ISketch> sketch;
-	sld_mcp::v1::SketchItem circle;
-	if (grpc::Status status = FindHelixCircle(sketchFeature, sketch, circle); !status.ok())
-		return status;
-
-	// The circle's center in model space. Informational.
-	SketchSpace space;
-	if (space.Init(swApp).ok())
-	{
-		space.Attach(sketch);
-		const double inSketch[3] = {circle.center().x(), circle.center().y(), 0.0};
-		double center[3];
-		if (space.ToModel(inSketch, center))
-			SetVec3(response->mutable_center(), center);
-	}
-
-	PreferenceToggles toggles(swApp);
-	toggles.Set(swShowErrorsEveryRebuild, false);
-
-	HRESULT hr = doc->ClearSelection2(VARIANT_TRUE);
-	if (FAILED(hr))
-		return ComError("IModelDoc2::ClearSelection2", hr);
-	VARIANT_BOOL selected = VARIANT_FALSE;
-	hr = sketchFeature->Select2(VARIANT_FALSE, 0, &selected);
-	if (FAILED(hr))
-		return ComError("IFeature::Select2", hr);
-	if (!selected)
-		return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks wouldn't select " + sketchName);
-
-	// InsertHelix returns nothing: the new feature is the new last one.
-	ATL::CComPtr<IFeature> lastBefore;
-	doc->IFeatureByPositionReverse(0, &lastBefore);
-	hr = doc->InsertHelix(
-		request->reverse_direction() ? VARIANT_TRUE : VARIANT_FALSE,
-		request->clockwise() ? VARIANT_TRUE : VARIANT_FALSE,
-		tapered ? VARIANT_TRUE : VARIANT_FALSE,
-		request->taper_outward() ? VARIANT_TRUE : VARIANT_FALSE,
-		definedBy,
-		request->height(),
-		request->pitch(),
-		request->revolutions(),
-		taper,
-		request->start_angle());
-	doc->ClearSelection2(VARIANT_TRUE);
-	if (FAILED(hr))
-		return ComError("IModelDoc2::InsertHelix", hr);
-	ATL::CComPtr<IFeature> helix;
-	doc->IFeatureByPositionReverse(0, &helix);
-
-	const std::string why =
-		"check the sizes: too few turns, or a taper that narrows the helix down to nothing, won't build";
-	if (!helix || SameObject(helix, lastBefore))
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			"SolidWorks couldn't make a helix from " + sketchName + " -- " + why);
-	VARIANT_BOOL warning = VARIANT_FALSE;
-	long error = swFeatureErrorNone;
-	if (SUCCEEDED(helix->GetErrorCode2(&warning, &error)) && error != swFeatureErrorNone && !warning)
-	{
-		const std::string name = FeatureName(helix);
-		DeleteFeature(doc, helix);
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			"SolidWorks made " + name + " but it failed to rebuild (swFeatureError_e " + std::to_string(error) +
-			"), so it was deleted again -- " + why);
-	}
-
-	response->set_feature_name(FeatureName(helix));
-	response->set_sketch_name(sketchName);
-	response->set_radius(circle.radius());
-	ATL::CComPtr<IDispatch> definition;
-	if (SUCCEEDED(helix->GetDefinition(&definition)))
-		if (ATL::CComQIPtr<IHelixFeatureData> data(definition.p); data)
+		ATL::CComPtr<IFeature> sketchFeature;
+		if (request->sketch_name().empty())
 		{
-			double value = 0.0;
-			if (SUCCEEDED(data->get_Height(&value)))
-				response->set_height(value);
-			if (SUCCEEDED(data->get_Pitch(&value)))
-				response->set_pitch(value);
-			if (SUCCEEDED(data->get_Revolution(&value)))
-				response->set_revolutions(value);
+			if (grpc::Status status = FindLatestUnusedSketch(doc, sketchFeature); !status.ok())
+				return status;
 		}
-	DescribeHelixCurve(helix, response);
-	return grpc::Status::OK;
+		else if (grpc::Status status = FindSketchByName(doc, request->sketch_name(), sketchFeature); !status.ok())
+			return status;
+		const std::string sketchName = FeatureName(sketchFeature);
+
+		ATL::CComPtr<ISketch> sketch;
+		sld_mcp::v1::SketchItem circle;
+		if (grpc::Status status = FindHelixCircle(sketchFeature, sketch, circle); !status.ok())
+			return status;
+
+		// The circle's center in model space. Informational.
+		SketchSpace space;
+		if (space.Init(swApp).ok())
+		{
+			space.Attach(sketch);
+			const double inSketch[3] = {circle.center().x(), circle.center().y(), 0.0};
+			double center[3];
+			if (space.ToModel(inSketch, center))
+				SetVec3(response->mutable_center(), center);
+		}
+
+		PreferenceToggles toggles(swApp);
+		toggles.Set(swShowErrorsEveryRebuild, false);
+
+		HRESULT hr = doc->ClearSelection2(VARIANT_TRUE);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::ClearSelection2", hr);
+		VARIANT_BOOL selected = VARIANT_FALSE;
+		hr = sketchFeature->Select2(VARIANT_FALSE, 0, &selected);
+		if (FAILED(hr))
+			return ComError("IFeature::Select2", hr);
+		if (!selected)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks wouldn't select " + sketchName);
+
+		// InsertHelix returns nothing: the new feature is the new last one.
+		ATL::CComPtr<IFeature> lastBefore;
+		doc->IFeatureByPositionReverse(0, &lastBefore);
+		hr = doc->InsertHelix(
+			request->reverse_direction() ? VARIANT_TRUE : VARIANT_FALSE,
+			request->clockwise() ? VARIANT_TRUE : VARIANT_FALSE,
+			tapered ? VARIANT_TRUE : VARIANT_FALSE,
+			request->taper_outward() ? VARIANT_TRUE : VARIANT_FALSE,
+			definedBy,
+			request->height(),
+			request->pitch(),
+			request->revolutions(),
+			taper,
+			request->start_angle());
+		doc->ClearSelection2(VARIANT_TRUE);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::InsertHelix", hr);
+		ATL::CComPtr<IFeature> helix;
+		doc->IFeatureByPositionReverse(0, &helix);
+
+		const std::string why =
+			"check the sizes: too few turns, or a taper that narrows the helix down to nothing, won't build";
+		if (!helix || SameObject(helix, lastBefore))
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"SolidWorks couldn't make a helix from " + sketchName + " -- " + why);
+		VARIANT_BOOL warning = VARIANT_FALSE;
+		long error = swFeatureErrorNone;
+		if (SUCCEEDED(helix->GetErrorCode2(&warning, &error)) && error != swFeatureErrorNone && !warning)
+		{
+			const std::string name = FeatureName(helix);
+			DeleteFeature(doc, helix);
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"SolidWorks made " + name + " but it failed to rebuild (swFeatureError_e " + std::to_string(error) +
+				"), so it was deleted again -- " + why);
+		}
+
+		response->set_feature_name(FeatureName(helix));
+		response->set_sketch_name(sketchName);
+		response->set_radius(circle.radius());
+		ATL::CComPtr<IDispatch> definition;
+		if (SUCCEEDED(helix->GetDefinition(&definition)))
+			if (ATL::CComQIPtr<IHelixFeatureData> data(definition.p); data)
+			{
+				double value = 0.0;
+				if (SUCCEEDED(data->get_Height(&value)))
+					response->set_height(value);
+				if (SUCCEEDED(data->get_Pitch(&value)))
+					response->set_pitch(value);
+				if (SUCCEEDED(data->get_Revolution(&value)))
+					response->set_revolutions(value);
+			}
+		DescribeHelixCurve(helix, response);
+		return grpc::Status::OK;
+	});
 }

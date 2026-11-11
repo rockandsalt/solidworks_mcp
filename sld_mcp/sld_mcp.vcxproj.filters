@@ -58,6 +58,15 @@
     <ClInclude Include="SolidWorksService.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="CadExecutor.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="RequestControl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="service\RequestLock.h">
+      <Filter>Header Files\service</Filter>
+    </ClInclude>
     <ClInclude Include="ComVariant.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -118,6 +127,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="SolidWorksService.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="CadExecutor.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="service\AnnotationHelpers.cpp">

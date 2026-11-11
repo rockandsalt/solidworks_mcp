@@ -6,6 +6,8 @@
     .\build.ps1                                  # both, Debug
     .\build.ps1 -Target server                   # Rust only (fine while SolidWorks is open)
     .\build.ps1 -Target addin -Configuration Release
+    .\build.ps1 -Target test                     # native tests, without running SolidWorks
+    .\build.ps1 -Target test -SwTypeLibDir 'C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS (2)'
     .\build.ps1 -Clean                           # clean both
     .\build.ps1 -Target register                 # regsvr32 the Debug DLL (prompts for admin)
     .\build.ps1 -Target test-session             # open the MCP test session in its own window
@@ -28,14 +30,21 @@
     The installer target always builds Release, needs NSIS (makensis.exe on
     PATH, in its default install folder, or in MAKENSIS), and bundles the
     vc_redist.x64.exe of the Visual Studio that built the add-in.
+
+    The test target builds the native execution tests in Release using installed
+    C++ dependencies, with output separate from the installed or development DLL.
+    It does not start, stop, or reset SolidWorks. SwTypeLibDir optionally overrides
+    the project's default type-library location for add-in builds and tests.
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('all', 'addin', 'server', 'register', 'test-session', 'installer')]
+    [ValidateSet('all', 'addin', 'server', 'register', 'test', 'test-session', 'installer')]
     [string]$Target = 'all',
 
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Debug',
+
+    [string]$SwTypeLibDir,
 
     [switch]$Clean,
 
@@ -320,10 +329,61 @@ function Build-Addin {
     $msbuild = Find-MSBuild
     $msbuildTarget = if ($Clean) { 'Clean' } else { 'Build' }
     Write-Step "Add-in: $msbuildTarget $Configuration|x64"
+    $addinProperties = @()
+    if ($SwTypeLibDir) { $addinProperties += "-p:SwTypeLibDir=$SwTypeLibDir" }
     & $msbuild $solution "-t:$msbuildTarget" "-p:Configuration=$Configuration" '-p:Platform=x64' `
-        '-p:GenerateFullPaths=true' '-m' '-nologo' '-v:minimal'
+        @addinProperties '-p:GenerateFullPaths=true' '-m' '-nologo' '-v:minimal'
     if ($LASTEXITCODE -ne 0) { throw "Add-in build failed (MSBuild exit code $LASTEXITCODE)." }
     if (-not $Clean) { Write-Host "    $dll" -ForegroundColor Green }
+}
+
+function Test-Addin {
+    Write-Step 'Native CAD execution tests (no running SolidWorks required)'
+    # Every protocol operation must use the shared execution boundary exactly once.
+    $rpcNames = [regex]::Matches((Get-Content (Join-Path $root 'proto\sld_mcp.proto') -Raw), '\brpc\s+(\w+)\(') |
+        ForEach-Object { $_.Groups[1].Value } | Sort-Object
+    $sources = (Get-ChildItem (Join-Path $root 'sld_mcp\service') -Filter '*.cpp' | Get-Content -Raw) -join "`n"
+    $executedNames = [regex]::Matches($sources, 'm_executor\.Execute\(context, "(\w+)"') |
+        ForEach-Object { $_.Groups[1].Value } | Sort-Object
+    if (Compare-Object $rpcNames $executedNames) { throw 'Every CAD RPC must use the shared executor exactly once.' }
+    if ($sources -match '\b(?:ComApartment|LockForRequest|GetSwApp)\s*\(|std::(?:lock_guard|unique_lock)<std::mutex>') {
+        throw 'CAD handlers must leave locking and COM setup to the executor.'
+    }
+    Write-Host "PASS: all $($rpcNames.Count) protocol operations use the shared execution boundary."
+
+    $msbuild = Find-MSBuild
+    $vsPath = Find-VsInstallPath
+    $project = Join-Path $root 'sld_mcp\sld_mcp.vcxproj'
+    $outDir = Join-Path $root 'build\mesh-cancellation'
+    # Reuse installed dependencies and keep output away from any loaded DLL.
+    $properties = @('-p:Configuration=Release', '-p:Platform=x64',
+        '-p:VcpkgManifestInstall=false', "-p:OutDir=$outDir\")
+    if ($SwTypeLibDir) { $properties += "-p:SwTypeLibDir=$SwTypeLibDir" }
+    & $msbuild $project @properties -t:Build -m:2 -nologo -v:minimal
+    if ($LASTEXITCODE) { throw 'Add-in test build failed.' }
+    $settings = (& $msbuild $project @properties `
+        '-getProperty:IntDir,SldMcpProtoOutDir,_ZVcpkgCurrentInstalledDir,SwTypeLibDir' -nologo | ConvertFrom-Json).Properties
+    if ($LASTEXITCODE) { throw 'Could not read the add-in build directories.' }
+    $projectDir = Split-Path -Parent $project
+    $objectDir = [IO.Path]::GetFullPath((Join-Path $projectDir $settings.IntDir))
+    $generatedDir = [IO.Path]::GetFullPath((Join-Path $projectDir $settings.SldMcpProtoOutDir))
+    $dependencyDir = $settings._ZVcpkgCurrentInstalledDir
+
+    # The fake connection prevents calls into CAD; localhost gRPC supplies cancellation.
+    & (Join-Path $vsPath 'Common7\Tools\Launch-VsDevShell.ps1') -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+    $names = @(Get-ChildItem (Join-Path $projectDir 'service') -Filter '*.cpp' | ForEach-Object BaseName)
+    $names += @('SolidWorksService', 'CadExecutor', 'pch', 'sld_mcp.pb', 'sld_mcp.grpc.pb')
+    $objects = @($names | ForEach-Object { Join-Path $objectDir "$_.obj" })
+    $libraries = @(Get-ChildItem (Join-Path $dependencyDir 'lib') -Filter '*.lib' | ForEach-Object FullName)
+    $testExe = Join-Path $outDir 'mesh_cancellation_tests.exe'
+    & cl.exe /nologo /std:c++17 /EHsc /MD /D_UNICODE /DUNICODE "/I$projectDir" "/I$($settings.SwTypeLibDir)" `
+        "/I$generatedDir" "/I$(Join-Path $dependencyDir 'include')" `
+        (Join-Path $projectDir 'tests\MeshCancellation.cpp') "/Fo$outDir\MeshCancellation.obj" "/Fe$testExe" `
+        /link @objects @libraries ws2_32.lib crypt32.lib iphlpapi.lib bcrypt.lib dbghelp.lib `
+        ole32.lib oleaut32.lib uuid.lib user32.lib advapi32.lib shell32.lib
+    if ($LASTEXITCODE) { throw 'Native execution test build failed.' }
+    & $testExe
+    if ($LASTEXITCODE) { throw 'Native execution regression failed.' }
 }
 
 function Build-Server {
@@ -356,8 +416,8 @@ function Register-Addin {
     if ($process.ExitCode -ne 0) { throw "regsvr32 failed with exit code $($process.ExitCode)." }
 }
 
-if ($Clean -and $Target -eq 'installer') {
-    throw "-Clean doesn't apply to the installer; use it with -Target all, addin or server."
+if ($Clean -and $Target -in 'installer', 'test') {
+    throw "-Clean doesn't apply to -Target $Target; use it with -Target all, addin or server."
 }
 if ($Cycle -and ($Clean -or $Target -notin 'all', 'server')) {
     throw "-Cycle restarts the test session around the server build, so it needs -Target all or server, without -Clean."
@@ -369,6 +429,7 @@ switch ($Target) {
     'all'      { Build-Addin; Build-Server }
     'addin'    { Build-Addin }
     'server'   { Build-Server }
+    'test'     { Test-Addin }
     'register' { Register-Addin }
     'test-session' { Start-TestSession }
     'installer' { Build-Addin; Build-Server; Build-Installer }

@@ -20,10 +20,9 @@ namespace sld_mcp::service
 	// leading names are dropped until the assembly knows the rest.
 	ATL::CComPtr<IComponent2> AssemblyComponentOf(IAssemblyDoc* assembly, IComponent2* viewComponent);
 
-	// Every component of the assembly, nested ones included. With context,
-	// cancellation stops conversion early; callers must check it before using
-	// the (possibly partial) result.
-	std::vector<ATL::CComPtr<IComponent2>> AllComponents(IAssemblyDoc* assembly, grpc::ServerContext* context = nullptr);
+	// Every component of the assembly, nested ones included. With control,
+	// cancellation unwinds to the executor instead of returning a partial list.
+	std::vector<ATL::CComPtr<IComponent2>> AllComponents(IAssemblyDoc* assembly, RequestControl* control = nullptr);
 
 	bool IsSubassembly(IComponent2* component);
 
@@ -31,10 +30,12 @@ namespace sld_mcp::service
 
 	// The components that hold geometry: parts (subassemblies' bodies are
 	// their children's), not suppressed. `visibleOnly` also drops hidden ones.
-	std::vector<ATL::CComPtr<IComponent2>> GeometryComponents(IAssemblyDoc* assembly, bool visibleOnly);
+	// With control, cancellation unwinds like AllComponents.
+	std::vector<ATL::CComPtr<IComponent2>> GeometryComponents(IAssemblyDoc* assembly, bool visibleOnly,
+		RequestControl* control = nullptr);
 
-	// A component's solid and surface bodies.
-	std::vector<ATL::CComPtr<IBody2>> ComponentBodies(IComponent2* component);
+	// A component's solid and surface bodies. With control, cancellation unwinds.
+	std::vector<ATL::CComPtr<IBody2>> ComponentBodies(IComponent2* component, RequestControl* control = nullptr);
 
 	// A component transform (IComponent2::Transform2) as component ->
 	// assembly, read through where it puts the origin and unit axes.

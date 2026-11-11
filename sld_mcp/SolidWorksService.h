@@ -7,7 +7,7 @@
 #pragma once
 
 #include "GrpcIncludes.h"
-#include <mutex>
+#include "CadExecutor.h"
 
 class SolidWorksService final : public sld_mcp::v1::SolidWorks::Service
 {
@@ -352,18 +352,6 @@ public:
 		sld_mcp::v1::GetMassPropertiesResponse* response) override;
 
 private:
-	// gRPC runs handlers on its own thread pool, not on SolidWorks' main
-	// STA thread, so ISldWorks can't be used directly. This fetches a
-	// marshaled proxy from the GIT; COM then forwards every call made on it
-	// to the main thread. Call only inside a ComApartment scope (see .cpp).
-	grpc::Status GetSwApp(ATL::CComPtr<ISldWorks>& swApp) const;
-
-	ATL::CComPtr<IGlobalInterfaceTable> m_git;
-	DWORD m_swAppCookie;
-
-	// Serializes RPCs that change the model. Each COM call is marshaled to
-	// SolidWorks' main thread on its own, so two concurrent multi-step RPCs
-	// (select plane, open sketch, ...) could otherwise interleave their
-	// steps and clobber each other's selection or open sketch.
-	std::mutex m_editMutex;
+	// All CAD access, including reads, shares one execution/lifetime policy.
+	sld_mcp::service::CadExecutor m_executor;
 };

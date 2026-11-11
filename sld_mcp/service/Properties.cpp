@@ -222,7 +222,7 @@ namespace
 	}
 }
 
-grpc::Status SolidWorksService::CustomProperties(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::CustomProperties(grpc::ServerContext* context,
 	const sld_mcp::v1::CustomPropertiesRequest* request,
 	sld_mcp::v1::CustomPropertiesResponse* response)
 {
@@ -232,185 +232,175 @@ grpc::Status SolidWorksService::CustomProperties(grpc::ServerContext* /*context*
 		if (p.name().empty())
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "a property needs a name");
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDoc2> doc;
-	std::string viewConfiguration;
-	if (grpc::Status status = PropertyDocument(swApp, request->document(), request->sheet_name(), doc, viewConfiguration);
-		!status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	ATL::CComPtr<ICustomPropertyManager> properties;
-	if (FAILED(ext->get_CustomPropertyManager(FromUtf8(request->configuration()), &properties)) || !properties)
-		return grpc::Status(grpc::StatusCode::NOT_FOUND, "no configuration named \"" + request->configuration() + "\"");
-	long docType = swDocNONE;
-	doc->GetType(&docType);
-	const bool hasConfigurations = docType == swDocPART || docType == swDocASSEMBLY;
-	ATL::CComPtr<IConfiguration> config;
-	std::string bomConfiguration = request->configuration().empty() ? viewConfiguration : request->configuration();
-	if (hasConfigurations)
-		if (grpc::Status status = ConfigurationOf(doc, bomConfiguration, config); !status.ok())
+	return m_executor.Execute(context, "CustomProperties", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		std::string viewConfiguration;
+		if (grpc::Status status = PropertyDocument(swApp, request->document(), request->sheet_name(), doc, viewConfiguration);
+			!status.ok())
 			return status;
-	if (!request->bom_part_number().empty() && !config)
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			"a BOM part number belongs to a part's or assembly's configuration, not a drawing");
-
-	// Everything is checked before anything changes.
-	auto refuseLink = [&](const std::string& name, const char* what) -> grpc::Status {
-		sld_mcp::v1::CustomProperty current;
-		if (request->replace_links() || !GetProperty(properties, FromUtf8(name), &current) || !IsLink(current))
-			return grpc::Status::OK;
-		std::string message = std::string("won't ") + what + " property \"" + name + "\": it links " + current.value() +
-			" (now \"" + current.resolved() + "\"), which SolidWorks keeps up to date; replace_links overwrites it";
-		if (current.value().find("SW-Material") != std::string::npos)
-			message += ". It shows the part's physical material: part_material changes that, and this property follows";
-		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, message);
-	};
-	for (const auto& name : request->remove())
-		if (grpc::Status status = refuseLink(name, "remove"); !status.ok())
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
 			return status;
-	for (const auto& p : request->set())
-		if (grpc::Status status = refuseLink(p.name(), "replace"); !status.ok())
-			return status;
+		ATL::CComPtr<ICustomPropertyManager> properties;
+		if (FAILED(ext->get_CustomPropertyManager(FromUtf8(request->configuration()), &properties)) || !properties)
+			return grpc::Status(grpc::StatusCode::NOT_FOUND, "no configuration named \"" + request->configuration() + "\"");
+		long docType = swDocNONE;
+		doc->GetType(&docType);
+		const bool hasConfigurations = docType == swDocPART || docType == swDocASSEMBLY;
+		ATL::CComPtr<IConfiguration> config;
+		std::string bomConfiguration = request->configuration().empty() ? viewConfiguration : request->configuration();
+		if (hasConfigurations)
+			if (grpc::Status status = ConfigurationOf(doc, bomConfiguration, config); !status.ok())
+				return status;
+		if (!request->bom_part_number().empty() && !config)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+				"a BOM part number belongs to a part's or assembly's configuration, not a drawing");
 
-	for (const auto& name : request->remove())
-	{
-		long result = 0;
-		properties->Delete2(FromUtf8(name), &result);
-	}
-	for (const auto& p : request->set())
-	{
-		long result = 0;
-		HRESULT hr = properties->Add3(FromUtf8(p.name()), swCustomInfoText, FromUtf8(p.value()),
-			swCustomPropertyReplaceValue, &result);
-		if (FAILED(hr) || result != swCustomInfoAddResult_AddedOrChanged)
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "SolidWorks didn't set property \"" + p.name() +
-				"\" (result " + std::to_string(result) + "; an existing property of another type?)");
-	}
-	if (!request->bom_part_number().empty())
-		if (grpc::Status status = SetBomPartNumber(config, request->bom_part_number()); !status.ok())
-			return status;
-	if (request->set_size() + request->remove_size() > 0 || !request->bom_part_number().empty())
-		RebuildAfterChange(swApp, doc);
+		// Everything is checked before anything changes.
+		auto refuseLink = [&](const std::string& name, const char* what) -> grpc::Status {
+			sld_mcp::v1::CustomProperty current;
+			if (request->replace_links() || !GetProperty(properties, FromUtf8(name), &current) || !IsLink(current))
+				return grpc::Status::OK;
+			std::string message = std::string("won't ") + what + " property \"" + name + "\": it links " + current.value() +
+				" (now \"" + current.resolved() + "\"), which SolidWorks keeps up to date; replace_links overwrites it";
+			if (current.value().find("SW-Material") != std::string::npos)
+				message += ". It shows the part's physical material: part_material changes that, and this property follows";
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, message);
+		};
+		for (const auto& name : request->remove())
+			if (grpc::Status status = refuseLink(name, "remove"); !status.ok())
+				return status;
+		for (const auto& p : request->set())
+			if (grpc::Status status = refuseLink(p.name(), "replace"); !status.ok())
+				return status;
 
-	SetDocument(doc, response->mutable_document());
-	response->set_configuration(request->configuration());
-	ATL::CComVariant names;
-	if (SUCCEEDED(properties->GetNames(&names)))
-		for (const auto& name : comvariant::ToBstrs(names))
-			GetProperty(properties, name, response->add_properties());
-	if (config)
-	{
-		response->set_bom_configuration(bomConfiguration);
-		long source = 0;
-		config->get_BOMPartNoSource(&source);
-		response->set_bom_part_number_source(static_cast<int32_t>(source));
-		ATL::CComBSTR alternate;
-		config->get_AlternateName(&alternate);
-		response->set_bom_part_number(ToUtf8(alternate));
-	}
-	return grpc::Status::OK;
+		for (const auto& name : request->remove())
+		{
+			long result = 0;
+			properties->Delete2(FromUtf8(name), &result);
+		}
+		for (const auto& p : request->set())
+		{
+			long result = 0;
+			HRESULT hr = properties->Add3(FromUtf8(p.name()), swCustomInfoText, FromUtf8(p.value()),
+				swCustomPropertyReplaceValue, &result);
+			if (FAILED(hr) || result != swCustomInfoAddResult_AddedOrChanged)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "SolidWorks didn't set property \"" + p.name() +
+					"\" (result " + std::to_string(result) + "; an existing property of another type?)");
+		}
+		if (!request->bom_part_number().empty())
+			if (grpc::Status status = SetBomPartNumber(config, request->bom_part_number()); !status.ok())
+				return status;
+		if (request->set_size() + request->remove_size() > 0 || !request->bom_part_number().empty())
+			RebuildAfterChange(swApp, doc);
+
+		SetDocument(doc, response->mutable_document());
+		response->set_configuration(request->configuration());
+		ATL::CComVariant names;
+		if (SUCCEEDED(properties->GetNames(&names)))
+			for (const auto& name : comvariant::ToBstrs(names))
+				GetProperty(properties, name, response->add_properties());
+		if (config)
+		{
+			response->set_bom_configuration(bomConfiguration);
+			long source = 0;
+			config->get_BOMPartNoSource(&source);
+			response->set_bom_part_number_source(static_cast<int32_t>(source));
+			ATL::CComBSTR alternate;
+			config->get_AlternateName(&alternate);
+			response->set_bom_part_number(ToUtf8(alternate));
+		}
+		return grpc::Status::OK;
+	});
 }
 
-grpc::Status SolidWorksService::PartMaterial(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::PartMaterial(grpc::ServerContext* context,
 	const sld_mcp::v1::PartMaterialRequest* request,
 	sld_mcp::v1::PartMaterialResponse* response)
 {
 	if (request->remove() && !request->material().empty())
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "give a material or remove, not both");
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "PartMaterial", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		std::string configuration;
+		if (grpc::Status status = PropertyDocument(swApp, request->document(), request->sheet_name(), doc, configuration);
+			!status.ok())
+			return status;
+		SetDocument(doc, response->mutable_document());
+		for (const auto& folder : MaterialDatabaseFolders(swApp))
+			response->add_database_folders(folder);
+		ATL::CComQIPtr<IPartDoc> part(doc.p);
+		if (!part)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, response->document().title() +
+				" isn't a part: a physical material is assigned to each part (give the part as document)");
+		if (!request->configuration().empty())
+			configuration = request->configuration();
+		ATL::CComPtr<IConfiguration> config;
+		if (grpc::Status status = ConfigurationOf(doc, configuration, config); !status.ok())
+			return status;
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDoc2> doc;
-	std::string configuration;
-	if (grpc::Status status = PropertyDocument(swApp, request->document(), request->sheet_name(), doc, configuration);
-		!status.ok())
-		return status;
-	SetDocument(doc, response->mutable_document());
-	for (const auto& folder : MaterialDatabaseFolders(swApp))
-		response->add_database_folders(folder);
-	ATL::CComQIPtr<IPartDoc> part(doc.p);
-	if (!part)
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, response->document().title() +
-			" isn't a part: a physical material is assigned to each part (give the part as document)");
-	if (!request->configuration().empty())
-		configuration = request->configuration();
-	ATL::CComPtr<IConfiguration> config;
-	if (grpc::Status status = ConfigurationOf(doc, configuration, config); !status.ok())
-		return status;
-
-	if (request->remove() || !request->material().empty())
-	{
-		// An unknown name is ignored without an error (seen 2026-10-22),
-		// so the result is read back.
-		HRESULT hr = part->SetMaterialPropertyName2(FromUtf8(configuration), FromUtf8(request->database()),
-			FromUtf8(request->material()));
-		if (FAILED(hr))
-			return ComError("IPartDoc::SetMaterialPropertyName2", hr);
-		std::string database;
-		const std::string now = MaterialName(part, configuration, database);
-		if (now != request->material())
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, request->remove()
-				? "SolidWorks didn't remove the material (still \"" + now + "\")"
-				: "SolidWorks didn't take material \"" + request->material() + "\"" +
-					(request->database().empty() ? "" : " of database \"" + request->database() + "\"") +
-					" (names are exact, as in the database; the part still has " +
-					(now.empty() ? "no material" : "\"" + now + "\"") + ")");
-		RebuildAfterChange(swApp, doc);
-	}
-
-	std::string database;
-	response->set_configuration(configuration);
-	response->set_material(MaterialName(part, configuration, database));
-	response->set_database(database);
-
-	// Mass properties are the active configuration's.
-	std::string active;
-	ATL::CComPtr<IConfiguration> activeConfig;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	if (ConfigurationOf(doc, active, activeConfig).ok() && active == configuration)
-	{
-		ATL::CComPtr<IDispatch> disp;
-		ATL::CComQIPtr<IMassProperty2> mass;
-		double kg = 0, density = 0;
-		if (SUCCEEDED(ext->CreateMassProperty2(&disp)) && disp && (mass = disp.p) &&
-			SUCCEEDED(mass->get_Mass(&kg)) && SUCCEEDED(mass->get_Density(&density)))
+		if (request->remove() || !request->material().empty())
 		{
-			response->set_has_mass(true);
-			response->set_mass(kg);
-			response->set_density(density);
+			// An unknown name is ignored without an error (seen 2026-10-22),
+			// so the result is read back.
+			HRESULT hr = part->SetMaterialPropertyName2(FromUtf8(configuration), FromUtf8(request->database()),
+				FromUtf8(request->material()));
+			if (FAILED(hr))
+				return ComError("IPartDoc::SetMaterialPropertyName2", hr);
+			std::string database;
+			const std::string now = MaterialName(part, configuration, database);
+			if (now != request->material())
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, request->remove()
+					? "SolidWorks didn't remove the material (still \"" + now + "\")"
+					: "SolidWorks didn't take material \"" + request->material() + "\"" +
+						(request->database().empty() ? "" : " of database \"" + request->database() + "\"") +
+						" (names are exact, as in the database; the part still has " +
+						(now.empty() ? "no material" : "\"" + now + "\"") + ")");
+			RebuildAfterChange(swApp, doc);
 		}
-	}
 
-	ATL::CComPtr<ICustomPropertyManager> fileProperties, configProperties;
-	const ATL::CComBSTR materialName(L"Material");
-	if (SUCCEEDED(ext->get_CustomPropertyManager(ATL::CComBSTR(L""), &fileProperties)) && fileProperties)
-	{
-		sld_mcp::v1::CustomProperty p;
-		if (GetProperty(fileProperties, materialName, &p))
-			*response->mutable_material_property() = p;
-	}
-	if (SUCCEEDED(ext->get_CustomPropertyManager(FromUtf8(configuration), &configProperties)) && configProperties)
-	{
-		sld_mcp::v1::CustomProperty p;
-		if (GetProperty(configProperties, materialName, &p))
-			*response->mutable_configuration_material_property() = p;
-	}
-	return grpc::Status::OK;
+		std::string database;
+		response->set_configuration(configuration);
+		response->set_material(MaterialName(part, configuration, database));
+		response->set_database(database);
+
+		// Mass properties are the active configuration's.
+		std::string active;
+		ATL::CComPtr<IConfiguration> activeConfig;
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		if (ConfigurationOf(doc, active, activeConfig).ok() && active == configuration)
+		{
+			ATL::CComPtr<IDispatch> disp;
+			ATL::CComQIPtr<IMassProperty2> mass;
+			double kg = 0, density = 0;
+			if (SUCCEEDED(ext->CreateMassProperty2(&disp)) && disp && (mass = disp.p) &&
+				SUCCEEDED(mass->get_Mass(&kg)) && SUCCEEDED(mass->get_Density(&density)))
+			{
+				response->set_has_mass(true);
+				response->set_mass(kg);
+				response->set_density(density);
+			}
+		}
+
+		ATL::CComPtr<ICustomPropertyManager> fileProperties, configProperties;
+		const ATL::CComBSTR materialName(L"Material");
+		if (SUCCEEDED(ext->get_CustomPropertyManager(ATL::CComBSTR(L""), &fileProperties)) && fileProperties)
+		{
+			sld_mcp::v1::CustomProperty p;
+			if (GetProperty(fileProperties, materialName, &p))
+				*response->mutable_material_property() = p;
+		}
+		if (SUCCEEDED(ext->get_CustomPropertyManager(FromUtf8(configuration), &configProperties)) && configProperties)
+		{
+			sld_mcp::v1::CustomProperty p;
+			if (GetProperty(configProperties, materialName, &p))
+				*response->mutable_configuration_material_property() = p;
+		}
+		return grpc::Status::OK;
+	});
 }

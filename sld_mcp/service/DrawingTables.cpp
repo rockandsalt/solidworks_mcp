@@ -456,7 +456,7 @@ namespace
 	}
 }
 
-grpc::Status SolidWorksService::SetupDrawingTable(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::SetupDrawingTable(grpc::ServerContext* context,
 	const sld_mcp::v1::SetupDrawingTableRequest* request,
 	sld_mcp::v1::SetupDrawingTableResponse* response)
 {
@@ -464,291 +464,286 @@ grpc::Status SolidWorksService::SetupDrawingTable(grpc::ServerContext* /*context
 		return status;
 	const bool create = request->name().empty();
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDoc2> doc;
-	ATL::CComQIPtr<IDrawingDoc> drawing;
-	if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	ATL::CComQIPtr<IMathUtility> math;
-	if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
-		return status;
-
-	// Everything is looked up before anything changes.
-	const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
-	const std::string original = ActiveSheetName(drawing);
-	std::string sheetName;
-	ATL::CComPtr<IView> view;
-	FoundTable found;
-	std::wstring templatePath;
-	const auto kind = request->kind();
-	if (create)
-	{
-		if (kind == sld_mcp::v1::TABLE_KIND_GENERAL || kind == sld_mcp::v1::TABLE_KIND_REVISION)
-		{
-			const std::string& wanted = request->sheet_name().empty() ? original : request->sheet_name();
-			const DrawingSheet* sheet = FindSheet(sheets, wanted);
-			if (!sheet)
-				return grpc::Status(grpc::StatusCode::NOT_FOUND,
-					"the drawing has no sheet named \"" + wanted + "\" (its sheets: " + SheetList(sheets) + ")");
-			sheetName = sheet->name;
-		}
-		else
-		{
-			if (grpc::Status status = FindDrawingView(sheets, request->view_name(), view, sheetName); !status.ok())
-				return status;
-			if (!request->sheet_name().empty() && !EqualsIgnoringCase(request->sheet_name(), sheetName))
-				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, request->view_name() + " is on " + sheetName +
-					", not " + request->sheet_name());
-		}
-		if (!request->template_file().empty() || kind != sld_mcp::v1::TABLE_KIND_GENERAL)
-		{
-			const auto pref = kind == sld_mcp::v1::TABLE_KIND_BOM ? swFileLocationsBOMTemplates
-				: kind == sld_mcp::v1::TABLE_KIND_HOLE ? swFileLocationsHoleTableTemplates
-				: kind == sld_mcp::v1::TABLE_KIND_REVISION ? swFileLocationsRevisionTableTemplates : swFileLocationsGeneralTablesTemplate;
-			const std::wstring extension = kind == sld_mcp::v1::TABLE_KIND_BOM ? L".sldbomtbt"
-				: kind == sld_mcp::v1::TABLE_KIND_HOLE ? L".sldholtbt"
-				: kind == sld_mcp::v1::TABLE_KIND_REVISION ? L".sldrevtbt" : L".sldtbt";
-			const std::string name = !request->template_file().empty() ? request->template_file()
-				: kind == sld_mcp::v1::TABLE_KIND_BOM ? "bom-standard"
-				: kind == sld_mcp::v1::TABLE_KIND_REVISION ? "standard revision block" : "standard hole table--letters";
-			if (grpc::Status status = FindTemplateFile(swApp, pref, name, extension, std::string(KindWord(kind)) + " template",
-				templatePath); !status.ok())
-				return status;
-		}
-	}
-	else
-	{
-		if (grpc::Status status = FindTable(sheets, request->name(), request->sheet_name(), found); !status.ok())
+	return m_executor.Execute(context, "SetupDrawingTable", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		ATL::CComQIPtr<IDrawingDoc> drawing;
+		if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
 			return status;
-		sheetName = found.sheetName;
-	}
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		ATL::CComQIPtr<IMathUtility> math;
+		if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
+			return status;
 
-	// Unless each sheet's table stands alone, a later sheet's says "See
-	// Sheet1" and AddRevision adds to the first sheet's, or fails without
-	// one (seen 2026-11-01).
-	if (request->revisions_size() > 0 && !sheets.empty() && sheetName != sheets[0].name)
-	{
-		long style = swRevisionTable_SeeSheet1;
-		ext->GetUserPreferenceInteger(swRevisionTableMultipleSheetStyle, swDetailingNoOptionSpecified, &style);
-		if (style != swRevisionTable_Independent)
-			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "this drawing keeps its revisions on the first sheet, " +
-				sheets[0].name + " (a later sheet's table only says \"See Sheet1\"): add them to that sheet's table");
-	}
-
-	std::unique_ptr<DrawingViewContext> ctx;
-	google::protobuf::RepeatedPtrField<sld_mcp::v1::ComponentInfo> holeComponents;
-	std::vector<ATL::CComPtr<IAnnotation>> viewBefore;
-	ATL::CComPtr<ITableAnnotation> table;
-	ATL::CComPtr<IAnnotation> annotation;
-	{
-		SheetActivation activation(drawing);
-		if (!activation.Show(sheetName))
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "couldn't switch to sheet " + sheetName);
-		// Tables go on the sheet, never into its format.
-		EditModeScope editMode(drawing);
-		editMode.Set(false);
-
+		// Everything is looked up before anything changes.
+		const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
+		const std::string original = ActiveSheetName(drawing);
+		std::string sheetName;
+		ATL::CComPtr<IView> view;
+		FoundTable found;
+		std::wstring templatePath;
+		const auto kind = request->kind();
 		if (create)
 		{
-			SheetSetup setup;
-			if (const DrawingSheet* sheet = FindSheet(sheets, sheetName); sheet)
-				ReadSheetSetup(sheet->sheet, setup);
-			const long anchor = request->anchor() > 0 ? request->anchor()
-				: kind == sld_mcp::v1::TABLE_KIND_REVISION ? swBOMConfigurationAnchor_TopRight : swBOMConfigurationAnchor_TopLeft;
-			const double x = request->has_position() ? request->position().x()
-				: kind == sld_mcp::v1::TABLE_KIND_REVISION ? std::max(setup.width - kDefaultTableMargin, kDefaultTableMargin) : kDefaultTableMargin;
-			const double y = request->has_position() ? request->position().y()
-				: std::max(setup.height - kDefaultTableMargin, kDefaultTableMargin);
-			const ATL::CComBSTR templateBstr(templatePath.c_str());
-			doc->ClearSelection2(VARIANT_TRUE);
-			if (kind == sld_mcp::v1::TABLE_KIND_BOM)
+			if (kind == sld_mcp::v1::TABLE_KIND_GENERAL || kind == sld_mcp::v1::TABLE_KIND_REVISION)
 			{
-				const ViewModel model = ViewModelOf(view);
-				if (model.type != swDocASSEMBLY)
-					return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, request->view_name() +
-						" doesn't show an assembly: a bill of materials lists an assembly's components");
-				// An empty configuration gives a BOM of only its header
-				// (seen 2026-10-22): the view's own is named.
-				ATL::CComBSTR configuration(FromUtf8(request->configuration()));
-				if (configuration.Length() == 0)
-					view->get_ReferencedConfiguration(&configuration);
-				VARIANT_BOOL ok = VARIANT_FALSE;
-				drawing->ActivateView(FromUtf8(request->view_name()), &ok);
-				const long bomType = request->bom_type() > 0 ? request->bom_type() : swBomType_TopLevelOnly;
-				ATL::CComPtr<IDispatch> made;
-				HRESULT hr = view->InsertBomTable6(VARIANT_FALSE, x, y, anchor, bomType, configuration, templateBstr,
-					VARIANT_FALSE, bomType == swBomType_Indented ? swNumberingType_Detailed : swNumberingType_None,
-					VARIANT_FALSE, VARIANT_FALSE, VARIANT_FALSE, &made);
-				if (FAILED(hr))
-					return ComError("IView::InsertBomTable6", hr);
-				table = ATL::CComQIPtr<ITableAnnotation>(made.p);
-				if (!table)
-					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't add a bill of materials for " +
-						request->view_name() + " (configuration \"" + ToUtf8(configuration) + "\")");
-				long rows = 0, header = 0;
-				table->get_TotalRowCount(&rows);
-				table->GetHeaderCount(&header);
-				if (rows <= header)
-				{
-					DeleteTable(doc, ext, table);
-					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks made an empty bill of materials for " +
-						request->view_name() + " (configuration \"" + ToUtf8(configuration) + "\"); it was deleted again");
-				}
-			}
-			else if (kind == sld_mcp::v1::TABLE_KIND_HOLE)
-			{
-				ctx = std::make_unique<DrawingViewContext>();
-				ctx->view = view;
-				ctx->sheetName = sheetName;
-				ctx->model = ViewModelOf(view);
-				ctx->ids = std::make_unique<PersistIds>(ext);
-				ctx->modelIds = std::make_unique<PersistIds>(ctx->model.ext);
-				ctx->components = ViewComponents(view, ctx->model);
-				if (ctx->model.type == swDocASSEMBLY)
-					ctx->componentList = std::make_unique<ComponentList>(*ctx->modelIds, math, &holeComponents,
-						ATL::CComQIPtr<IAssemblyDoc>(ctx->model.doc.p));
-				VARIANT_BOOL ok = VARIANT_FALSE;
-				drawing->ActivateView(FromUtf8(request->view_name()), &ok);
-				// Origin with mark 1, the holes' edges with mark 2 (as the
-				// Hole Table PropertyManager's two boxes).
-				ViewEntityItem origin;
-				if (grpc::Status status = ResolveDrawingRef(*ctx, request->hole_origin(), "the origin", origin); !status.ok())
-					return status;
-				if (origin.kind != sld_mcp::v1::VIEW_ENTITY_KIND_VERTEX)
-					return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "the hole table's origin must be a vertex");
-				std::vector<ViewEntityItem> holes;
-				for (int i = 0; i < request->hole_edges_size(); ++i)
-				{
-					ViewEntityItem item;
-					if (grpc::Status status = ResolveDrawingRef(*ctx, request->hole_edges(i), "hole edge " + std::to_string(i + 1),
-						item); !status.ok())
-						return status;
-					if (item.kind != sld_mcp::v1::VIEW_ENTITY_KIND_EDGE)
-						return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "hole " + std::to_string(i + 1) +
-							" must be an edge (the hole's circle)");
-					holes.push_back(item);
-				}
-				viewBefore = ViewAnnotationList(view);
-				doc->ClearSelection2(VARIANT_TRUE);
-				if (!SelectViewEntityAt(doc, view, origin, std::nullopt, 1))
-					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks wouldn't select the origin vertex");
-				for (size_t i = 0; i < holes.size(); ++i)
-					if (!SelectViewEntityAt(doc, view, holes[i], std::nullopt, 2))
-					{
-						doc->ClearSelection2(VARIANT_TRUE);
-						return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks wouldn't select hole edge " +
-							std::to_string(i + 1));
-					}
-				const std::string start = request->start_tag().empty() ? "A" : request->start_tag();
-				const long tagType = std::isdigit(static_cast<unsigned char>(start[0])) ? swHoleTable_NumericTags
-					: swHoleTable_AlphaNumericTags;
-				ATL::CComPtr<IDispatch> made;
-				HRESULT hr = view->InsertHoleTable3(VARIANT_FALSE, x, y, anchor, FromUtf8(start), templateBstr,
-					swHoleTableTagOrder_XY, tagType, ATL::CComVariant(), &made);
-				doc->ClearSelection2(VARIANT_TRUE);
-				if (FAILED(hr))
-					return ComError("IView::InsertHoleTable3", hr);
-				table = ATL::CComQIPtr<ITableAnnotation>(made.p);
-				if (!table)
-				{
-					DeleteNotes(doc, ext, NewAnnotations(view, viewBefore));
-					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't add the hole table (are the "
-						"edges holes' circles seen face-on, and the origin a vertex of the same view?)");
-				}
-			}
-			else if (kind == sld_mcp::v1::TABLE_KIND_REVISION)
-			{
-				const DrawingSheet* sheet = FindSheet(sheets, sheetName);
-				if (!sheet || !sheet->sheet)
-					return grpc::Status(grpc::StatusCode::NOT_FOUND, "the drawing has no sheet named \"" + sheetName + "\"");
-				ATL::CComPtr<IRevisionTableAnnotation> existing;
-				if (SUCCEEDED(sheet->sheet->get_RevisionTable(&existing)) && existing)
-					if (ATL::CComQIPtr<ITableAnnotation> other(existing.p); other)
-						return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, sheetName + " has a revision table already (" +
-							TableName(other) + "): add revisions to it with edit_drawing_table");
-				VARIANT_BOOL ok = VARIANT_FALSE;
-				drawing->ActivateView(ATL::CComBSTR(L""), &ok);
-				ATL::CComPtr<IRevisionTableAnnotation> made;
-				HRESULT hr = sheet->sheet->InsertRevisionTable2(VARIANT_FALSE, x, y, anchor, templateBstr,
-					request->revision_symbol() > 0 ? request->revision_symbol() : static_cast<long>(swRevisionTable_TriangleSymbol),
-					VARIANT_FALSE, &made);
-				if (FAILED(hr))
-					return ComError("ISheet::InsertRevisionTable2", hr);
-				table = ATL::CComQIPtr<ITableAnnotation>(made.p);
-				if (!table)
-					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't add the revision table");
+				const std::string& wanted = request->sheet_name().empty() ? original : request->sheet_name();
+				const DrawingSheet* sheet = FindSheet(sheets, wanted);
+				if (!sheet)
+					return grpc::Status(grpc::StatusCode::NOT_FOUND,
+						"the drawing has no sheet named \"" + wanted + "\" (its sheets: " + SheetList(sheets) + ")");
+				sheetName = sheet->name;
 			}
 			else
 			{
-				VARIANT_BOOL ok = VARIANT_FALSE;
-				drawing->ActivateView(ATL::CComBSTR(L""), &ok);
-				HRESULT hr = drawing->InsertTableAnnotation2(VARIANT_FALSE, x, y, anchor, templateBstr, request->rows(),
-					request->columns(), &table);
-				if (FAILED(hr))
-					return ComError("IDrawingDoc::InsertTableAnnotation2", hr);
-				if (!table)
-					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't add the table");
+				if (grpc::Status status = FindDrawingView(sheets, request->view_name(), view, sheetName); !status.ok())
+					return status;
+				if (!request->sheet_name().empty() && !EqualsIgnoringCase(request->sheet_name(), sheetName))
+					return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, request->view_name() + " is on " + sheetName +
+						", not " + request->sheet_name());
+			}
+			if (!request->template_file().empty() || kind != sld_mcp::v1::TABLE_KIND_GENERAL)
+			{
+				const auto pref = kind == sld_mcp::v1::TABLE_KIND_BOM ? swFileLocationsBOMTemplates
+					: kind == sld_mcp::v1::TABLE_KIND_HOLE ? swFileLocationsHoleTableTemplates
+					: kind == sld_mcp::v1::TABLE_KIND_REVISION ? swFileLocationsRevisionTableTemplates : swFileLocationsGeneralTablesTemplate;
+				const std::wstring extension = kind == sld_mcp::v1::TABLE_KIND_BOM ? L".sldbomtbt"
+					: kind == sld_mcp::v1::TABLE_KIND_HOLE ? L".sldholtbt"
+					: kind == sld_mcp::v1::TABLE_KIND_REVISION ? L".sldrevtbt" : L".sldtbt";
+				const std::string name = !request->template_file().empty() ? request->template_file()
+					: kind == sld_mcp::v1::TABLE_KIND_BOM ? "bom-standard"
+					: kind == sld_mcp::v1::TABLE_KIND_REVISION ? "standard revision block" : "standard hole table--letters";
+				if (grpc::Status status = FindTemplateFile(swApp, pref, name, extension, std::string(KindWord(kind)) + " template",
+					templatePath); !status.ok())
+					return status;
 			}
 		}
 		else
-			table = found.table;
-
-		if (FAILED(table->GetAnnotation(&annotation)) || !annotation)
-			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks gave the table no annotation");
-		TableState before;
-		if (!create)
-			before = ReadTableState(table, annotation, *request);
-		std::vector<long> addedRevisions;
-		grpc::Status status = ApplyTableChange(table, annotation, doc, drawing, *request, create, addedRevisions);
-		if (!status.ok())
 		{
-			if (ATL::CComQIPtr<IRevisionTableAnnotation> revisions(table.p); revisions && !create)
-				for (const long id : addedRevisions)
-				{
-					VARIANT_BOOL ok = VARIANT_FALSE;
-					revisions->DeleteRevision(id, VARIANT_TRUE, &ok);
-				}
+			if (grpc::Status status = FindTable(sheets, request->name(), request->sheet_name(), found); !status.ok())
+				return status;
+			sheetName = found.sheetName;
+		}
+
+		// Unless each sheet's table stands alone, a later sheet's says "See
+		// Sheet1" and AddRevision adds to the first sheet's, or fails without
+		// one (seen 2026-11-01).
+		if (request->revisions_size() > 0 && !sheets.empty() && sheetName != sheets[0].name)
+		{
+			long style = swRevisionTable_SeeSheet1;
+			ext->GetUserPreferenceInteger(swRevisionTableMultipleSheetStyle, swDetailingNoOptionSpecified, &style);
+			if (style != swRevisionTable_Independent)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "this drawing keeps its revisions on the first sheet, " +
+					sheets[0].name + " (a later sheet's table only says \"See Sheet1\"): add them to that sheet's table");
+		}
+
+		std::unique_ptr<DrawingViewContext> ctx;
+		google::protobuf::RepeatedPtrField<sld_mcp::v1::ComponentInfo> holeComponents;
+		std::vector<ATL::CComPtr<IAnnotation>> viewBefore;
+		ATL::CComPtr<ITableAnnotation> table;
+		ATL::CComPtr<IAnnotation> annotation;
+		{
+			SheetActivation activation(drawing);
+			if (!activation.Show(sheetName))
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "couldn't switch to sheet " + sheetName);
+			// Tables go on the sheet, never into its format.
+			EditModeScope editMode(drawing);
+			editMode.Set(false);
+
 			if (create)
 			{
-				DeleteTable(doc, ext, table);
-				if (view && kind == sld_mcp::v1::TABLE_KIND_HOLE)
-					DeleteNotes(doc, ext, NewAnnotations(view, viewBefore));
+				SheetSetup setup;
+				if (const DrawingSheet* sheet = FindSheet(sheets, sheetName); sheet)
+					ReadSheetSetup(sheet->sheet, setup);
+				const long anchor = request->anchor() > 0 ? request->anchor()
+					: kind == sld_mcp::v1::TABLE_KIND_REVISION ? swBOMConfigurationAnchor_TopRight : swBOMConfigurationAnchor_TopLeft;
+				const double x = request->has_position() ? request->position().x()
+					: kind == sld_mcp::v1::TABLE_KIND_REVISION ? std::max(setup.width - kDefaultTableMargin, kDefaultTableMargin) : kDefaultTableMargin;
+				const double y = request->has_position() ? request->position().y()
+					: std::max(setup.height - kDefaultTableMargin, kDefaultTableMargin);
+				const ATL::CComBSTR templateBstr(templatePath.c_str());
+				doc->ClearSelection2(VARIANT_TRUE);
+				if (kind == sld_mcp::v1::TABLE_KIND_BOM)
+				{
+					const ViewModel model = ViewModelOf(view);
+					if (model.type != swDocASSEMBLY)
+						return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, request->view_name() +
+							" doesn't show an assembly: a bill of materials lists an assembly's components");
+					// An empty configuration gives a BOM of only its header
+					// (seen 2026-10-22): the view's own is named.
+					ATL::CComBSTR configuration(FromUtf8(request->configuration()));
+					if (configuration.Length() == 0)
+						view->get_ReferencedConfiguration(&configuration);
+					VARIANT_BOOL ok = VARIANT_FALSE;
+					drawing->ActivateView(FromUtf8(request->view_name()), &ok);
+					const long bomType = request->bom_type() > 0 ? request->bom_type() : swBomType_TopLevelOnly;
+					ATL::CComPtr<IDispatch> made;
+					HRESULT hr = view->InsertBomTable6(VARIANT_FALSE, x, y, anchor, bomType, configuration, templateBstr,
+						VARIANT_FALSE, bomType == swBomType_Indented ? swNumberingType_Detailed : swNumberingType_None,
+						VARIANT_FALSE, VARIANT_FALSE, VARIANT_FALSE, &made);
+					if (FAILED(hr))
+						return ComError("IView::InsertBomTable6", hr);
+					table = ATL::CComQIPtr<ITableAnnotation>(made.p);
+					if (!table)
+						return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't add a bill of materials for " +
+							request->view_name() + " (configuration \"" + ToUtf8(configuration) + "\")");
+					long rows = 0, header = 0;
+					table->get_TotalRowCount(&rows);
+					table->GetHeaderCount(&header);
+					if (rows <= header)
+					{
+						DeleteTable(doc, ext, table);
+						return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks made an empty bill of materials for " +
+							request->view_name() + " (configuration \"" + ToUtf8(configuration) + "\"); it was deleted again");
+					}
+				}
+				else if (kind == sld_mcp::v1::TABLE_KIND_HOLE)
+				{
+					ctx = std::make_unique<DrawingViewContext>();
+					ctx->view = view;
+					ctx->sheetName = sheetName;
+					ctx->model = ViewModelOf(view);
+					ctx->ids = std::make_unique<PersistIds>(ext);
+					ctx->modelIds = std::make_unique<PersistIds>(ctx->model.ext);
+					ctx->components = ViewComponents(view, ctx->model);
+					if (ctx->model.type == swDocASSEMBLY)
+						ctx->componentList = std::make_unique<ComponentList>(*ctx->modelIds, math, &holeComponents,
+							ATL::CComQIPtr<IAssemblyDoc>(ctx->model.doc.p));
+					VARIANT_BOOL ok = VARIANT_FALSE;
+					drawing->ActivateView(FromUtf8(request->view_name()), &ok);
+					// Origin with mark 1, the holes' edges with mark 2 (as the
+					// Hole Table PropertyManager's two boxes).
+					ViewEntityItem origin;
+					if (grpc::Status status = ResolveDrawingRef(*ctx, request->hole_origin(), "the origin", origin); !status.ok())
+						return status;
+					if (origin.kind != sld_mcp::v1::VIEW_ENTITY_KIND_VERTEX)
+						return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "the hole table's origin must be a vertex");
+					std::vector<ViewEntityItem> holes;
+					for (int i = 0; i < request->hole_edges_size(); ++i)
+					{
+						ViewEntityItem item;
+						if (grpc::Status status = ResolveDrawingRef(*ctx, request->hole_edges(i), "hole edge " + std::to_string(i + 1),
+							item); !status.ok())
+							return status;
+						if (item.kind != sld_mcp::v1::VIEW_ENTITY_KIND_EDGE)
+							return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "hole " + std::to_string(i + 1) +
+								" must be an edge (the hole's circle)");
+						holes.push_back(item);
+					}
+					viewBefore = ViewAnnotationList(view);
+					doc->ClearSelection2(VARIANT_TRUE);
+					if (!SelectViewEntityAt(doc, view, origin, std::nullopt, 1))
+						return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks wouldn't select the origin vertex");
+					for (size_t i = 0; i < holes.size(); ++i)
+						if (!SelectViewEntityAt(doc, view, holes[i], std::nullopt, 2))
+						{
+							doc->ClearSelection2(VARIANT_TRUE);
+							return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks wouldn't select hole edge " +
+								std::to_string(i + 1));
+						}
+					const std::string start = request->start_tag().empty() ? "A" : request->start_tag();
+					const long tagType = std::isdigit(static_cast<unsigned char>(start[0])) ? swHoleTable_NumericTags
+						: swHoleTable_AlphaNumericTags;
+					ATL::CComPtr<IDispatch> made;
+					HRESULT hr = view->InsertHoleTable3(VARIANT_FALSE, x, y, anchor, FromUtf8(start), templateBstr,
+						swHoleTableTagOrder_XY, tagType, ATL::CComVariant(), &made);
+					doc->ClearSelection2(VARIANT_TRUE);
+					if (FAILED(hr))
+						return ComError("IView::InsertHoleTable3", hr);
+					table = ATL::CComQIPtr<ITableAnnotation>(made.p);
+					if (!table)
+					{
+						DeleteNotes(doc, ext, NewAnnotations(view, viewBefore));
+						return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't add the hole table (are the "
+							"edges holes' circles seen face-on, and the origin a vertex of the same view?)");
+					}
+				}
+				else if (kind == sld_mcp::v1::TABLE_KIND_REVISION)
+				{
+					const DrawingSheet* sheet = FindSheet(sheets, sheetName);
+					if (!sheet || !sheet->sheet)
+						return grpc::Status(grpc::StatusCode::NOT_FOUND, "the drawing has no sheet named \"" + sheetName + "\"");
+					ATL::CComPtr<IRevisionTableAnnotation> existing;
+					if (SUCCEEDED(sheet->sheet->get_RevisionTable(&existing)) && existing)
+						if (ATL::CComQIPtr<ITableAnnotation> other(existing.p); other)
+							return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, sheetName + " has a revision table already (" +
+								TableName(other) + "): add revisions to it with edit_drawing_table");
+					VARIANT_BOOL ok = VARIANT_FALSE;
+					drawing->ActivateView(ATL::CComBSTR(L""), &ok);
+					ATL::CComPtr<IRevisionTableAnnotation> made;
+					HRESULT hr = sheet->sheet->InsertRevisionTable2(VARIANT_FALSE, x, y, anchor, templateBstr,
+						request->revision_symbol() > 0 ? request->revision_symbol() : static_cast<long>(swRevisionTable_TriangleSymbol),
+						VARIANT_FALSE, &made);
+					if (FAILED(hr))
+						return ComError("ISheet::InsertRevisionTable2", hr);
+					table = ATL::CComQIPtr<ITableAnnotation>(made.p);
+					if (!table)
+						return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't add the revision table");
+				}
+				else
+				{
+					VARIANT_BOOL ok = VARIANT_FALSE;
+					drawing->ActivateView(ATL::CComBSTR(L""), &ok);
+					HRESULT hr = drawing->InsertTableAnnotation2(VARIANT_FALSE, x, y, anchor, templateBstr, request->rows(),
+						request->columns(), &table);
+					if (FAILED(hr))
+						return ComError("IDrawingDoc::InsertTableAnnotation2", hr);
+					if (!table)
+						return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't add the table");
+				}
 			}
 			else
-				RestoreTableState(table, annotation, before);
-			doc->GraphicsRedraw2();
-			return status;
-		}
-	}
+				table = found.table;
 
-	DescribeTable(table, response->mutable_table());
-	if (view && kind == sld_mcp::v1::TABLE_KIND_HOLE)
-	{
-		PersistIds ids(ext);
-		for (const auto& tag : NewAnnotations(view, viewBefore))
-			if (long type = 0; SUCCEEDED(tag->GetType(&type)) && type == swNote)
-				DescribeAnnotation(tag, ids, nullptr, response->add_hole_tags());
-	}
-	for (const auto& s : DrawingSheets(drawing))
-		if (s.name == sheetName)
-		{
-			DrawingBudget budget;
-			DescribeSheet(s, original, ext, math, {}, false, false, budget, response->mutable_sheet());
-			DescribeSheetLayout(s, response->mutable_sheet());
+			if (FAILED(table->GetAnnotation(&annotation)) || !annotation)
+				return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks gave the table no annotation");
+			TableState before;
+			if (!create)
+				before = ReadTableState(table, annotation, *request);
+			std::vector<long> addedRevisions;
+			grpc::Status status = ApplyTableChange(table, annotation, doc, drawing, *request, create, addedRevisions);
+			if (!status.ok())
+			{
+				if (ATL::CComQIPtr<IRevisionTableAnnotation> revisions(table.p); revisions && !create)
+					for (const long id : addedRevisions)
+					{
+						VARIANT_BOOL ok = VARIANT_FALSE;
+						revisions->DeleteRevision(id, VARIANT_TRUE, &ok);
+					}
+				if (create)
+				{
+					DeleteTable(doc, ext, table);
+					if (view && kind == sld_mcp::v1::TABLE_KIND_HOLE)
+						DeleteNotes(doc, ext, NewAnnotations(view, viewBefore));
+				}
+				else
+					RestoreTableState(table, annotation, before);
+				doc->GraphicsRedraw2();
+				return status;
+			}
 		}
-	response->set_created(create);
-	response->set_active_sheet(original);
-	return grpc::Status::OK;
+
+		DescribeTable(table, response->mutable_table());
+		if (view && kind == sld_mcp::v1::TABLE_KIND_HOLE)
+		{
+			PersistIds ids(ext);
+			for (const auto& tag : NewAnnotations(view, viewBefore))
+				if (long type = 0; SUCCEEDED(tag->GetType(&type)) && type == swNote)
+					DescribeAnnotation(tag, ids, nullptr, response->add_hole_tags());
+		}
+		for (const auto& s : DrawingSheets(drawing))
+			if (s.name == sheetName)
+			{
+				DrawingBudget budget;
+				DescribeSheet(s, original, ext, math, {}, false, false, budget, response->mutable_sheet());
+				DescribeSheetLayout(s, response->mutable_sheet());
+			}
+		response->set_created(create);
+		response->set_active_sheet(original);
+		return grpc::Status::OK;
+	});
 }
 
 namespace
@@ -829,222 +824,217 @@ namespace
 	}
 }
 
-grpc::Status SolidWorksService::AddBalloons(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::AddBalloons(grpc::ServerContext* context,
 	const sld_mcp::v1::AddBalloonsRequest* request,
 	sld_mcp::v1::AddBalloonsResponse* response)
 {
 	if (grpc::Status status = ValidateBalloons(*request); !status.ok())
 		return status;
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "AddBalloons", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		ATL::CComQIPtr<IDrawingDoc> drawing;
+		if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
+			return status;
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		ATL::CComQIPtr<IMathUtility> math;
+		if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
+			return status;
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDoc2> doc;
-	ATL::CComQIPtr<IDrawingDoc> drawing;
-	if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	ATL::CComQIPtr<IMathUtility> math;
-	if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
-		return status;
+		const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
+		const std::string original = ActiveSheetName(drawing);
+		DrawingViewContext ctx;
+		if (grpc::Status status = FindDrawingView(sheets, request->view_name(), ctx.view, ctx.sheetName); !status.ok())
+			return status;
+		ctx.model = ViewModelOf(ctx.view);
+		if (ctx.model.type != swDocASSEMBLY)
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, request->view_name() +
+				(ctx.model.doc ? " shows a part" : "'s model isn't loaded") + ": BOM balloons label an assembly's components");
+		ctx.ids = std::make_unique<PersistIds>(ext);
+		ctx.modelIds = std::make_unique<PersistIds>(ctx.model.ext);
+		ctx.components = ViewComponents(ctx.view, ctx.model);
+		ctx.componentList = std::make_unique<ComponentList>(*ctx.modelIds, math, response->mutable_components(),
+			ATL::CComQIPtr<IAssemblyDoc>(ctx.model.doc.p));
 
-	const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
-	const std::string original = ActiveSheetName(drawing);
-	DrawingViewContext ctx;
-	if (grpc::Status status = FindDrawingView(sheets, request->view_name(), ctx.view, ctx.sheetName); !status.ok())
-		return status;
-	ctx.model = ViewModelOf(ctx.view);
-	if (ctx.model.type != swDocASSEMBLY)
-		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, request->view_name() +
-			(ctx.model.doc ? " shows a part" : "'s model isn't loaded") + ": BOM balloons label an assembly's components");
-	ctx.ids = std::make_unique<PersistIds>(ext);
-	ctx.modelIds = std::make_unique<PersistIds>(ctx.model.ext);
-	ctx.components = ViewComponents(ctx.view, ctx.model);
-	ctx.componentList = std::make_unique<ComponentList>(*ctx.modelIds, math, response->mutable_components(),
-		ATL::CComQIPtr<IAssemblyDoc>(ctx.model.doc.p));
-
-	// Positions and the targets' entities, before anything changes.
-	std::vector<std::optional<Eigen::Vector2d>> positions, arrows;
-	for (int i = 0; i < request->targets_size(); ++i)
-	{
-		const auto& t = request->targets(i);
-		const std::string which = "balloon " + std::to_string(i + 1);
-		std::optional<Eigen::Vector2d> at, arrow;
-		Eigen::Vector2d p;
-		if (t.has_position())
-		{
-			if (grpc::Status status = ToSheetPoint(sheets, math, t.position(), which + "'s position", p); !status.ok())
-				return status;
-			at = p;
-		}
-		if (t.has_arrow_point())
-		{
-			if (grpc::Status status = ToSheetPoint(sheets, math, t.arrow_point(), which + "'s arrow point", p); !status.ok())
-				return status;
-			arrow = p;
-		}
-		positions.push_back(at);
-		arrows.push_back(arrow);
-	}
-
-	std::vector<ATL::CComPtr<IAnnotation>> made;
-	{
-		SheetActivation activation(drawing);
-		if (!activation.Show(ctx.sheetName))
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "couldn't switch to sheet " + ctx.sheetName);
-		EditModeScope editMode(drawing);
-		editMode.Set(false);
-		VARIANT_BOOL ok = VARIANT_FALSE;
-		drawing->ActivateView(FromUtf8(request->view_name()), &ok);
-
-		// Targets resolved to the entity each balloon's leader goes to.
-		std::vector<ViewEntityItem> items;
+		// Positions and the targets' entities, before anything changes.
+		std::vector<std::optional<Eigen::Vector2d>> positions, arrows;
 		for (int i = 0; i < request->targets_size(); ++i)
 		{
 			const auto& t = request->targets(i);
 			const std::string which = "balloon " + std::to_string(i + 1);
-			ViewEntityItem item;
-			if (!t.component().empty())
+			std::optional<Eigen::Vector2d> at, arrow;
+			Eigen::Vector2d p;
+			if (t.has_position())
 			{
-				std::vector<std::string> names;
-				ATL::CComPtr<IComponent2> component = ViewComponentNamed(ctx, t.component(), names);
-				if (!component)
-				{
-					std::string list;
-					for (const auto& n : names)
-						list += (list.empty() ? "" : ", ") + n;
-					return grpc::Status(grpc::StatusCode::NOT_FOUND, which + ": " + request->view_name() +
-						" shows no component named \"" + t.component() + "\" (it shows: " + list + ")");
-				}
-				// Its first visible edge; SolidWorks puts the arrow on it.
-				const std::string pid = ctx.componentList->Add(component);
-				std::vector<ViewEntityItem> edges;
-				size_t budget = 1;
-				ListViewEntities(ctx.view, component, pid, sld_mcp::v1::VIEW_ENTITY_KIND_EDGE, *ctx.ids, budget, edges);
-				if (edges.empty())
-				{
-					budget = 1;
-					ListViewEntities(ctx.view, component, pid, sld_mcp::v1::VIEW_ENTITY_KIND_SILHOUETTE, *ctx.ids, budget, edges);
-				}
-				if (edges.empty())
-					return grpc::Status(grpc::StatusCode::NOT_FOUND, which + ": none of " + t.component() + "'s edges are visible in " +
-						request->view_name());
-				item = edges[0];
+				if (grpc::Status status = ToSheetPoint(sheets, math, t.position(), which + "'s position", p); !status.ok())
+					return status;
+				at = p;
 			}
-			else if (grpc::Status status = ResolveDrawingRef(ctx, t.entity(), which, item); !status.ok())
-				return status;
-			items.push_back(item);
+			if (t.has_arrow_point())
+			{
+				if (grpc::Status status = ToSheetPoint(sheets, math, t.arrow_point(), which + "'s arrow point", p); !status.ok())
+					return status;
+				arrow = p;
+			}
+			positions.push_back(at);
+			arrows.push_back(arrow);
 		}
 
-		grpc::Status status = grpc::Status::OK;
-		if (request->targets_size() == 0)
+		std::vector<ATL::CComPtr<IAnnotation>> made;
 		{
-			// Auto Balloon works on the selected view.
-			doc->ClearSelection2(VARIANT_TRUE);
-			VARIANT_BOOL selected = VARIANT_FALSE;
-			if (FAILED(ext->SelectByID2(FromUtf8(request->view_name()), ATL::CComBSTR(L"DRAWINGVIEW"), 0.0, 0.0, 0.0,
-				VARIANT_FALSE, 0, nullptr, swSelectOptionDefault, &selected)) || !selected)
-				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks wouldn't select " + request->view_name());
-			ATL::CComPtr<IAutoBalloonOptions> options;
-			if (FAILED(drawing->CreateAutoBalloonOptions(&options)) || !options)
-				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks gave no auto balloon options");
-			if (request->layout() > 0)
-				options->put_Layout(request->layout());
-			options->put_IgnoreMultiple(request->every_instance() ? VARIANT_FALSE : VARIANT_TRUE);
-			SetBalloonOptions(options.p, *request);
-			ATL::CComVariant notes;
-			HRESULT hr = drawing->AutoBalloon5(options, &notes);
-			doc->ClearSelection2(VARIANT_TRUE);
-			if (FAILED(hr))
-				return ComError("IDrawingDoc::AutoBalloon5", hr);
-			for (const auto& disp : comvariant::ToDispatches(notes))
-				if (ATL::CComQIPtr<INote> note(disp.p); note)
-				{
-					ATL::CComPtr<IDispatch> a;
-					if (SUCCEEDED(note->GetAnnotation(&a)) && a)
-						made.push_back(ATL::CComPtr<IAnnotation>(ATL::CComQIPtr<IAnnotation>(a.p)));
-				}
-			if (made.empty())
-				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks added no balloons to " +
-					request->view_name() + " (are its components already ballooned?)");
-		}
-		else
-			for (size_t i = 0; i < items.size() && status.ok(); ++i)
+			SheetActivation activation(drawing);
+			if (!activation.Show(ctx.sheetName))
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "couldn't switch to sheet " + ctx.sheetName);
+			EditModeScope editMode(drawing);
+			editMode.Set(false);
+			VARIANT_BOOL ok = VARIANT_FALSE;
+			drawing->ActivateView(FromUtf8(request->view_name()), &ok);
+
+			// Targets resolved to the entity each balloon's leader goes to.
+			std::vector<ViewEntityItem> items;
+			for (int i = 0; i < request->targets_size(); ++i)
 			{
+				const auto& t = request->targets(i);
 				const std::string which = "balloon " + std::to_string(i + 1);
-				doc->ClearSelection2(VARIANT_TRUE);
-				if (!SelectViewEntityAt(doc, ctx.view, items[i], arrows[i], 0) &&
-					!(arrows[i] && SelectViewEntityAt(doc, ctx.view, items[i], std::nullopt, 0)) &&
-					!SelectViewEntity(ctx.view, items[i]))
+				ViewEntityItem item;
+				if (!t.component().empty())
 				{
-					status = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks wouldn't select " + which + "'s entity");
-					break;
+					std::vector<std::string> names;
+					ATL::CComPtr<IComponent2> component = ViewComponentNamed(ctx, t.component(), names);
+					if (!component)
+					{
+						std::string list;
+						for (const auto& n : names)
+							list += (list.empty() ? "" : ", ") + n;
+						return grpc::Status(grpc::StatusCode::NOT_FOUND, which + ": " + request->view_name() +
+							" shows no component named \"" + t.component() + "\" (it shows: " + list + ")");
+					}
+					// Its first visible edge; SolidWorks puts the arrow on it.
+					const std::string pid = ctx.componentList->Add(component);
+					std::vector<ViewEntityItem> edges;
+					size_t budget = 1;
+					ListViewEntities(ctx.view, component, pid, sld_mcp::v1::VIEW_ENTITY_KIND_EDGE, *ctx.ids, budget, edges);
+					if (edges.empty())
+					{
+						budget = 1;
+						ListViewEntities(ctx.view, component, pid, sld_mcp::v1::VIEW_ENTITY_KIND_SILHOUETTE, *ctx.ids, budget, edges);
+					}
+					if (edges.empty())
+						return grpc::Status(grpc::StatusCode::NOT_FOUND, which + ": none of " + t.component() + "'s edges are visible in " +
+							request->view_name());
+					item = edges[0];
 				}
-				ATL::CComPtr<IBalloonOptions> options;
-				if (FAILED(ext->CreateBalloonOptions(&options)) || !options)
-				{
-					status = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks gave no balloon options");
-					break;
-				}
-				SetBalloonOptions(options.p, *request);
-				ATL::CComPtr<INote> note;
-				HRESULT hr = ext->InsertBOMBalloon2(options, &note);
-				doc->ClearSelection2(VARIANT_TRUE);
-				ATL::CComPtr<IDispatch> a;
-				if (FAILED(hr) || !note || FAILED(note->GetAnnotation(&a)) || !a)
-				{
-					status = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't add " + which);
-					break;
-				}
-				ATL::CComQIPtr<IAnnotation> annotation(a.p);
-				made.push_back(ATL::CComPtr<IAnnotation>(annotation));
-				if (positions[i])
-				{
-					VARIANT_BOOL moved = VARIANT_FALSE;
-					if (FAILED(annotation->SetPosition2(positions[i]->x(), positions[i]->y(), 0.0, &moved)) || !moved)
-						status = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't move " + which);
-				}
+				else if (grpc::Status status = ResolveDrawingRef(ctx, t.entity(), which, item); !status.ok())
+					return status;
+				items.push_back(item);
 			}
-		if (!status.ok())
-		{
-			DeleteNotes(doc, ext, made);
-			doc->GraphicsRedraw2();
-			return status;
-		}
-		doc->GraphicsRedraw2();
-	}
 
-	PersistIds ids(ext);
-	for (const auto& annotation : made)
-		DescribeAnnotation(annotation, ids, ctx.componentList.get(), response->add_balloons());
-	// The BOMs balloons take their numbers from: tables listing this model.
-	ATL::CComBSTR modelFile;
-	ctx.view->GetReferencedModelName(&modelFile);
-	for (const auto& s : DrawingSheets(drawing))
-	{
-		for (const auto& table : SheetTables(s))
-			if (ATL::CComQIPtr<IBomTableAnnotation> bom(table.p); bom)
+			grpc::Status status = grpc::Status::OK;
+			if (request->targets_size() == 0)
 			{
-				ATL::CComPtr<IBomFeature> feature;
-				ATL::CComBSTR listed;
-				if (SUCCEEDED(bom->get_BomFeature(&feature)) && feature && SUCCEEDED(feature->GetReferencedModelName(&listed)) &&
-					_wcsicmp(listed.m_str ? listed.m_str : L"", modelFile.m_str ? modelFile.m_str : L"") == 0)
-					response->add_boms(TableName(table));
+				// Auto Balloon works on the selected view.
+				doc->ClearSelection2(VARIANT_TRUE);
+				VARIANT_BOOL selected = VARIANT_FALSE;
+				if (FAILED(ext->SelectByID2(FromUtf8(request->view_name()), ATL::CComBSTR(L"DRAWINGVIEW"), 0.0, 0.0, 0.0,
+					VARIANT_FALSE, 0, nullptr, swSelectOptionDefault, &selected)) || !selected)
+					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks wouldn't select " + request->view_name());
+				ATL::CComPtr<IAutoBalloonOptions> options;
+				if (FAILED(drawing->CreateAutoBalloonOptions(&options)) || !options)
+					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks gave no auto balloon options");
+				if (request->layout() > 0)
+					options->put_Layout(request->layout());
+				options->put_IgnoreMultiple(request->every_instance() ? VARIANT_FALSE : VARIANT_TRUE);
+				SetBalloonOptions(options.p, *request);
+				ATL::CComVariant notes;
+				HRESULT hr = drawing->AutoBalloon5(options, &notes);
+				doc->ClearSelection2(VARIANT_TRUE);
+				if (FAILED(hr))
+					return ComError("IDrawingDoc::AutoBalloon5", hr);
+				for (const auto& disp : comvariant::ToDispatches(notes))
+					if (ATL::CComQIPtr<INote> note(disp.p); note)
+					{
+						ATL::CComPtr<IDispatch> a;
+						if (SUCCEEDED(note->GetAnnotation(&a)) && a)
+							made.push_back(ATL::CComPtr<IAnnotation>(ATL::CComQIPtr<IAnnotation>(a.p)));
+					}
+				if (made.empty())
+					return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks added no balloons to " +
+						request->view_name() + " (are its components already ballooned?)");
 			}
-		if (s.name == ctx.sheetName)
-		{
-			DrawingBudget budget;
-			DescribeSheet(s, original, ext, math, {}, false, false, budget, response->mutable_sheet());
-			DescribeSheetLayout(s, response->mutable_sheet());
+			else
+				for (size_t i = 0; i < items.size() && status.ok(); ++i)
+				{
+					const std::string which = "balloon " + std::to_string(i + 1);
+					doc->ClearSelection2(VARIANT_TRUE);
+					if (!SelectViewEntityAt(doc, ctx.view, items[i], arrows[i], 0) &&
+						!(arrows[i] && SelectViewEntityAt(doc, ctx.view, items[i], std::nullopt, 0)) &&
+						!SelectViewEntity(ctx.view, items[i]))
+					{
+						status = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks wouldn't select " + which + "'s entity");
+						break;
+					}
+					ATL::CComPtr<IBalloonOptions> options;
+					if (FAILED(ext->CreateBalloonOptions(&options)) || !options)
+					{
+						status = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks gave no balloon options");
+						break;
+					}
+					SetBalloonOptions(options.p, *request);
+					ATL::CComPtr<INote> note;
+					HRESULT hr = ext->InsertBOMBalloon2(options, &note);
+					doc->ClearSelection2(VARIANT_TRUE);
+					ATL::CComPtr<IDispatch> a;
+					if (FAILED(hr) || !note || FAILED(note->GetAnnotation(&a)) || !a)
+					{
+						status = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't add " + which);
+						break;
+					}
+					ATL::CComQIPtr<IAnnotation> annotation(a.p);
+					made.push_back(ATL::CComPtr<IAnnotation>(annotation));
+					if (positions[i])
+					{
+						VARIANT_BOOL moved = VARIANT_FALSE;
+						if (FAILED(annotation->SetPosition2(positions[i]->x(), positions[i]->y(), 0.0, &moved)) || !moved)
+							status = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't move " + which);
+					}
+				}
+			if (!status.ok())
+			{
+				DeleteNotes(doc, ext, made);
+				doc->GraphicsRedraw2();
+				return status;
+			}
+			doc->GraphicsRedraw2();
 		}
-	}
-	response->set_active_sheet(original);
-	return grpc::Status::OK;
+
+		PersistIds ids(ext);
+		for (const auto& annotation : made)
+			DescribeAnnotation(annotation, ids, ctx.componentList.get(), response->add_balloons());
+		// The BOMs balloons take their numbers from: tables listing this model.
+		ATL::CComBSTR modelFile;
+		ctx.view->GetReferencedModelName(&modelFile);
+		for (const auto& s : DrawingSheets(drawing))
+		{
+			for (const auto& table : SheetTables(s))
+				if (ATL::CComQIPtr<IBomTableAnnotation> bom(table.p); bom)
+				{
+					ATL::CComPtr<IBomFeature> feature;
+					ATL::CComBSTR listed;
+					if (SUCCEEDED(bom->get_BomFeature(&feature)) && feature && SUCCEEDED(feature->GetReferencedModelName(&listed)) &&
+						_wcsicmp(listed.m_str ? listed.m_str : L"", modelFile.m_str ? modelFile.m_str : L"") == 0)
+						response->add_boms(TableName(table));
+				}
+			if (s.name == ctx.sheetName)
+			{
+				DrawingBudget budget;
+				DescribeSheet(s, original, ext, math, {}, false, false, budget, response->mutable_sheet());
+				DescribeSheetLayout(s, response->mutable_sheet());
+			}
+		}
+		response->set_active_sheet(original);
+		return grpc::Status::OK;
+	});
 }

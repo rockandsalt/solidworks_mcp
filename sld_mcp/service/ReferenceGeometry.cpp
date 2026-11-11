@@ -202,226 +202,221 @@ namespace
 	}
 }
 
-grpc::Status SolidWorksService::CreateReferenceGeometry(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::CreateReferenceGeometry(grpc::ServerContext* context,
 	const sld_mcp::v1::CreateReferenceGeometryRequest* request,
 	sld_mcp::v1::CreateReferenceGeometryResponse* response)
 {
 	if (grpc::Status status = Validate(*request); !status.ok())
 		return status;
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDoc2> doc;
-	if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	ATL::CComPtr<IFeatureManager> featureManager;
-	HRESULT hr = doc->get_FeatureManager(&featureManager);
-	if (FAILED(hr) || !featureManager)
-		return ComError("IModelDoc2::FeatureManager", hr);
-
-	// No What's Wrong dialog if the new feature fails to rebuild.
-	PreferenceToggles toggles(swApp);
-	toggles.Set(swShowErrorsEveryRebuild, false);
-
-	// Resolve every reference before changing anything.
-	using R = sld_mcp::v1::CreateReferenceGeometryRequest;
-	Selection selection;
-	const char* what = "a feature";
-	switch (request->geometry_case())
-	{
-	case R::kPlane:
-		what = "a plane";
-		for (int i = 0; i < request->plane().references_size(); ++i)
-			if (grpc::Status status = selection.Add(doc, ext, request->plane().references(i).ref(), i,
-				"reference " + std::to_string(i + 1)); !status.ok())
-				return status;
-		break;
-	case R::kAxis:
-		what = "an axis";
-		for (int i = 0; i < request->axis().references_size(); ++i)
-			if (grpc::Status status = selection.Add(doc, ext, request->axis().references(i), 0,
-				"reference " + std::to_string(i + 1)); !status.ok())
-				return status;
-		break;
-	case R::kPoint:
-		what = "a point";
-		for (int i = 0; i < request->point().references_size(); ++i)
-			if (grpc::Status status = selection.Add(doc, ext, request->point().references(i), 0,
-				"reference " + std::to_string(i + 1)); !status.ok())
-				return status;
-		break;
-	case R::kCoordinateSystem:
-	{
-		what = "a coordinate system";
-		// InsertCoordinateSystem reads the origin with mark 1 and the X / Y /
-		// Z axis references with marks 2 / 4 / 8.
-		const auto& cs = request->coordinate_system();
-		const std::pair<const sld_mcp::v1::GeometryRef*, std::pair<long, const char*>> roles[] = {
-			{cs.has_origin() ? &cs.origin() : nullptr, {1, "origin"}},
-			{cs.has_x_axis() ? &cs.x_axis() : nullptr, {2, "x axis"}},
-			{cs.has_y_axis() ? &cs.y_axis() : nullptr, {4, "y axis"}},
-			{cs.has_z_axis() ? &cs.z_axis() : nullptr, {8, "z axis"}},
-		};
-		for (const auto& [ref, role] : roles)
-			if (ref)
-				if (grpc::Status status = selection.Add(doc, ext, *ref, role.first, role.second); !status.ok())
-					return status;
-		break;
-	}
-	default:
-		break;
-	}
-
-	// A point at a vertex is made another way (PointAtVertex), from an edge.
-	ATL::CComQIPtr<IVertex> pointVertex;
-	if (request->geometry_case() == R::kPoint &&
-		request->point().kind() == sld_mcp::v1::REFERENCE_POINT_KIND_AT_POINT && selection.picks.size() == 1)
-		pointVertex = selection.picks.front().obj;
-
-	const std::set<std::string> before = TopLevelNames(doc);
-	if (!pointVertex)
-		if (grpc::Status status = selection.Select(doc, ext); !status.ok())
+	return m_executor.Execute(context, "CreateReferenceGeometry", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
 			return status;
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		ATL::CComPtr<IFeatureManager> featureManager;
+		HRESULT hr = doc->get_FeatureManager(&featureManager);
+		if (FAILED(hr) || !featureManager)
+			return ComError("IModelDoc2::FeatureManager", hr);
 
-	bool made = false;
-	switch (request->geometry_case())
-	{
-	case R::kPlane:
-	{
-		long constraints[kMaxPlaneRefs] = {};
-		double values[kMaxPlaneRefs] = {};
-		for (int i = 0; i < request->plane().references_size(); ++i)
+		// No What's Wrong dialog if the new feature fails to rebuild.
+		PreferenceToggles toggles(swApp);
+		toggles.Set(swShowErrorsEveryRebuild, false);
+
+		// Resolve every reference before changing anything.
+		using R = sld_mcp::v1::CreateReferenceGeometryRequest;
+		Selection selection;
+		const char* what = "a feature";
+		switch (request->geometry_case())
 		{
-			const auto& r = request->plane().references(i);
-			constraints[i] = ToSwPlaneConstraint(r.constraint());
-			if (r.flip())
-				constraints[i] |= swRefPlaneReferenceConstraint_OptionFlip;
-			if (r.constraint() == sld_mcp::v1::PLANE_CONSTRAINT_DISTANCE)
-				values[i] = r.distance();
-			else if (r.constraint() == sld_mcp::v1::PLANE_CONSTRAINT_ANGLE)
-				values[i] = r.angle();
-		}
-		ATL::CComPtr<IDispatch> plane;
-		hr = featureManager->InsertRefPlane(constraints[0], values[0], constraints[1], values[1], constraints[2],
-			values[2], &plane);
-		made = SUCCEEDED(hr) && plane;
-		break;
-	}
-	case R::kAxis:
-	{
-		VARIANT_BOOL ok = VARIANT_FALSE;
-		hr = doc->InsertAxis2(VARIANT_TRUE, &ok);
-		made = SUCCEEDED(hr) && ok;
-		break;
-	}
-	case R::kPoint:
-	{
-		if (pointVertex)
+		case R::kPlane:
+			what = "a plane";
+			for (int i = 0; i < request->plane().references_size(); ++i)
+				if (grpc::Status status = selection.Add(doc, ext, request->plane().references(i).ref(), i,
+					"reference " + std::to_string(i + 1)); !status.ok())
+					return status;
+			break;
+		case R::kAxis:
+			what = "an axis";
+			for (int i = 0; i < request->axis().references_size(); ++i)
+				if (grpc::Status status = selection.Add(doc, ext, request->axis().references(i), 0,
+					"reference " + std::to_string(i + 1)); !status.ok())
+					return status;
+			break;
+		case R::kPoint:
+			what = "a point";
+			for (int i = 0; i < request->point().references_size(); ++i)
+				if (grpc::Status status = selection.Add(doc, ext, request->point().references(i), 0,
+					"reference " + std::to_string(i + 1)); !status.ok())
+					return status;
+			break;
+		case R::kCoordinateSystem:
 		{
-			made = PointAtVertex(doc, ext, featureManager, pointVertex);
+			what = "a coordinate system";
+			// InsertCoordinateSystem reads the origin with mark 1 and the X / Y /
+			// Z axis references with marks 2 / 4 / 8.
+			const auto& cs = request->coordinate_system();
+			const std::pair<const sld_mcp::v1::GeometryRef*, std::pair<long, const char*>> roles[] = {
+				{cs.has_origin() ? &cs.origin() : nullptr, {1, "origin"}},
+				{cs.has_x_axis() ? &cs.x_axis() : nullptr, {2, "x axis"}},
+				{cs.has_y_axis() ? &cs.y_axis() : nullptr, {4, "y axis"}},
+				{cs.has_z_axis() ? &cs.z_axis() : nullptr, {8, "z axis"}},
+			};
+			for (const auto& [ref, role] : roles)
+				if (ref)
+					if (grpc::Status status = selection.Add(doc, ext, *ref, role.first, role.second); !status.ok())
+						return status;
 			break;
 		}
-		const auto& point = request->point();
-		long along = swRefPointAlongCurveDistance;
-		double value = 0.0;
-		if (point.kind() == sld_mcp::v1::REFERENCE_POINT_KIND_ALONG_CURVE)
-			switch (point.along())
+		default:
+			break;
+		}
+
+		// A point at a vertex is made another way (PointAtVertex), from an edge.
+		ATL::CComQIPtr<IVertex> pointVertex;
+		if (request->geometry_case() == R::kPoint &&
+			request->point().kind() == sld_mcp::v1::REFERENCE_POINT_KIND_AT_POINT && selection.picks.size() == 1)
+			pointVertex = selection.picks.front().obj;
+
+		const std::set<std::string> before = TopLevelNames(doc);
+		if (!pointVertex)
+			if (grpc::Status status = selection.Select(doc, ext); !status.ok())
+				return status;
+
+		bool made = false;
+		switch (request->geometry_case())
+		{
+		case R::kPlane:
+		{
+			long constraints[kMaxPlaneRefs] = {};
+			double values[kMaxPlaneRefs] = {};
+			for (int i = 0; i < request->plane().references_size(); ++i)
 			{
-			case sld_mcp::v1::ALONG_CURVE_PERCENT:
-				along = swRefPointAlongCurvePercentage;
-				value = point.percent();  // 0-100, seen 2026-10-19 (0.5 made a point at 0.5 %)
-				break;
-			case sld_mcp::v1::ALONG_CURVE_EVENLY:
-				along = swRefPointAlongCurveEvenlyDistributed;
-				break;
-			default:
-				value = point.distance();
+				const auto& r = request->plane().references(i);
+				constraints[i] = ToSwPlaneConstraint(r.constraint());
+				if (r.flip())
+					constraints[i] |= swRefPlaneReferenceConstraint_OptionFlip;
+				if (r.constraint() == sld_mcp::v1::PLANE_CONSTRAINT_DISTANCE)
+					values[i] = r.distance();
+				else if (r.constraint() == sld_mcp::v1::PLANE_CONSTRAINT_ANGLE)
+					values[i] = r.angle();
+			}
+			ATL::CComPtr<IDispatch> plane;
+			hr = featureManager->InsertRefPlane(constraints[0], values[0], constraints[1], values[1], constraints[2],
+				values[2], &plane);
+			made = SUCCEEDED(hr) && plane;
+			break;
+		}
+		case R::kAxis:
+		{
+			VARIANT_BOOL ok = VARIANT_FALSE;
+			hr = doc->InsertAxis2(VARIANT_TRUE, &ok);
+			made = SUCCEEDED(hr) && ok;
+			break;
+		}
+		case R::kPoint:
+		{
+			if (pointVertex)
+			{
+				made = PointAtVertex(doc, ext, featureManager, pointVertex);
 				break;
 			}
-		ATL::CComVariant features;
-		hr = featureManager->InsertReferencePoint(ToSwRefPointType(point.kind()), along, value,
-			std::max(1, point.count()), &features);
-		made = SUCCEEDED(hr) && !comvariant::ToDispatches(features).empty();
-		break;
-	}
-	case R::kCoordinateSystem:
-	{
-		const auto& cs = request->coordinate_system();
-		ATL::CComPtr<IFeature> feature;
-		hr = featureManager->InsertCoordinateSystem(cs.flip_x() ? VARIANT_TRUE : VARIANT_FALSE,
-			cs.flip_y() ? VARIANT_TRUE : VARIANT_FALSE, cs.flip_z() ? VARIANT_TRUE : VARIANT_FALSE, &feature);
-		made = SUCCEEDED(hr) && feature;
-		break;
-	}
-	default:
-		break;
-	}
-	doc->ClearSelection2(VARIANT_TRUE);
-
-	// Whatever the call returned, the new features are what's in the tree now.
-	std::vector<ATL::CComPtr<IFeature>> created = NewReferenceFeatures(doc, before);
-	const std::string refs = selection.Describe();
-	if (!made || created.empty())
-	{
-		if (!created.empty())
-			DeleteCreated(doc, ext, created);
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-			std::string("SolidWorks couldn't make ") + what + " from " + (refs.empty() ? "no references" : refs) +
-			" -- check the references and how they're combined");
-	}
-
-	VARIANT_BOOL rebuilt = VARIANT_FALSE;
-	doc->EditRebuild3(&rebuilt);
-	for (const auto& feature : created)
-	{
-		VARIANT_BOOL warning = VARIANT_FALSE;
-		long code = swFeatureErrorNone;
-		if (SUCCEEDED(feature->GetErrorCode2(&warning, &code)) && code != swFeatureErrorNone && !warning)
+			const auto& point = request->point();
+			long along = swRefPointAlongCurveDistance;
+			double value = 0.0;
+			if (point.kind() == sld_mcp::v1::REFERENCE_POINT_KIND_ALONG_CURVE)
+				switch (point.along())
+				{
+				case sld_mcp::v1::ALONG_CURVE_PERCENT:
+					along = swRefPointAlongCurvePercentage;
+					value = point.percent();  // 0-100, seen 2026-10-19 (0.5 made a point at 0.5 %)
+					break;
+				case sld_mcp::v1::ALONG_CURVE_EVENLY:
+					along = swRefPointAlongCurveEvenlyDistributed;
+					break;
+				default:
+					value = point.distance();
+					break;
+				}
+			ATL::CComVariant features;
+			hr = featureManager->InsertReferencePoint(ToSwRefPointType(point.kind()), along, value,
+				std::max(1, point.count()), &features);
+			made = SUCCEEDED(hr) && !comvariant::ToDispatches(features).empty();
+			break;
+		}
+		case R::kCoordinateSystem:
 		{
-			const std::string name = FeatureName(feature);
-			DeleteCreated(doc, ext, created);
+			const auto& cs = request->coordinate_system();
+			ATL::CComPtr<IFeature> feature;
+			hr = featureManager->InsertCoordinateSystem(cs.flip_x() ? VARIANT_TRUE : VARIANT_FALSE,
+				cs.flip_y() ? VARIANT_TRUE : VARIANT_FALSE, cs.flip_z() ? VARIANT_TRUE : VARIANT_FALSE, &feature);
+			made = SUCCEEDED(hr) && feature;
+			break;
+		}
+		default:
+			break;
+		}
+		doc->ClearSelection2(VARIANT_TRUE);
+
+		// Whatever the call returned, the new features are what's in the tree now.
+		std::vector<ATL::CComPtr<IFeature>> created = NewReferenceFeatures(doc, before);
+		const std::string refs = selection.Describe();
+		if (!made || created.empty())
+		{
+			if (!created.empty())
+				DeleteCreated(doc, ext, created);
 			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				name + " (" + what + " made from " + refs + ") fails to rebuild (error " +
-				std::to_string(code) + "), so it was deleted again");
-		}
-	}
-
-	if (!request->name().empty())
-		for (size_t i = 0; i < created.size(); ++i)
-		{
-			const std::string name = request->name() + (i == 0 ? "" : std::to_string(i + 1));
-			created[i]->put_Name(FromUtf8(name));
+				std::string("SolidWorks couldn't make ") + what + " from " + (refs.empty() ? "no references" : refs) +
+				" -- check the references and how they're combined");
 		}
 
-	PersistIds ids(ext);
-	for (const auto& feature : created)
-	{
-		sld_mcp::v1::FeatureInfo* info = response->add_features();
-		const std::string type = FeatureTypeName(feature);
-		info->set_persist_id(ids.Get(feature));
-		info->set_name(FeatureName(feature));
-		info->set_type_name(type);
-		ATL::CComVariant parents;
-		if (SUCCEEDED(feature->GetParents(&parents)))
-			for (const auto& parent : FeatureList(parents))
-				info->add_parents(FeatureName(parent));
-		VARIANT_BOOL warning = VARIANT_FALSE;
-		long code = swFeatureErrorNone;
-		if (SUCCEEDED(feature->GetErrorCode2(&warning, &code)) && code != swFeatureErrorNone)
+		VARIANT_BOOL rebuilt = VARIANT_FALSE;
+		doc->EditRebuild3(&rebuilt);
+		for (const auto& feature : created)
 		{
-			info->set_error_code(static_cast<int32_t>(code));
-			info->set_error_is_warning(warning != VARIANT_FALSE);
+			VARIANT_BOOL warning = VARIANT_FALSE;
+			long code = swFeatureErrorNone;
+			if (SUCCEEDED(feature->GetErrorCode2(&warning, &code)) && code != swFeatureErrorNone && !warning)
+			{
+				const std::string name = FeatureName(feature);
+				DeleteCreated(doc, ext, created);
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+					name + " (" + what + " made from " + refs + ") fails to rebuild (error " +
+					std::to_string(code) + "), so it was deleted again");
+			}
 		}
-		DescribeReferenceGeometry(ext, feature, type, info->mutable_reference());
-	}
-	return grpc::Status::OK;
+
+		if (!request->name().empty())
+			for (size_t i = 0; i < created.size(); ++i)
+			{
+				const std::string name = request->name() + (i == 0 ? "" : std::to_string(i + 1));
+				created[i]->put_Name(FromUtf8(name));
+			}
+
+		PersistIds ids(ext);
+		for (const auto& feature : created)
+		{
+			sld_mcp::v1::FeatureInfo* info = response->add_features();
+			const std::string type = FeatureTypeName(feature);
+			info->set_persist_id(ids.Get(feature));
+			info->set_name(FeatureName(feature));
+			info->set_type_name(type);
+			ATL::CComVariant parents;
+			if (SUCCEEDED(feature->GetParents(&parents)))
+				for (const auto& parent : FeatureList(parents))
+					info->add_parents(FeatureName(parent));
+			VARIANT_BOOL warning = VARIANT_FALSE;
+			long code = swFeatureErrorNone;
+			if (SUCCEEDED(feature->GetErrorCode2(&warning, &code)) && code != swFeatureErrorNone)
+			{
+				info->set_error_code(static_cast<int32_t>(code));
+				info->set_error_is_warning(warning != VARIANT_FALSE);
+			}
+			DescribeReferenceGeometry(ext, feature, type, info->mutable_reference());
+		}
+		return grpc::Status::OK;
+	});
 }

@@ -521,7 +521,7 @@ namespace
 	}
 }
 
-grpc::Status SolidWorksService::CreateRectangleSketch(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::CreateRectangleSketch(grpc::ServerContext* context,
 	const sld_mcp::v1::CreateRectangleSketchRequest* request,
 	sld_mcp::v1::CreateRectangleSketchResponse* response)
 {
@@ -552,159 +552,153 @@ grpc::Status SolidWorksService::CreateRectangleSketch(grpc::ServerContext* /*con
 	else if (!(std::isfinite(cx) && std::isfinite(cy)))
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "center must be finite");
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "CreateRectangleSketch", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
+			return status;
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
+		// What to sketch on: a planar face, a reference plane feature, or one of
+		// the three default planes.
+		SketchTarget target;
+		if (grpc::Status status = ResolveSketchTarget(doc, request->on_persist_id(), planeIndex, target); !status.ok())
+			return status;
 
-	ATL::CComPtr<IModelDoc2> doc;
-	if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
-		return status;
+		// On a face, default to the middle of the face (well, of its bounding box).
+		HRESULT hr = S_OK;
+		if (target.face && !haveModelCenter)
+		{
+			ATL::CComVariant box;
+			hr = target.face->GetBox(&box);
+			if (FAILED(hr))
+				return ComError("IFace2::GetBox", hr);
+			const std::vector<double> b = comvariant::ToDoubles(box);
+			if (b.size() < 6)
+				return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no box for the face");
+			for (int i = 0; i < 3; ++i)
+				modelCenter[i] = (b[i] + b[i + 3]) / 2.0;
+			haveModelCenter = true;
+		}
 
-	// What to sketch on: a planar face, a reference plane feature, or one of
-	// the three default planes.
-	SketchTarget target;
-	if (grpc::Status status = ResolveSketchTarget(doc, request->on_persist_id(), planeIndex, target); !status.ok())
-		return status;
+		SketchSpace space;
+		if (grpc::Status status = space.Init(swApp); !status.ok())
+			return status;
 
-	// On a face, default to the middle of the face (well, of its bounding box).
-	HRESULT hr = S_OK;
-	if (target.face && !haveModelCenter)
-	{
-		ATL::CComVariant box;
-		hr = target.face->GetBox(&box);
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+
+		ATL::CComPtr<ISketchManager> sketchManager;
+		hr = doc->get_SketchManager(&sketchManager);
 		if (FAILED(hr))
-			return ComError("IFace2::GetBox", hr);
-		const std::vector<double> b = comvariant::ToDoubles(box);
-		if (b.size() < 6)
-			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no box for the face");
-		for (int i = 0; i < 3; ++i)
-			modelCenter[i] = (b[i] + b[i + 3]) / 2.0;
-		haveModelCenter = true;
-	}
+			return ComError("IModelDoc2::SketchManager", hr);
+		if (!sketchManager)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no sketch manager");
 
-	SketchSpace space;
-	if (grpc::Status status = space.Init(swApp); !status.ok())
-		return status;
+		ATL::CComPtr<ISketch> sketch;
+		if (grpc::Status status = OpenNewSketch(doc, sketchManager, target, sketch); !status.ok())
+			return status;
 
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
+		// The sketch is now open: everything below must fall through to the
+		// InsertSketch call that closes it, so no early returns until then.
+		grpc::Status failure = grpc::Status::OK;
+		space.Attach(sketch);
 
-	ATL::CComPtr<ISketchManager> sketchManager;
-	hr = doc->get_SketchManager(&sketchManager);
-	if (FAILED(hr))
-		return ComError("IModelDoc2::SketchManager", hr);
-	if (!sketchManager)
-		return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no sketch manager");
-
-	ATL::CComPtr<ISketch> sketch;
-	if (grpc::Status status = OpenNewSketch(doc, sketchManager, target, sketch); !status.ok())
-		return status;
-
-	// The sketch is now open: everything below must fall through to the
-	// InsertSketch call that closes it, so no early returns until then.
-	grpc::Status failure = grpc::Status::OK;
-	space.Attach(sketch);
-
-	if (haveModelCenter)
-	{
-		// Dropping the sketch Z (the distance from the plane) projects the
-		// point onto the sketch plane.
-		double sketchCenter[3];
-		if (space.ToSketch(modelCenter, sketchCenter))
+		if (haveModelCenter)
 		{
-			cx = sketchCenter[0];
-			cy = sketchCenter[1];
-		}
-		else
-			failure = grpc::Status(grpc::StatusCode::INTERNAL,
-				"couldn't map the center point into the sketch's coordinates");
-	}
-
-	// AddToDB skips snapping and inferencing, so the rectangle lands exactly
-	// at the requested coordinates instead of snapping to nearby geometry.
-	VARIANT_BOOL previousAddToDB = VARIANT_FALSE;
-	sketchManager->get_AddToDB(&previousAddToDB);
-	sketchManager->put_AddToDB(VARIANT_TRUE);
-
-	// Center point, then one corner; sketch coordinates in meters. Returns
-	// the created segments, or nothing if SolidWorks rejected the geometry.
-	ATL::CComVariant segments;
-	HRESULT createHr = S_OK;
-	bool created = false;
-	if (failure.ok())
-	{
-		createHr = sketchManager->CreateCenterRectangle(
-			cx, cy, 0.0, cx + halfWidth, cy + halfHeight, 0.0, &segments);
-		created = SUCCEEDED(createHr) && segments.vt != VT_EMPTY && segments.vt != VT_NULL;
-		if (FAILED(createHr))
-			failure = ComError("ISketchManager::CreateCenterRectangle", createHr);
-		else if (!created)
-			failure = grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks didn't create the rectangle");
-	}
-
-	sketchManager->put_AddToDB(previousAddToDB);
-
-	if (created)
-		DimensionRectangle(swApp, doc, space, segments, cx, cy, halfWidth, halfHeight, response);
-
-	// Report the frame and where the center actually landed. Purely
-	// informational, so a failure here just leaves them out.
-	if (created)
-	{
-		// The sides (and any construction geometry), with IDs for
-		// dimensioning; stamped with the sketch's persist ID once it's closed.
-		for (const auto& segment : comvariant::ToDispatches(segments))
-		{
-			sld_mcp::v1::SketchItem item;
-			if (segment && DescribeSketchItem(segment, std::string(), &item))
-				response->add_items()->Swap(&item);
+			// Dropping the sketch Z (the distance from the plane) projects the
+			// point onto the sketch plane.
+			double sketchCenter[3];
+			if (space.ToSketch(modelCenter, sketchCenter))
+			{
+				cx = sketchCenter[0];
+				cy = sketchCenter[1];
+			}
+			else
+				failure = grpc::Status(grpc::StatusCode::INTERNAL,
+					"couldn't map the center point into the sketch's coordinates");
 		}
 
-		sld_mcp::v1::SketchFrame frame;
-		const double sketchCenter[3] = {cx, cy, 0.0};
-		double center[3];
-		if (space.Frame(frame) && space.ToModel(sketchCenter, center))
+		// AddToDB skips snapping and inferencing, so the rectangle lands exactly
+		// at the requested coordinates instead of snapping to nearby geometry.
+		VARIANT_BOOL previousAddToDB = VARIANT_FALSE;
+		sketchManager->get_AddToDB(&previousAddToDB);
+		sketchManager->put_AddToDB(VARIANT_TRUE);
+
+		// Center point, then one corner; sketch coordinates in meters. Returns
+		// the created segments, or nothing if SolidWorks rejected the geometry.
+		ATL::CComVariant segments;
+		HRESULT createHr = S_OK;
+		bool created = false;
+		if (failure.ok())
 		{
-			*response->mutable_frame() = frame;
-			SetVec3(response->mutable_center_model(), center);
+			createHr = sketchManager->CreateCenterRectangle(
+				cx, cy, 0.0, cx + halfWidth, cy + halfHeight, 0.0, &segments);
+			created = SUCCEEDED(createHr) && segments.vt != VT_EMPTY && segments.vt != VT_NULL;
+			if (FAILED(createHr))
+				failure = ComError("ISketchManager::CreateCenterRectangle", createHr);
+			else if (!created)
+				failure = grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks didn't create the rectangle");
 		}
-	}
 
-	// An ISketch is also its IFeature in the tree; read the name while it's
-	// still the active sketch.
-	ATL::CComQIPtr<IFeature> sketchFeature(sketch.p);
-	ATL::CComBSTR sketchName;
-	if (sketchFeature)
-		sketchFeature->get_Name(&sketchName);
+		sketchManager->put_AddToDB(previousAddToDB);
 
-	// Close the sketch (and rebuild).
-	const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_TRUE);
-	doc->ClearSelection2(VARIANT_TRUE);
+		if (created)
+			DimensionRectangle(swApp, doc, space, segments, cx, cy, halfWidth, halfHeight, response);
 
-	if (!created)
-	{
-		// Don't leave an empty sketch behind.
-		if (SUCCEEDED(closeHr))
-			DeleteSketchFeature(doc, sketchFeature);
-		return failure;
-	}
-	if (FAILED(closeHr))
-		return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
+		// Report the frame and where the center actually landed. Purely
+		// informational, so a failure here just leaves them out.
+		if (created)
+		{
+			// The sides (and any construction geometry), with IDs for
+			// dimensioning; stamped with the sketch's persist ID once it's closed.
+			for (const auto& segment : comvariant::ToDispatches(segments))
+			{
+				sld_mcp::v1::SketchItem item;
+				if (segment && DescribeSketchItem(segment, std::string(), &item))
+					response->add_items()->Swap(&item);
+			}
 
-	const std::string sketchPid = PersistIdOf(ext, sketchFeature);
-	for (auto& item : *response->mutable_items())
-		StampSketchId(&item, sketchPid);
-	response->set_sketch_name(ToUtf8(sketchName));
-	return grpc::Status::OK;
+			sld_mcp::v1::SketchFrame frame;
+			const double sketchCenter[3] = {cx, cy, 0.0};
+			double center[3];
+			if (space.Frame(frame) && space.ToModel(sketchCenter, center))
+			{
+				*response->mutable_frame() = frame;
+				SetVec3(response->mutable_center_model(), center);
+			}
+		}
+
+		// An ISketch is also its IFeature in the tree; read the name while it's
+		// still the active sketch.
+		ATL::CComQIPtr<IFeature> sketchFeature(sketch.p);
+		ATL::CComBSTR sketchName;
+		if (sketchFeature)
+			sketchFeature->get_Name(&sketchName);
+
+		// Close the sketch (and rebuild).
+		const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_TRUE);
+		doc->ClearSelection2(VARIANT_TRUE);
+
+		if (!created)
+		{
+			// Don't leave an empty sketch behind.
+			if (SUCCEEDED(closeHr))
+				DeleteSketchFeature(doc, sketchFeature);
+			return failure;
+		}
+		if (FAILED(closeHr))
+			return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
+
+		const std::string sketchPid = PersistIdOf(ext, sketchFeature);
+		for (auto& item : *response->mutable_items())
+			StampSketchId(&item, sketchPid);
+		response->set_sketch_name(ToUtf8(sketchName));
+		return grpc::Status::OK;
+	});
 }
 
-grpc::Status SolidWorksService::AddSketchEntities(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::AddSketchEntities(grpc::ServerContext* context,
 	const sld_mcp::v1::AddSketchEntitiesRequest* request,
 	sld_mcp::v1::AddSketchEntitiesResponse* response)
 {
@@ -735,235 +729,223 @@ grpc::Status SolidWorksService::AddSketchEntities(grpc::ServerContext* /*context
 			return grpc::Status(status.error_code(),
 				"entity " + std::to_string(i + 1) + ": " + status.error_message());
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
-
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
-
-	ATL::CComPtr<IModelDoc2> doc;
-	if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
-		return status;
-
-	// Resolve everything that can fail before a sketch is opened.
-	ATL::CComPtr<IFeature> sketchFeature;
-	SketchTarget target;
-	if (existing)
-	{
-		if (grpc::Status status = FindSketchByName(doc, request->sketch_name(), sketchFeature, true); !status.ok())
+	return m_executor.Execute(context, "AddSketchEntities", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		if (grpc::Status status = GetEditablePart(swApp, doc); !status.ok())
 			return status;
-	}
-	else if (!new3D)
-	{
-		if (grpc::Status status = ResolveSketchTarget(doc, request->on_persist_id(), planeIndex, target);
-			!status.ok())
-			return status;
-	}
 
-	SketchSpace space;
-	if (grpc::Status status = space.Init(swApp); !status.ok())
-		return status;
-
-	ATL::CComPtr<ISketchManager> sketchManager;
-	HRESULT hr = doc->get_SketchManager(&sketchManager);
-	if (FAILED(hr))
-		return ComError("IModelDoc2::SketchManager", hr);
-	if (!sketchManager)
-		return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no sketch manager");
-
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-
-	// Open the sketch: re-enter the existing one, or create one.
-	ATL::CComPtr<ISketch> sketch;
-	if (existing)
-	{
-		if (grpc::Status status = OpenExistingSketch(doc, sketchFeature, sketch); !status.ok())
-			return status;
-	}
-	else
-	{
-		if (grpc::Status status = new3D ? OpenNew3DSketch(doc, sketchManager, sketch)
-		                                : OpenNewSketch(doc, sketchManager, target, sketch);
-			!status.ok())
-			return status;
-		sketchFeature = ATL::CComQIPtr<IFeature>(sketch.p);
-	}
-
-	// The sketch is now open: everything below must fall through to the
-	// InsertSketch call that closes it, so no early returns until then.
-	space.Attach(sketch);
-	const bool is3D = new3D || IsSketch3D(sketch);
-	const SketchPointMapper map{space, request->model_space(), is3D};
-
-	// AddToDB skips snapping and inferencing, so entities land exactly at the
-	// requested coordinates instead of snapping to nearby geometry.
-	VARIANT_BOOL previousAddToDB = VARIANT_FALSE;
-	sketchManager->get_AddToDB(&previousAddToDB);
-	sketchManager->put_AddToDB(VARIANT_TRUE);
-
-	grpc::Status failure = grpc::Status::OK;
-	if (is3D && !request->model_space())
-		failure = grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-			"a 3D sketch has no 2D coordinates -- give points as [x, y, z] in model coordinates");
-	std::vector<ATL::CComPtr<IDispatch>> created;
-	for (int i = 0; i < request->entities_size() && failure.ok(); ++i)
-	{
-		failure = DrawSketchEntity(sketch, sketchManager, map, request->entities(i), created);
-		if (!failure.ok())
-			failure = grpc::Status(failure.error_code(),
-				"entity " + std::to_string(i + 1) + ": " + failure.error_message());
-	}
-
-	sketchManager->put_AddToDB(previousAddToDB);
-
-	if (failure.ok())
-	{
-		// With AddToDB on, entities that meet end to end each keep their own
-		// end point; merging them is what connects them into contours.
-		VARIANT_BOOL merged = VARIANT_FALSE;
-		sketch->MergePoints(kMergeDistance, &merged);
-
-		// IDs for later dimensioning. Merging can delete a drawn point (it's
-		// folded into another), so describe after it, skipping what's gone.
-		for (const auto& entity : created)
+		// Resolve everything that can fail before a sketch is opened.
+		ATL::CComPtr<IFeature> sketchFeature;
+		SketchTarget target;
+		if (existing)
 		{
-			sld_mcp::v1::SketchItem item;
-			if (DescribeSketchItem(entity, std::string(), &item))
-				response->add_items()->Swap(&item);
+			if (grpc::Status status = FindSketchByName(doc, request->sketch_name(), sketchFeature, true); !status.ok())
+				return status;
+		}
+		else if (!new3D)
+		{
+			if (grpc::Status status = ResolveSketchTarget(doc, request->on_persist_id(), planeIndex, target);
+				!status.ok())
+				return status;
 		}
 
-		sld_mcp::v1::SketchFrame frame;
-		if (!is3D && space.Frame(frame))
-			*response->mutable_frame() = frame;
-	}
-	else if (existing)
-	{
-		// All or nothing: take back what this call drew.
-		DeleteDrawnEntities(doc, created);
-	}
+		SketchSpace space;
+		if (grpc::Status status = space.Init(swApp); !status.ok())
+			return status;
 
-	ATL::CComBSTR sketchName;
-	if (sketchFeature)
-		sketchFeature->get_Name(&sketchName);
+		ATL::CComPtr<ISketchManager> sketchManager;
+		HRESULT hr = doc->get_SketchManager(&sketchManager);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::SketchManager", hr);
+		if (!sketchManager)
+			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks returned no sketch manager");
 
-	// Close the sketch (and rebuild).
-	const HRESULT closeHr = is3D ? sketchManager->Insert3DSketch(VARIANT_TRUE)
-	                             : sketchManager->InsertSketch(VARIANT_TRUE);
-	doc->ClearSelection2(VARIANT_TRUE);
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
 
-	if (!failure.ok())
-	{
-		// Don't leave a half-drawn new sketch behind.
-		if (!existing && SUCCEEDED(closeHr))
-			DeleteSketchFeature(doc, sketchFeature);
-		return failure;
-	}
-	if (FAILED(closeHr))
-		return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
+		// Open the sketch: re-enter the existing one, or create one.
+		ATL::CComPtr<ISketch> sketch;
+		if (existing)
+		{
+			if (grpc::Status status = OpenExistingSketch(doc, sketchFeature, sketch); !status.ok())
+				return status;
+		}
+		else
+		{
+			if (grpc::Status status = new3D ? OpenNew3DSketch(doc, sketchManager, sketch)
+			                                : OpenNewSketch(doc, sketchManager, target, sketch);
+				!status.ok())
+				return status;
+			sketchFeature = ATL::CComQIPtr<IFeature>(sketch.p);
+		}
 
-	// After the rebuild, so contours reflect the merged points.
-	sld_mcp::v1::SketchContours contours;
-	if (CountContours(sketch, contours))
-		*response->mutable_contours() = contours;
+		// The sketch is now open: everything below must fall through to the
+		// InsertSketch call that closes it, so no early returns until then.
+		space.Attach(sketch);
+		const bool is3D = new3D || IsSketch3D(sketch);
+		const SketchPointMapper map{space, request->model_space(), is3D};
 
-	// Read once the sketch is closed, so it's the ID later calls compare to.
-	const std::string sketchPid = PersistIdOf(ext, sketchFeature);
-	for (auto& item : *response->mutable_items())
-		StampSketchId(&item, sketchPid);
+		// AddToDB skips snapping and inferencing, so entities land exactly at the
+		// requested coordinates instead of snapping to nearby geometry.
+		VARIANT_BOOL previousAddToDB = VARIANT_FALSE;
+		sketchManager->get_AddToDB(&previousAddToDB);
+		sketchManager->put_AddToDB(VARIANT_TRUE);
 
-	response->set_sketch_name(ToUtf8(sketchName));
-	response->set_created_sketch(!existing);
-	response->set_is_3d(is3D);
-	response->set_entity_count(request->entities_size());
-	return grpc::Status::OK;
+		grpc::Status failure = grpc::Status::OK;
+		if (is3D && !request->model_space())
+			failure = grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+				"a 3D sketch has no 2D coordinates -- give points as [x, y, z] in model coordinates");
+		std::vector<ATL::CComPtr<IDispatch>> created;
+		for (int i = 0; i < request->entities_size() && failure.ok(); ++i)
+		{
+			failure = DrawSketchEntity(sketch, sketchManager, map, request->entities(i), created);
+			if (!failure.ok())
+				failure = grpc::Status(failure.error_code(),
+					"entity " + std::to_string(i + 1) + ": " + failure.error_message());
+		}
+
+		sketchManager->put_AddToDB(previousAddToDB);
+
+		if (failure.ok())
+		{
+			// With AddToDB on, entities that meet end to end each keep their own
+			// end point; merging them is what connects them into contours.
+			VARIANT_BOOL merged = VARIANT_FALSE;
+			sketch->MergePoints(kMergeDistance, &merged);
+
+			// IDs for later dimensioning. Merging can delete a drawn point (it's
+			// folded into another), so describe after it, skipping what's gone.
+			for (const auto& entity : created)
+			{
+				sld_mcp::v1::SketchItem item;
+				if (DescribeSketchItem(entity, std::string(), &item))
+					response->add_items()->Swap(&item);
+			}
+
+			sld_mcp::v1::SketchFrame frame;
+			if (!is3D && space.Frame(frame))
+				*response->mutable_frame() = frame;
+		}
+		else if (existing)
+		{
+			// All or nothing: take back what this call drew.
+			DeleteDrawnEntities(doc, created);
+		}
+
+		ATL::CComBSTR sketchName;
+		if (sketchFeature)
+			sketchFeature->get_Name(&sketchName);
+
+		// Close the sketch (and rebuild).
+		const HRESULT closeHr = is3D ? sketchManager->Insert3DSketch(VARIANT_TRUE)
+		                             : sketchManager->InsertSketch(VARIANT_TRUE);
+		doc->ClearSelection2(VARIANT_TRUE);
+
+		if (!failure.ok())
+		{
+			// Don't leave a half-drawn new sketch behind.
+			if (!existing && SUCCEEDED(closeHr))
+				DeleteSketchFeature(doc, sketchFeature);
+			return failure;
+		}
+		if (FAILED(closeHr))
+			return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
+
+		// After the rebuild, so contours reflect the merged points.
+		sld_mcp::v1::SketchContours contours;
+		if (CountContours(sketch, contours))
+			*response->mutable_contours() = contours;
+
+		// Read once the sketch is closed, so it's the ID later calls compare to.
+		const std::string sketchPid = PersistIdOf(ext, sketchFeature);
+		for (auto& item : *response->mutable_items())
+			StampSketchId(&item, sketchPid);
+
+		response->set_sketch_name(ToUtf8(sketchName));
+		response->set_created_sketch(!existing);
+		response->set_is_3d(is3D);
+		response->set_entity_count(request->entities_size());
+		return grpc::Status::OK;
+	});
 }
 
-grpc::Status SolidWorksService::InspectSketch(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::InspectSketch(grpc::ServerContext* context,
 	const sld_mcp::v1::InspectSketchRequest* request,
 	sld_mcp::v1::InspectSketchResponse* response)
 {
 	// Read-only, but must not see a half-finished edit (see InspectModel).
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "InspectSketch", ExecutionPolicy::Cancellable,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		if (grpc::Status status = GetActivePart(swApp, doc); !status.ok())
+			return status;
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
+		ATL::CComPtr<IFeature> feature;
+		if (grpc::Status status = ResolveSketchFeature(doc, request->sketch_name(), feature, true); !status.ok())
+			return status;
+		ATL::CComPtr<ISketch> sketch;
+		if (grpc::Status status = SketchOf(feature, sketch); !status.ok())
+			return status;
+		const std::string sketchName = FeatureName(feature);
+		const std::string sketchPid = PersistIdOf(ext, feature);
+		response->set_sketch_name(sketchName);
 
-	ATL::CComPtr<IModelDoc2> doc;
-	if (grpc::Status status = GetActivePart(swApp, doc); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-
-	ATL::CComPtr<IFeature> feature;
-	if (grpc::Status status = ResolveSketchFeature(doc, request->sketch_name(), feature, true); !status.ok())
-		return status;
-	ATL::CComPtr<ISketch> sketch;
-	if (grpc::Status status = SketchOf(feature, sketch); !status.ok())
-		return status;
-	const std::string sketchName = FeatureName(feature);
-	const std::string sketchPid = PersistIdOf(ext, feature);
-	response->set_sketch_name(sketchName);
-
-	const bool is3D = IsSketch3D(sketch);
-	response->set_is_3d(is3D);
-	SketchSpace space;
-	if (!is3D && space.Init(swApp).ok())
-	{
-		space.Attach(sketch);
-		sld_mcp::v1::SketchFrame frame;
-		if (space.Frame(frame))
-			*response->mutable_frame() = frame;
-	}
-
-	response->set_status(SketchStatus(sketch));
-
-	SketchItems items;
-	items.Load(sketch);
-	const ArcAxisPoints hidden(sketch, items);
-	for (const auto& entry : items.All())
-	{
-		if (static_cast<size_t>(response->items_size()) >= kMaxSketchItems)
+		const bool is3D = IsSketch3D(sketch);
+		response->set_is_3d(is3D);
+		SketchSpace space;
+		if (!is3D && space.Init(swApp).ok())
 		{
-			response->set_truncated(true);
-			break;
+			space.Attach(sketch);
+			sld_mcp::v1::SketchFrame frame;
+			if (space.Frame(frame))
+				*response->mutable_frame() = frame;
 		}
-		if (entry.point && hidden.Contains(entry.obj))
-			continue;
-		sld_mcp::v1::SketchItem item;
-		if (DescribeSketchItem(entry.obj, sketchPid, &item))
-			response->add_items()->Swap(&item);
-	}
 
-	for (const auto& display : FeatureDimensions(feature))
-	{
-		sld_mcp::v1::DimensionInfo info;
-		if (DescribeDimension(display, &info))
-			response->add_dimensions()->Swap(&info);
-	}
+		response->set_status(SketchStatus(sketch));
 
-	for (const auto& relation : SketchRelations(sketch))
-	{
-		long type = 0;
-		// Dimensions show up as relations too; they're listed above.
-		if (SUCCEEDED(relation->GetRelationType(&type)) &&
-			(type == swConstraintType_DISTANCE || type == swConstraintType_ANGLE ||
-			 type == swConstraintType_RADIUS || type == swConstraintType_DIAMETER))
-			continue;
-		DescribeRelation(relation, sketchPid, items, response->add_relations());
-	}
+		SketchItems items;
+		items.Load(sketch);
+		const ArcAxisPoints hidden(sketch, items);
+		for (const auto& entry : items.All())
+		{
+			if (static_cast<size_t>(response->items_size()) >= kMaxSketchItems)
+			{
+				response->set_truncated(true);
+				break;
+			}
+			if (entry.point && hidden.Contains(entry.obj))
+				continue;
+			sld_mcp::v1::SketchItem item;
+			if (DescribeSketchItem(entry.obj, sketchPid, &item))
+				response->add_items()->Swap(&item);
+		}
 
-	sld_mcp::v1::SketchContours contours;
-	if (CountContours(sketch, contours))
-		*response->mutable_contours() = contours;
-	return grpc::Status::OK;
+		for (const auto& display : FeatureDimensions(feature))
+		{
+			sld_mcp::v1::DimensionInfo info;
+			if (DescribeDimension(display, &info))
+				response->add_dimensions()->Swap(&info);
+		}
+
+		for (const auto& relation : SketchRelations(sketch))
+		{
+			long type = 0;
+			// Dimensions show up as relations too; they're listed above.
+			if (SUCCEEDED(relation->GetRelationType(&type)) &&
+				(type == swConstraintType_DISTANCE || type == swConstraintType_ANGLE ||
+				 type == swConstraintType_RADIUS || type == swConstraintType_DIAMETER))
+				continue;
+			DescribeRelation(relation, sketchPid, items, response->add_relations());
+		}
+
+		sld_mcp::v1::SketchContours contours;
+		if (CountContours(sketch, contours))
+			*response->mutable_contours() = contours;
+		return grpc::Status::OK;
+	});
 }

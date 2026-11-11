@@ -187,142 +187,136 @@ namespace
 	}
 }
 
-grpc::Status SolidWorksService::DiagnoseModel(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::DiagnoseModel(grpc::ServerContext* context,
 	const sld_mcp::v1::DiagnoseModelRequest* request,
 	sld_mcp::v1::DiagnoseModelResponse* response)
 {
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "DiagnoseModel", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		long docType = swDocNONE;
+		if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
+			return status;
+		if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
+			return status;
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
+			return status;
+		PersistIds ids(ext);
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
+		ATL::CComBSTR title;
+		if (SUCCEEDED(doc->GetTitle(&title)))
+			response->mutable_document()->set_title(ToUtf8(title));
+		response->mutable_document()->set_type(
+			docType == swDocASSEMBLY ? sld_mcp::v1::DOCUMENT_TYPE_ASSEMBLY : sld_mcp::v1::DOCUMENT_TYPE_PART);
 
-	ATL::CComPtr<IModelDoc2> doc;
-	long docType = swDocNONE;
-	if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
-		return status;
-	if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
-		return status;
-	ATL::CComPtr<IModelDocExtension> ext;
-	if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-		return status;
-	PersistIds ids(ext);
-
-	ATL::CComBSTR title;
-	if (SUCCEEDED(doc->GetTitle(&title)))
-		response->mutable_document()->set_title(ToUtf8(title));
-	response->mutable_document()->set_type(
-		docType == swDocASSEMBLY ? sld_mcp::v1::DOCUMENT_TYPE_ASSEMBLY : sld_mcp::v1::DOCUMENT_TYPE_PART);
-
-	if (!request->skip_rebuild())
-	{
-		// No "What's Wrong" dialog popping up over the errors being read.
-		PreferenceToggles toggles(swApp);
-		toggles.Set(swShowErrorsEveryRebuild, false);
-		// It returns false when the rebuild has errors, which is what
-		// we're here for: rebuilt means it ran.
-		VARIANT_BOOL ok = VARIANT_FALSE;
-		response->set_rebuilt(SUCCEEDED(doc->EditRebuild3(&ok)));
-	}
-
-	const std::vector<TreeFeature> tree = FeatureTree(doc);
-	std::vector<WhatsWrongEntry> whatsWrong = WhatsWrong(ext);
-
-	auto addProblem = [&]() -> sld_mcp::v1::FeatureDiagnosis* {
-		if (response->problems_size() >= kMaxDiagnosedProblems)
+		if (!request->skip_rebuild())
 		{
-			response->set_truncated(true);
-			return nullptr;
+			// No "What's Wrong" dialog popping up over the errors being read.
+			PreferenceToggles toggles(swApp);
+			toggles.Set(swShowErrorsEveryRebuild, false);
+			// It returns false when the rebuild has errors, which is what
+			// we're here for: rebuilt means it ran.
+			VARIANT_BOOL ok = VARIANT_FALSE;
+			response->set_rebuilt(SUCCEEDED(doc->EditRebuild3(&ok)));
 		}
-		return response->add_problems();
-	};
-	auto describeRelatives = [&](IFeature* feature, sld_mcp::v1::FeatureDiagnosis* d) {
-		AddFeatureRefs(ParentFeatures(feature), d->mutable_parents());
-		AddFeatureRefs(ChildFeatures(feature), d->mutable_children());
-	};
 
-	int checked = 0;
-	int sketches = 0;
-	for (const TreeFeature& f : tree)
-	{
-		// The tree's fixed folders say nothing about the model.
-		if (f.fixed && f.type != "Reference" && f.type != "RefPlane")
-			continue;
-		++checked;
+		const std::vector<TreeFeature> tree = FeatureTree(doc);
+		std::vector<WhatsWrongEntry> whatsWrong = WhatsWrong(ext);
 
-		VARIANT_BOOL warning = VARIANT_FALSE;
-		long code = swFeatureErrorNone;
-		if (FAILED(f.feature->GetErrorCode2(&warning, &code)))
-			code = swFeatureErrorNone;
-		bool listed = false;
-		for (WhatsWrongEntry& e : whatsWrong)
-			if (!e.matched && SameObject(e.feature, f.feature))
+		auto addProblem = [&]() -> sld_mcp::v1::FeatureDiagnosis* {
+			if (response->problems_size() >= kMaxDiagnosedProblems)
 			{
-				e.matched = true;
-				listed = true;
-				if (code == swFeatureErrorNone)
+				response->set_truncated(true);
+				return nullptr;
+			}
+			return response->add_problems();
+		};
+		auto describeRelatives = [&](IFeature* feature, sld_mcp::v1::FeatureDiagnosis* d) {
+			AddFeatureRefs(ParentFeatures(feature), d->mutable_parents());
+			AddFeatureRefs(ChildFeatures(feature), d->mutable_children());
+		};
+
+		int checked = 0;
+		int sketches = 0;
+		for (const TreeFeature& f : tree)
+		{
+			// The tree's fixed folders say nothing about the model.
+			if (f.fixed && f.type != "Reference" && f.type != "RefPlane")
+				continue;
+			++checked;
+
+			VARIANT_BOOL warning = VARIANT_FALSE;
+			long code = swFeatureErrorNone;
+			if (FAILED(f.feature->GetErrorCode2(&warning, &code)))
+				code = swFeatureErrorNone;
+			bool listed = false;
+			for (WhatsWrongEntry& e : whatsWrong)
+				if (!e.matched && SameObject(e.feature, f.feature))
 				{
-					code = e.code;
-					warning = e.warning ? VARIANT_TRUE : VARIANT_FALSE;
+					e.matched = true;
+					listed = true;
+					if (code == swFeatureErrorNone)
+					{
+						code = e.code;
+						warning = e.warning ? VARIANT_TRUE : VARIANT_FALSE;
+					}
 				}
+
+			sld_mcp::v1::SketchDiagnosis sketch;
+			bool sketchProblem = false;
+			if (IsSketchType(f.type))
+			{
+				++sketches;
+				sketchProblem = DiagnoseSketch(f.feature, f.type, code != swFeatureErrorNone, ext, &sketch);
 			}
 
-		sld_mcp::v1::SketchDiagnosis sketch;
-		bool sketchProblem = false;
-		if (IsSketchType(f.type))
-		{
-			++sketches;
-			sketchProblem = DiagnoseSketch(f.feature, f.type, code != swFeatureErrorNone, ext, &sketch);
+			google::protobuf::RepeatedPtrField<sld_mcp::v1::MateEntityState> mateEntities;
+			bool mateProblem = false;
+			if (f.type.rfind("Mate", 0) == 0 && f.type != "MateGroup" && f.type != "MateReferenceGroupFeature")
+				mateProblem = DiagnoseMate(f.feature, ids, &mateEntities);
+
+			if (code == swFeatureErrorNone && !listed && !sketchProblem && !mateProblem)
+				continue;
+			sld_mcp::v1::FeatureDiagnosis* d = addProblem();
+			if (!d)
+				break;
+			d->set_persist_id(ids.Get(f.feature));
+			d->set_name(f.name);
+			d->set_type_name(f.type);
+			d->set_error_code(static_cast<int32_t>(code));
+			d->set_warning(code != swFeatureErrorNone && warning != VARIANT_FALSE);
+			VARIANT_BOOL suppressed = VARIANT_FALSE;
+			if (SUCCEEDED(f.feature->IsSuppressed(&suppressed)))
+				d->set_suppressed(suppressed != VARIANT_FALSE);
+			d->set_whats_wrong(listed);
+			describeRelatives(f.feature, d);
+			if (IsSketchType(f.type))
+				d->mutable_sketch()->Swap(&sketch);
+			d->mutable_mate_entities()->Swap(&mateEntities);
 		}
 
-		google::protobuf::RepeatedPtrField<sld_mcp::v1::MateEntityState> mateEntities;
-		bool mateProblem = false;
-		if (f.type.rfind("Mate", 0) == 0 && f.type != "MateGroup" && f.type != "MateReferenceGroupFeature")
-			mateProblem = DiagnoseMate(f.feature, ids, &mateEntities);
+		// What's Wrong entries our walk didn't reach: in an assembly, the
+		// components' own features.
+		for (const WhatsWrongEntry& e : whatsWrong)
+		{
+			if (e.matched || response->truncated())
+				continue;
+			sld_mcp::v1::FeatureDiagnosis* d = addProblem();
+			if (!d)
+				break;
+			d->set_persist_id(ids.Get(e.feature));
+			d->set_name(FeatureName(e.feature));
+			d->set_type_name(FeatureTypeName(e.feature));
+			d->set_component_persist_id(ids.Get(ComponentOf(e.feature)));
+			d->set_error_code(static_cast<int32_t>(e.code));
+			d->set_warning(e.code != swFeatureErrorNone && e.warning);
+			d->set_whats_wrong(true);
+			describeRelatives(e.feature, d);
+		}
 
-		if (code == swFeatureErrorNone && !listed && !sketchProblem && !mateProblem)
-			continue;
-		sld_mcp::v1::FeatureDiagnosis* d = addProblem();
-		if (!d)
-			break;
-		d->set_persist_id(ids.Get(f.feature));
-		d->set_name(f.name);
-		d->set_type_name(f.type);
-		d->set_error_code(static_cast<int32_t>(code));
-		d->set_warning(code != swFeatureErrorNone && warning != VARIANT_FALSE);
-		VARIANT_BOOL suppressed = VARIANT_FALSE;
-		if (SUCCEEDED(f.feature->IsSuppressed(&suppressed)))
-			d->set_suppressed(suppressed != VARIANT_FALSE);
-		d->set_whats_wrong(listed);
-		describeRelatives(f.feature, d);
-		if (IsSketchType(f.type))
-			d->mutable_sketch()->Swap(&sketch);
-		d->mutable_mate_entities()->Swap(&mateEntities);
-	}
-
-	// What's Wrong entries our walk didn't reach: in an assembly, the
-	// components' own features.
-	for (const WhatsWrongEntry& e : whatsWrong)
-	{
-		if (e.matched || response->truncated())
-			continue;
-		sld_mcp::v1::FeatureDiagnosis* d = addProblem();
-		if (!d)
-			break;
-		d->set_persist_id(ids.Get(e.feature));
-		d->set_name(FeatureName(e.feature));
-		d->set_type_name(FeatureTypeName(e.feature));
-		d->set_component_persist_id(ids.Get(ComponentOf(e.feature)));
-		d->set_error_code(static_cast<int32_t>(e.code));
-		d->set_warning(e.code != swFeatureErrorNone && e.warning);
-		d->set_whats_wrong(true);
-		describeRelatives(e.feature, d);
-	}
-
-	response->set_checked_features(checked);
-	response->set_checked_sketches(sketches);
-	return grpc::Status::OK;
+		response->set_checked_features(checked);
+		response->set_checked_sketches(sketches);
+		return grpc::Status::OK;
+	});
 }

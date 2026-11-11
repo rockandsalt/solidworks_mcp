@@ -38,7 +38,7 @@ namespace
 	}
 }
 
-grpc::Status SolidWorksService::Undo(grpc::ServerContext* /*context*/,
+grpc::Status SolidWorksService::Undo(grpc::ServerContext* context,
 	const sld_mcp::v1::UndoRequest* request,
 	sld_mcp::v1::UndoResponse* response)
 {
@@ -46,58 +46,52 @@ grpc::Status SolidWorksService::Undo(grpc::ServerContext* /*context*/,
 		return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
 			"steps must be between 1 and " + std::to_string(kMaxSteps));
 
-	std::lock_guard<std::mutex> lock(m_editMutex);
-	ComApartment com;
-	if (!com.Ok())
-		return ComApartmentError();
+	return m_executor.Execute(context, "Undo", ExecutionPolicy::CompleteOperation,
+		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
+		ATL::CComPtr<IModelDoc2> doc;
+		HRESULT hr = swApp->get_IActiveDoc2(&doc);
+		if (FAILED(hr))
+			return ComError("ISldWorks::IActiveDoc2", hr);
+		if (!doc)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "no document is open in SolidWorks");
+		// A drawing's sheet always counts as its open sketch (seen 2026-11-01).
+		long docType = swDocNONE;
+		doc->GetType(&docType);
+		const bool hasSketches = docType != swDocDRAWING;
+		if (hasSketches)
+			if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
+				return status;
 
-	ATL::CComPtr<ISldWorks> swApp;
-	if (grpc::Status status = GetSwApp(swApp); !status.ok())
-		return status;
+		ATL::CComBSTR title;
+		if (SUCCEEDED(doc->GetTitle(&title)))
+			response->set_document(ToUtf8(title));
 
-	ATL::CComPtr<IModelDoc2> doc;
-	HRESULT hr = swApp->get_IActiveDoc2(&doc);
-	if (FAILED(hr))
-		return ComError("ISldWorks::IActiveDoc2", hr);
-	if (!doc)
-		return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "no document is open in SolidWorks");
-	// A drawing's sheet always counts as its open sketch (seen 2026-11-01).
-	long docType = swDocNONE;
-	doc->GetType(&docType);
-	const bool hasSketches = docType != swDocDRAWING;
-	if (hasSketches)
-		if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
-			return status;
+		PreferenceToggles toggles(swApp);
+		toggles.Set(swShowErrorsEveryRebuild, false);
 
-	ATL::CComBSTR title;
-	if (SUCCEEDED(doc->GetTitle(&title)))
-		response->set_document(ToUtf8(title));
-
-	PreferenceToggles toggles(swApp);
-	toggles.Set(swShowErrorsEveryRebuild, false);
-
-	// EditUndo2 returns nothing, and takes more steps than there are without
-	// complaint (seen 2026-11-01), so what it did is measured.
-	const std::vector<TreeFeature> before = FeatureTree(doc);
-	response->set_volume_before(SolidVolume(doc));
-	hr = UndoSteps(doc, request->steps());
-	if (FAILED(hr))
-		return ComError("IModelDoc2::EditUndo2", hr);
-	// A step back over a sketch's closing leaves it open for editing (seen
-	// 2026-11-01), where other tools refuse to work and none closes it, so a
-	// sketch call is taken back whole.
-	int taken = request->steps();
-	const auto sketchOpen = [&] { return hasSketches && !CheckNoOpenSketch(doc).ok(); };
-	for (; sketchOpen() && taken < request->steps() + kMaxSketchSteps; ++taken)
-		if (FAILED(hr = UndoSteps(doc, 1)))
+		// EditUndo2 returns nothing, and takes more steps than there are without
+		// complaint (seen 2026-11-01), so what it did is measured.
+		const std::vector<TreeFeature> before = FeatureTree(doc);
+		response->set_volume_before(SolidVolume(doc));
+		hr = UndoSteps(doc, request->steps());
+		if (FAILED(hr))
 			return ComError("IModelDoc2::EditUndo2", hr);
-	if (sketchOpen())
-		return grpc::Status(grpc::StatusCode::INTERNAL, "undoing left a sketch open for editing");
-	response->set_steps_taken(taken);
-	const std::vector<TreeFeature> after = FeatureTree(doc);
-	response->set_volume_after(SolidVolume(doc));
-	AddMissing(before, after, response->mutable_removed());
-	AddMissing(after, before, response->mutable_restored());
-	doc->GraphicsRedraw2();
-	return grpc::Status::OK;
+		// A step back over a sketch's closing leaves it open for editing (seen
+		// 2026-11-01), where other tools refuse to work and none closes it, so a
+		// sketch call is taken back whole.
+		int taken = request->steps();
+		const auto sketchOpen = [&] { return hasSketches && !CheckNoOpenSketch(doc).ok(); };
+		for (; sketchOpen() && taken < request->steps() + kMaxSketchSteps; ++taken)
+			if (FAILED(hr = UndoSteps(doc, 1)))
+				return ComError("IModelDoc2::EditUndo2", hr);
+		if (sketchOpen())
+			return grpc::Status(grpc::StatusCode::INTERNAL, "undoing left a sketch open for editing");
+		response->set_steps_taken(taken);
+		const std::vector<TreeFeature> after = FeatureTree(doc);
+		response->set_volume_after(SolidVolume(doc));
+		AddMissing(before, after, response->mutable_removed());
+		AddMissing(after, before, response->mutable_restored());
+		doc->GraphicsRedraw2();
+		return grpc::Status::OK;
+	});
 }
