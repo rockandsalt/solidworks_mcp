@@ -335,8 +335,12 @@ namespace
 	};
 }
 
+bool TestPmiPreferences();
+
 int main()
 {
+	if (!TestPmiPreferences())
+		return 1;
 	if (!TestGateAdmissionAndExceptions() || !TestGateLifecycle(ExecutionPolicy::Cancellable) ||
 		!TestGateLifecycle(ExecutionPolicy::CompleteOperation))
 	{

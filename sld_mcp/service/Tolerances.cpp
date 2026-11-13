@@ -325,7 +325,11 @@ grpc::Status SolidWorksService::SetDimensionTolerance(grpc::ServerContext* conte
 
 		sld_mcp::v1::AnnotationDimension* out = response->mutable_dimension();
 		if (found.display)
-			DescribeAnnotationDimension(found.display, out);
+		{
+			ATL::CComPtr<IModelDocExtension> ext;
+			doc->get_Extension(&ext);
+			DescribeAnnotationDimension(found.display, ext, out);
+		}
 		else
 		{
 			DescribeDimensionValue(found.dim, out->mutable_dimension());

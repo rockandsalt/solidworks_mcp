@@ -70,7 +70,25 @@ namespace sld_mcp::service
 	// What the IDimension itself knows: reference, tolerance, owning feature.
 	void DescribeModelDimension(IDimension* dim, sld_mcp::v1::AnnotationDimension* out);
 
-	void DescribeAnnotationDimension(IDisplayDimension* display, sld_mcp::v1::AnnotationDimension* out);
+	// Precision may inherit the document's linear or angular setting rather
+	// than carry its own decimal count.
+	template <typename Display, typename Extension>
+	std::optional<int32_t> PrimaryDimensionPrecision(Display* display, Extension* ext, bool angular)
+	{
+		long decimals = -1;
+		if (FAILED(display->GetPrimaryPrecision2(&decimals)))
+			return std::nullopt;
+		if (decimals == swPrecisionFollowsDocumentSetting && ext)
+		{
+			const long preference = angular ? swDetailingAngularDimPrecision : swDetailingLinearDimPrecision;
+			if (FAILED(ext->GetUserPreferenceInteger(preference, swDetailingNoOptionSpecified, &decimals)))
+				return std::nullopt;
+		}
+		return decimals >= 0 ? std::optional<int32_t>(static_cast<int32_t>(decimals)) : std::nullopt;
+	}
+
+	void DescribeAnnotationDimension(IDisplayDimension* display, IModelDocExtension* ext,
+		sld_mcp::v1::AnnotationDimension* out);
 
 	void DescribeGtol(IGtol* gtol, sld_mcp::v1::AnnotationGtol* out);
 

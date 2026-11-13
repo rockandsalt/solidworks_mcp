@@ -2313,71 +2313,61 @@ impl SolidWorksTools {
     ) -> Result<CallToolResult, McpError> {
         let units = self.active_units();
         let standard = dimxpert::standard(params.standard, units.as_ref());
-        let (request, mut tolerance) = {
+        let (request, tolerance) = {
             let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             dimxpert::request(&ids, &params, standard)?
+        };
+        let use_block = tolerance.is_none()
+            && standard == gdt::GdtStandard::Asme
+            && params.kind != dimxpert::PmiDimensionKind::Basic;
+        // A read failure must occur before inserting anything into the part.
+        let block = if use_block {
+            let preferences = self.addin.document_preferences(dimxpert::block_read_request())
+                .await.map_err(|status| self.addin_error(status))?;
+            dimxpert::block_table(&preferences)
+        } else {
+            None
         };
         // DimXpert warns in a modal dialog when a dimension over-constrains
         // the part (seen 2026-11-12).
         let (reply, dialogs) = macro_run::closing_dialogs(self.addin.add_pmi_dimension(request)).await;
-        let reply = reply.map_err(|status| self.addin_error(status))?;
-        // All or nothing: what's refused below takes the new dimension away
-        // again.
-        let undo = proto::DeleteDrawingAnnotationsRequest {
-            names: reply.annotations.iter().map(|a| a.name.clone()).collect(),
-            ..Default::default()
-        };
+        let mut reply = reply.map_err(|status| self.addin_error(status))?;
         if let Some(why) = dimxpert::overconstrained(&dialogs) {
-            let _ = self.addin.delete_drawing_annotations(undo).await;
-            return Err(McpError::invalid_params(why, None));
+            return Err(self.reject_pmi(&reply.annotations, McpError::invalid_params(why, None)).await);
         }
-        // ASME: an untoleranced dimension takes the part's block tolerance
-        // row for its decimals, as its own +/- (DimXpert's block method
-        // can't be switched on through the API; dimxpert.md).
-        let mut general = None;
-        if tolerance.is_none()
-            && standard == gdt::GdtStandard::Asme
-            && params.kind != dimxpert::PmiDimensionKind::Basic
-            && let Some(first) = reply.annotations.first()
-        {
-            let table = self
-                .addin
-                .document_preferences(dimxpert::block_read_request())
-                .await
-                .map_err(|status| self.addin_error(status))?;
-            match dimxpert::block_tolerance(dimxpert::block_table(&table).as_ref(), first, params.values.decimals, units.as_ref()) {
-                Ok((request, what)) => {
-                    tolerance = Some(request);
-                    general = Some(format!("ASME: {what}"));
-                }
-                Err(why) => general = Some(why),
-            }
-        }
-        let mut toleranced = None;
-        if let Some(mut tolerance) = tolerance {
-            let result = match dimxpert::new_dimension_name(&reply.annotations) {
-                Some(name) => {
-                    tolerance.name = name;
-                    self.addin.set_dimension_tolerance(tolerance).await.map_err(|status| self.addin_error(status))
-                }
-                None => Err(McpError::internal_error("DimXpert's new annotation is no dimension to tolerance", None)),
-            };
+        let (requests, general) = match dimxpert::dimension_tolerances(
+            &reply.annotations, tolerance.as_ref(), block.as_ref(), use_block, params.values.decimals, units.as_ref(),
+        ) {
+            Ok(plan) => plan,
+            Err(error) => return Err(self.reject_pmi(&reply.annotations, error).await),
+        };
+        for (index, tolerance) in requests {
+            let result = self.addin.set_dimension_tolerance(tolerance).await;
             match result {
-                Ok(r) => toleranced = Some(r),
-                Err(error) => {
-                    let _ = self.addin.delete_drawing_annotations(undo).await;
-                    return Err(McpError::internal_error(
-                        format!("{} -- the new dimension was deleted again", error.message),
-                        None,
-                    ));
+                Ok(r) if r.dimension.is_some() => reply.annotations[index].dimension = r.dimension,
+                other => {
+                    let error = match other {
+                        Err(status) => self.addin_error(status),
+                        Ok(_) => McpError::internal_error("SolidWorks returned no toleranced dimension", None),
+                    };
+                    return Err(self.reject_pmi(&reply.annotations, error).await);
                 }
             }
         }
         let text = {
             let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            dimxpert::reply(&mut ids, &params, &reply.annotations, toleranced.as_ref(), general.as_deref(), &dialogs)
+            dimxpert::reply(&mut ids, &params, &reply.annotations, &general, &dialogs)
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    async fn reject_pmi(&self, added: &[proto::AnnotationInfo], error: McpError) -> McpError {
+        let names: Vec<String> = added.iter().map(|a| a.name.clone()).collect();
+        let cleanup = self.addin.delete_drawing_annotations(proto::DeleteDrawingAnnotationsRequest {
+            names: names.clone(),
+            ..Default::default()
+        }).await;
+        dimxpert::cleanup_error(error, &names, cleanup)
     }
 
     #[tool(

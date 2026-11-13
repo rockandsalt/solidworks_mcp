@@ -3,6 +3,7 @@
 // tolerance is one of them).
 #include "pch.h"
 #include "Common.h"
+#include "PreferenceHelpers.h"
 
 using namespace sld_mcp::service;
 
@@ -23,51 +24,13 @@ grpc::Status SolidWorksService::DocumentPreferences(grpc::ServerContext* context
 			return status;
 		const long none = swDetailingNoOptionSpecified;
 
-		// What was there before, to put back if SolidWorks refuses a value.
-		std::map<int32_t, VARIANT_BOOL> oldToggles;
-		std::map<int32_t, long> oldIntegers;
-		std::map<int32_t, double> oldDoubles;
-		auto restore = [&] {
-			VARIANT_BOOL ok = VARIANT_FALSE;
-			for (const auto& [id, value] : oldToggles)
-				ext->SetUserPreferenceToggle(id, none, value, &ok);
-			for (const auto& [id, value] : oldIntegers)
-				ext->SetUserPreferenceInteger(id, none, value, &ok);
-			for (const auto& [id, value] : oldDoubles)
-				ext->SetUserPreferenceDouble(id, none, value, &ok);
-		};
-		auto refused = [&](const char* what, int32_t id) {
-			restore();
-			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-				std::string("SolidWorks refused ") + what + " " + std::to_string(id) + " -- nothing was changed");
-		};
-		for (const auto& [id, value] : request->set_toggles())
+		bool changed = false;
+		if (grpc::Status status = ApplyDocumentPreferenceChanges(ext.p, *request, changed); !status.ok())
 		{
-			VARIANT_BOOL old = VARIANT_FALSE, ok = VARIANT_FALSE;
-			ext->GetUserPreferenceToggle(id, none, &old);
-			if (FAILED(ext->SetUserPreferenceToggle(id, none, value ? VARIANT_TRUE : VARIANT_FALSE, &ok)) || !ok)
-				return refused("toggle", id);
-			oldToggles.emplace(id, old);
+			if (changed)
+				doc->SetSaveFlag();
+			return status;
 		}
-		for (const auto& [id, value] : request->set_integers())
-		{
-			long old = 0;
-			VARIANT_BOOL ok = VARIANT_FALSE;
-			ext->GetUserPreferenceInteger(id, none, &old);
-			if (FAILED(ext->SetUserPreferenceInteger(id, none, value, &ok)) || !ok)
-				return refused("integer", id);
-			oldIntegers.emplace(id, old);
-		}
-		for (const auto& [id, value] : request->set_doubles())
-		{
-			double old = 0.0;
-			VARIANT_BOOL ok = VARIANT_FALSE;
-			ext->GetUserPreferenceDouble(id, none, &old);
-			if (!std::isfinite(value) || FAILED(ext->SetUserPreferenceDouble(id, none, value, &ok)) || !ok)
-				return refused("double", id);
-			oldDoubles.emplace(id, old);
-		}
-		const bool changed = !oldToggles.empty() || !oldIntegers.empty() || !oldDoubles.empty();
 		if (changed)
 		{
 			doc->SetSaveFlag();

@@ -42,8 +42,8 @@ pub fn overconstrained(dialogs: &[Closed]) -> Option<String> {
     let warning = dialogs.iter().find(|d| d.text.to_lowercase().contains("overconstrain"))?;
     Some(format!(
         "DimXpert: \"{}\" -- the part already has a dimension that controls this (e.g. the hole located from \
-         another face in the same direction), and a feature is dimensioned once. The new dimension was deleted \
-         again; delete the other one first (delete_drawing_annotations) if this is the one you want",
+         another face in the same direction), and a feature is dimensioned once; delete the other one first \
+         (delete_drawing_annotations) if this is the one you want",
         warning.text.trim()
     ))
 }
@@ -210,9 +210,65 @@ fn dimension_name(a: &proto::AnnotationInfo) -> Option<&str> {
     a.dimension.as_ref()?.dimension.as_ref().map(|i| i.name.as_str()).filter(|n| !n.is_empty())
 }
 
-/// The full name of the dimension DimXpert added, for SetDimensionTolerance.
-pub fn new_dimension_name(added: &[proto::AnnotationInfo]) -> Option<String> {
-    added.iter().find_map(dimension_name).map(str::to_string)
+/// Plan tolerances for every dimension, retaining annotation indices so the
+/// read-back replaces the right entry even when other annotations precede it.
+pub fn dimension_tolerances(
+    added: &[proto::AnnotationInfo],
+    explicit: Option<&proto::SetDimensionToleranceRequest>,
+    block: Option<&BlockTable>,
+    use_block: bool,
+    decimals: Option<u8>,
+    units: Option<&proto::DocumentUnits>,
+) -> Result<(Vec<(usize, proto::SetDimensionToleranceRequest)>, Vec<String>), McpError> {
+    let mut requests = Vec::new();
+    let mut notes = Vec::new();
+    for (index, annotation) in added.iter().enumerate() {
+        let Some(name) = dimension_name(annotation) else { continue };
+        if let Some(explicit) = explicit {
+            let mut request = explicit.clone();
+            request.name = name.to_string();
+            requests.push((index, request));
+        } else if use_block {
+            match block_tolerance(block, annotation, decimals, units) {
+                Ok((request, what)) => {
+                    requests.push((index, request));
+                    notes.push(format!("ASME: {name}: {what}"));
+                }
+                Err(why) => notes.push(format!("{name}: {why}")),
+            }
+        }
+    }
+    if explicit.is_some() && requests.is_empty() {
+        return Err(McpError::internal_error("DimXpert's new annotation is no dimension to tolerance", None));
+    }
+    Ok((requests, notes))
+}
+
+/// A failed edit must distinguish confirmed deletion from failed or partial
+/// cleanup. A transport error cannot establish which annotations remain.
+pub fn cleanup_error(
+    mut error: McpError,
+    names: &[String],
+    cleanup: Result<proto::DeleteDrawingAnnotationsResponse, tonic::Status>,
+) -> McpError {
+    let note = match cleanup {
+        Ok(reply) => {
+            let remaining: Vec<&str> = names.iter()
+                .filter(|name| !reply.deleted.iter().any(|a| a.name == **name))
+                .map(String::as_str).collect();
+            if remaining.is_empty() {
+                "the new dimension(s) were deleted again".to_string()
+            } else {
+                format!("cleanup did not confirm deletion of {}; inspect_annotations before retrying", remaining.join(", "))
+            }
+        }
+        Err(status) => format!(
+            "cleanup failed: {}; new annotations may remain: {}; inspect_annotations before retrying",
+            status.message(), names.join(", ")
+        ),
+    };
+    error.message = format!("{} -- {note}", error.message).into();
+    error
 }
 
 // ---- Block tolerance (ASME) --------------------------------------------------------
@@ -234,6 +290,8 @@ const BLOCK_TOLERANCE_TOGGLE: i32 = 424;
 /// decimals at 0.01 / 0.014 / 0.0025 mm, seen 2026-11-12): not a table
 /// anyone set, so it isn't applied.
 const TEMPLATE_BLOCK_ROWS: [(i32, f64); 3] = [(2, 1e-5), (3, 1.4e-5), (4, 2.5e-6)];
+// The template's angular placeholder, radians (approximately 0.01 degrees).
+const TEMPLATE_BLOCK_ANGLE: f64 = 1.745e-4;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlockTable {
@@ -254,18 +312,21 @@ pub fn block_read_request() -> proto::DocumentPreferencesRequest {
 
 /// The part's block tolerance table; None while it's the template's.
 pub fn block_table(reply: &proto::DocumentPreferencesResponse) -> Option<BlockTable> {
-    let rows: Vec<(i32, f64)> = BLOCK_DECIMALS
+    let mut rows: Vec<(i32, f64)> = BLOCK_DECIMALS
         .iter()
         .zip(BLOCK_VALUES)
         .filter_map(|(d, v)| Some((*reply.integers.get(d)?, *reply.doubles.get(&v)?)))
         .collect();
     let placeholder = rows.len() == 3
         && rows.iter().zip(TEMPLATE_BLOCK_ROWS).all(|((d, v), (td, tv))| *d == td && (v - tv).abs() < 1e-12);
-    if rows.is_empty() || placeholder {
-        return None;
+    let mut angle = reply.doubles.get(&BLOCK_ANGLE).copied().filter(|a| a.is_finite() && *a > 0.0);
+    if placeholder {
+        rows.clear();
+        // A changed angular row is useful even with untouched length rows.
+        // Account for the template's rounded radian value as well as 0.01 deg.
+        angle = angle.filter(|a| (a - TEMPLATE_BLOCK_ANGLE).abs() > 1e-7);
     }
-    let angle = reply.doubles.get(&BLOCK_ANGLE).copied().filter(|a| *a > 0.0);
-    Some(BlockTable { rows, angle })
+    (!rows.is_empty() || angle.is_some()).then_some(BlockTable { rows, angle })
 }
 
 /// A length as the document shows it: "0.01 in" in an inch part, "0.254 mm" otherwise.
@@ -334,20 +395,15 @@ fn mm3(p: &proto::Vec3) -> String {
 }
 
 /// The reply: what DimXpert made of the faces, then its JSON. With a
-/// tolerance set, `toleranced` is the dimension afterwards; `general` says
-/// what ASME's block tolerance did (applied, or why not).
+/// The annotations already contain tolerance read-back. `general` says what
+/// ASME's block tolerance did for each dimension (applied, or why not).
 pub fn reply(
     ids: &mut IdRegistry,
     p: &AddPmiDimensionParams,
     added: &[proto::AnnotationInfo],
-    toleranced: Option<&proto::SetDimensionToleranceResponse>,
-    general: Option<&str>,
+    general: &[String],
     dialogs: &[Closed],
 ) -> String {
-    let mut added = added.to_vec();
-    if let (Some(t), Some(first)) = (toleranced.and_then(|t| t.dimension.as_ref()), added.first_mut()) {
-        first.dimension = Some(t.clone());
-    }
     let json: Vec<Value> = added.iter().map(|a| pmi::annotation_json(ids, a)).collect();
     let Some(first) = json.first() else { return "done".to_string() };
     let field = |key: &str| first.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
@@ -382,8 +438,8 @@ pub fn reply(
         );
     }
     let tol_type = first.get("tolerance").and_then(|t| t.get("type")).and_then(Value::as_str).unwrap_or_default();
-    if let Some(general) = general {
-        notes.push(general.to_string());
+    if !general.is_empty() {
+        notes.extend_from_slice(general);
     } else if p.tolerance.is_none() {
         match tol_type {
             "general" => notes.push(
@@ -1035,7 +1091,7 @@ mod tests {
             pressed: "its close box".into(),
         };
         let why = overconstrained(std::slice::from_ref(&warning)).unwrap();
-        assert!(why.contains("overconstrained the part") && why.contains("deleted"), "{why}");
+        assert!(why.contains("overconstrained the part") && !why.contains("deleted"), "{why}");
         let other = Closed { text: "Something else".into(), ..warning };
         assert!(overconstrained(std::slice::from_ref(&other)).is_none());
         assert!(dialog_note(&[other]).unwrap().contains("\"Something else\""));
@@ -1054,6 +1110,7 @@ mod tests {
 
     fn dimension(kind: proto::DimensionType, decimals: Option<i32>) -> proto::AnnotationInfo {
         proto::AnnotationInfo {
+            r#type: 4, // swDisplayDimension
             dimension: Some(proto::AnnotationDimension {
                 dimension: Some(proto::DimensionInfo { name: "TXD1@Scheme2@Part1.Part".into(), r#type: kind as i32, ..Default::default() }),
                 decimals,
@@ -1084,6 +1141,70 @@ mod tests {
         // No row for 4 decimals, no table.
         assert!(block_tolerance(Some(&table), &dimension(proto::DimensionType::Linear, Some(4)), None, None).unwrap_err().contains("no row for 4"));
         assert!(block_tolerance(None, &dimension(proto::DimensionType::Linear, Some(2)), None, None).unwrap_err().contains("block=["));
+    }
+
+    #[test]
+    fn angular_block_tolerance_does_not_enable_placeholder_length_rows() {
+        let angle = 0.5f64.to_radians();
+        let table = block_table(&table_reply(TEMPLATE_BLOCK_ROWS, angle)).unwrap();
+        assert!(table.rows.is_empty(), "placeholder lengths must stay unset: {table:?}");
+        let (request, _) = block_tolerance(Some(&table), &dimension(proto::DimensionType::Angular, Some(2)), None, None).unwrap();
+        assert!((request.upper - angle).abs() < 1e-12 && request.angle, "{request:?}");
+        assert!(block_tolerance(Some(&table), &dimension(proto::DimensionType::Linear, Some(2)), None, None).is_err());
+        let p = GeneralToleranceParams { block_angle_deg: Some(0.5), ..general(None, None) };
+        let json = general_tolerance_json(&p, &table_reply(TEMPLATE_BLOCK_ROWS, angle), ASME, None, &[]);
+        assert_eq!(json["block_angle_deg"], json!(0.5), "{json}");
+        assert_eq!(json["block_tolerance"], json!([]), "{json}");
+        assert!(block_table(&table_reply(TEMPLATE_BLOCK_ROWS, 0.01f64.to_radians())).is_none());
+    }
+
+    #[test]
+    fn block_tolerances_cover_every_dimension_and_preserve_annotation_indices() {
+        let table = BlockTable { rows: vec![(2, 0.000254), (3, 0.000127)], angle: Some(0.5f64.to_radians()) };
+        let mut diameter = dimension(proto::DimensionType::Diameter, Some(2));
+        diameter.name = "TXD1".into();
+        diameter.dimension.as_mut().unwrap().dimension.as_mut().unwrap().name = "diameter".into();
+        let mut depth = dimension(proto::DimensionType::Linear, Some(3));
+        depth.name = "TXD2".into();
+        depth.dimension.as_mut().unwrap().dimension.as_mut().unwrap().name = "depth".into();
+        let mut angle = dimension(proto::DimensionType::Angular, Some(2));
+        angle.name = "TXD3".into();
+        let mut added = vec![proto::AnnotationInfo::default(), diameter, depth, angle];
+        let (requests, notes) = dimension_tolerances(&added, None, Some(&table), true, None, Some(&inch())).unwrap();
+        assert_eq!(requests.iter().map(|(i, _)| *i).collect::<Vec<_>>(), [1, 2, 3]);
+        assert_eq!(requests.iter().map(|(_, r)| r.upper).collect::<Vec<_>>(), [0.000254, 0.000127, 0.5f64.to_radians()]);
+        assert_eq!(notes.len(), 3, "{notes:?}");
+        for (index, request) in requests {
+            let d = added[index].dimension.as_mut().unwrap();
+            d.tolerance_type = request.tolerance_type;
+            d.tolerance_max = request.upper;
+            d.tolerance_min = request.lower;
+        }
+        let text = reply(&mut registry(), &params(PmiDimensionKind::Size, &["face:1"]), &added[1..], &notes, &[]);
+        let json: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
+        let annotations = json["annotations"].as_array().unwrap();
+        assert_eq!(annotations[0]["tolerance"]["plus_minus_mm"], json!(0.254), "{text}");
+        assert_eq!(annotations[1]["tolerance"]["plus_minus_mm"], json!(0.127), "{text}");
+        assert_eq!(annotations[2]["tolerance"]["plus_minus_deg"], json!(0.5), "{text}");
+    }
+
+    #[test]
+    fn cleanup_reports_confirmed_partial_and_failed_deletion() {
+        let names = vec!["TXD1".to_string(), "TXD2".to_string()];
+        let error = || invalid("tolerance refused");
+        let deleted = |name: &str| proto::AnnotationInfo { name: name.into(), ..Default::default() };
+        let complete = cleanup_error(error(), &names, Ok(proto::DeleteDrawingAnnotationsResponse {
+            deleted: names.iter().map(|n| deleted(n)).collect(),
+        }));
+        assert!(complete.message.contains("were deleted again"), "{complete:?}");
+        let partial = cleanup_error(error(), &names, Ok(proto::DeleteDrawingAnnotationsResponse {
+            deleted: vec![deleted("TXD1")],
+        }));
+        assert!(partial.message.contains("did not confirm deletion of TXD2"), "{partial:?}");
+        assert!(!partial.message.contains("were deleted again"), "{partial:?}");
+        let failed = cleanup_error(error(), &names, Err(tonic::Status::unavailable("lost connection")));
+        assert!(failed.message.contains("lost connection") && failed.message.contains("TXD1, TXD2"), "{failed:?}");
+        assert!(!failed.message.contains("were deleted again"), "{failed:?}");
     }
 
     #[test]

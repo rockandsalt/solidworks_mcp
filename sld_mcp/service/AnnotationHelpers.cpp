@@ -222,7 +222,8 @@ namespace sld_mcp::service
 		}
 	}
 
-	void DescribeAnnotationDimension(IDisplayDimension* display, sld_mcp::v1::AnnotationDimension* out)
+	void DescribeAnnotationDimension(IDisplayDimension* display, IModelDocExtension* ext,
+		sld_mcp::v1::AnnotationDimension* out)
 	{
 		auto text = [&](long which) {
 			ATL::CComBSTR s;
@@ -241,15 +242,14 @@ namespace sld_mcp::service
 		if (SUCCEEDED(display->get_Inspection(&flag)))
 			out->set_inspection(flag != VARIANT_FALSE);
 
-		long decimals = -1;
-		if (SUCCEEDED(display->GetPrimaryPrecision2(&decimals)) && decimals >= 0)
-			out->set_decimals(static_cast<int32_t>(decimals));
-
 		ATL::CComPtr<IDimension> dim;
 		if (FAILED(display->GetDimension2(0, &dim)) || !dim)
 			return;
 		DescribeDimension(display, out->mutable_dimension());
 		DescribeModelDimension(dim, out);
+		const bool angular = out->dimension().type() == sld_mcp::v1::DIMENSION_TYPE_ANGULAR;
+		if (const auto decimals = PrimaryDimensionPrecision(display, ext, angular))
+			out->set_decimals(*decimals);
 	}
 
 	namespace
@@ -712,7 +712,7 @@ namespace sld_mcp::service
 		case swDisplayDimension:
 			if (ATL::CComQIPtr<IDisplayDimension> display(specific.p); display)
 			{
-				DescribeAnnotationDimension(display, info->mutable_dimension());
+				DescribeAnnotationDimension(display, ids.Extension(), info->mutable_dimension());
 				ATL::CComBSTR all;
 				if (SUCCEEDED(display->GetText(swDimensionTextAll, &all)))
 					AddText(all, info);

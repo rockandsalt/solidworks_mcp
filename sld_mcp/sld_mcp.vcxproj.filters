@@ -76,6 +76,9 @@
     <ClInclude Include="service\AnnotationHelpers.h">
       <Filter>Header Files\service</Filter>
     </ClInclude>
+    <ClInclude Include="service\PreferenceHelpers.h">
+      <Filter>Header Files\service</Filter>
+    </ClInclude>
     <ClInclude Include="service\AssemblyHelpers.h">
       <Filter>Header Files\service</Filter>
     </ClInclude>

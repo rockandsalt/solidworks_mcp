@@ -64,6 +64,7 @@ namespace sld_mcp::service
 		// A null `ext` (e.g. a drawing view whose model isn't loaded) hands
 		// out empty IDs.
 		explicit PersistIds(IModelDocExtension* ext) : m_ext(ext) {}
+		IModelDocExtension* Extension() const { return m_ext; }
 
 		// Empty if `obj` is null or SolidWorks can't reference it.
 		std::string Get(IUnknown* obj)

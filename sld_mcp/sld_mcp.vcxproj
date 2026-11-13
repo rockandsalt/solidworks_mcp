@@ -313,6 +313,7 @@
     <ClInclude Include="service\RequestLock.h" />
     <ClInclude Include="ComVariant.h" />
     <ClInclude Include="service\AnnotationHelpers.h" />
+    <ClInclude Include="service\PreferenceHelpers.h" />
     <ClInclude Include="service\AssemblyHelpers.h" />
     <ClInclude Include="service\Common.h" />
     <ClInclude Include="service\RequestLock.h" />

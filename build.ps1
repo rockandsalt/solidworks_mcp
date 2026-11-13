@@ -376,9 +376,10 @@ function Test-Addin {
     $objects = @($names | ForEach-Object { Join-Path $objectDir "$_.obj" })
     $libraries = @(Get-ChildItem (Join-Path $dependencyDir 'lib') -Filter '*.lib' | ForEach-Object FullName)
     $testExe = Join-Path $outDir 'mesh_cancellation_tests.exe'
-    & cl.exe /nologo /std:c++17 /EHsc /MD /D_UNICODE /DUNICODE "/I$projectDir" "/I$($settings.SwTypeLibDir)" `
+    & cl.exe /nologo /std:c++17 /EHsc /MD /D_UNICODE /DUNICODE /D_USE_MATH_DEFINES "/I$projectDir" "/I$($settings.SwTypeLibDir)" `
         "/I$generatedDir" "/I$(Join-Path $dependencyDir 'include')" `
-        (Join-Path $projectDir 'tests\MeshCancellation.cpp') "/Fo$outDir\MeshCancellation.obj" "/Fe$testExe" `
+        (Join-Path $projectDir 'tests\MeshCancellation.cpp') (Join-Path $projectDir 'tests\PmiPreferences.cpp') `
+        "/Fo$outDir\" "/Fe$testExe" `
         /link @objects @libraries ws2_32.lib crypt32.lib iphlpapi.lib bcrypt.lib dbghelp.lib `
         ole32.lib oleaut32.lib uuid.lib user32.lib advapi32.lib shell32.lib
     if ($LASTEXITCODE) { throw 'Native execution test build failed.' }
