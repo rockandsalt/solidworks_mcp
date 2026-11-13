@@ -184,7 +184,7 @@ pub enum GdtStandard {
 }
 
 impl GdtStandard {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             GdtStandard::Iso => "ISO 1101",
             GdtStandard::Asme => "ASME Y14.5",
@@ -193,7 +193,7 @@ impl GdtStandard {
 
     /// The document's: ANSI follows ASME, the other drafting standards ISO;
     /// without a known one, inch documents ASME.
-    fn of_document(units: Option<&proto::DocumentUnits>) -> Self {
+    pub(crate) fn of_document(units: Option<&proto::DocumentUnits>) -> Self {
         match units.map(|u| u.drafting_standard) {
             Some(1) => GdtStandard::Asme,
             Some(2..=7) => GdtStandard::Iso,

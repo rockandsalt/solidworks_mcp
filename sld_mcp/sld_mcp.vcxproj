@@ -407,7 +407,9 @@
     <ClCompile Include="service\Mirror.cpp" />
     <ClCompile Include="service\SketchEditing.cpp" />
     <ClCompile Include="service\SketchOffset.cpp" />
+    <ClCompile Include="service\DimXpert.cpp" />
     <ClCompile Include="service\ModelAnnotations.cpp" />
+    <ClCompile Include="service\Preferences.cpp" />
     <ClCompile Include="service\Mesh.cpp" />
     <ClCompile Include="service\Pattern.cpp" />
     <ClCompile Include="service\ReferenceGeometry.cpp" />

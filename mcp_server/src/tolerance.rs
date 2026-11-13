@@ -91,6 +91,13 @@ pub struct SetToleranceParams {
     /// The kind of tolerance: "none", "basic", "bilateral", "limit", "symmetric", "min",
     /// "max", "fit", "fit_with_tolerance" or "fit_tolerance_only".
     pub tolerance: ToleranceKind,
+    #[serde(flatten)]
+    pub values: ToleranceValues,
+}
+
+/// A tolerance's values: which ones a kind takes is checked by `request_for`.
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+pub struct ToleranceValues {
     /// Bilateral / limit: upper deviation from the nominal value, signed, in mm (lengths,
     /// diameters, radii), e.g. 0.1.
     #[serde(default)]
@@ -147,14 +154,22 @@ fn decimals(value: Option<u8>, which: &str) -> Result<Option<i32>, McpError> {
 }
 
 pub fn request(params: &SetToleranceParams) -> Result<proto::SetDimensionToleranceRequest, McpError> {
-    let name = params.name.trim();
+    request_for(&params.name, params.tolerance, &params.values)
+}
+
+/// The SetDimensionToleranceRequest for the dimension `name`.
+pub fn request_for(
+    name: &str,
+    kind: ToleranceKind,
+    params: &ToleranceValues,
+) -> Result<proto::SetDimensionToleranceRequest, McpError> {
+    let name = name.trim();
     if name.is_empty() {
         return Err(invalid(
             "give the dimension's full name, e.g. \"RD1@Drawing View1\" (inspect_drawing lists them) or \
              \"D1@Sketch1\"",
         ));
     }
-    let kind = params.tolerance;
     let mm_given = [params.upper_mm, params.lower_mm, params.plus_minus_mm].iter().any(Option::is_some);
     let deg_given = [params.upper_deg, params.lower_deg, params.plus_minus_deg].iter().any(Option::is_some);
     if mm_given && deg_given {
@@ -278,7 +293,7 @@ pub fn reply_json(request: &proto::SetDimensionToleranceRequest, reply: &proto::
             d.tolerance_type, request.tolerance_type
         ));
     }
-    // Deviations are read back to 1 nm / 1 µrad.
+    // Deviations are read back to 1 nm / 1 Âµrad.
     let close = |a: f64, b: f64| (a - b).abs() < 1e-9;
     if matches!(request.tolerance_type, 2..=4)
         && !(close(d.tolerance_max, request.upper) && close(d.tolerance_min, request.lower))
@@ -302,76 +317,52 @@ pub fn reply_json(request: &proto::SetDimensionToleranceRequest, reply: &proto::
 mod tests {
     use super::*;
 
-    fn params(tolerance: ToleranceKind) -> SetToleranceParams {
-        SetToleranceParams {
-            name: "RD1@Drawing View1".into(),
-            tolerance,
-            upper_mm: None,
-            lower_mm: None,
-            plus_minus_mm: None,
-            upper_deg: None,
-            lower_deg: None,
-            plus_minus_deg: None,
-            hole_fit: None,
-            shaft_fit: None,
-            decimals: None,
-            tolerance_decimals: None,
-        }
+    type V = ToleranceValues;
+
+    fn req(kind: ToleranceKind, values: V) -> Result<proto::SetDimensionToleranceRequest, McpError> {
+        request_for("RD1@Drawing View1", kind, &values)
     }
 
     #[test]
     fn bilateral_converts_signed_deviations_to_meters() {
-        let p = SetToleranceParams { upper_mm: Some(0.1), lower_mm: Some(-0.05), ..params(ToleranceKind::Bilateral) };
-        let r = request(&p).unwrap();
+        let r = req(ToleranceKind::Bilateral, V { upper_mm: Some(0.1), lower_mm: Some(-0.05), ..V::default() }).unwrap();
         assert_eq!(r.tolerance_type, 2);
         assert!((r.upper - 1e-4).abs() < 1e-15 && (r.lower + 5e-5).abs() < 1e-15, "{r:?}");
         assert!(!r.angle);
         assert_eq!((r.value_precision, r.tolerance_precision), (None, None));
         // Both needed, in order, no plus_minus.
-        assert!(request(&SetToleranceParams { upper_mm: Some(0.1), ..params(ToleranceKind::Bilateral) }).is_err());
-        let swapped = SetToleranceParams { upper_mm: Some(-0.1), lower_mm: Some(0.1), ..params(ToleranceKind::Limit) };
-        assert!(request(&swapped).is_err());
-        let pm = SetToleranceParams {
-            upper_mm: Some(0.1),
-            lower_mm: Some(0.0),
-            plus_minus_mm: Some(0.1),
-            ..params(ToleranceKind::Bilateral)
-        };
-        assert!(request(&pm).is_err());
+        assert!(req(ToleranceKind::Bilateral, V { upper_mm: Some(0.1), ..V::default() }).is_err());
+        assert!(req(ToleranceKind::Limit, V { upper_mm: Some(-0.1), lower_mm: Some(0.1), ..V::default() }).is_err());
+        let pm = V { upper_mm: Some(0.1), lower_mm: Some(0.0), plus_minus_mm: Some(0.1), ..V::default() };
+        assert!(req(ToleranceKind::Bilateral, pm).is_err());
     }
 
     #[test]
     fn symmetric_and_angles() {
-        let r = request(&SetToleranceParams { plus_minus_mm: Some(0.05), ..params(ToleranceKind::Symmetric) }).unwrap();
+        let r = req(ToleranceKind::Symmetric, V { plus_minus_mm: Some(0.05), ..V::default() }).unwrap();
         assert_eq!(r.tolerance_type, 4);
         assert!((r.upper - 5e-5).abs() < 1e-15 && (r.lower + 5e-5).abs() < 1e-15);
-        let r = request(&SetToleranceParams { plus_minus_deg: Some(0.5), ..params(ToleranceKind::Symmetric) }).unwrap();
+        let r = req(ToleranceKind::Symmetric, V { plus_minus_deg: Some(0.5), ..V::default() }).unwrap();
         assert!(r.angle && (r.upper - 0.5f64.to_radians()).abs() < 1e-15);
-        assert!(request(&SetToleranceParams { plus_minus_mm: Some(-1.0), ..params(ToleranceKind::Symmetric) }).is_err());
-        assert!(request(&params(ToleranceKind::Symmetric)).is_err());
-        let mixed = SetToleranceParams { upper_mm: Some(0.1), lower_deg: Some(-0.1), ..params(ToleranceKind::Bilateral) };
-        assert!(request(&mixed).is_err());
+        assert!(req(ToleranceKind::Symmetric, V { plus_minus_mm: Some(-1.0), ..V::default() }).is_err());
+        assert!(req(ToleranceKind::Symmetric, V::default()).is_err());
+        assert!(req(ToleranceKind::Bilateral, V { upper_mm: Some(0.1), lower_deg: Some(-0.1), ..V::default() }).is_err());
     }
 
     #[test]
     fn fits_and_value_free_kinds() {
-        let fit = SetToleranceParams {
-            hole_fit: Some(" H7 ".into()),
-            shaft_fit: Some("g6".into()),
-            ..params(ToleranceKind::FitWithTolerance)
-        };
-        let r = request(&fit).unwrap();
+        let fit = V { hole_fit: Some(" H7 ".into()), shaft_fit: Some("g6".into()), ..V::default() };
+        let r = req(ToleranceKind::FitWithTolerance, fit).unwrap();
         assert_eq!((r.tolerance_type, r.hole_fit.as_str(), r.shaft_fit.as_str()), (8, "H7", "g6"));
-        assert!(request(&params(ToleranceKind::Fit)).is_err());
-        assert!(request(&SetToleranceParams { hole_fit: Some("7H".into()), ..params(ToleranceKind::Fit) }).is_err());
-        assert!(request(&SetToleranceParams { hole_fit: Some("H7".into()), ..params(ToleranceKind::Basic) }).is_err());
+        assert!(req(ToleranceKind::Fit, V::default()).is_err());
+        assert!(req(ToleranceKind::Fit, V { hole_fit: Some("7H".into()), ..V::default() }).is_err());
+        assert!(req(ToleranceKind::Basic, V { hole_fit: Some("H7".into()), ..V::default() }).is_err());
 
-        assert_eq!(request(&params(ToleranceKind::None)).unwrap().tolerance_type, 0);
-        assert!(request(&SetToleranceParams { upper_mm: Some(0.1), ..params(ToleranceKind::Max) }).is_err());
-        let dec = SetToleranceParams { decimals: Some(2), tolerance_decimals: Some(3), ..params(ToleranceKind::Basic) };
-        let r = request(&dec).unwrap();
+        assert_eq!(req(ToleranceKind::None, V::default()).unwrap().tolerance_type, 0);
+        assert!(req(ToleranceKind::Max, V { upper_mm: Some(0.1), ..V::default() }).is_err());
+        let r = req(ToleranceKind::Basic, V { decimals: Some(2), tolerance_decimals: Some(3), ..V::default() }).unwrap();
         assert_eq!((r.value_precision, r.tolerance_precision), (Some(2), Some(3)));
-        assert!(request(&SetToleranceParams { decimals: Some(9), ..params(ToleranceKind::Basic) }).is_err());
-        assert!(request(&SetToleranceParams { name: " ".into(), ..params(ToleranceKind::Basic) }).is_err());
+        assert!(req(ToleranceKind::Basic, V { decimals: Some(9), ..V::default() }).is_err());
+        assert!(request_for(" ", ToleranceKind::Basic, &V::default()).is_err());
     }
 }

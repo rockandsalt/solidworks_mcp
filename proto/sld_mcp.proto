@@ -392,6 +392,33 @@ service SolidWorks {
   // symbol already has.
   rpc AddModelAnnotation(AddModelAnnotationRequest) returns (AddModelAnnotationResponse);
 
+  // DimXpert (the UI's "MBD Dimension") dimension on faces of the active
+  // part: a size dimension of the feature DimXpert recognizes from a face
+  // (a hole's or shaft's diameter, a fillet's radius, a chamfer, a cone's
+  // angle, ...), a location dimension (distance, or angle between features
+  // that aren't parallel) or an angle between two features, or a basic
+  // dimension. Its tolerance is DimXpert's default for that kind of
+  // dimension (Document Properties > DimXpert); SetDimensionTolerance
+  // changes it. IDimXpertPart's Insert* return false even when they add
+  // the dimension (seen 2026-11-12), so what's new is found by comparing
+  // DimXpert's annotations before and after. FAILED_PRECONDITION if the
+  // active document isn't a part, a sketch is open, or DimXpert makes no
+  // dimension of the faces; INVALID_ARGUMENT for an entity that isn't a face.
+  rpc AddPmiDimension(AddPmiDimensionRequest) returns (AddPmiDimensionResponse);
+
+  // DimXpert's Auto Dimension Scheme on the active part: datums on the
+  // given faces, then size and location dimensions (plus / minus) or
+  // geometric tolerances (position, profile, ...) for every feature
+  // DimXpert recognizes. Errors as AddPmiDimension.
+  rpc AutoDimensionScheme(AutoDimensionSchemeRequest) returns (AutoDimensionSchemeResponse);
+
+  // Reads and changes document properties of the active document by their
+  // SolidWorks ids (IModelDocExtension::Get/SetUserPreference* with no
+  // option); which ids mean what is the MCP server's business. All or
+  // nothing: a value SolidWorks refuses puts the ones already set back
+  // (FAILED_PRECONDITION). FAILED_PRECONDITION with no document open.
+  rpc DocumentPreferences(DocumentPreferencesRequest) returns (DocumentPreferencesResponse);
+
   // Read-only look at the active drawing: its sheets (size, scale,
   // projection), the drawing views on each (type, orientation, scale, the
   // model it shows, where it sits on the sheet and how model space maps
@@ -3132,6 +3159,15 @@ message AnnotationDimension {
   string suffix = 13;
   string callout_above = 14;
   string callout_below = 15;
+  // DimXpert dimensions under a general (ISO 2768) or block tolerance
+  // (tolerance_type 10 / 11, which carry no values): the limits DimXpert
+  // works out for them (IDimXpertDimensionTolerance::
+  // GetUpperAndLowerLimit), meters or radians. Unset otherwise.
+  optional double general_upper_limit = 16;
+  optional double general_lower_limit = 17;
+  // Decimal places the value is shown with (IDisplayDimension::
+  // GetPrimaryPrecision2). Unset if SolidWorks didn't say.
+  optional int32 decimals = 18;
 }
 
 // One row of a feature control frame.
@@ -3255,6 +3291,82 @@ message AddModelAnnotationResponse {
   // position and leader points are in its plane: a leader's last point is
   // where the arrow is drawn, the face / edge point projected into it.
   Vec3 annotation_view_normal = 4;
+}
+
+// What IDimXpertPart inserts.
+enum PmiDimensionKind {
+  PMI_DIMENSION_KIND_UNSPECIFIED = 0;
+  PMI_DIMENSION_KIND_SIZE = 1;      // InsertSizeDimension: one face
+  PMI_DIMENSION_KIND_LOCATION = 2;  // InsertLocationDimension: two faces
+  PMI_DIMENSION_KIND_ANGLE = 3;     // InsertAngleDimension: two faces
+  // InsertBasicDimension: two faces (a basic location; it makes nothing of
+  // one face, seen 2026-11-12).
+  PMI_DIMENSION_KIND_BASIC = 4;
+}
+
+message AddPmiDimensionRequest {
+  PmiDimensionKind kind = 1;
+  // Faces of the active part (persist ids from InspectModel). A location
+  // or angle dimension goes from the first (its origin) to the second.
+  repeated bytes faces = 2;
+  // Where the text goes, model meters (DimXpert keeps it in its annotation
+  // view's plane). Unset: outside the part, past the faces as seen from
+  // the part's middle (DimXpert's own spot is the origin).
+  Vec3 position = 3;
+}
+
+message AddPmiDimensionResponse {
+  // What DimXpert added, as InspectAnnotations reports it; the DimXpert
+  // name says what it made of the faces, e.g. "Diameter1@Simple Hole1(6)",
+  // "AngleBetween1@Simple Hole1(90°)".
+  repeated AnnotationInfo annotations = 1;
+}
+
+message AutoDimensionSchemeRequest {
+  // Datum faces, selected with marks 1, 2 and 4 (DimXpert names them A, B,
+  // C in that order; seen 2026-11-12). The primary is needed.
+  bytes primary_datum = 1;
+  bytes secondary_datum = 2;
+  bytes tertiary_datum = 3;
+  // swDimXpertAutoDimSchemePartType_e: 0 prismatic, 1 turned.
+  int32 part_type = 4;
+  // swDimXpertAutoDimSchemeToleranceType_e: 0 plus / minus (size and
+  // location dimensions), 1 geometric (datums, position and profile frames).
+  int32 tolerance_type = 5;
+  // swDimXpertAutoDimSchemePatternType_e: 0 linear, 1 polar.
+  int32 pattern_type = 6;
+  // swDimXpertFeatureFilters_e bits: the kinds of feature to dimension;
+  // 0 = all.
+  int32 feature_filters = 7;
+}
+
+message AutoDimensionSchemeResponse {
+  // What the scheme added.
+  repeated AnnotationInfo annotations = 1;
+}
+
+message DocumentPreferencesRequest {
+  // Ids to read: swUserPreferenceToggle_e, swUserPreferenceIntegerValue_e,
+  // swUserPreferenceDoubleValue_e.
+  repeated int32 toggles = 1;
+  repeated int32 integers = 2;
+  repeated int32 doubles = 3;
+  // Values to set first (and read back).
+  map<int32, bool> set_toggles = 4;
+  map<int32, int32> set_integers = 5;
+  map<int32, double> set_doubles = 6;
+  // Rebuild after setting, for what only takes a change then (DimXpert
+  // dimensions under a general tolerance take a new class; seen 2026-11-12).
+  bool rebuild = 7;
+}
+
+message DocumentPreferencesResponse {
+  // Every id read or set, as it is now.
+  map<int32, bool> toggles = 1;
+  map<int32, int32> integers = 2;
+  map<int32, double> doubles = 3;
+  // The document's title.
+  string document = 4;
 }
 
 // ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ mod configuration;
 mod delete;
 mod design_table;
 mod diagnose;
+mod dimxpert;
 mod discovery;
 mod draft;
 mod drawing;
@@ -2293,6 +2294,158 @@ impl SolidWorksTools {
         let units = self.active_units();
         let (symbol, remarks) = gdt::weld(&params, units.as_ref())?;
         self.add_gdt(symbol, &params.place, remarks).await
+    }
+
+    #[tool(
+        description = "Add a DimXpert (MBD) dimension to faces of the active part (3D PMI): \
+                       `size` of the feature a face belongs to (a hole's or shaft's diameter, a \
+                       fillet's radius, a chamfer, a counterbore), `location` between two \
+                       features (from the first: planes, hole axes), `angle` between two, or \
+                       `basic` (boxed, for feature control frames). Toleranced as asked (bilateral, \
+                       limit, symmetric, fits such as H7 / g6), else by the part's general tolerance \
+                       (pmi_general_tolerance): ISO 2768 in ISO parts, the block tolerance for its \
+                       decimals in ASME ones. Replies with what DimXpert made of the faces and its \
+                       limits; delete_drawing_annotations removes it."
+    )]
+    async fn add_pmi_dimension(
+        &self,
+        Parameters(params): Parameters<dimxpert::AddPmiDimensionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let units = self.active_units();
+        let standard = dimxpert::standard(params.standard, units.as_ref());
+        let (request, mut tolerance) = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            dimxpert::request(&ids, &params, standard)?
+        };
+        // DimXpert warns in a modal dialog when a dimension over-constrains
+        // the part (seen 2026-11-12).
+        let (reply, dialogs) = macro_run::closing_dialogs(self.addin.add_pmi_dimension(request)).await;
+        let reply = reply.map_err(|status| self.addin_error(status))?;
+        // All or nothing: what's refused below takes the new dimension away
+        // again.
+        let undo = proto::DeleteDrawingAnnotationsRequest {
+            names: reply.annotations.iter().map(|a| a.name.clone()).collect(),
+            ..Default::default()
+        };
+        if let Some(why) = dimxpert::overconstrained(&dialogs) {
+            let _ = self.addin.delete_drawing_annotations(undo).await;
+            return Err(McpError::invalid_params(why, None));
+        }
+        // ASME: an untoleranced dimension takes the part's block tolerance
+        // row for its decimals, as its own +/- (DimXpert's block method
+        // can't be switched on through the API; dimxpert.md).
+        let mut general = None;
+        if tolerance.is_none()
+            && standard == gdt::GdtStandard::Asme
+            && params.kind != dimxpert::PmiDimensionKind::Basic
+            && let Some(first) = reply.annotations.first()
+        {
+            let table = self
+                .addin
+                .document_preferences(dimxpert::block_read_request())
+                .await
+                .map_err(|status| self.addin_error(status))?;
+            match dimxpert::block_tolerance(dimxpert::block_table(&table).as_ref(), first, params.values.decimals, units.as_ref()) {
+                Ok((request, what)) => {
+                    tolerance = Some(request);
+                    general = Some(format!("ASME: {what}"));
+                }
+                Err(why) => general = Some(why),
+            }
+        }
+        let mut toleranced = None;
+        if let Some(mut tolerance) = tolerance {
+            let result = match dimxpert::new_dimension_name(&reply.annotations) {
+                Some(name) => {
+                    tolerance.name = name;
+                    self.addin.set_dimension_tolerance(tolerance).await.map_err(|status| self.addin_error(status))
+                }
+                None => Err(McpError::internal_error("DimXpert's new annotation is no dimension to tolerance", None)),
+            };
+            match result {
+                Ok(r) => toleranced = Some(r),
+                Err(error) => {
+                    let _ = self.addin.delete_drawing_annotations(undo).await;
+                    return Err(McpError::internal_error(
+                        format!("{} -- the new dimension was deleted again", error.message),
+                        None,
+                    ));
+                }
+            }
+        }
+        let text = {
+            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            dimxpert::reply(&mut ids, &params, &reply.annotations, toleranced.as_ref(), general.as_deref(), &dialogs)
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Let DimXpert dimension the whole active part (MBD Auto Dimension Scheme) \
+                       from datum faces A, B, C: size and location dimensions (plus_minus), or \
+                       datum symbols with form, orientation, position and profile frames \
+                       (geometric; position / profile values, ASME composite frames for patterns). \
+                       Replies with every annotation it added."
+    )]
+    async fn auto_dimension_scheme(
+        &self,
+        Parameters(params): Parameters<dimxpert::AutoDimensionSchemeParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let units = self.active_units();
+        let standard = dimxpert::standard(params.standard, units.as_ref());
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            dimxpert::scheme_request(&ids, &params)?
+        };
+        // The geometric scheme's options (composite frames, values) are the
+        // part's DimXpert options, set before it runs.
+        if let Some(preferences) = dimxpert::scheme_preferences(&params, standard)? {
+            self.addin
+                .document_preferences(preferences)
+                .await
+                .map_err(|status| self.addin_error(status))?;
+        }
+        let (reply, dialogs) = macro_run::closing_dialogs(self.addin.auto_dimension_scheme(request)).await;
+        let reply = reply.map_err(|status| self.addin_error(status))?;
+        let text = {
+            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            dimxpert::scheme_reply(&mut ids, &params, &reply, units.as_ref(), &dialogs)
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
+    }
+
+    #[tool(
+        description = "Read or set the general tolerance of the active part's DimXpert (MBD) \
+                       dimensions, which they take when they have no tolerance of their own: the \
+                       ISO 2768-1 class (f, m, c, v; it updates the ones there), or ASME's block \
+                       tolerance by decimal places (.X / .XX / .XXX rows and angles). Without \
+                       either: what applies now."
+    )]
+    async fn pmi_general_tolerance(
+        &self,
+        Parameters(params): Parameters<dimxpert::GeneralToleranceParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let active = self
+            .addin
+            .get_active_document(Some(DOCUMENT_CHECK_TIMEOUT))
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        if active.document.as_ref().map(|d| d.r#type()) != Some(proto::DocumentType::Part) {
+            return Err(McpError::invalid_params(
+                "DimXpert's general tolerance is a part's -- open (or switch to) the part",
+                None,
+            ));
+        }
+        let units = active.document.as_ref().and_then(|d| d.units.clone()).or_else(|| self.active_units());
+        let standard = dimxpert::standard(params.standard, units.as_ref());
+        let (request, remarks) = dimxpert::general_tolerance_request(&params, standard)?;
+        let reply = self
+            .addin
+            .document_preferences(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        let json = dimxpert::general_tolerance_json(&params, &reply, standard, units.as_ref(), &remarks);
+        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
     }
 
     #[tool(

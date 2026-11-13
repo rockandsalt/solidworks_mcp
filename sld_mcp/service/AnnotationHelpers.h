@@ -21,6 +21,23 @@ namespace sld_mcp::service
 	// swdimxpert.tlb, which the add-in doesn't #import.
 	bool InvokeByName(IDispatch* obj, const wchar_t* name, ATL::CComVariant& result);
 
+	// Late-bound call with arguments (in their order), or with `put` a
+	// property assignment (one argument). `result` may be null.
+	bool CallByName(IDispatch* obj, const wchar_t* name, std::vector<ATL::CComVariant> args,
+		ATL::CComVariant* result, bool put = false);
+
+	// The active configuration's IDimXpertPart (late-bound); null if there is
+	// none (a part without a DimXpert scheme, unless `create`) or the
+	// document isn't a part.
+	ATL::CComPtr<IDispatch> DimXpertPartOf(IModelDoc2* doc, IModelDocExtension* ext, bool create);
+
+	// IDimXpertPart::GetAnnotations.
+	std::vector<ATL::CComPtr<IDispatch>> DimXpertAnnotations(IDispatch* dimXpertPart);
+
+	// A DimXpert dimension under a general or block tolerance: the limits
+	// DimXpert works out (`dimXpertAnnotation` is its IDimXpertAnnotation).
+	void DescribeDimXpertLimits(IDispatch* dimXpertAnnotation, sld_mcp::v1::AnnotationDimension* out);
+
 	// Every annotation of the document, once each. IModelDocExtension::
 	// GetAnnotations should have them all; the annotation views' lists and
 	// the GetFirstAnnotation2 chain are merged in too in case it leaves some
@@ -56,6 +73,10 @@ namespace sld_mcp::service
 	void DescribeAnnotationDimension(IDisplayDimension* display, sld_mcp::v1::AnnotationDimension* out);
 
 	void DescribeGtol(IGtol* gtol, sld_mcp::v1::AnnotationGtol* out);
+
+	// A 2022-format frame's diameter zones, material conditions and
+	// composite flag, from its rows' XML (after DescribeGtol read the rest).
+	void DescribeFormat2Frames(IGtol* gtol, sld_mcp::v1::AnnotationGtol* out);
 
 	constexpr long kMaxAnnotationLeaders = 50;
 

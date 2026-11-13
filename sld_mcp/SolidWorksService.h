@@ -194,6 +194,18 @@ public:
 		const sld_mcp::v1::AddModelAnnotationRequest* request,
 		sld_mcp::v1::AddModelAnnotationResponse* response) override;
 
+	grpc::Status AddPmiDimension(grpc::ServerContext* context,
+		const sld_mcp::v1::AddPmiDimensionRequest* request,
+		sld_mcp::v1::AddPmiDimensionResponse* response) override;
+
+	grpc::Status AutoDimensionScheme(grpc::ServerContext* context,
+		const sld_mcp::v1::AutoDimensionSchemeRequest* request,
+		sld_mcp::v1::AutoDimensionSchemeResponse* response) override;
+
+	grpc::Status DocumentPreferences(grpc::ServerContext* context,
+		const sld_mcp::v1::DocumentPreferencesRequest* request,
+		sld_mcp::v1::DocumentPreferencesResponse* response) override;
+
 	grpc::Status InspectDrawing(grpc::ServerContext* context,
 		const sld_mcp::v1::InspectDrawingRequest* request,
 		sld_mcp::v1::InspectDrawingResponse* response) override;

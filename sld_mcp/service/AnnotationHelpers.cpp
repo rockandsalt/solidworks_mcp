@@ -21,6 +21,90 @@ namespace sld_mcp::service
 			DISPATCH_METHOD | DISPATCH_PROPERTYGET, &none, &result, nullptr, nullptr));
 	}
 
+	bool CallByName(IDispatch* obj, const wchar_t* name, std::vector<ATL::CComVariant> args,
+		ATL::CComVariant* result, bool put)
+	{
+		if (result)
+			result->Clear();
+		if (!obj)
+			return false;
+		DISPID id = DISPID_UNKNOWN;
+		LPOLESTR names[] = { const_cast<LPOLESTR>(name) };
+		if (FAILED(obj->GetIDsOfNames(IID_NULL, names, 1, LOCALE_USER_DEFAULT, &id)))
+			return false;
+		// IDispatch takes the arguments last first.
+		std::reverse(args.begin(), args.end());
+		DISPID putId = DISPID_PROPERTYPUT;
+		DISPPARAMS params = { args.empty() ? nullptr : static_cast<VARIANT*>(args.data()), put ? &putId : nullptr,
+			static_cast<UINT>(args.size()), put ? 1u : 0u };
+		return SUCCEEDED(obj->Invoke(id, IID_NULL, LOCALE_USER_DEFAULT,
+			put ? DISPATCH_PROPERTYPUT : DISPATCH_METHOD | DISPATCH_PROPERTYGET, &params, result, nullptr, nullptr));
+	}
+
+	ATL::CComPtr<IDispatch> DimXpertPartOf(IModelDoc2* doc, IModelDocExtension* ext, bool create)
+	{
+		long type = swDocNONE;
+		if (FAILED(doc->GetType(&type)) || type != swDocPART)
+			return {};
+		ATL::CComPtr<IDispatch> configDisp;
+		ATL::CComBSTR configName;
+		if (FAILED(doc->GetActiveConfiguration(&configDisp)) || !configDisp)
+			return {};
+		if (ATL::CComQIPtr<IConfiguration> config(configDisp.p); !config || FAILED(config->get_Name(&configName)))
+			return {};
+		ATL::CComPtr<IDimXpertManager> manager;
+		if (FAILED(ext->get_DimXpertManager(configName, create ? VARIANT_TRUE : VARIANT_FALSE, &manager)) || !manager)
+			return {};
+		ATL::CComPtr<IDispatch> part;
+		if (FAILED(manager->get_DimXpertPart(&part)))
+			return {};
+		return part;
+	}
+
+	std::vector<ATL::CComPtr<IDispatch>> DimXpertAnnotations(IDispatch* dimXpertPart)
+	{
+		ATL::CComVariant result;
+		if (!InvokeByName(dimXpertPart, L"GetAnnotations", result))
+			return {};
+		return comvariant::ToDispatches(result);
+	}
+
+	void DescribeDimXpertLimits(IDispatch* dimXpertAnnotation, sld_mcp::v1::AnnotationDimension* out)
+	{
+		if (!dimXpertAnnotation)
+			return;
+		DISPID id = DISPID_UNKNOWN;
+		LPOLESTR names[] = { const_cast<LPOLESTR>(L"GetUpperAndLowerLimit") };
+		if (FAILED(dimXpertAnnotation->GetIDsOfNames(IID_NULL, names, 1, LOCALE_USER_DEFAULT, &id)))
+			return;
+		// Two out parameters (Upper, Lower), passed last first.
+		double upper = 0.0, lower = 0.0;
+		VARIANT args[2];
+		args[0].vt = VT_BYREF | VT_R8;
+		args[0].pdblVal = &lower;
+		args[1].vt = VT_BYREF | VT_R8;
+		args[1].pdblVal = &upper;
+		DISPPARAMS params = { args, nullptr, 2, 0 };
+		ATL::CComVariant ok;
+		if (FAILED(dimXpertAnnotation->Invoke(id, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &params, &ok,
+				nullptr, nullptr)) ||
+			ok.vt != VT_BOOL || ok.boolVal == VARIANT_FALSE || !std::isfinite(upper) || !std::isfinite(lower) ||
+			upper < lower)
+			return;
+		// DimXpert's lengths are in the document's unit (a 6 mm hole's
+		// nominal is 6, seen 2026-11-12), its angles in radians: scaled by
+		// its nominal against the dimension's own (meters / radians).
+		ATL::CComVariant nominal;
+		if (!out->has_dimension() || !InvokeByName(dimXpertAnnotation, L"GetNominalValue", nominal) ||
+			FAILED(nominal.ChangeType(VT_R8)) || !std::isfinite(nominal.dblVal) || std::abs(nominal.dblVal) < 1e-12)
+			return;
+		const double scale = out->dimension().value() / nominal.dblVal;
+		if (!std::isfinite(scale) || scale <= 0.0)
+			return;
+		out->set_general_upper_limit(upper * scale);
+		out->set_general_lower_limit(lower * scale);
+	}
+
 	std::vector<ATL::CComPtr<IAnnotation>> AllAnnotations(IModelDoc2* doc, IModelDocExtension* ext,
 		bool& truncated)
 	{
@@ -157,11 +241,85 @@ namespace sld_mcp::service
 		if (SUCCEEDED(display->get_Inspection(&flag)))
 			out->set_inspection(flag != VARIANT_FALSE);
 
+		long decimals = -1;
+		if (SUCCEEDED(display->GetPrimaryPrecision2(&decimals)) && decimals >= 0)
+			out->set_decimals(static_cast<int32_t>(decimals));
+
 		ATL::CComPtr<IDimension> dim;
 		if (FAILED(display->GetDimension2(0, &dim)) || !dim)
 			return;
 		DescribeDimension(display, out->mutable_dimension());
 		DescribeModelDimension(dim, out);
+	}
+
+	namespace
+	{
+		// The text of the first <tag>...</tag> in `xml`; empty if none.
+		std::string XmlText(const std::string& xml, const std::string& tag)
+		{
+			const std::string open = "<" + tag + ">", close = "</" + tag + ">";
+			const size_t start = xml.find(open);
+			if (start == std::string::npos)
+				return {};
+			const size_t from = start + open.size(), end = xml.find(close, from);
+			return end == std::string::npos ? std::string() : xml.substr(from, end - from);
+		}
+
+		// The material condition a piece of frame XML states (swGtolMatCondition_e).
+		int32_t XmlCondition(const std::string& xml)
+		{
+			if (XmlText(xml, "MaximumMaterialCondition") == "true")
+				return swMcMMC;
+			if (XmlText(xml, "LeastMaterialCondition") == "true")
+				return swMcLMC;
+			return swMcNONE;
+		}
+	}
+
+	void DescribeFormat2Frames(IGtol* gtol, sld_mcp::v1::AnnotationGtol* out)
+	{
+		// A 2022-format frame (DimXpert's) answers GetFrameSymbols in another
+		// layout (its second entry is the material condition, and a composite
+		// frame's lower row has neither) and GetCompositeFrame false; each
+		// row's XML (IGtolFrame::GetSymbolXml) has it all (seen 2026-11-12):
+		// <PrimaryRangeSymbol>phi</...>, <MaterialCondition>
+		// <MaximumMaterialCondition>true</...>, then a <DatumCompartment> per
+		// datum. The values and the characteristic read right the old way.
+		// GetFrame's index base differed between VBA (0) and here (1, by the
+		// rows that came out): the rows are taken in order from either.
+		std::vector<std::string> rows;
+		for (long index = 0; index <= out->frames_size() && rows.size() < static_cast<size_t>(out->frames_size()); ++index)
+		{
+			ATL::CComPtr<IDispatch> frameDisp;
+			if (FAILED(gtol->GetFrame(index, &frameDisp)) || !frameDisp)
+				continue;
+			ATL::CComQIPtr<IGtolFrame> frame(frameDisp.p);
+			ATL::CComBSTR xmlBstr;
+			if (frame && SUCCEEDED(frame->GetSymbolXml(&xmlBstr)))
+				if (std::string xml = ToUtf8(xmlBstr); xml.find("<GtolFrame>") != std::string::npos)
+					rows.push_back(std::move(xml));
+		}
+		for (size_t row = 0; row < rows.size(); ++row)
+		{
+			const std::string& xml = rows[row];
+			sld_mcp::v1::GtolFrame* f = out->mutable_frames(static_cast<int>(row));
+			const size_t datumsAt = std::min(xml.find("<DatumCompartment>"), xml.size());
+			const std::string head = xml.substr(0, datumsAt);
+			f->set_tolerance1_diameter(XmlText(head, "PrimaryRangeSymbol").find("phi") != std::string::npos);
+			f->set_tolerance1_condition(XmlCondition(XmlText(head, "MaterialCondition")));
+			f->set_tolerance2_diameter(false);
+			f->set_tolerance2_condition(swMcNONE);
+			size_t at = datumsAt;
+			for (int i = 0; i < f->datum_conditions_size() && at < xml.size(); ++i)
+			{
+				const size_t next = std::min(xml.find("<DatumCompartment>", at + 1), xml.size());
+				f->set_datum_conditions(i, XmlCondition(xml.substr(at, next - at)));
+				at = next;
+			}
+		}
+		VARIANT_BOOL composite = VARIANT_FALSE;
+		if (!out->composite() && out->frames_size() == 2 && SUCCEEDED(gtol->GetCompositeFrame2(1, &composite)))
+			out->set_composite(composite != VARIANT_FALSE);
 	}
 
 	void DescribeGtol(IGtol* gtol, sld_mcp::v1::AnnotationGtol* out)
@@ -227,6 +385,8 @@ namespace sld_mcp::service
 		long format = 0;
 		if (SUCCEEDED(gtol->GetFormat(&format)))
 			out->set_format(static_cast<int32_t>(format));
+		if (format == 2)
+			DescribeFormat2Frames(gtol, out);
 	}
 
 	sld_mcp::v1::AnnotationOwner AnnotationOwnerOf(IAnnotation* annotation, std::string* ownerName)
@@ -524,13 +684,13 @@ namespace sld_mcp::service
 				attach(disp);
 
 		flag = VARIANT_FALSE;
+		ATL::CComPtr<IDispatch> feature;  // DimXpert's
 		if (SUCCEEDED(annotation->IsDimXpert(&flag)) && flag != VARIANT_FALSE)
 		{
 			info->set_dimxpert(true);
 			ATL::CComBSTR dimXpertName;
 			if (SUCCEEDED(annotation->GetDimXpertName(&dimXpertName)))
 				info->set_dimxpert_name(ToUtf8(dimXpertName));
-			ATL::CComPtr<IDispatch> feature;
 			if (SUCCEEDED(annotation->GetDimXpertFeature(&feature)) && feature)
 			{
 				ATL::CComVariant result;
@@ -556,6 +716,26 @@ namespace sld_mcp::service
 				ATL::CComBSTR all;
 				if (SUCCEEDED(display->GetText(swDimensionTextAll, &all)))
 					AddText(all, info);
+				// A general or block tolerance has no values of its own:
+				// DimXpert's limits, from its annotation for this one (among
+				// its feature's, by the name of what it displays).
+				const int32_t tolType = info->dimension().tolerance_type();
+				ATL::CComVariant applied;
+				if (feature && !info->name().empty() && (tolType == swTolBLOCK || tolType == swTolGeneral) &&
+					InvokeByName(feature, L"GetAppliedAnnotations", applied))
+					for (const auto& candidate : comvariant::ToDispatches(applied))
+					{
+						ATL::CComVariant shown;
+						ATL::CComBSTR shownName;
+						if (!InvokeByName(candidate, L"GetDisplayEntity", shown) || shown.vt != VT_DISPATCH)
+							continue;
+						if (ATL::CComQIPtr<IAnnotation> other(shown.pdispVal);
+							other && SUCCEEDED(other->GetName(&shownName)) && ToUtf8(shownName) == info->name())
+						{
+							DescribeDimXpertLimits(candidate, info->mutable_dimension());
+							break;
+						}
+					}
 			}
 			break;
 		case swGTol:
