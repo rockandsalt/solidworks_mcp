@@ -308,6 +308,7 @@
     <ClInclude Include="InstanceFile.h" />
     <ClInclude Include="SolidWorksService.h" />
     <ClInclude Include="CadExecutor.h" />
+    <ClInclude Include="MainThread.h" />
     <ClInclude Include="RequestControl.h" />
     <ClInclude Include="service\RequestLock.h" />
     <ClInclude Include="ComVariant.h" />
@@ -364,6 +365,7 @@
     <ClCompile Include="InstanceFile.cpp" />
     <ClCompile Include="SolidWorksService.cpp" />
     <ClCompile Include="CadExecutor.cpp" />
+    <ClCompile Include="MainThread.cpp" />
     <ClCompile Include="service\AnnotationHelpers.cpp" />
     <ClCompile Include="service\Annotations.cpp" />
     <ClCompile Include="service\AssemblyHelpers.cpp" />

@@ -372,7 +372,7 @@ function Test-Addin {
     # The fake connection prevents calls into CAD; localhost gRPC supplies cancellation.
     & (Join-Path $vsPath 'Common7\Tools\Launch-VsDevShell.ps1') -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
     $names = @(Get-ChildItem (Join-Path $projectDir 'service') -Filter '*.cpp' | ForEach-Object BaseName)
-    $names += @('SolidWorksService', 'CadExecutor', 'pch', 'sld_mcp.pb', 'sld_mcp.grpc.pb')
+    $names += @('SolidWorksService', 'CadExecutor', 'MainThread', 'pch', 'sld_mcp.pb', 'sld_mcp.grpc.pb')
     $objects = @($names | ForEach-Object { Join-Path $objectDir "$_.obj" })
     $libraries = @(Get-ChildItem (Join-Path $dependencyDir 'lib') -Filter '*.lib' | ForEach-Object FullName)
     $testExe = Join-Path $outDir 'mesh_cancellation_tests.exe'

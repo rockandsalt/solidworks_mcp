@@ -13,8 +13,9 @@ class SolidWorksService final : public sld_mcp::v1::SolidWorks::Service
 {
 public:
 	// `git` / `swAppCookie` identify the ISldWorks registered in the Global
-	// Interface Table by CSwAddin. Both must outlive this service.
-	SolidWorksService(IGlobalInterfaceTable* git, DWORD swAppCookie);
+	// Interface Table by CSwAddin. Both must outlive this service, and so must
+	// `mainThread`: when given, the RPCs' CAD work runs there (CadExecutor).
+	SolidWorksService(IGlobalInterfaceTable* git, DWORD swAppCookie, MainThread* mainThread = nullptr);
 
 	grpc::Status GetActiveDocument(grpc::ServerContext* context,
 		const sld_mcp::v1::GetActiveDocumentRequest* request,

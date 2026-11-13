@@ -7,6 +7,7 @@
 #include "SwAddin.h"
 #include "RpcServer.h"
 #include "InstanceFile.h"
+#include "MainThread.h"
 #include <objidl.h>
 #include <cwchar>
 #include <exception>
@@ -16,6 +17,15 @@ namespace
 {
 	// Must match PORT_ENV in mcp_server/src/discovery.rs.
 	const wchar_t kPortEnvVar[] = L"SLD_MCP_PORT";
+
+	// "worker" runs the CAD work on the gRPC workers, marshaling every COM
+	// call to the main thread (the way it was before 2026-11-11), to compare.
+	bool RunOnWorkers()
+	{
+		wchar_t value[16] = {};
+		DWORD len = GetEnvironmentVariableW(L"SLD_MCP_CAD_THREAD", value, static_cast<DWORD>(std::size(value)));
+		return len > 0 && len < std::size(value) && _wcsicmp(value, L"worker") == 0;
+	}
 
 	// From swconst.tlb (swMessageBoxIcon_e / swMessageBoxBtn_e), which this
 	// project doesn't #import.
@@ -88,7 +98,9 @@ STDMETHODIMP CSwAddin::ConnectToSW(IDispatch* ThisSW, long Cookie, VARIANT_BOOL*
 	try
 	{
 		const std::string token = NewToken();
-		m_rpcServer = std::make_unique<RpcServer>(GetPort(), token, m_git, m_swAppGitCookie);
+		if (!RunOnWorkers())
+			m_mainThread = std::make_unique<MainThread>();
+		m_rpcServer = std::make_unique<RpcServer>(GetPort(), token, m_git, m_swAppGitCookie, m_mainThread.get());
 		m_instanceFile = std::make_unique<InstanceFile>(m_rpcServer->Port(), token);
 	}
 	catch (const std::exception& ex)
@@ -99,6 +111,7 @@ STDMETHODIMP CSwAddin::ConnectToSW(IDispatch* ThisSW, long Cookie, VARIANT_BOOL*
 			m_rpcServer->Shutdown();
 			m_rpcServer.reset();
 		}
+		m_mainThread.reset();
 
 		std::wstring message = L"sld_mcp: the MCP bridge couldn't start, so it won't be available "
 			L"in this SolidWorks session.\n\n";
@@ -123,12 +136,16 @@ STDMETHODIMP CSwAddin::DisconnectFromSW(VARIANT_BOOL* IsDisconnected)
 	m_instanceFile.reset();
 
 	// Stop the server (waiting out in-flight calls) before tearing down the
-	// GIT registration its handlers depend on.
+	// GIT registration its handlers depend on. Work still queued for the main
+	// thread won't start: this thread is busy here.
+	if (m_mainThread)
+		m_mainThread->Close();
 	if (m_rpcServer)
 	{
 		m_rpcServer->Shutdown();
 		m_rpcServer.reset();
 	}
+	m_mainThread.reset();
 
 	ReleaseSolidWorks();
 	*IsDisconnected = VARIANT_TRUE;

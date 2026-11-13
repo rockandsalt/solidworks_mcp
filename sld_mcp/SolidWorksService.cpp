@@ -4,7 +4,7 @@
 #include "pch.h"
 #include "SolidWorksService.h"
 
-SolidWorksService::SolidWorksService(IGlobalInterfaceTable* git, DWORD swAppCookie)
-	: m_executor(git, swAppCookie)
+SolidWorksService::SolidWorksService(IGlobalInterfaceTable* git, DWORD swAppCookie, MainThread* mainThread)
+	: m_executor(git, swAppCookie, mainThread)
 {
 }

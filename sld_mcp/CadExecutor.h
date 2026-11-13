@@ -2,6 +2,7 @@
 #pragma once
 #include "GrpcIncludes.h"
 #include "RequestControl.h"
+#include "MainThread.h"
 #include <functional>
 
 namespace sld_mcp::service
@@ -9,7 +10,10 @@ namespace sld_mcp::service
 	class CadExecutor
 	{
 	public:
-		CadExecutor(IGlobalInterfaceTable* git, DWORD cookie) : m_git(git), m_cookie(cookie) {}
+		// With `mainThread` the work runs on SolidWorks' main thread (direct COM
+		// calls); without it, on the gRPC worker (each call marshaled there).
+		CadExecutor(IGlobalInterfaceTable* git, DWORD cookie, MainThread* mainThread = nullptr)
+			: m_git(git), m_cookie(cookie), m_mainThread(mainThread) {}
 		using Work = std::function<grpc::Status(RequestControl&, ISldWorks*)>;
 
 		// Synchronous by design: neither context nor captured request/response data
@@ -20,6 +24,7 @@ namespace sld_mcp::service
 	private:
 		ATL::CComPtr<IGlobalInterfaceTable> m_git;
 		DWORD m_cookie;
+		MainThread* m_mainThread;
 		RequestGate m_gate;
 	};
 }

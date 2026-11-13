@@ -13,15 +13,19 @@ namespace grpc
 	class Service;
 }
 
+class MainThread;
+
 class RpcServer
 {
 public:
 	// Starts serving the SolidWorks service on 127.0.0.1:`port` (loopback
 	// only; 0 = any free port, see Port()). Calls without `token` in their
 	// x-sld-mcp-token metadata are refused. `git` / `swAppCookie` identify
-	// the ISldWorks the RPC handlers use; both must outlive this object.
+	// the ISldWorks the RPC handlers use; both must outlive this object, and
+	// so must `mainThread` (null: the work runs on the gRPC workers).
 	// Throws std::runtime_error if the port can't be bound.
-	RpcServer(int port, const std::string& token, IGlobalInterfaceTable* git, DWORD swAppCookie);
+	RpcServer(int port, const std::string& token, IGlobalInterfaceTable* git, DWORD swAppCookie,
+		MainThread* mainThread);
 	~RpcServer();
 
 	RpcServer(const RpcServer&) = delete;

@@ -60,8 +60,9 @@ namespace
 	};
 }
 
-RpcServer::RpcServer(int port, const std::string& token, IGlobalInterfaceTable* git, DWORD swAppCookie)
-	: m_service(std::make_unique<SolidWorksService>(git, swAppCookie))
+RpcServer::RpcServer(int port, const std::string& token, IGlobalInterfaceTable* git, DWORD swAppCookie,
+	MainThread* mainThread)
+	: m_service(std::make_unique<SolidWorksService>(git, swAppCookie, mainThread))
 {
 	const std::string address = "127.0.0.1:" + std::to_string(port);
 

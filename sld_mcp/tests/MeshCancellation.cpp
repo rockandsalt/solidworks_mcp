@@ -1,6 +1,7 @@
 // Exercises the production GetMesh handler over gRPC, without a running CAD app.
 #include "pch.h"
 #include "SolidWorksService.h"
+#include "MainThread.h"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -8,6 +9,8 @@
 #include <iostream>
 #include <mutex>
 #include <stdexcept>
+#include <thread>
+#include <vector>
 
 using namespace std::chrono_literals;
 
@@ -126,6 +129,171 @@ namespace
 		bool m_released = false;
 	};
 
+	// This thread stands in for SolidWorks' main thread: it dispatches its
+	// window messages until `done` is ready or `limit` passes.
+	template <typename Future>
+	bool PumpUntil(Future& done, std::chrono::milliseconds limit)
+	{
+		const auto end = std::chrono::steady_clock::now() + limit;
+		while (done.wait_for(0ms) != std::future_status::ready)
+		{
+			if (std::chrono::steady_clock::now() >= end)
+				return false;
+			MsgWaitForMultipleObjects(0, nullptr, FALSE, 10, QS_ALLINPUT);
+			MSG message;
+			while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE))
+				DispatchMessageW(&message);
+		}
+		return true;
+	}
+
+	void Pump(std::chrono::milliseconds duration)
+	{
+		std::promise<void> never;
+		auto future = never.get_future();
+		PumpUntil(future, duration);
+	}
+
+	bool TestMainThread()
+	{
+		using Outcome = MainThread::Outcome;
+		MainThread main;
+		const DWORD owner = GetCurrentThreadId();
+		auto never = [] { return false; };
+
+		// Work runs on the owning thread; an exception it throws reaches the caller.
+		auto ran = std::async(std::launch::async, [&] {
+			DWORD ranOn = 0;
+			const bool done = main.Run([&] { ranOn = GetCurrentThreadId(); }, never) == Outcome::Done;
+			bool threw = false;
+			try { main.Run([] { throw std::runtime_error("fake CAD failure"); }, never); }
+			catch (const std::runtime_error&) { threw = true; }
+			return done && ranOn == owner && threw;
+		});
+		if (!PumpUntil(ran, 2s) || !ran.get())
+			return false;
+
+		// Cancelled while queued (the owner isn't pumping): it never runs, not
+		// even once the owner pumps again.
+		bool late = false;
+		std::atomic<bool> cancel{ false };
+		auto queued = std::async(std::launch::async, [&] {
+			return main.Run([&] { late = true; }, [&] { return cancel.load(); });
+		});
+		std::this_thread::sleep_for(100ms);
+		cancel = true;
+		if (queued.wait_for(1s) != std::future_status::ready || queued.get() != Outcome::NotStarted)
+			return false;
+		Pump(100ms);
+		if (late)
+			return false;
+
+		// Work queued while other work runs and pumps messages (as SolidWorks does
+		// inside some calls) waits for it instead of running nested.
+		std::vector<int> order;
+		std::future<Outcome> inner;
+		auto outer = std::async(std::launch::async, [&] {
+			return main.Run([&] {
+				order.push_back(1);
+				inner = std::async(std::launch::async, [&] { return main.Run([&] { order.push_back(3); }, never); });
+				Pump(200ms);
+				order.push_back(2);
+			}, never);
+		});
+		if (!PumpUntil(outer, 2s) || outer.get() != Outcome::Done || !inner.valid() ||
+			!PumpUntil(inner, 2s) || inner.get() != Outcome::Done || order != std::vector<int>{ 1, 2, 3 })
+			return false;
+
+		// Close: queued work is let go without running, new work is refused.
+		bool closedRan = false;
+		auto pending = std::async(std::launch::async, [&] { return main.Run([&] { closedRan = true; }, never); });
+		std::this_thread::sleep_for(100ms);
+		main.Close();
+		if (pending.wait_for(1s) != std::future_status::ready || pending.get() != Outcome::Closed)
+			return false;
+		auto refused = std::async(std::launch::async, [&] { return main.Run([] {}, never); });
+		if (refused.wait_for(1s) != std::future_status::ready || refused.get() != Outcome::Closed)
+			return false;
+		Pump(100ms);
+		return !closedRan;
+	}
+
+	// Records which thread looks the connection up; failing it keeps the
+	// handler away from any real SolidWorks API.
+	class ThreadGit final : public IGlobalInterfaceTable
+	{
+	public:
+		HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override
+		{
+			*out = nullptr;
+			if (iid != IID_IUnknown && iid != IID_IGlobalInterfaceTable)
+				return E_NOINTERFACE;
+			*out = static_cast<IGlobalInterfaceTable*>(this);
+			return S_OK;
+		}
+		ULONG STDMETHODCALLTYPE AddRef() override { return 2; }
+		ULONG STDMETHODCALLTYPE Release() override { return 1; }
+		HRESULT STDMETHODCALLTYPE RegisterInterfaceInGlobal(IUnknown*, REFIID, DWORD*) override { return E_NOTIMPL; }
+		HRESULT STDMETHODCALLTYPE RevokeInterfaceFromGlobal(DWORD) override { return E_NOTIMPL; }
+		HRESULT STDMETHODCALLTYPE GetInterfaceFromGlobal(DWORD, REFIID, void** out) override
+		{
+			*out = nullptr;
+			thread = GetCurrentThreadId();
+			++calls;
+			return E_FAIL;
+		}
+
+		std::atomic<int> calls{ 0 };
+		std::atomic<DWORD> thread{ 0 };
+	};
+
+	// The production executor with a main thread: an RPC that expires while
+	// queued never connects; a fresh one connects on the main thread.
+	bool TestExecutorOnMainThread()
+	{
+		MainThread main;
+		ThreadGit git;
+		SolidWorksService service(&git, 1, &main);
+		grpc::ServerBuilder builder;
+		int port = 0;
+		builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials(), &port);
+		builder.RegisterService(&service);
+		auto server = builder.BuildAndStart();
+		if (!server || !port)
+			return false;
+		auto channel = grpc::CreateChannel("127.0.0.1:" + std::to_string(port), grpc::InsecureChannelCredentials());
+		auto call = [channel](std::chrono::milliseconds timeout) {
+			return std::async(std::launch::async, [channel, timeout] {
+				auto stub = sld_mcp::v1::SolidWorks::NewStub(channel);
+				grpc::ClientContext context;
+				context.set_deadline(std::chrono::system_clock::now() + timeout);
+				sld_mcp::v1::GetActiveDocumentRequest request;
+				sld_mcp::v1::GetActiveDocumentResponse response;
+				return stub->GetActiveDocument(&context, request, &response).error_code();
+			});
+		};
+
+		auto expired = call(300ms);
+		bool passed = expired.wait_for(2s) == std::future_status::ready;
+		if (passed)
+		{
+			const auto code = expired.get();
+			passed = code == grpc::StatusCode::DEADLINE_EXCEEDED || code == grpc::StatusCode::CANCELLED;
+		}
+		// Let the server side give up on it (it polls every 50 ms), then pump:
+		// the stale wake must not start it.
+		std::this_thread::sleep_for(200ms);
+		Pump(100ms);
+		passed = passed && git.calls == 0;
+
+		auto fresh = call(5s);
+		passed = PumpUntil(fresh, 5s) && fresh.get() == grpc::StatusCode::UNAVAILABLE && passed;
+		passed = passed && git.calls == 1 && git.thread == GetCurrentThreadId();
+		server->Shutdown();
+		server->Wait();
+		return passed;
+	}
+
 	class ObservedService final : public sld_mcp::v1::SolidWorks::Service
 	{
 	public:
@@ -176,6 +344,17 @@ int main()
 		return 1;
 	}
 	std::cout << "PASS: shared admission, running inspection cancellation, edit completion and exception cleanup\n";
+	if (!TestMainThread())
+	{
+		std::cerr << "FAIL: main-thread work: owning thread, exceptions, cancelled while queued, no nesting or Close\n";
+		return 1;
+	}
+	if (!TestExecutorOnMainThread())
+	{
+		std::cerr << "FAIL: executor on the main thread: an expired queued RPC connected, or a fresh one didn't on the main thread\n";
+		return 1;
+	}
+	std::cout << "PASS: main-thread work runs on its thread, never after expiring in the queue, never nested\n";
 	BlockingGit git;
 	ObservedService service(&git);
 	grpc::ServerBuilder builder;

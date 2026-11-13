@@ -53,12 +53,9 @@ grpc::Status CadExecutor::Execute(grpc::ServerContext* context, const char* meth
 
 	// Keep the lock through stack unwinding, COM releases and apartment teardown.
 	// Never cancel an editing command by abandoning its worker or unlocking early.
-	auto execute = [&]() -> grpc::Status {
-		ComApartment com;
-		if (!com.Ok())
-			return grpc::Status(grpc::StatusCode::INTERNAL, "CoInitializeEx failed on gRPC worker thread");
-		if (control.IsCancelled())
-			return grpc::Status(grpc::StatusCode::CANCELLED, "request expired before CAD work started");
+	// On the main thread the GIT hands out SolidWorks' own ISldWorks, so every
+	// COM object the work touches is created and released there, with direct calls.
+	auto connectAndWork = [&]() -> grpc::Status {
 		trace.Write("connecting");
 		ATL::CComPtr<ISldWorks> swApp;
 		const HRESULT hr = m_git->GetInterfaceFromGlobal(m_cookie, __uuidof(ISldWorks),
@@ -73,6 +70,30 @@ grpc::Status CadExecutor::Execute(grpc::ServerContext* context, const char* meth
 		// A partial read must never be published as successful after expiry.
 		control.Checkpoint();
 		return result;
+	};
+	auto execute = [&]() -> grpc::Status {
+		if (!m_mainThread)
+		{
+			ComApartment com;
+			if (!com.Ok())
+				return grpc::Status(grpc::StatusCode::INTERNAL, "CoInitializeEx failed on gRPC worker thread");
+			if (control.IsCancelled())
+				return grpc::Status(grpc::StatusCode::CANCELLED, "request expired before CAD work started");
+			return connectAndWork();
+		}
+		if (control.IsCancelled())
+			return grpc::Status(grpc::StatusCode::CANCELLED, "request expired before CAD work started");
+		trace.Write("queued");
+		grpc::Status status;
+		switch (m_mainThread->Run([&] { status = connectAndWork(); }, [&] { return control.IsCancelled(); }))
+		{
+		case MainThread::Outcome::Done:
+			return status;
+		case MainThread::Outcome::NotStarted:
+			return grpc::Status(grpc::StatusCode::CANCELLED, "request expired before CAD work started");
+		default:
+			return grpc::Status(grpc::StatusCode::UNAVAILABLE, "the SolidWorks add-in is shutting down");
+		}
 	};
 	grpc::Status result;
 	try { result = m_gate.Execute(control, execute); }

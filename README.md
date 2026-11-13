@@ -78,6 +78,13 @@ document queries share the same gate as geometry and edits. The Rust request
 interceptor supplies the 60 s deadline for every RPC, preserving explicit
 shorter deadlines.
 
+Admitted work runs on SolidWorks' main thread (`MainThread`, a message-only
+window the gRPC worker posts to), so its COM calls are direct. From the worker,
+each COM call would be marshaled to that thread on its own, at 1-12 ms each;
+over the devloop scenarios the whole run is about 5x faster this way. Setting
+`SLD_MCP_CAD_THREAD=worker` in SolidWorks' environment runs the work on the
+worker as before, to compare.
+
 Expired queued requests never start CAD work. Inspections use `Cancellable`
 policy and call the transport-independent `RequestControl::Checkpoint()` in
 long traversals; cancelled reads cannot publish a successful partial result.
@@ -89,7 +96,8 @@ timed-out command may still complete; do not automatically retry it.
 For a new RPC, validate arguments, then return `m_executor.Execute(...)` with
 the appropriate policy and a callback containing the CAD work. Keep COM objects
 inside that callback; handlers and geometry helpers must not acquire their own
-model lock, initialize COM, or retain a gRPC context. Lifecycle diagnostics go
+model lock, initialize COM, or retain a gRPC context, and the callback must not
+wait for another thread: it holds SolidWorks' main thread. Lifecycle diagnostics go
 to `OutputDebugString` (debugger/DebugView): process/request IDs, method, phase,
 elapsed milliseconds, final status, and whether the deadline/cancellation was
 observed. A request without a finished event may still be executing inside COM.

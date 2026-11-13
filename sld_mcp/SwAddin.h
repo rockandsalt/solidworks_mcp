@@ -10,6 +10,7 @@
 
 class RpcServer;
 class InstanceFile;
+class MainThread;
 
 class ATL_NO_VTABLE CSwAddin :
 	public ATL::CComObjectRootEx<ATL::CComSingleThreadModel>,
@@ -45,6 +46,10 @@ private:
 	// with calls forwarded to the main thread's message loop automatically.
 	ATL::CComPtr<IGlobalInterfaceTable> m_git;
 	DWORD m_swAppGitCookie = 0;
+
+	// Where the RPCs' CAD work runs instead, so its COM calls are direct
+	// (null with SLD_MCP_CAD_THREAD=worker). Outlives m_rpcServer.
+	std::unique_ptr<MainThread> m_mainThread;
 
 	std::unique_ptr<RpcServer> m_rpcServer;
 	// Where m_rpcServer listens and its token, for the MCP server to find.
