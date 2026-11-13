@@ -76,6 +76,9 @@
     <ClInclude Include="service\AnnotationHelpers.h">
       <Filter>Header Files\service</Filter>
     </ClInclude>
+    <ClInclude Include="service\PreferenceHelpers.h">
+      <Filter>Header Files\service</Filter>
+    </ClInclude>
     <ClInclude Include="service\AssemblyHelpers.h">
       <Filter>Header Files\service</Filter>
     </ClInclude>
@@ -252,7 +255,13 @@
     <ClCompile Include="service\Mates.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>
+    <ClCompile Include="service\DimXpert.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
     <ClCompile Include="service\ModelAnnotations.cpp">
+      <Filter>Source Files\service</Filter>
+    </ClCompile>
+    <ClCompile Include="service\Preferences.cpp">
       <Filter>Source Files\service</Filter>
     </ClCompile>
     <ClCompile Include="service\Mirror.cpp">

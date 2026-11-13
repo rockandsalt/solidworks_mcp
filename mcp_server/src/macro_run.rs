@@ -488,6 +488,38 @@ mod dialogs {
             windows
         }
 
+        /// A task dialog's main instruction and content, through UI Automation
+        /// (their automation ids; seen 2026-11-12); empty if it can't say.
+        fn task_dialog_texts(window: HWND) -> Vec<String> {
+            use windows::Win32::Foundation::HWND as Hwnd;
+            use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx};
+            use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation, TreeScope_Descendants};
+
+            let read = || -> windows::core::Result<Vec<String>> {
+                // SAFETY: plain COM calls on interfaces the calls hand back;
+                // initializing COM again on this thread is harmless.
+                unsafe {
+                    let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+                    let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)?;
+                    let element = automation.ElementFromHandle(Hwnd(window as *mut core::ffi::c_void))?;
+                    let all = element.FindAll(TreeScope_Descendants, &automation.CreateTrueCondition()?)?;
+                    let mut texts = Vec::new();
+                    for i in 0..all.Length()? {
+                        let e = all.GetElement(i)?;
+                        let id = e.CurrentAutomationId()?.to_string();
+                        if id == "MainInstruction" || id == "ContentText" {
+                            let name = e.CurrentName()?.to_string();
+                            if !name.trim().is_empty() {
+                                texts.push(name.split_whitespace().collect::<Vec<_>>().join(" "));
+                            }
+                        }
+                    }
+                    Ok(texts)
+                }
+            };
+            read().unwrap_or_default()
+        }
+
         /// Reads the dialog and presses its best button (no such button: closes it).
         pub fn close(window: isize) -> Closed {
             let window = window as HWND;
@@ -507,6 +539,11 @@ mod dialogs {
                 {
                     best = Some((rank, child, text.replace('&', "")));
                 }
+            }
+            // A task dialog draws its text itself (a DirectUIHWND child),
+            // as SolidWorks' warnings with "Don't show again" do.
+            if texts.is_empty() {
+                texts = task_dialog_texts(window);
             }
             let pressed = match best {
                 Some((_, button, label)) => {

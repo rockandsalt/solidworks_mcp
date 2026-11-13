@@ -29,6 +29,10 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 # SolidWorks (discovery.rs). EnumWindows & co: closing dialogs a macro opens (macro.rs).
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging"] }
+# UI Automation: the text of a task dialog (SolidWorks' warnings with "Don't show
+# again"), which has no window text of its own (macro_run.rs). Already in the
+# tree through other crates.
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Variant", "Win32_System_Ole", "Win32_UI_Accessibility"] }
 
 [build-dependencies]
 tonic-prost-build = "0.14"

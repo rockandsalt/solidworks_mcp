@@ -328,6 +328,18 @@ fn dimension_json(d: &proto::AnnotationDimension, obj: &mut Map<String, Value>) 
                 );
             }
         }
+        // Block / general (ISO 2768): no values of their own; DimXpert's
+        // limits for them when it has them.
+        10 | 11 => {
+            if let (Some(hi), Some(lo)) = (d.general_upper_limit, d.general_lower_limit) {
+                if let Some(n) = nominal {
+                    if ((hi - n) - (n - lo)).abs() < 1e-9 {
+                        tol.insert(format!("plus_minus_{u}"), json!(value_of(hi - n, angular)));
+                    }
+                }
+                tol.insert(format!("limits_{u}"), json!([value_of(lo, angular), value_of(hi, angular)]));
+            }
+        }
         _ => {}
     }
     if matches!(d.tolerance_type, 7..=9) {

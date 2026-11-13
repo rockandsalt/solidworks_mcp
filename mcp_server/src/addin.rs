@@ -594,6 +594,32 @@ impl AddinClient {
         Ok(client.add_model_annotation(request).await?.into_inner())
     }
 
+    /// A DimXpert dimension on faces of the active part.
+    pub async fn add_pmi_dimension(
+        &self,
+        request: proto::AddPmiDimensionRequest,
+    ) -> Result<proto::AddPmiDimensionResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.add_pmi_dimension(request).await?.into_inner())
+    }
+
+    pub async fn auto_dimension_scheme(
+        &self,
+        request: proto::AutoDimensionSchemeRequest,
+    ) -> Result<proto::AutoDimensionSchemeResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.auto_dimension_scheme(request).await?.into_inner())
+    }
+
+    /// Document properties of the active document by SolidWorks id.
+    pub async fn document_preferences(
+        &self,
+        request: proto::DocumentPreferencesRequest,
+    ) -> Result<proto::DocumentPreferencesResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.document_preferences(request).await?.into_inner())
+    }
+
     pub async fn delete_drawing_annotations(
         &self,
         request: proto::DeleteDrawingAnnotationsRequest,

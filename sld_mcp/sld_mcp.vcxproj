@@ -313,6 +313,7 @@
     <ClInclude Include="service\RequestLock.h" />
     <ClInclude Include="ComVariant.h" />
     <ClInclude Include="service\AnnotationHelpers.h" />
+    <ClInclude Include="service\PreferenceHelpers.h" />
     <ClInclude Include="service\AssemblyHelpers.h" />
     <ClInclude Include="service\Common.h" />
     <ClInclude Include="service\RequestLock.h" />
@@ -407,7 +408,9 @@
     <ClCompile Include="service\Mirror.cpp" />
     <ClCompile Include="service\SketchEditing.cpp" />
     <ClCompile Include="service\SketchOffset.cpp" />
+    <ClCompile Include="service\DimXpert.cpp" />
     <ClCompile Include="service\ModelAnnotations.cpp" />
+    <ClCompile Include="service\Preferences.cpp" />
     <ClCompile Include="service\Mesh.cpp" />
     <ClCompile Include="service\Pattern.cpp" />
     <ClCompile Include="service\ReferenceGeometry.cpp" />

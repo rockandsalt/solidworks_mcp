@@ -99,6 +99,18 @@ namespace
 								break;
 							}
 						}
+					// DimXpert's dimensions aren't among their owner's (a
+					// detail folder; seen 2026-11-12): from the annotations.
+					ATL::CComPtr<IModelDocExtension> ext;
+					if (!out.display && SUCCEEDED(doc->get_Extension(&ext)) && ext)
+					{
+						bool truncated = false;
+						std::vector<NamedDimension> shownExact, shownPartial;
+						MatchDimensions(AllAnnotations(doc, ext, truncated), out.fullName, std::string(), shownExact,
+							shownPartial);
+						if (!shownExact.empty())
+							out.display = shownExact.front().display;
+					}
 					return grpc::Status::OK;
 				}
 			ATL::CComPtr<IModelDocExtension> ext;
@@ -298,12 +310,26 @@ grpc::Status SolidWorksService::SetDimensionTolerance(grpc::ServerContext* conte
 			}
 		}
 
+		// DimXpert takes a new tolerance of its dimensions on a rebuild; until
+		// then it keeps the old one (seen 2026-11-12).
+		if (docType == swDocPART && found.display)
+		{
+			ATL::CComPtr<IAnnotation> annotation;
+			VARIANT_BOOL dimXpert = VARIANT_FALSE, rebuilt = VARIANT_FALSE;
+			if (SUCCEEDED(found.display->IGetAnnotation(&annotation)) && annotation &&
+				SUCCEEDED(annotation->IsDimXpert(&dimXpert)) && dimXpert)
+				doc->EditRebuild3(&rebuilt);
+		}
 		doc->SetSaveFlag();
 		doc->GraphicsRedraw2();
 
 		sld_mcp::v1::AnnotationDimension* out = response->mutable_dimension();
 		if (found.display)
-			DescribeAnnotationDimension(found.display, out);
+		{
+			ATL::CComPtr<IModelDocExtension> ext;
+			doc->get_Extension(&ext);
+			DescribeAnnotationDimension(found.display, ext, out);
+		}
 		else
 		{
 			DescribeDimensionValue(found.dim, out->mutable_dimension());
