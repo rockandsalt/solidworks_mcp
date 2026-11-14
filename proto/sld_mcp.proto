@@ -775,6 +775,17 @@ service SolidWorks {
   // FAILED_PRECONDITION if the active document isn't a part or assembly, a
   // sketch is open, or SolidWorks computes nothing.
   rpc GetMassProperties(GetMassPropertiesRequest) returns (GetMassPropertiesResponse);
+
+  // The selection in the active part or assembly: what the user picked in
+  // SolidWorks (faces, edges, vertices, features, bodies, components, sketch
+  // entities), each described as InspectModel describes it, with its persist
+  // id for other RPCs. With `select`, the selection is first replaced (or,
+  // with `append`, added to) by those entities, as clicking them would:
+  // highlighted on screen. `clear` empties it. Changes nothing in the model.
+  // NOT_FOUND / INVALID_ARGUMENT for entities that can't be;
+  // FAILED_PRECONDITION if the active document isn't a part or assembly or
+  // SolidWorks won't select one (hidden, suppressed).
+  rpc UserSelection(SelectionRequest) returns (SelectionResponse);
 }
 
 // ---------------------------------------------------------------------------
@@ -5282,4 +5293,58 @@ message GetMassPropertiesResponse {
   // vectors), in SolidWorks' order.
   repeated double principal_moments = 11;
   repeated Vec3 principal_axes = 12;
+}
+
+// ---------------------------------------------------------------------------
+// Selection
+
+message SelectionRequest {
+  // Entities to select, in order: a model_persist_id may be any face, edge,
+  // vertex, feature, body or component; feature_name any feature of the
+  // active document.
+  repeated GeometryRef select = 1;
+  // Add `select` to the selection instead of replacing it.
+  bool append = 2;
+  // Empty the selection (before `select`, if any).
+  bool clear = 3;
+}
+
+// A vertex (InspectModel hands vertices out on edges only).
+message VertexInfo {
+  bytes persist_id = 1;
+  Vec3 position = 2;
+  bytes component_persist_id = 3;  // assemblies, as FaceInfo's
+}
+
+message SelectedItem {
+  // ISelectionMgr::GetSelectedObjectType3 (swSelectType_e) and the mark it
+  // was selected with.
+  int32 select_type = 1;
+  int32 mark = 2;
+  // Where it was picked (ISelectionMgr::GetSelectionPoint2), in model or
+  // assembly space; set for faces, edges, vertices and sketch entities.
+  Vec3 point = 3;
+  oneof item {
+    FaceInfo face = 4;
+    EdgeInfo edge = 5;
+    VertexInfo vertex = 6;
+    FeatureInfo feature = 7;
+    BodyInfo body = 8;
+    bytes component_persist_id = 9;
+    SketchItem sketch_item = 10;
+  }
+  // Sketch items: their sketch's name; their positions are in its
+  // coordinates (model coordinates in a 3D sketch).
+  string sketch_name = 11;
+  bool sketch_3d = 12;
+}
+
+message SelectionResponse {
+  Document document = 1;  // title and type
+  // Unset items are selected things of other kinds (dimensions, notes, ...):
+  // only select_type says what.
+  repeated SelectedItem items = 2;
+  // Assemblies: the components the items are in, with their placements
+  // (geometry as in InspectModel: see local_geometry).
+  repeated ComponentInfo components = 3;
 }

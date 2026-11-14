@@ -344,13 +344,13 @@ fn insert_id(obj: &mut Map<String, Value>, key: &str, id: Option<String>) {
 }
 
 /// "component": its id, for entities of an assembly component.
-fn insert_component(ids: &mut IdRegistry, obj: &mut Map<String, Value>, component_persist_id: &[u8]) {
+pub(crate) fn insert_component(ids: &mut IdRegistry, obj: &mut Map<String, Value>, component_persist_id: &[u8]) {
     if let Some(id) = ids.id_for(Kind::Component, component_persist_id) {
         obj.insert("component".into(), Value::String(id));
     }
 }
 
-fn feature_json(ids: &mut IdRegistry, f: &proto::FeatureInfo) -> Value {
+pub(crate) fn feature_json(ids: &mut IdRegistry, f: &proto::FeatureInfo) -> Value {
     let mut obj = Map::new();
     insert_id(&mut obj, "id", ids.id_for(Kind::Feature, &f.persist_id));
     obj.insert("name".into(), json!(f.name));
@@ -420,7 +420,7 @@ pub fn reference_json(obj: &mut Map<String, Value>, type_name: &str, r: &proto::
     }
 }
 
-fn body_json(ids: &mut IdRegistry, b: &proto::BodyInfo) -> Value {
+pub(crate) fn body_json(ids: &mut IdRegistry, b: &proto::BodyInfo) -> Value {
     let mut obj = Map::new();
     insert_id(&mut obj, "id", ids.id_for(Kind::Body, &b.persist_id));
     obj.insert("name".into(), json!(b.name));
@@ -444,7 +444,7 @@ fn body_json(ids: &mut IdRegistry, b: &proto::BodyInfo) -> Value {
     Value::Object(obj)
 }
 
-fn face_json(ids: &mut IdRegistry, f: &proto::FaceInfo) -> Value {
+pub(crate) fn face_json(ids: &mut IdRegistry, f: &proto::FaceInfo) -> Value {
     use proto::SurfaceType as S;
     let mut obj = Map::new();
     insert_id(&mut obj, "id", ids.id_for(Kind::Face, &f.persist_id));
@@ -560,7 +560,7 @@ fn points_at_center(f: &proto::FaceInfo) -> Option<bool> {
     Some(d < 0.0)
 }
 
-fn edge_json(ids: &mut IdRegistry, e: &proto::EdgeInfo) -> Value {
+pub(crate) fn edge_json(ids: &mut IdRegistry, e: &proto::EdgeInfo) -> Value {
     let mut obj = Map::new();
     insert_id(&mut obj, "id", ids.id_for(Kind::Edge, &e.persist_id));
     insert_id(&mut obj, "body", ids.id_for(Kind::Body, &e.body_persist_id));

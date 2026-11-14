@@ -129,6 +129,14 @@ namespace sld_mcp::service
 
 	void InspectEdge(IEdge* edge, PersistIds& ids, sld_mcp::v1::EdgeInfo* info);
 
+	// As InspectModel describes them (InspectModel.cpp). A feature's
+	// `componentPid` is stamped on it; with `referenceExt` (the document's
+	// own tree), reference features say where they are.
+	void InspectFace(IFace2* face, PersistIds& ids, sld_mcp::v1::FaceInfo* info);
+	void InspectBody(IBody2* body, PersistIds& ids, sld_mcp::v1::BodyInfo* info);
+	void DescribeFeature(IFeature* feature, const std::string& typeName, PersistIds& ids,
+		const std::string& componentPid, IModelDocExtension* referenceExt, sld_mcp::v1::FeatureInfo* info);
+
 	sld_mcp::v1::DocumentType ToDocumentType(long type);
 
 	bool SameObject(IUnknown* a, IUnknown* b);

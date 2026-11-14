@@ -103,6 +103,31 @@ impl Placement {
         }
     }
 
+    fn place_face(&self, face: &mut proto::FaceInfo) {
+        self.place_box(&mut face.r#box);
+        // Plane normals, axes and sample normals are directions; origins
+        // (points on planes, axes, centers) and samples are points.
+        self.place_direction(&mut face.normal);
+        self.place_direction(&mut face.axis);
+        self.place_direction(&mut face.sample_normal);
+        self.place_point(&mut face.origin);
+        self.place_point(&mut face.sample_point);
+    }
+
+    fn place_edge(&self, edge: &mut proto::EdgeInfo) {
+        self.place_point(&mut edge.start);
+        self.place_point(&mut edge.end);
+        self.place_point(&mut edge.center);
+        self.place_direction(&mut edge.axis);
+    }
+
+    fn place_body(&self, body: &mut proto::BodyInfo) {
+        self.place_box(&mut body.r#box);
+        if let Some(mass) = &mut body.mass {
+            self.place_point(&mut mass.center_of_mass);
+        }
+    }
+
     /// Whether the component is turned relative to the assembly.
     fn is_rotated(&self) -> bool {
         !self.0.matrix3.abs_diff_eq(DMat3::IDENTITY, 1e-9)
@@ -125,28 +150,54 @@ pub fn place_inspect_reply(reply: &mut proto::InspectModelResponse) {
         return;
     }
     for face in &mut reply.faces {
-        let Some(p) = placements.get(&face.component_persist_id) else { continue };
-        p.place_box(&mut face.r#box);
-        // Plane normals, axes and sample normals are directions; origins
-        // (points on planes, axes, centers) and samples are points.
-        p.place_direction(&mut face.normal);
-        p.place_direction(&mut face.axis);
-        p.place_direction(&mut face.sample_normal);
-        p.place_point(&mut face.origin);
-        p.place_point(&mut face.sample_point);
+        if let Some(p) = placements.get(&face.component_persist_id) {
+            p.place_face(face);
+        }
     }
     for edge in &mut reply.edges {
-        let Some(p) = placements.get(&edge.component_persist_id) else { continue };
-        p.place_point(&mut edge.start);
-        p.place_point(&mut edge.end);
-        p.place_point(&mut edge.center);
-        p.place_direction(&mut edge.axis);
+        if let Some(p) = placements.get(&edge.component_persist_id) {
+            p.place_edge(edge);
+        }
     }
     for body in &mut reply.bodies {
-        let Some(p) = placements.get(&body.component_persist_id) else { continue };
-        p.place_box(&mut body.r#box);
-        if let Some(mass) = &mut body.mass {
-            p.place_point(&mut mass.center_of_mass);
+        if let Some(p) = placements.get(&body.component_persist_id) {
+            p.place_body(body);
+        }
+    }
+}
+
+/// Moves the selected component faces, edges, vertices and bodies of a
+/// Selection reply into assembly space, as place_inspect_reply. The pick
+/// points already are.
+pub fn place_selection_reply(reply: &mut proto::SelectionResponse) {
+    use proto::selected_item::Item;
+    let placements = placements(&reply.components);
+    if placements.is_empty() {
+        return;
+    }
+    for item in &mut reply.items {
+        match &mut item.item {
+            Some(Item::Face(f)) => {
+                if let Some(p) = placements.get(&f.component_persist_id) {
+                    p.place_face(f);
+                }
+            }
+            Some(Item::Edge(e)) => {
+                if let Some(p) = placements.get(&e.component_persist_id) {
+                    p.place_edge(e);
+                }
+            }
+            Some(Item::Body(b)) => {
+                if let Some(p) = placements.get(&b.component_persist_id) {
+                    p.place_body(b);
+                }
+            }
+            Some(Item::Vertex(v)) => {
+                if let Some(p) = placements.get(&v.component_persist_id) {
+                    p.place_point(&mut v.position);
+                }
+            }
+            _ => {}
         }
     }
 }

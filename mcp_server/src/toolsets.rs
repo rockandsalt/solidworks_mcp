@@ -58,6 +58,8 @@ pub const TOOLS: &[(&str, &[Mode], Access)] = &[
     ("inspect_annotations", MODEL, Inspect),
     ("diagnose_model", MODEL, Inspect),
     ("measure", MODEL, Inspect),
+    // Changes only what's selected (UI state), not the model.
+    ("selection", MODEL, Inspect),
     ("mass_properties", MODEL, Inspect),
     ("render_views", MODEL, Inspect),
     ("set_dimension", MODEL, Edit),

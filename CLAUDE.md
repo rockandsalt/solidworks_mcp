@@ -13,7 +13,7 @@ An MCP server that lets an AI model drive SOLIDWORKS.
 Design notes, per area, with "Untested in SolidWorks —
 verify: …" lists where checks are open: `docs/notes/`, a separate private git
 repo cloned there and gitignored here, so commit note changes in it (architecture.md first; also diagnosing,
-deleting, editing, drawings, gdt, dimxpert, files, units, reference, configurations, equations, measure, installer, devloop, scenarios). Read the relevant one before changing
+deleting, editing, drawings, gdt, dimxpert, files, units, reference, configurations, equations, measure, selection, installer, devloop, scenarios). Read the relevant one before changing
 an area, and update it when you change the design or learn how SolidWorks
 actually behaves.
 

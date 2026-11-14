@@ -44,7 +44,52 @@ namespace
 	// Faces and edges past this many are dropped (and `truncated` set), so a
 	// huge part can't stall SolidWorks' UI thread for minutes.
 	constexpr size_t kMaxInspectedEntities = 2000;
+}
 
+namespace sld_mcp::service
+{
+	void DescribeFeature(IFeature* feature, const std::string& typeName, PersistIds& ids,
+		const std::string& componentPid, IModelDocExtension* referenceExt, sld_mcp::v1::FeatureInfo* info)
+	{
+		info->set_persist_id(ids.Get(feature));
+		info->set_name(FeatureName(feature));
+		info->set_type_name(typeName);
+		info->set_component_persist_id(componentPid);
+
+		VARIANT_BOOL suppressed = VARIANT_FALSE;
+		if (SUCCEEDED(feature->IsSuppressed(&suppressed)))
+			info->set_suppressed(suppressed != VARIANT_FALSE);
+		VARIANT_BOOL rolledBack = VARIANT_FALSE;
+		if (SUCCEEDED(feature->IsRolledBack(&rolledBack)))
+			info->set_rolled_back(rolledBack != VARIANT_FALSE);
+
+		VARIANT_BOOL warning = VARIANT_FALSE;
+		long errorCode = swFeatureErrorNone;
+		if (SUCCEEDED(feature->GetErrorCode2(&warning, &errorCode)) && errorCode != swFeatureErrorNone)
+		{
+			info->set_error_code(static_cast<int32_t>(errorCode));
+			info->set_error_is_warning(warning != VARIANT_FALSE);
+		}
+
+		ATL::CComVariant parents;
+		if (SUCCEEDED(feature->GetParents(&parents)))
+			AddFeatureNames(parents, info->mutable_parents());
+		ATL::CComVariant children;
+		if (SUCCEEDED(feature->GetChildren(&children)))
+			AddFeatureNames(children, info->mutable_children());
+
+		if (referenceExt && IsReferenceType(info->type_name()))
+			DescribeReferenceGeometry(referenceExt, feature, info->type_name(), info->mutable_reference());
+
+		long visibility = swVisibilityStateShown;
+		if ((IsSketchType(info->type_name()) || IsReferenceType(info->type_name())) &&
+			SUCCEEDED(feature->get_Visible(&visibility)))
+			info->set_hidden(visibility == swVisibilityStateHide);
+	}
+}
+
+namespace
+{
 	// Every feature from `first` on, starting at the first reference plane.
 	// The ones before it are the tree's fixed folders (History, Sensors,
 	// Annotations, Material, ...), which say nothing about the geometry.
@@ -72,43 +117,7 @@ namespace
 				(typeName == L"Reference" || typeName == L"MateGroup" || typeName == L"MateReferenceGroupFeature");
 
 			if (started && !skip)
-			{
-				sld_mcp::v1::FeatureInfo* info = response->add_features();
-				info->set_persist_id(ids.Get(feature));
-				info->set_name(FeatureName(feature));
-				info->set_type_name(ToUtf8(typeName));
-				info->set_component_persist_id(componentPid);
-
-				VARIANT_BOOL suppressed = VARIANT_FALSE;
-				if (SUCCEEDED(feature->IsSuppressed(&suppressed)))
-					info->set_suppressed(suppressed != VARIANT_FALSE);
-				VARIANT_BOOL rolledBack = VARIANT_FALSE;
-				if (SUCCEEDED(feature->IsRolledBack(&rolledBack)))
-					info->set_rolled_back(rolledBack != VARIANT_FALSE);
-
-				VARIANT_BOOL warning = VARIANT_FALSE;
-				long errorCode = swFeatureErrorNone;
-				if (SUCCEEDED(feature->GetErrorCode2(&warning, &errorCode)) && errorCode != swFeatureErrorNone)
-				{
-					info->set_error_code(static_cast<int32_t>(errorCode));
-					info->set_error_is_warning(warning != VARIANT_FALSE);
-				}
-
-				ATL::CComVariant parents;
-				if (SUCCEEDED(feature->GetParents(&parents)))
-					AddFeatureNames(parents, info->mutable_parents());
-				ATL::CComVariant children;
-				if (SUCCEEDED(feature->GetChildren(&children)))
-					AddFeatureNames(children, info->mutable_children());
-
-				if (referenceExt && IsReferenceType(info->type_name()))
-					DescribeReferenceGeometry(referenceExt, feature, info->type_name(), info->mutable_reference());
-
-				long visibility = swVisibilityStateShown;
-				if ((IsSketchType(info->type_name()) || IsReferenceType(info->type_name())) &&
-					SUCCEEDED(feature->get_Visible(&visibility)))
-					info->set_hidden(visibility == swVisibilityStateHide);
-			}
+				DescribeFeature(feature, ToUtf8(typeName), ids, componentPid, referenceExt, response->add_features());
 
 			ATL::CComPtr<IFeature> next;
 			hr = feature->IGetNextFeature(&next);
@@ -128,7 +137,10 @@ namespace
 			return ComError("IModelDoc2::IFirstFeature", hr);
 		return InspectFeatureList(control, feature, ids, {}, skipAssemblyItems, ext, response);
 	}
+}
 
+namespace sld_mcp::service
+{
 	void InspectBody(IBody2* body, PersistIds& ids, sld_mcp::v1::BodyInfo* info)
 	{
 		info->set_persist_id(ids.Get(body));
@@ -296,7 +308,10 @@ namespace
 			break;
 		}
 	}
+}
 
+namespace
+{
 	// Collects distinct faces / edges (by COM identity), up to the cap.
 	template <typename T>
 	class EntitySet

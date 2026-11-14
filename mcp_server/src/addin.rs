@@ -492,6 +492,11 @@ impl AddinClient {
         Ok(client.measure(request).await?.into_inner())
     }
 
+    pub async fn selection(&self, request: proto::SelectionRequest) -> Result<proto::SelectionResponse, tonic::Status> {
+        let mut client = self.client()?;
+        Ok(client.user_selection(request).await?.into_inner())
+    }
+
     pub async fn get_mass_properties(
         &self,
         request: proto::GetMassPropertiesRequest,

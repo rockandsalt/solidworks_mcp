@@ -40,6 +40,7 @@ mod refgeom;
 mod render;
 mod revolve;
 mod rib;
+mod selection;
 mod sheet;
 mod sheet_format;
 mod shell;
@@ -3866,6 +3867,32 @@ impl SolidWorksTools {
     }
 
     #[tool(
+        description = "What the user has selected in SolidWorks (faces, edges, vertices, features, \
+                       bodies, components, sketch entities), each with its id for the other tools \
+                       (\"face:7\" for hole_wizard, sketch `on`, fillet_edges, ...), its geometry as \
+                       inspect_model gives it, and where it was clicked (`picked_at_mm`, to screen \
+                       precision: e.g. roughly where to put a hole). Call it first when the user says this / here / the selected ...: \
+                       other tools replace the selection. `select` highlights entities for the user \
+                       instead; `clear` empties it. Changes nothing in the model."
+    )]
+    async fn selection(
+        &self,
+        Parameters(params): Parameters<selection::SelectionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let request = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            selection::request(&ids, &params)?
+        };
+        let mut reply = self.addin.selection(request).await.map_err(|status| self.addin_error(status))?;
+        assembly::place_selection_reply(&mut reply);
+        let json = {
+            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            selection::render(&mut ids, &reply)
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+    }
+
+    #[tool(
         description = "Mass properties of the active part or assembly: mass, volume, area, \
                        density, center of mass, principal moments and axes, and the inertia tensor \
                        at the center of mass and at the origin or a coordinate system (products of \
@@ -4987,7 +5014,9 @@ const INSTRUCTIONS: &str = "Drives a running SolidWorks through its sld_mcp add-
                  / create_drawing take units=\"ips\" for an inch document). Ids: inspect_model \
                  gives the model's (\"face:7\", \"edge:3\", \"feature:2\", \"component:1\"), \
                  inspect_sketch and the sketch tool a sketch's (\"line:3\", \"point:7\"), \
-                 inspect_drawing with a view that view's (\"view_edge:3\"); they belong to the \
+                 inspect_drawing with a view that view's (\"view_edge:3\"), selection what the \
+                 user picked in SolidWorks (read it first when they say this / here / the \
+                 selected ...: other tools replace the selection); they belong to the \
                  active document and stay valid while the entity exists. Work in a loop: inspect, \
                  change by id, check with render_views / render_drawing (shapes) and inspect_model \
                  (sizes). A part: sketch closed profiles, then extrude_sketch, revolve_sketch, \

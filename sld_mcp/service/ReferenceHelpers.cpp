@@ -230,11 +230,9 @@ namespace sld_mcp::service
 		}
 		case Ref::kFeatureName:
 		{
-			ATL::CComQIPtr<IPartDoc> part(doc);
 			ATL::CComPtr<IFeature> feature;
-			if (!part || FAILED(part->IFeatureByName(FromUtf8(ref.feature_name()), &feature)) || !feature)
-				return grpc::Status(grpc::StatusCode::NOT_FOUND,
-					"the active part has no feature named \"" + ref.feature_name() + "\"");
+			if (grpc::Status status = FeatureByName(doc, ref.feature_name(), feature); !status.ok())
+				return status;
 			return PickFeature(feature, out);
 		}
 		default:

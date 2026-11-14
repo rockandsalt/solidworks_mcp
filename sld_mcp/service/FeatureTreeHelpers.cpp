@@ -14,6 +14,20 @@ namespace sld_mcp::service
 		return ToUtf8(typeName);
 	}
 
+	grpc::Status FeatureByName(IModelDoc2* doc, const std::string& name, ATL::CComPtr<IFeature>& feature)
+	{
+		feature.Release();
+		const ATL::CComBSTR bstr = FromUtf8(name);
+		if (ATL::CComQIPtr<IPartDoc> part(doc); part)
+			part->IFeatureByName(bstr, &feature);
+		else if (ATL::CComQIPtr<IAssemblyDoc> assembly(doc); assembly)
+			assembly->IFeatureByName(bstr, &feature);
+		if (!feature)
+			return grpc::Status(grpc::StatusCode::NOT_FOUND,
+				"the active document has no feature named \"" + name + "\"");
+		return grpc::Status::OK;
+	}
+
 	bool AddTreeFeature(TreeFeature f, SeenFeatures& seen, std::vector<TreeFeature>& out)
 	{
 		ATL::CComPtr<IUnknown> identity;

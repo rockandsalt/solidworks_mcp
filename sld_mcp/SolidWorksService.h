@@ -364,6 +364,10 @@ public:
 		const sld_mcp::v1::GetMassPropertiesRequest* request,
 		sld_mcp::v1::GetMassPropertiesResponse* response) override;
 
+	grpc::Status UserSelection(grpc::ServerContext* context,
+		const sld_mcp::v1::SelectionRequest* request,
+		sld_mcp::v1::SelectionResponse* response) override;
+
 private:
 	// All CAD access, including reads, shares one execution/lifetime policy.
 	sld_mcp::service::CadExecutor m_executor;

@@ -10,6 +10,10 @@ namespace sld_mcp::service
 {
 	std::string FeatureTypeName(IFeature* feature);
 
+	// The active part's or assembly's feature named `name`; NOT_FOUND if it
+	// has none (or is neither).
+	grpc::Status FeatureByName(IModelDoc2* doc, const std::string& name, ATL::CComPtr<IFeature>& feature);
+
 	// One feature of the tree, as DeleteFeatures sees it.
 	struct TreeFeature
 	{
