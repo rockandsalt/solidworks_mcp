@@ -52,12 +52,13 @@ namespace
 
 	// Each configuration with what's suppressed in it, and the dimensions
 	// whose value differs between them.
-	void ListConfigurations(IModelDoc2* doc, const ConfigurationList& configs,
+	void ListConfigurations(const RequestControl& control, IModelDoc2* doc, const ConfigurationList& configs,
 		sld_mcp::v1::ConfigurationsResponse* response)
 	{
 		response->set_active(configs.active);
 		for (size_t i = 0; i < configs.names.size(); ++i)
 		{
+			control.Checkpoint();
 			sld_mcp::v1::ConfigurationInfo* info = response->add_configurations();
 			info->set_name(configs.names[i]);
 			info->set_parent(configs.parents[i]);
@@ -84,6 +85,7 @@ namespace
 		std::set<std::string> seenDimensions;
 		for (const TreeFeature& f : FeatureTree(doc))
 		{
+			control.Checkpoint();
 			if (f.type == kComponentType)
 				continue;
 			const std::vector<bool> suppressed = FeatureSuppression(f.feature, configs.names);
@@ -281,11 +283,17 @@ namespace
 	}
 }
 
+ExecutionPolicy sld_mcp::service::PolicyFor(const sld_mcp::v1::ConfigurationsRequest& request)
+{
+	return request.action_case() == sld_mcp::v1::ConfigurationsRequest::ACTION_NOT_SET
+		? ExecutionPolicy::Cancellable : ExecutionPolicy::CompleteOperation;
+}
+
 grpc::Status SolidWorksService::Configurations(grpc::ServerContext* context,
 	const sld_mcp::v1::ConfigurationsRequest* request,
 	sld_mcp::v1::ConfigurationsResponse* response)
 {
-	return m_executor.Execute(context, "Configurations", ExecutionPolicy::CompleteOperation,
+	return m_executor.Execute(context, "Configurations", PolicyFor(*request),
 		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
 		ATL::CComPtr<IModelDoc2> doc;
 		long docType = swDocNONE;
@@ -315,7 +323,7 @@ grpc::Status SolidWorksService::Configurations(grpc::ServerContext* context,
 		if (!status.ok())
 			return status;
 
-		ListConfigurations(doc, ReadConfigurations(doc), response);
+		ListConfigurations(control, doc, ReadConfigurations(doc), response);
 		return grpc::Status::OK;
 	});
 }

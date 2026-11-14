@@ -74,11 +74,13 @@ namespace
 			: " (" + unknown + " is neither a global variable nor a dimension of the document)";
 	}
 
-	void ListEquations(IModelDoc2* doc, IEquationMgr* equations, sld_mcp::v1::EquationsResponse* response)
+	void ListEquations(const RequestControl& control, IModelDoc2* doc, IEquationMgr* equations,
+		sld_mcp::v1::EquationsResponse* response)
 	{
 		const std::vector<std::string> texts = ReadEquations(equations);
 		for (long i = 0; i < static_cast<long>(texts.size()); ++i)
 		{
+			control.Checkpoint();
 			sld_mcp::v1::EquationInfo* info = response->add_equations();
 			info->set_name(EquationName(texts[i]));
 			info->set_equation(texts[i]);
@@ -374,11 +376,17 @@ namespace
 	}
 }
 
+ExecutionPolicy sld_mcp::service::PolicyFor(const sld_mcp::v1::EquationsRequest& request)
+{
+	return request.delete_().empty() && request.set().empty()
+		? ExecutionPolicy::Cancellable : ExecutionPolicy::CompleteOperation;
+}
+
 grpc::Status SolidWorksService::Equations(grpc::ServerContext* context,
 	const sld_mcp::v1::EquationsRequest* request,
 	sld_mcp::v1::EquationsResponse* response)
 {
-	return m_executor.Execute(context, "Equations", ExecutionPolicy::CompleteOperation,
+	return m_executor.Execute(context, "Equations", PolicyFor(*request),
 		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
 		ATL::CComPtr<IModelDoc2> doc;
 		long docType = swDocNONE;
@@ -409,7 +417,7 @@ grpc::Status SolidWorksService::Equations(grpc::ServerContext* context,
 			AddNewErrors(errorsBefore, FeatureErrors(FeatureTree(doc)), response->mutable_new_errors());
 		}
 
-		ListEquations(doc, equations, response);
+		ListEquations(control, doc, equations, response);
 		return grpc::Status::OK;
 	});
 }

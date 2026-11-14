@@ -2,6 +2,7 @@
 #include "pch.h"
 #include "SolidWorksService.h"
 #include "MainThread.h"
+#include "service/Common.h"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -81,6 +82,41 @@ namespace
 		}
 		catch (const std::runtime_error&) {}
 		return gate.Execute(active, [&] { return cleaned; });
+	}
+
+	// RPCs that read unless asked to change: only the plain read may stop early.
+	bool TestReadOrChangePolicies()
+	{
+		constexpr auto read = ExecutionPolicy::Cancellable;
+		constexpr auto change = ExecutionPolicy::CompleteOperation;
+
+		sld_mcp::v1::SelectionRequest selection;
+		bool passed = PolicyFor(selection) == read;
+		selection.set_append(true);
+		passed = passed && PolicyFor(selection) == read;
+		selection.add_select()->set_feature_name("Boss-Extrude1");
+		passed = passed && PolicyFor(selection) == change;
+		sld_mcp::v1::SelectionRequest clear;
+		clear.set_clear(true);
+		passed = passed && PolicyFor(clear) == change;
+
+		sld_mcp::v1::ConfigurationsRequest configurations;
+		passed = passed && PolicyFor(configurations) == read;
+		configurations.set_activate("Default");
+		passed = passed && PolicyFor(configurations) == change;
+		configurations.set_delete_("Other");
+		passed = passed && PolicyFor(configurations) == change;
+		configurations.mutable_create();
+		passed = passed && PolicyFor(configurations) == change;
+
+		sld_mcp::v1::EquationsRequest equations;
+		passed = passed && PolicyFor(equations) == read;
+		equations.add_delete_("Width");
+		passed = passed && PolicyFor(equations) == change;
+		sld_mcp::v1::EquationsRequest set;
+		set.add_set()->set_name("Width");
+		passed = passed && PolicyFor(set) == change;
+		return passed;
 	}
 
 	// Blocks the first connection lookup while GetMesh owns the model mutex.
@@ -348,6 +384,12 @@ int main()
 		return 1;
 	}
 	std::cout << "PASS: shared admission, running inspection cancellation, edit completion and exception cleanup\n";
+	if (!TestReadOrChangePolicies())
+	{
+		std::cerr << "FAIL: a selection, configurations or equations request that changes something could stop early, or a read couldn't\n";
+		return 1;
+	}
+	std::cout << "PASS: selection, configurations and equations reads are cancellable, their changes complete\n";
 	if (!TestMainThread())
 	{
 		std::cerr << "FAIL: main-thread work: owning thread, exceptions, cancelled while queued, no nesting or Close\n";

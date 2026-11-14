@@ -140,4 +140,11 @@ namespace sld_mcp::service
 	sld_mcp::v1::DocumentType ToDocumentType(long type);
 
 	bool SameObject(IUnknown* a, IUnknown* b);
+
+	// RPCs that only read unless the request asks for a change: a read is
+	// Cancellable like the inspections, a change runs to the end. Defined with
+	// each RPC.
+	ExecutionPolicy PolicyFor(const sld_mcp::v1::SelectionRequest& request);
+	ExecutionPolicy PolicyFor(const sld_mcp::v1::ConfigurationsRequest& request);
+	ExecutionPolicy PolicyFor(const sld_mcp::v1::EquationsRequest& request);
 }

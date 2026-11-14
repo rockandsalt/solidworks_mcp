@@ -167,11 +167,17 @@ namespace
 	}
 }
 
+ExecutionPolicy sld_mcp::service::PolicyFor(const sld_mcp::v1::SelectionRequest& request)
+{
+	const bool changesSelection = request.clear() || !request.select().empty();
+	return changesSelection ? ExecutionPolicy::CompleteOperation : ExecutionPolicy::Cancellable;
+}
+
 grpc::Status SolidWorksService::UserSelection(grpc::ServerContext* context,
 	const sld_mcp::v1::SelectionRequest* request,
 	sld_mcp::v1::SelectionResponse* response)
 {
-	return m_executor.Execute(context, "UserSelection", ExecutionPolicy::CompleteOperation,
+	return m_executor.Execute(context, "UserSelection", PolicyFor(*request),
 		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
 		ATL::CComPtr<IModelDoc2> doc;
 		long docType = swDocNONE;
