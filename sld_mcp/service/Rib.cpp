@@ -3,6 +3,7 @@
 #include "Common.h"
 #include "AssemblyHelpers.h"
 #include "DimensionHelpers.h"
+#include "FeatureTreeHelpers.h"
 #include "SeedHelpers.h"
 #include "SketchHelpers.h"
 
@@ -28,8 +29,7 @@ namespace
 			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks wouldn't select " + FeatureName(sketch));
 
 		const double volumeBefore = SolidVolume(doc);
-		ATL::CComPtr<IFeature> lastBefore;
-		doc->IFeatureByPositionReverse(0, &lastBefore);
+		const NewFeatureWatch watch(doc);
 		hr = featureManager->InsertRib(
 			request.one_sided() ? VARIANT_FALSE : VARIANT_TRUE,      // Is2Sided
 			request.flip_side() ? VARIANT_TRUE : VARIANT_FALSE,      // ReverseThicknessDir
@@ -45,9 +45,8 @@ namespace
 		if (FAILED(hr))
 			return ComError("IFeatureManager::InsertRib", hr);
 
-		ATL::CComPtr<IFeature> last;
-		doc->IFeatureByPositionReverse(0, &last);
-		if (!last || SameObject(last, lastBefore))
+		const ATL::CComPtr<IFeature> last = watch.Added();
+		if (!last)
 			return grpc::Status::OK;
 		if (!KeepIfBuilt(doc, last, why).ok())
 			return grpc::Status::OK;

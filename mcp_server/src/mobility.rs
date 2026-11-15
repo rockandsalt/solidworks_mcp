@@ -437,67 +437,123 @@ fn size_mm(c: &proto::ComponentInfo) -> f64 {
     half.max(1.0)
 }
 
-pub fn reply_json(ids: &mut IdRegistry, request: &proto::InspectMobilityRequest, reply: &proto::InspectMobilityResponse) -> Value {
-    // Where everything started, and each component's motions: from its own
-    // probes and from the ones that dragged it along.
-    let start: HashMap<&[u8], (&proto::ComponentInfo, DVec3)> = reply
-        .components
-        .iter()
-        .chain(&reply.others)
-        .filter_map(|m| Some((m.component.as_ref()?.persist_id.as_slice(), (m.component.as_ref()?, vec(&m.center)))))
-        .collect();
-    let step_mm = request.step * MM_PER_M;
-    let step_rad = request.step_angle;
-    // (moved, nudged, which nudge, motion)
-    let mut motions: Vec<(&[u8], &[u8], (i32, bool), Twist)> = Vec::new();
-    for m in &reply.components {
-        let Some(c) = &m.component else { continue };
-        for probe in &m.probes {
-            for moved in &probe.moved {
-                let (Some((info, center)), Some(p)) = (start.get(moved.persist_id.as_slice()), &moved.placement) else {
-                    continue;
-                };
-                let t = twist(info_frame(info), placement_frame(p), *center);
-                if t.v.length() < MOVED_SHARE * step_mm && t.w.length() < MOVED_SHARE * step_rad {
-                    continue;
+/// What the probes found: where every component started, and the motions
+/// each made, from its own nudges and from the ones that dragged it along.
+struct Motions<'a> {
+    start: HashMap<&'a [u8], (&'a proto::ComponentInfo, DVec3)>,
+    twists: HashMap<&'a [u8], Vec<Twist>>,
+    drags: HashMap<&'a [u8], Vec<&'a [u8]>>,
+    dragged_by: HashMap<&'a [u8], Vec<&'a [u8]>>,
+}
+
+impl<'a> Motions<'a> {
+    fn collect(request: &proto::InspectMobilityRequest, reply: &'a proto::InspectMobilityResponse) -> Self {
+        // Where everything started, and each component's motions: from its own
+        // probes and from the ones that dragged it along.
+        let start: HashMap<&[u8], (&proto::ComponentInfo, DVec3)> = reply
+            .components
+            .iter()
+            .chain(&reply.others)
+            .filter_map(|m| Some((m.component.as_ref()?.persist_id.as_slice(), (m.component.as_ref()?, vec(&m.center)))))
+            .collect();
+        let step_mm = request.step * MM_PER_M;
+        let step_rad = request.step_angle;
+        // (moved, nudged, which nudge, motion)
+        let mut motions: Vec<(&[u8], &[u8], (i32, bool), Twist)> = Vec::new();
+        for m in &reply.components {
+            let Some(c) = &m.component else { continue };
+            for probe in &m.probes {
+                for moved in &probe.moved {
+                    let (Some((info, center)), Some(p)) = (start.get(moved.persist_id.as_slice()), &moved.placement) else {
+                        continue;
+                    };
+                    let t = twist(info_frame(info), placement_frame(p), *center);
+                    if t.v.length() < MOVED_SHARE * step_mm && t.w.length() < MOVED_SHARE * step_rad {
+                        continue;
+                    }
+                    motions.push((&moved.persist_id, &c.persist_id, (probe.axis, probe.negative), t));
                 }
-                motions.push((&moved.persist_id, &c.persist_id, (probe.axis, probe.negative), t));
             }
         }
-    }
-    let mut twists: HashMap<&[u8], Vec<Twist>> = HashMap::new();
-    let mut drags: HashMap<&[u8], Vec<&[u8]>> = HashMap::new();
-    let mut dragged_by: HashMap<&[u8], Vec<&[u8]>> = HashMap::new();
-    for (i, &(moved, nudged, nudge, t)) in motions.iter().enumerate() {
-        if moved != nudged {
-            // Dragged along the same way by a nudge along another axis or the
-            // other way isn't a response to the nudge: the solver re-solving
-            // a mate it holds only within a tolerance, the same snap on every
-            // solve (a lock-mated pair, seen 2026-10-25).
-            let scale = start.get(moved).map(|(c, _)| size_mm(c)).unwrap_or(10.0);
-            let size = |t: &Twist| (t.v / scale).length() + t.w.length();
-            let repeated = motions.iter().enumerate().any(|(j, &(m2, _, nudge2, t2))| {
-                j != i && m2 == moved && nudge2 != nudge && {
-                    let d = Twist { v: t.v - t2.v, w: t.w - t2.w };
-                    size(&d) < 0.2 * size(&t)
+        let mut twists: HashMap<&[u8], Vec<Twist>> = HashMap::new();
+        let mut drags: HashMap<&[u8], Vec<&[u8]>> = HashMap::new();
+        let mut dragged_by: HashMap<&[u8], Vec<&[u8]>> = HashMap::new();
+        for (i, &(moved, nudged, nudge, t)) in motions.iter().enumerate() {
+            if moved != nudged {
+                // Dragged along the same way by a nudge along another axis or the
+                // other way isn't a response to the nudge: the solver re-solving
+                // a mate it holds only within a tolerance, the same snap on every
+                // solve (a lock-mated pair, seen 2026-10-25).
+                let scale = start.get(moved).map(|(c, _)| size_mm(c)).unwrap_or(10.0);
+                let size = |t: &Twist| (t.v / scale).length() + t.w.length();
+                let repeated = motions.iter().enumerate().any(|(j, &(m2, _, nudge2, t2))| {
+                    j != i && m2 == moved && nudge2 != nudge && {
+                        let d = Twist { v: t.v - t2.v, w: t.w - t2.w };
+                        size(&d) < 0.2 * size(&t)
+                    }
+                });
+                if repeated {
+                    continue;
                 }
-            });
-            if repeated {
-                continue;
+                push_once(drags.entry(nudged).or_default(), moved);
+                push_once(dragged_by.entry(moved).or_default(), nudged);
             }
-            push_once(drags.entry(nudged).or_default(), moved);
-            push_once(dragged_by.entry(moved).or_default(), nudged);
+            twists.entry(moved).or_default().push(t);
         }
-        twists.entry(moved).or_default().push(t);
+        Motions { start, twists, drags, dragged_by }
     }
-    let label = |ids: &mut IdRegistry, pid: &[u8]| {
-        let name = start.get(pid).map(|(c, _)| c.name.as_str()).unwrap_or("?");
+
+    /// "name (component:N)".
+    fn label(&self, ids: &mut IdRegistry, pid: &[u8]) -> String {
+        let name = self.start.get(pid).map(|(c, _)| c.name.as_str()).unwrap_or("?");
         match ids.id_for(Kind::Component, pid) {
             Some(id) => format!("{name} ({id})"),
             None => name.to_string(),
         }
-    };
+    }
+}
 
+/// The axes a component turns about, with the pitch of a screw motion.
+fn rotations_json(f: &Freedom) -> Vec<Value> {
+    f.rotations
+        .iter()
+        .map(|r| {
+            let mut o = json!({ "axis": dir_json(r.axis), "through_mm": mm_json(r.through) });
+            if r.pitch.abs() >= PITCH_MM_PER_RAD {
+                // Along the axis as dir_json shows it.
+                let sign = if direction(r.axis).dot(r.axis) < 0.0 { -1.0 } else { 1.0 };
+                o["pitch_mm_per_turn"] = json!(round(sign * r.pitch * std::f64::consts::TAU, 3));
+            }
+            o
+        })
+        .collect()
+}
+
+/// Where SolidWorks' constrained status and what the probes found
+/// disagree, or the mates conflict.
+fn status_note(label: &str, status: proto::ConstrainedStatus, f: &Freedom, dragged: bool) -> Option<String> {
+    Some(match status {
+        proto::ConstrainedStatus::Under if f.dof() == 0 => format!(
+            "{label}: SolidWorks calls it under defined, but no nudge moved it -- it may only move \
+             together with components that weren't probed, or the mates hold it at a dead point."
+        ),
+        proto::ConstrainedStatus::Fully if f.dof() > 0 => format!(
+            "{label}: SolidWorks calls it fully defined (against what it's mated to), yet it moves: {}.",
+            if dragged { "together with the components that drag it" } else { "check its mates" }
+        ),
+        proto::ConstrainedStatus::Over | proto::ConstrainedStatus::NoSolution | proto::ConstrainedStatus::InvalidSolution => {
+            format!(
+                "{label}: its mates conflict ({}); the result reflects how SolidWorks resolved them -- \
+                 diagnose_model shows the failing mates.",
+                constrained_name(status).unwrap_or_default()
+            )
+        }
+        _ => return None,
+    })
+}
+
+pub fn reply_json(ids: &mut IdRegistry, request: &proto::InspectMobilityRequest, reply: &proto::InspectMobilityResponse) -> Value {
+    let motions = Motions::collect(request, reply);
     let mut components = Vec::new();
     let mut counts = (0, 0, 0); // fixed, can't move, can move
     let mut not_probed = Vec::new();
@@ -528,13 +584,13 @@ pub fn reply_json(ids: &mut IdRegistry, request: &proto::InspectMobilityRequest,
             continue;
         }
         if !m.probed {
-            not_probed.push(label(ids, pid));
+            not_probed.push(motions.label(ids, pid));
             obj.insert("free".into(), json!("not checked: ran out of time"));
             components.push(Value::Object(obj));
             continue;
         }
 
-        let f = freedom(twists.get(pid).map(Vec::as_slice).unwrap_or_default(), vec(&m.center) * MM_PER_M, size_mm(c));
+        let f = freedom(motions.twists.get(pid).map(Vec::as_slice).unwrap_or_default(), vec(&m.center) * MM_PER_M, size_mm(c));
         obj.insert("dof".into(), json!(f.dof()));
         obj.insert("translations".into(), json!(f.translations.len()));
         obj.insert("rotations".into(), json!(f.rotations.len()));
@@ -549,53 +605,18 @@ pub fn reply_json(ids: &mut IdRegistry, request: &proto::InspectMobilityRequest,
                 obj.insert("translate_along".into(), json!(f.translations.iter().map(|t| dir_json(*t)).collect::<Vec<_>>()));
             }
             if !f.rotations.is_empty() {
-                let rotations: Vec<Value> = f
-                    .rotations
-                    .iter()
-                    .map(|r| {
-                        let mut o = json!({ "axis": dir_json(r.axis), "through_mm": mm_json(r.through) });
-                        if r.pitch.abs() >= PITCH_MM_PER_RAD {
-                            // Along the axis as dir_json shows it.
-                            let sign = if direction(r.axis).dot(r.axis) < 0.0 { -1.0 } else { 1.0 };
-                            o["pitch_mm_per_turn"] = json!(round(sign * r.pitch * std::f64::consts::TAU, 3));
-                        }
-                        o
-                    })
-                    .collect();
-                obj.insert("rotate_about".into(), json!(rotations));
+                obj.insert("rotate_about".into(), json!(rotations_json(&f)));
             }
         }
-        if let Some(others) = drags.get(pid) {
-            obj.insert("drags_along".into(), json!(others.iter().map(|o| label(ids, o)).collect::<Vec<_>>()));
+        if let Some(others) = motions.drags.get(pid) {
+            obj.insert("drags_along".into(), json!(others.iter().map(|o| motions.label(ids, o)).collect::<Vec<_>>()));
         }
-        if let Some(others) = dragged_by.get(pid) {
-            obj.insert("dragged_by".into(), json!(others.iter().map(|o| label(ids, o)).collect::<Vec<_>>()));
+        if let Some(others) = motions.dragged_by.get(pid) {
+            obj.insert("dragged_by".into(), json!(others.iter().map(|o| motions.label(ids, o)).collect::<Vec<_>>()));
         }
-        match m.constrained() {
-            proto::ConstrainedStatus::Under if f.dof() == 0 => notes.push(format!(
-                "{}: SolidWorks calls it under defined, but no nudge moved it -- it may only move \
-                 together with components that weren't probed, or the mates hold it at a dead point.",
-                label(ids, pid)
-            )),
-            proto::ConstrainedStatus::Fully if f.dof() > 0 => notes.push(format!(
-                "{}: SolidWorks calls it fully defined (against what it's mated to), yet it moves: \
-                 {}.",
-                label(ids, pid),
-                if dragged_by.contains_key(pid) {
-                    "together with the components that drag it"
-                } else {
-                    "check its mates"
-                }
-            )),
-            proto::ConstrainedStatus::Over | proto::ConstrainedStatus::NoSolution | proto::ConstrainedStatus::InvalidSolution => {
-                notes.push(format!(
-                    "{}: its mates conflict ({}); the result reflects how SolidWorks resolved them -- \
-                     diagnose_model shows the failing mates.",
-                    label(ids, pid),
-                    constrained_name(m.constrained()).unwrap_or_default()
-                ))
-            }
-            _ => {}
+        let label = motions.label(ids, pid);
+        if let Some(note) = status_note(&label, m.constrained(), &f, motions.dragged_by.contains_key(pid)) {
+            notes.push(note);
         }
         components.push(Value::Object(obj));
     }
@@ -937,5 +958,24 @@ mod tests {
         assert_eq!(cs[3]["dof"], 0, "{text}");
         let note = json["notes"][0].as_str().unwrap();
         assert!(note.starts_with("full-1 (component:4): SolidWorks calls it under defined"), "{text}");
+    }
+
+    #[test]
+    fn status_notes_are_single_spaced_sentences() {
+        use proto::ConstrainedStatus as C;
+        let still = Freedom::default();
+        let moving = Freedom { translations: vec![DVec3::X], ..Freedom::default() };
+        let notes = [
+            status_note("a", C::Under, &still, false),
+            status_note("a", C::Fully, &moving, true),
+            status_note("a", C::Fully, &moving, false),
+            status_note("a", C::Over, &still, false),
+        ];
+        for note in &notes {
+            let note = note.as_deref().expect("a disagreement or conflict gets a note");
+            assert!(!note.contains("  ") && note.ends_with('.'), "{note:?}");
+        }
+        assert!(status_note("a", C::Under, &moving, false).is_none());
+        assert!(status_note("a", C::Fully, &still, false).is_none());
     }
 }

@@ -182,16 +182,11 @@ namespace
 					gone.push_back(item.ref());
 		}
 
-		const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_FALSE);
-		VARIANT_BOOL rebuilt = VARIANT_FALSE;
-		doc->EditRebuild3(&rebuilt);
+		const HRESULT closeHr = CloseSketch(doc, sketchManager);
 		if (!failure.ok())
 			return failure;
-		if (FAILED(closeHr))
-			return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
-		if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
-			return grpc::Status(grpc::StatusCode::INTERNAL,
-				"the sketch was changed, but SolidWorks left \"" + sketchName + "\" open for editing");
+		if (grpc::Status status = CheckSketchClosed(doc, closeHr, sketchName, "the sketch was changed"); !status.ok())
+			return status;
 
 		ATL::CComPtr<ISketch> sketch;
 		if (grpc::Status status = SketchOf(sketchFeature, sketch); !status.ok())

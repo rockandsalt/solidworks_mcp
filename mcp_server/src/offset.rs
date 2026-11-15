@@ -4,9 +4,9 @@
 use rmcp::{ErrorData as McpError, schemars};
 use serde::Deserialize;
 
-use crate::SketchTarget;
+use crate::sketch_tools::SketchTarget;
 use crate::addin::proto;
-use crate::delete::problems_text;
+use crate::feature_text::problems_text;
 use crate::inspect::{IdRegistry, Kind, MM_PER_M};
 use crate::mirror::{sketch_ref, unique};
 use crate::sketch;
@@ -350,7 +350,7 @@ mod tests {
         assert_eq!(r.on_persist_id, b"face");
 
         let mut p = params(&[&edge]);
-        p.target.plane = Some(crate::SketchPlane::Top);
+        p.target.plane = Some(crate::sketch_tools::SketchPlane::Top);
         assert_eq!(request(&ids, &p).unwrap().plane(), proto::Plane::Top);
 
         let mut p = params(&[&edge]);
@@ -390,7 +390,7 @@ mod tests {
         p.caps = OffsetCaps::Lines;
         assert!(request(&ids, &p).is_err());
         let mut p = params(&[&a]);
-        p.target.plane = Some(crate::SketchPlane::Top);
+        p.target.plane = Some(crate::sketch_tools::SketchPlane::Top);
         assert!(request(&ids, &p).is_err());
 
         let model = |set: &dyn Fn(&mut OffsetParams)| {

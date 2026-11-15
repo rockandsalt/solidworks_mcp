@@ -641,10 +641,9 @@ namespace
 					"SolidWorks didn't create hole location " + std::to_string(i + 1));
 		}
 		sketchManager->put_AddToDB(previousAddToDB);
-		const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_TRUE);
-		doc->ClearSelection2(VARIANT_TRUE);
-		if (failure.ok() && FAILED(closeHr))
-			failure = ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
+		const HRESULT closeHr = CloseSketch(doc, sketchManager);
+		if (failure.ok())
+			failure = CheckSketchClosed(doc, closeHr, FeatureName(result.placementFeature), "the hole locations were added");
 		if (failure.ok() &&
 			(!FindHolePlacementSketch(result.hole, result.placementFeature, result.placement).ok() ||
 				SketchPoints(result.placement).size() != points.size()))

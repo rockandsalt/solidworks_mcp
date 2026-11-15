@@ -4,7 +4,7 @@ use rmcp::{ErrorData as McpError, schemars};
 use serde::Deserialize;
 
 use crate::addin::proto;
-use crate::delete::type_label;
+use crate::feature_text::type_label;
 use crate::inspect::MM_PER_M;
 
 /// The add-in's limit.

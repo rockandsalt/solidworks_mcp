@@ -16,7 +16,7 @@ use serde_json::{Map, Value, json};
 use glam::{BVec3, DAffine3, DMat3, DVec3};
 
 use crate::addin::proto;
-use crate::inspect::{IdRegistry, Kind, MM_PER_M, direction, mm, point_mm, round};
+use crate::inspect::{self, IdRegistry, Kind, MM_PER_M, direction, mm, point_mm, round};
 
 // ---- Placement -------------------------------------------------------------
 
@@ -276,6 +276,22 @@ pub fn component_json(ids: &mut IdRegistry, c: &proto::ComponentInfo) -> Value {
         obj.insert("bbox_mm".into(), json!({ "min": point_mm(lo), "max": point_mm(hi) }));
     }
     Value::Object(obj)
+}
+
+/// The JSON for one InspectModel reply: the document, an assembly's
+/// components and mates, then features and geometry (crate::inspect).
+pub fn render_inspect(ids: &mut IdRegistry, reply: &proto::InspectModelResponse, filters: &inspect::Filters) -> Value {
+    let mut out = inspect::render_document(reply);
+    if !reply.components.is_empty() {
+        let components = reply.components.iter().map(|c| component_json(ids, c)).collect();
+        out.insert("components".into(), Value::Array(components));
+    }
+    if !reply.mates.is_empty() {
+        let mates = reply.mates.iter().map(|m| mate_json(ids, m)).collect();
+        out.insert("mates".into(), Value::Array(mates));
+    }
+    inspect::render_contents(ids, reply, filters, &mut out);
+    Value::Object(out)
 }
 
 pub fn mate_type_name(t: proto::MateType) -> &'static str {
@@ -986,5 +1002,23 @@ mod tests {
         let mut p = params(MateKind::Parallel, &["face:1", "face:2"]);
         p.lock_rotation = true;
         assert!(check(&p).is_err());
+    }
+
+    #[test]
+    fn inspect_reply_lists_components_and_mates_after_the_document() {
+        let reply = proto::InspectModelResponse {
+            document: Some(proto::Document {
+                title: "Assem1".into(),
+                r#type: proto::DocumentType::Assembly as i32,
+                ..Default::default()
+            }),
+            components: vec![turned(false)],
+            mates: vec![proto::MateInfo { name: "Coincident1".into(), ..Default::default() }],
+            features: vec![proto::FeatureInfo { name: "Front Plane".into(), ..Default::default() }],
+            ..Default::default()
+        };
+        let out = render_inspect(&mut IdRegistry::default(), &reply, &inspect::Filters::default());
+        let keys: Vec<&str> = out.as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(keys, ["document", "document_type", "components", "mates", "features"]);
     }
 }

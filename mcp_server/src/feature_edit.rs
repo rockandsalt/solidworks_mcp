@@ -10,7 +10,7 @@ use rmcp::{ErrorData as McpError, schemars};
 use serde::Deserialize;
 
 use crate::addin::proto;
-use crate::delete;
+use crate::feature_text;
 use crate::edit::{error_text, feature_target};
 use crate::inspect::{IdRegistry, Kind, MM_PER_M, mm, round};
 use crate::mirror::{self, unique};
@@ -194,7 +194,7 @@ pub fn fillet_reply_text(ids: &mut IdRegistry, params: &EditFilletParams, reply:
         fillet_definition_text(ids, after)
     );
     text += &error_text(after.error_code, after.error_is_warning);
-    text += &delete::problems_text(&reply.new_errors);
+    text += &feature_text::problems_text(&reply.new_errors);
     text += " The model was rebuilt; face and edge ids next to the fillet may be out of date -- \
              inspect_model again.";
     text
@@ -434,7 +434,7 @@ pub fn pattern_reply_text(ids: &mut IdRegistry, params: &EditPatternParams, repl
         pattern_definition_text(ids, after)
     );
     text += &error_text(after.error_code, after.error_is_warning);
-    text += &delete::problems_text(&reply.new_errors);
+    text += &feature_text::problems_text(&reply.new_errors);
     let bodies = match reply.body_count {
         1 => "1 solid body".to_string(),
         n => format!("{n} solid bodies"),
@@ -557,7 +557,7 @@ pub fn sweep_reply_text(params: &EditSweepParams, reply: &proto::EditSweepRespon
         sweep_definition_text(after)
     );
     text += &error_text(after.error_code, after.error_is_warning);
-    text += &delete::problems_text(&reply.new_errors);
+    text += &feature_text::problems_text(&reply.new_errors);
     text += " The model was rebuilt; earlier body, face and edge ids of the swept geometry may be \
              out of date -- inspect_model again.";
     text

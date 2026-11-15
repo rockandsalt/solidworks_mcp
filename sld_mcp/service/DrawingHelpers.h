@@ -98,6 +98,21 @@ namespace sld_mcp::service
 
 	std::string ActiveSheetName(IDrawingDoc* drawing);
 
+	// The active drawing with what the steps of one RPC on it use, looked up
+	// once before anything changes: `sheets` and `activeSheet` stay as they
+	// were then.
+	struct ActiveDrawing
+	{
+		ATL::CComPtr<IModelDoc2> doc;
+		ATL::CComQIPtr<IDrawingDoc> drawing;
+		ATL::CComPtr<IModelDocExtension> ext;
+		ATL::CComQIPtr<IMathUtility> math;
+		std::vector<DrawingSheet> sheets;
+		std::string activeSheet;
+	};
+
+	grpc::Status GetActiveDrawing(ISldWorks* swApp, ActiveDrawing& d);
+
 	// Finds a view by name; `sheetName` is the sheet it's on.
 	grpc::Status FindDrawingView(const std::vector<DrawingSheet>& sheets, const std::string& name,
 		ATL::CComPtr<IView>& view, std::string& sheetName);

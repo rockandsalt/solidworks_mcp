@@ -15,7 +15,7 @@ use serde::Deserialize;
 
 use crate::addin::proto;
 use crate::assembly;
-use crate::delete;
+use crate::feature_text;
 use crate::edit;
 use crate::inspect::{IdRegistry, Kind, MM_PER_M, mm, mm3, point_mm, round};
 
@@ -349,7 +349,7 @@ pub fn sweep_reply_text(ids: &mut IdRegistry, request: &proto::SweepMateRequest,
             text += " Earlier inspect_model coordinates of the moved components are out of date.";
         }
     }
-    text += &delete::problems_text(&reply.new_errors);
+    text += &feature_text::problems_text(&reply.new_errors);
     text
 }
 

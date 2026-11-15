@@ -676,10 +676,7 @@ grpc::Status SolidWorksService::CreateRectangleSketch(grpc::ServerContext* conte
 		if (sketchFeature)
 			sketchFeature->get_Name(&sketchName);
 
-		// Close the sketch (and rebuild).
-		const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_TRUE);
-		doc->ClearSelection2(VARIANT_TRUE);
-
+		const HRESULT closeHr = CloseSketch(doc, sketchManager);
 		if (!created)
 		{
 			// Don't leave an empty sketch behind.
@@ -687,8 +684,8 @@ grpc::Status SolidWorksService::CreateRectangleSketch(grpc::ServerContext* conte
 				DeleteSketchFeature(doc, sketchFeature);
 			return failure;
 		}
-		if (FAILED(closeHr))
-			return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
+		if (grpc::Status status = CheckSketchClosed(doc, closeHr, ToUtf8(sketchName), "the rectangle was drawn"); !status.ok())
+			return status;
 
 		const std::string sketchPid = PersistIdOf(ext, sketchFeature);
 		for (auto& item : *response->mutable_items())
@@ -838,11 +835,7 @@ grpc::Status SolidWorksService::AddSketchEntities(grpc::ServerContext* context,
 		if (sketchFeature)
 			sketchFeature->get_Name(&sketchName);
 
-		// Close the sketch (and rebuild).
-		const HRESULT closeHr = is3D ? sketchManager->Insert3DSketch(VARIANT_TRUE)
-		                             : sketchManager->InsertSketch(VARIANT_TRUE);
-		doc->ClearSelection2(VARIANT_TRUE);
-
+		const HRESULT closeHr = CloseSketch(doc, sketchManager, is3D);
 		if (!failure.ok())
 		{
 			// Don't leave a half-drawn new sketch behind.
@@ -850,8 +843,8 @@ grpc::Status SolidWorksService::AddSketchEntities(grpc::ServerContext* context,
 				DeleteSketchFeature(doc, sketchFeature);
 			return failure;
 		}
-		if (FAILED(closeHr))
-			return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
+		if (grpc::Status status = CheckSketchClosed(doc, closeHr, ToUtf8(sketchName), "the entities were drawn"); !status.ok())
+			return status;
 
 		// After the rebuild, so contours reflect the merged points.
 		sld_mcp::v1::SketchContours contours;

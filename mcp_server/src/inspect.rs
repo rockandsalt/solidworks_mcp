@@ -10,6 +10,8 @@
 
 use std::collections::HashMap;
 
+use rmcp::schemars;
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::addin::proto;
@@ -393,7 +395,7 @@ pub(crate) fn feature_json(ids: &mut IdRegistry, f: &proto::FeatureInfo) -> Valu
     }
     if f.error_code != 0 {
         let key = if f.error_is_warning { "warning" } else { "error" };
-        obj.insert(key.into(), json!(crate::delete::feature_error_name(f.error_code)));
+        obj.insert(key.into(), json!(crate::feature_text::feature_error_name(f.error_code)));
     }
     if !f.parents.is_empty() {
         obj.insert("parents".into(), json!(f.parents));
@@ -656,9 +658,9 @@ fn page<T>(
     out.insert(key.to_string(), Value::Array(shown));
 }
 
-/// The JSON for one InspectModel reply. Assembly geometry must already be
-/// in assembly space (crate::assembly::place_inspect_reply).
-pub fn render(ids: &mut IdRegistry, reply: &proto::InspectModelResponse, filters: &Filters) -> Value {
+/// The head of the JSON for one InspectModel reply: which document it is.
+/// crate::assembly::render_inspect puts it together with render_contents.
+pub fn render_document(reply: &proto::InspectModelResponse) -> Map<String, Value> {
     let mut out = Map::new();
     if let Some(doc) = &reply.document {
         out.insert("document".into(), json!(doc.title));
@@ -666,18 +668,13 @@ pub fn render(ids: &mut IdRegistry, reply: &proto::InspectModelResponse, filters
             out.insert("document_type".into(), json!("assembly"));
         }
     }
-    if !reply.components.is_empty() {
-        let components = reply
-            .components
-            .iter()
-            .map(|c| crate::assembly::component_json(ids, c))
-            .collect();
-        out.insert("components".into(), Value::Array(components));
-    }
-    if !reply.mates.is_empty() {
-        let mates = reply.mates.iter().map(|m| crate::assembly::mate_json(ids, m)).collect();
-        out.insert("mates".into(), Value::Array(mates));
-    }
+    out
+}
+
+/// The rest of the JSON for one InspectModel reply, added to `out`: its
+/// features and geometry. Assembly geometry must already be in assembly
+/// space (crate::assembly::place_inspect_reply).
+pub fn render_contents(ids: &mut IdRegistry, reply: &proto::InspectModelResponse, filters: &Filters, out: &mut Map<String, Value>) {
     if !reply.features.is_empty() {
         let features = reply.features.iter().map(|f| feature_json(ids, f)).collect();
         out.insert("features".into(), Value::Array(features));
@@ -701,10 +698,10 @@ pub fn render(ids: &mut IdRegistry, reply: &proto::InspectModelResponse, filters
         out.insert("bodies".into(), Value::Array(bodies));
     }
     if !reply.faces.is_empty() {
-        page(&mut out, "faces", &reply.faces, |f| filters.keep_face(f), filters, |f| face_json(ids, f));
+        page(out, "faces", &reply.faces, |f| filters.keep_face(f), filters, |f| face_json(ids, f));
     }
     if !reply.edges.is_empty() {
-        page(&mut out, "edges", &reply.edges, |e| filters.keep_edge(e), filters, |e| edge_json(ids, e));
+        page(out, "edges", &reply.edges, |e| filters.keep_edge(e), filters, |e| edge_json(ids, e));
     }
     if reply.truncated {
         out.insert(
@@ -712,12 +709,114 @@ pub fn render(ids: &mut IdRegistry, reply: &proto::InspectModelResponse, filters
             json!("the model has more faces/edges than the add-in reports at once; narrow `within` to see the rest"),
         );
     }
-    Value::Object(out)
+}
+
+// The inspect_model tool's params.
+
+/// What inspect_model lists.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum InspectWhat {
+    /// Features and bodies (and in an assembly, components and mates).
+    #[default]
+    Overview,
+    Features,
+    Bodies,
+    Faces,
+    Edges,
+    /// Assemblies: the components, with where each sits.
+    Components,
+    /// Assemblies: the mates.
+    Mates,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SurfaceKind {
+    Plane,
+    Cylinder,
+    Cone,
+    Sphere,
+    Torus,
+    Bspline,
+}
+
+impl From<SurfaceKind> for proto::SurfaceType {
+    fn from(kind: SurfaceKind) -> Self {
+        match kind {
+            SurfaceKind::Plane => proto::SurfaceType::Plane,
+            SurfaceKind::Cylinder => proto::SurfaceType::Cylinder,
+            SurfaceKind::Cone => proto::SurfaceType::Cone,
+            SurfaceKind::Sphere => proto::SurfaceType::Sphere,
+            SurfaceKind::Torus => proto::SurfaceType::Torus,
+            SurfaceKind::Bspline => proto::SurfaceType::Bspline,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum CurveKind {
+    Line,
+    Circle,
+    Ellipse,
+    Bspline,
+}
+
+impl From<CurveKind> for proto::CurveType {
+    fn from(kind: CurveKind) -> Self {
+        match kind {
+            CurveKind::Line => proto::CurveType::Line,
+            CurveKind::Circle => proto::CurveType::Circle,
+            CurveKind::Ellipse => proto::CurveType::Ellipse,
+            CurveKind::Bspline => proto::CurveType::Bspline,
+        }
+    }
+}
+
+pub const DEFAULT_INSPECT_LIMIT: usize = 100;
+
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+pub struct InspectModelParams {
+    /// What to list: "overview" (default; the feature tree and bodies, plus components and
+    /// mates in an assembly), "features", "bodies", "faces", "edges", or for assemblies
+    /// "components" or "mates".
+    #[serde(default)]
+    pub what: InspectWhat,
+    /// Faces/edges: restrict to one body, feature or face (edges only), given as an id, e.g.
+    /// "body:1", or (parts only) as a feature name, e.g. "Boss-Extrude1" (the faces that feature
+    /// created). Assemblies: a component id, e.g. "component:2", restricts features (that
+    /// component's own tree, e.g. its planes), bodies, faces and edges to that component.
+    #[serde(default)]
+    pub within: Option<String>,
+    /// Faces only: keep only faces of this surface type.
+    #[serde(default)]
+    pub surface_type: Option<SurfaceKind>,
+    /// Faces only: keep only planar faces whose outward normal points this way (within 1
+    /// degree), e.g. [0, 0, 1] for faces facing +Z.
+    #[serde(default)]
+    pub normal: Option<[f64; 3]>,
+    /// Edges only: keep only edges of this curve type.
+    #[serde(default)]
+    pub curve_type: Option<CurveKind>,
+    /// Faces/edges only: how many to return. Defaults to 100.
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// Faces/edges only: skip this many matching entries first, for paging. Defaults to 0.
+    #[serde(default)]
+    pub offset: Option<usize>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A part's whole reply, as assembly::render_inspect gives it.
+    fn render(ids: &mut IdRegistry, reply: &proto::InspectModelResponse, filters: &Filters) -> Value {
+        let mut out = render_document(reply);
+        render_contents(ids, reply, filters, &mut out);
+        Value::Object(out)
+    }
 
     fn v(x: f64, y: f64, z: f64) -> Option<proto::Vec3> {
         Some(proto::Vec3 { x, y, z })

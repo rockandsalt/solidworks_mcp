@@ -7,8 +7,10 @@ An MCP server that lets an AI model drive SOLIDWORKS.
   that can live outside SolidWorks.
 - `sld_mcp/`: the add-in. `service/` implements the RPCs with COM calls, one
   file per area (`Sketches.cpp`, `Drawings.cpp`, ...), helpers shared between
-  areas in `service/*Helpers.h` and `Common.h`. Keep it thin: logic goes to
-  the Rust side.
+  areas in `service/*Helpers.h` and `Common.h`. Keep it thin: only what needs
+  live COM objects stays here; logic over plain values goes to the Rust side,
+  or (when it must run inside one RPC) to a helper with a test in
+  `sld_mcp/tests/` (architecture.md, "Where logic goes").
 
 Design notes, per area, with "Untested in SolidWorks —
 verify: …" lists where checks are open: `docs/notes/`, a separate private git

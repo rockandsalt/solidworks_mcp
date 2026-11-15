@@ -315,6 +315,19 @@ namespace sld_mcp::service
 		return grpc::Status::OK;
 	}
 
+	grpc::Status GetActiveDrawing(ISldWorks* swApp, ActiveDrawing& d)
+	{
+		if (grpc::Status status = GetActiveDrawing(swApp, d.doc, d.drawing); !status.ok())
+			return status;
+		if (grpc::Status status = GetExtension(d.doc, d.ext); !status.ok())
+			return status;
+		if (grpc::Status status = GetMathUtility(swApp, d.math); !status.ok())
+			return status;
+		d.sheets = DrawingSheets(d.drawing);
+		d.activeSheet = ActiveSheetName(d.drawing);
+		return grpc::Status::OK;
+	}
+
 	std::string ActiveSheetName(IDrawingDoc* drawing)
 	{
 		ATL::CComPtr<IDispatch> disp;

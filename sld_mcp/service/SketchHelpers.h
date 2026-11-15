@@ -158,9 +158,32 @@ namespace sld_mcp::service
 	// Opens a new 3D sketch. On failure nothing is left open.
 	grpc::Status OpenNew3DSketch(IModelDoc2* doc, ISketchManager* sketchManager, ATL::CComPtr<ISketch>& sketch);
 
+	// Closes the open sketch (a 3D one with `is3D`) the one way that never
+	// opens the Repair Sketch dialog: selection cleared, InsertSketch(FALSE)
+	// (no exit rebuild), then EditRebuild3. InsertSketch(TRUE) opens that
+	// dialog and leaves the sketch open when the edit broke the profile of the
+	// sketch's feature (seen 2026-10-17). Returns the close's HRESULT, for
+	// CheckSketchClosed once the caller has handled its own failure.
+	// Closing with nothing selected makes SolidWorks ignore the next
+	// InsertSketch / Insert3DSketch, so OpenNewSketch and OpenNew3DSketch try
+	// twice: keep them doing so.
+	HRESULT CloseSketch(IModelDoc2* doc, ISketchManager* sketchManager, bool is3D = false);
+
+	// After CloseSketch: the close failed, or SolidWorks left the sketch open
+	// ("<done>, but SolidWorks left "<sketchName>" open for editing").
+	grpc::Status CheckSketchClosed(IModelDoc2* doc, HRESULT closeHr, const std::string& sketchName,
+		const std::string& done);
+
 	// Deletes a (closed) sketch feature, e.g. one left empty by a failed
 	// RPC. Best effort.
 	void DeleteSketchFeature(IModelDoc2* doc, IFeature* sketchFeature);
+
+	// The points that bound an arc about `center` from `start` to `end`,
+	// counterclockwise unless `clockwise`: its ends and the quadrant points
+	// (center +- radius along x and y) it passes. Pure geometry, for a
+	// sketch's bounding box.
+	std::vector<Eigen::Vector2d> ArcBoundingPoints(const Eigen::Vector2d& center, double radius,
+		const Eigen::Vector2d& start, const Eigen::Vector2d& end, bool clockwise);
 
 	// Deletes segments or points of the open sketch. Best effort.
 	void DeleteDrawnEntities(IModelDoc2* doc, const std::vector<ATL::CComPtr<IDispatch>>& entities);

@@ -5,7 +5,7 @@ use rmcp::{ErrorData as McpError, schemars};
 use serde::Deserialize;
 
 use crate::addin::proto;
-use crate::delete::{problems_text, type_label};
+use crate::feature_text::{problems_text, type_label};
 use crate::edit::feature_target;
 use crate::inspect::IdRegistry;
 

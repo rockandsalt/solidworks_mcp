@@ -650,6 +650,383 @@ namespace
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "unknown border size " + std::to_string(s.border_size()));
 		return grpc::Status::OK;
 	}
+
+	using SetupRequest = sld_mcp::v1::SetupDrawingAnnotationRequest;
+
+	// Where SetupDrawingAnnotation's annotation is, or goes. Looked up
+	// before anything changes.
+	struct AnnotationTarget
+	{
+		sld_mcp::v1::AnnotationOwner owner = sld_mcp::v1::ANNOTATION_OWNER_UNSPECIFIED;
+		std::string sheetName;
+		ATL::CComPtr<IView> ownerView;
+		FoundAnnotation found;                  // the annotation changed
+		ATL::CComPtr<INote> note;               // its note, or the new one
+		ATL::CComPtr<IAnnotation> onDimension;  // gdt on a dimension
+		ATL::CComPtr<IAnnotation> annotation;   // what the change goes to: found's, or the new one
+	};
+
+	// The leaders asked for: their arrow points (sheet meters), and the view
+	// of their entities with the entities.
+	struct Leaders
+	{
+		std::vector<Eigen::Vector2d> tips;
+		std::unique_ptr<DrawingViewContext> ctx;
+		std::vector<ViewEntityItem> items;
+	};
+
+	// A new annotation's owner, sheet and view: from view_name, the
+	// dimension a frame goes on and the view of the leaders' entities, which
+	// must agree. A sheet note goes on the active sheet unless sheet_name says.
+	grpc::Status ResolveNewTarget(const SetupRequest& r, const ActiveDrawing& d, AnnotationTarget& t)
+	{
+		const std::vector<DrawingSheet>& sheets = d.sheets;
+		t.owner = r.owner();
+		std::string viewName = r.view_name();
+		if (!r.attach_to_dimension().empty())
+		{
+			ATL::CComPtr<IView> dimensionView;
+			std::string dimensionSheet;
+			if (grpc::Status status = FindViewDimension(sheets, r.attach_to_dimension(), t.onDimension, dimensionView,
+				dimensionSheet); !status.ok())
+				return status;
+			const std::string dimensionViewName = ViewName(dimensionView);
+			if (!viewName.empty() && viewName != dimensionViewName)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, r.attach_to_dimension() + " is in " +
+					dimensionViewName + ", so what goes on it belongs to " + dimensionViewName + ", not " + viewName);
+			viewName = dimensionViewName;
+		}
+		if (r.has_gdt())
+			if (grpc::Status status = CheckDatumLabelFree(r.gdt(), DatumLabels(DrawingAnnotationList(sheets)));
+				!status.ok())
+				return status;
+		if (r.leader_to_size() > 0)
+		{
+			const std::string& leaderView = r.leader_to(0).view_name();
+			if (t.owner != sld_mcp::v1::ANNOTATION_OWNER_UNSPECIFIED && t.owner != sld_mcp::v1::ANNOTATION_OWNER_VIEW)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, std::string("a note with leaders to ") +
+					leaderView + "'s entities belongs to that view, not to the " + OwnerWord(t.owner));
+			if (!viewName.empty() && viewName != leaderView)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "the leaders go to " + leaderView +
+					"'s entities, so the note belongs to " + leaderView + ", not " + viewName);
+			viewName = leaderView;
+		}
+		if (t.owner == sld_mcp::v1::ANNOTATION_OWNER_UNSPECIFIED)
+			t.owner = viewName.empty() ? sld_mcp::v1::ANNOTATION_OWNER_SHEET : sld_mcp::v1::ANNOTATION_OWNER_VIEW;
+		if (t.owner == sld_mcp::v1::ANNOTATION_OWNER_VIEW)
+		{
+			if (viewName.empty())
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "say which view the note goes in");
+			if (grpc::Status status = FindDrawingView(sheets, viewName, t.ownerView, t.sheetName); !status.ok())
+				return status;
+			if (!r.sheet_name().empty() && !EqualsIgnoringCase(r.sheet_name(), t.sheetName))
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, viewName + " is on " + t.sheetName + ", not " +
+					r.sheet_name());
+			return grpc::Status::OK;
+		}
+		if (!viewName.empty())
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, std::string("a ") + OwnerWord(t.owner) +
+				" note doesn't go in a view (" + viewName + ")");
+		const std::string& wanted = r.sheet_name().empty() ? d.activeSheet : r.sheet_name();
+		const DrawingSheet* sheet = FindSheet(sheets, wanted);
+		if (!sheet)
+			return grpc::Status(grpc::StatusCode::NOT_FOUND,
+				"the drawing has no sheet named \"" + wanted + "\" (its sheets: " + SheetList(sheets) + ")");
+		t.sheetName = sheet->name;
+		return grpc::Status::OK;
+	}
+
+	// The annotation r.name() names, with its owner and note. Refuses note
+	// settings for other annotations, and leaders to the entities of another
+	// view than the one it's in after the change.
+	grpc::Status ResolveExistingTarget(const SetupRequest& r, const std::vector<DrawingSheet>& sheets,
+		AnnotationTarget& t)
+	{
+		if (grpc::Status status = FindAnnotation(sheets, r.name(), r.sheet_name(), r.view_name(), t.found); !status.ok())
+			return status;
+		t.sheetName = t.found.sheetName;
+		t.owner = AnnotationOwnerOf(t.found.annotation, nullptr);
+		t.note = NoteOf(t.found.annotation);
+		if (!t.note && HasNoteFields(r))
+		{
+			long type = 0;
+			t.found.annotation->GetType(&type);
+			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, r.name() + " isn't a note (annotation type " +
+				std::to_string(type) + "): only its position, layer and view can be changed");
+		}
+		if (r.leader_to_size() > 0)
+		{
+			std::string ownerName;
+			AnnotationOwnerOf(t.found.annotation, &ownerName);
+			const std::string& leaderView = r.leader_to(0).view_name();
+			const std::string target = !r.attach_to_view().empty() ? r.attach_to_view()
+				: t.owner == sld_mcp::v1::ANNOTATION_OWNER_VIEW ? ownerName : std::string();
+			if (target != leaderView)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, r.name() + " is " +
+					(target.empty() ? std::string("on the ") + OwnerWord(t.owner) : "in " + target) +
+					": its leaders can only go to entities of the view it's in (attach_to_view " + leaderView +
+					" puts it there)");
+		}
+		return grpc::Status::OK;
+	}
+
+	// The change asked for, positions in sheet meters; `tips` = the arrow
+	// points, one per leader.
+	grpc::Status ReadChange(const SetupRequest& r, const ActiveDrawing& d, const std::string& sheetName,
+		AnnotationChange& change, std::vector<Eigen::Vector2d>& tips)
+	{
+		const std::vector<DrawingSheet>& sheets = d.sheets;
+		IMathUtility* const math = d.math;
+		if (r.has_text())
+			change.text = r.text();
+		if (r.has_position())
+		{
+			Eigen::Vector2d at;
+			if (grpc::Status status = ToSheetPoint(sheets, math, r.position(), "position", at); !status.ok())
+				return status;
+			change.position = at;
+		}
+		for (int i = 0; i < r.arrow_points_size(); ++i)
+		{
+			Eigen::Vector2d at;
+			if (grpc::Status status = ToSheetPoint(sheets, math, r.arrow_points(i),
+				"arrow point " + std::to_string(i + 1), at); !status.ok())
+				return status;
+			tips.push_back(at);
+		}
+		if (r.has_leader_style())
+			change.leaderStyle = r.leader_style();
+		if (r.has_arrow())
+			change.arrow = r.arrow();
+		change.style = r.style();
+		if (r.has_layer())
+			change.layer = r.layer();
+		if (!r.attach_to_view().empty())
+		{
+			std::string viewSheet;
+			if (grpc::Status status = FindDrawingView(sheets, r.attach_to_view(), change.attachToView, viewSheet);
+				!status.ok())
+				return status;
+			if (viewSheet != sheetName)
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, r.name() + " is on " + sheetName + " and " +
+					r.attach_to_view() + " on " + viewSheet + ": an annotation can only go into a view of its own sheet");
+		}
+		return grpc::Status::OK;
+	}
+
+	// The view of the leaders' entities, with what resolving them needs.
+	grpc::Status MakeLeaderContext(const std::string& viewName, const ActiveDrawing& d,
+		sld_mcp::v1::SetupDrawingAnnotationResponse* response, std::unique_ptr<DrawingViewContext>& ctx)
+	{
+		ctx = std::make_unique<DrawingViewContext>();
+		if (grpc::Status status = FindDrawingView(d.sheets, viewName, ctx->view, ctx->sheetName); !status.ok())
+			return status;
+		ctx->model = ViewModelOf(ctx->view);
+		ctx->ids = std::make_unique<PersistIds>(d.ext);
+		ctx->modelIds = std::make_unique<PersistIds>(ctx->model.ext);
+		ctx->components = ViewComponents(ctx->view, ctx->model);
+		if (ctx->model.type == swDocASSEMBLY)
+			ctx->componentList = std::make_unique<ComponentList>(*ctx->modelIds, d.math,
+				response->mutable_components(), ATL::CComQIPtr<IAssemblyDoc>(ctx->model.doc.p));
+		return grpc::Status::OK;
+	}
+
+	// SolidWorks puts a new annotation in the active view (none: the sheet;
+	// the format while it's being edited) and gives it a leader to each
+	// entity selected, its arrow where the entity was picked. So: activates
+	// the owner's view and selects each leader's entity (at its tip) and the
+	// dimension a frame goes on. (ActivateView, even of no view, ends
+	// editing the sheet format.)
+	grpc::Status SelectAttachments(const ActiveDrawing& d, const SetupRequest& r, const AnnotationTarget& t,
+		const Leaders& leaders)
+	{
+		IModelDoc2* const doc = d.doc;
+		VARIANT_BOOL ok = VARIANT_FALSE;
+		if (t.owner == sld_mcp::v1::ANNOTATION_OWNER_VIEW)
+			d.drawing->ActivateView(FromUtf8(ViewName(t.ownerView)), &ok);
+		else if (t.owner == sld_mcp::v1::ANNOTATION_OWNER_SHEET)
+			d.drawing->ActivateView(ATL::CComBSTR(L""), &ok);
+		doc->ClearSelection2(VARIANT_TRUE);
+		for (size_t i = 0; i < leaders.items.size(); ++i)
+		{
+			std::optional<Eigen::Vector2d> tip;
+			if (i < leaders.tips.size())
+				tip = leaders.tips[i];
+			if (!SelectLeaderEntity(doc, *leaders.ctx, leaders.items[i], tip))
+			{
+				doc->ClearSelection2(VARIANT_TRUE);
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks wouldn't select leader " +
+					std::to_string(i + 1) + "'s entity in " + ViewName(leaders.ctx->view));
+			}
+		}
+		if (t.onDimension)
+		{
+			VARIANT_BOOL selected = VARIANT_FALSE;
+			if (FAILED(t.onDimension->Select3(VARIANT_TRUE, nullptr, &selected)) || !selected)
+			{
+				doc->ClearSelection2(VARIANT_TRUE);
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
+					"SolidWorks wouldn't select " + r.attach_to_dimension());
+			}
+		}
+		return grpc::Status::OK;
+	}
+
+	// Inserts the symbol, or the note (the change's text, else the old
+	// note's), on the selection, and clears it; it becomes `t.annotation`. A
+	// note uses up `change.text` and becomes `t.note`.
+	grpc::Status InsertOnSelection(const ActiveDrawing& d, const SetupRequest& r, const AnnotationState& before,
+		const std::vector<Eigen::Vector2d>& tips, AnnotationTarget& t, AnnotationChange& change)
+	{
+		IModelDoc2* const doc = d.doc;
+		ATL::CComPtr<IAnnotation>& annotation = t.annotation;
+		if (r.has_gdt())
+		{
+			// A frame / datum symbol goes on what's selected, like a note's
+			// leaders. A surface finish symbol is made where it goes; standing
+			// on its entity (no position) that's the arrow point.
+			const Eigen::Vector2d insertAt = change.position ? *change.position
+				: !tips.empty() ? tips[0] : Eigen::Vector2d(Eigen::Vector2d::Zero());
+			grpc::Status status = InsertGdtSymbol(doc, d.ext, r.gdt(), Eigen::Vector3d(insertAt.x(), insertAt.y(), 0.0), annotation);
+			doc->ClearSelection2(VARIANT_TRUE);
+			return status;
+		}
+		const ATL::CComBSTR text = change.text ? FromUtf8(*change.text) : before.text;
+		ATL::CComPtr<IDispatch> noteDisp;
+		HRESULT hr = doc->InsertNote(text, &noteDisp);
+		doc->ClearSelection2(VARIANT_TRUE);
+		if (FAILED(hr))
+			return ComError("IModelDoc2::InsertNote", hr);
+		ATL::CComQIPtr<INote> made(noteDisp.p);
+		ATL::CComPtr<IDispatch> annotationDisp;
+		if (made && SUCCEEDED(made->GetAnnotation(&annotationDisp)) && annotationDisp)
+			annotation = ATL::CComQIPtr<IAnnotation>(annotationDisp.p);
+		if (!annotation)
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't add the note");
+		t.note = made;
+		change.text.reset();
+		return grpc::Status::OK;
+	}
+
+	// The new annotation went where it belongs and attached as asked (a
+	// note's leaders to every entity, a symbol to its entity or dimension);
+	// otherwise it's deleted again.
+	grpc::Status CheckInserted(const ActiveDrawing& d, const SetupRequest& r, const AnnotationTarget& t, size_t leaders,
+		bool gdtAttaches)
+	{
+		IModelDoc2* const doc = d.doc;
+		IModelDocExtension* const ext = d.ext;
+		IAnnotation* const annotation = t.annotation;
+		std::string ownerName;
+		const auto actual = AnnotationOwnerOf(annotation, &ownerName);
+		const std::string expectedName = t.owner == sld_mcp::v1::ANNOTATION_OWNER_VIEW ? ViewName(t.ownerView)
+			: t.owner == sld_mcp::v1::ANNOTATION_OWNER_SHEET ? t.sheetName : ownerName;
+		if (actual != t.owner || ownerName != expectedName)
+		{
+			DeleteAnnotations(doc, ext, { annotation });
+			auto place = [](sld_mcp::v1::AnnotationOwner o, const std::string& name) {
+				return std::string("the ") + OwnerWord(o) +
+					(o == sld_mcp::v1::ANNOTATION_OWNER_SHEET_FORMAT ? std::string() : " " + name);
+			};
+			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks put the " + std::string(r.has_gdt()
+				? "symbol" : "note") + " in " + place(actual, ownerName) + " instead of " + place(t.owner, expectedName) +
+				" (on " + t.sheetName + "); it was deleted again");
+		}
+		if (r.has_gdt())
+		{
+			// A datum symbol has no leader of its own (its triangle sits on
+			// the entity); a frame on a dimension none either.
+			if (gdtAttaches && !GdtAttached(annotation))
+			{
+				DeleteAnnotations(doc, ext, { annotation });
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't attach the symbol to " +
+					(t.onDimension ? r.attach_to_dimension() : std::string("the entity")) + "; it was deleted again");
+			}
+			return grpc::Status::OK;
+		}
+		long count = 0;
+		annotation->GetLeaderCount(&count);
+		if (count != static_cast<long>(leaders))
+		{
+			DeleteAnnotations(doc, ext, { annotation });
+			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks gave the note " +
+				std::to_string(count) + " leader(s) for " + std::to_string(leaders) + " entities; it was deleted again");
+		}
+		return grpc::Status::OK;
+	}
+
+	// Where a new note given no position goes: above its view, or the
+	// sheet's middle.
+	std::optional<Eigen::Vector2d> DefaultPosition(IView* ownerView, const std::vector<DrawingSheet>& sheets,
+		const std::string& sheetName)
+	{
+		ATL::CComVariant outline;
+		std::vector<double> o;
+		if (ownerView && SUCCEEDED(ownerView->GetOutline(&outline)))
+			o = comvariant::ToDoubles(outline);
+		if (o.size() >= 4)
+			return Eigen::Vector2d(o[0], o[3] + 0.010);
+		SheetSetup setup;
+		if (const DrawingSheet* sheet = FindSheet(sheets, sheetName); sheet && ReadSheetSetup(sheet->sheet, setup).ok())
+			return Eigen::Vector2d(setup.width / 2, setup.height / 2);
+		return std::nullopt;
+	}
+
+	// Makes t.annotation: the new annotation or, for an existing one
+	// (t.found), the one replacing it (with its look and place), in the
+	// owner's view, sheet or format. On error nothing new is left.
+	grpc::Status MakeAnnotation(const ActiveDrawing& d, const SetupRequest& r, const Leaders& leaders,
+		const AnnotationState& before, AnnotationTarget& t, AnnotationChange& change)
+	{
+		if (grpc::Status status = SelectAttachments(d, r, t, leaders); !status.ok())
+			return status;
+		if (grpc::Status status = InsertOnSelection(d, r, before, leaders.tips, t, change); !status.ok())
+			return status;
+		const bool gdtAttaches = r.has_gdt() && (!leaders.items.empty() || t.onDimension);
+		if (grpc::Status status = CheckInserted(d, r, t, leaders.items.size(), gdtAttaches); !status.ok())
+			return status;
+		if (t.found.annotation)
+		{
+			CopyLook(before, t.annotation, t.note);
+			if (!change.position && before.hasPosition)
+				change.position = before.position.head<2>();
+		}
+		else if (!change.position && !gdtAttaches)
+			change.position = DefaultPosition(t.ownerView, d.sheets, t.sheetName);
+		return grpc::Status::OK;
+	}
+
+	// The reply's annotation, described with the ids inspect_drawing gives
+	// (the drawing's, and the owner view's assembly's components), and its
+	// sheet.
+	void DescribeSetup(const ActiveDrawing& d, const AnnotationTarget& t, Leaders& leaders,
+		sld_mcp::v1::SetupDrawingAnnotationResponse* response)
+	{
+		IAnnotation* const annotation = t.annotation;
+		PersistIds ids(d.ext);
+		std::string ownerName;
+		std::unique_ptr<PersistIds> modelIds;
+		std::unique_ptr<ComponentList> components;
+		if (leaders.ctx && leaders.ctx->componentList)
+			components = std::move(leaders.ctx->componentList);
+		else if (AnnotationOwnerOf(annotation, &ownerName) == sld_mcp::v1::ANNOTATION_OWNER_VIEW)
+			for (const auto& s : d.sheets)
+				for (const auto& v : s.views)
+					if (ViewName(v) == ownerName)
+						if (const ViewModel model = ViewModelOf(v); model.type == swDocASSEMBLY)
+						{
+							modelIds = std::make_unique<PersistIds>(model.ext);
+							components = std::make_unique<ComponentList>(*modelIds, d.math, response->mutable_components(),
+								ATL::CComQIPtr<IAssemblyDoc>(model.doc.p));
+						}
+		DescribeAnnotation(annotation, ids, components.get(), response->mutable_annotation());
+		for (const auto& s : DrawingSheets(d.drawing))
+			if (s.name == t.sheetName)
+			{
+				DrawingBudget budget;
+				DescribeSheet(s, d.activeSheet, d.ext, d.math, {}, false, false, budget, response->mutable_sheet());
+			}
+	}
 }
 
 grpc::Status SolidWorksService::SetupDrawingAnnotation(grpc::ServerContext* context,
@@ -662,216 +1039,76 @@ grpc::Status SolidWorksService::SetupDrawingAnnotation(grpc::ServerContext* cont
 
 	return m_executor.Execute(context, "SetupDrawingAnnotation", ExecutionPolicy::CompleteOperation,
 		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
-		ATL::CComPtr<IModelDoc2> doc;
-		ATL::CComQIPtr<IDrawingDoc> drawing;
-		if (grpc::Status status = GetActiveDrawing(swApp, doc, drawing); !status.ok())
-			return status;
-		ATL::CComPtr<IModelDocExtension> ext;
-		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
-			return status;
-		ATL::CComQIPtr<IMathUtility> math;
-		if (grpc::Status status = GetMathUtility(swApp, math); !status.ok())
-			return status;
-
 		// Everything is looked up before anything changes.
-		const std::vector<DrawingSheet> sheets = DrawingSheets(drawing);
-		const std::string original = ActiveSheetName(drawing);
-		sld_mcp::v1::AnnotationOwner owner = request->owner();
-		std::string sheetName;
-		ATL::CComPtr<IView> ownerView;
-		FoundAnnotation found;
-		ATL::CComPtr<INote> note;
-		ATL::CComPtr<IAnnotation> onDimension;  // gdt on a dimension
-		if (create)
-		{
-			std::string viewName = request->view_name();
-			if (!request->attach_to_dimension().empty())
-			{
-				ATL::CComPtr<IView> dimensionView;
-				std::string dimensionSheet;
-				if (grpc::Status status = FindViewDimension(sheets, request->attach_to_dimension(), onDimension, dimensionView,
-					dimensionSheet); !status.ok())
-					return status;
-				const std::string dimensionViewName = ViewName(dimensionView);
-				if (!viewName.empty() && viewName != dimensionViewName)
-					return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, request->attach_to_dimension() + " is in " +
-						dimensionViewName + ", so what goes on it belongs to " + dimensionViewName + ", not " + viewName);
-				viewName = dimensionViewName;
-			}
-			if (request->has_gdt())
-				if (grpc::Status status = CheckDatumLabelFree(request->gdt(), DatumLabels(DrawingAnnotationList(sheets)));
-					!status.ok())
-					return status;
-			if (request->leader_to_size() > 0)
-			{
-				const std::string& leaderView = request->leader_to(0).view_name();
-				if (owner != sld_mcp::v1::ANNOTATION_OWNER_UNSPECIFIED && owner != sld_mcp::v1::ANNOTATION_OWNER_VIEW)
-					return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, std::string("a note with leaders to ") +
-						leaderView + "'s entities belongs to that view, not to the " + OwnerWord(owner));
-				if (!viewName.empty() && viewName != leaderView)
-					return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "the leaders go to " + leaderView +
-						"'s entities, so the note belongs to " + leaderView + ", not " + viewName);
-				viewName = leaderView;
-			}
-			if (owner == sld_mcp::v1::ANNOTATION_OWNER_UNSPECIFIED)
-				owner = viewName.empty() ? sld_mcp::v1::ANNOTATION_OWNER_SHEET : sld_mcp::v1::ANNOTATION_OWNER_VIEW;
-			if (owner == sld_mcp::v1::ANNOTATION_OWNER_VIEW)
-			{
-				if (viewName.empty())
-					return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "say which view the note goes in");
-				if (grpc::Status status = FindDrawingView(sheets, viewName, ownerView, sheetName); !status.ok())
-					return status;
-				if (!request->sheet_name().empty() && !EqualsIgnoringCase(request->sheet_name(), sheetName))
-					return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, viewName + " is on " + sheetName + ", not " +
-						request->sheet_name());
-			}
-			else
-			{
-				if (!viewName.empty())
-					return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, std::string("a ") + OwnerWord(owner) +
-						" note doesn't go in a view (" + viewName + ")");
-				const std::string& wanted = request->sheet_name().empty() ? original : request->sheet_name();
-				const DrawingSheet* sheet = FindSheet(sheets, wanted);
-				if (!sheet)
-					return grpc::Status(grpc::StatusCode::NOT_FOUND,
-						"the drawing has no sheet named \"" + wanted + "\" (its sheets: " + SheetList(sheets) + ")");
-				sheetName = sheet->name;
-			}
-		}
-		else
-		{
-			if (grpc::Status status = FindAnnotation(sheets, request->name(), request->sheet_name(), request->view_name(), found);
-				!status.ok())
-				return status;
-			sheetName = found.sheetName;
-			owner = AnnotationOwnerOf(found.annotation, nullptr);
-			note = NoteOf(found.annotation);
-			if (!note && HasNoteFields(*request))
-			{
-				long type = 0;
-				found.annotation->GetType(&type);
-				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, request->name() + " isn't a note (annotation type " +
-					std::to_string(type) + "): only its position, layer and view can be changed");
-			}
-			if (request->leader_to_size() > 0)
-			{
-				// The view it's in after the change.
-				std::string ownerName;
-				AnnotationOwnerOf(found.annotation, &ownerName);
-				const std::string& leaderView = request->leader_to(0).view_name();
-				const std::string target = !request->attach_to_view().empty() ? request->attach_to_view()
-					: owner == sld_mcp::v1::ANNOTATION_OWNER_VIEW ? ownerName : std::string();
-				if (target != leaderView)
-					return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, request->name() + " is " +
-						(target.empty() ? std::string("on the ") + OwnerWord(owner) : "in " + target) +
-						": its leaders can only go to entities of the view it's in (attach_to_view " + leaderView +
-						" puts it there)");
-			}
-		}
-
+		ActiveDrawing d;
+		if (grpc::Status status = GetActiveDrawing(swApp, d); !status.ok())
+			return status;
+		IModelDoc2* const doc = d.doc;
+		IModelDocExtension* const ext = d.ext;
+		AnnotationTarget t;
+		if (grpc::Status status = create ? ResolveNewTarget(*request, d, t)
+			: ResolveExistingTarget(*request, d.sheets, t); !status.ok())
+			return status;
 		AnnotationChange change;
-		if (request->has_text())
-			change.text = request->text();
-		if (request->has_position())
-		{
-			Eigen::Vector2d at;
-			if (grpc::Status status = ToSheetPoint(sheets, math, request->position(), "position", at); !status.ok())
-				return status;
-			change.position = at;
-		}
-		std::vector<Eigen::Vector2d> tips;
-		for (int i = 0; i < request->arrow_points_size(); ++i)
-		{
-			Eigen::Vector2d at;
-			if (grpc::Status status = ToSheetPoint(sheets, math, request->arrow_points(i),
-				"arrow point " + std::to_string(i + 1), at); !status.ok())
-				return status;
-			tips.push_back(at);
-		}
-		if (request->has_leader_style())
-			change.leaderStyle = request->leader_style();
-		if (request->has_arrow())
-			change.arrow = request->arrow();
-		change.style = request->style();
-		if (request->has_layer())
-			change.layer = request->layer();
-		if (!request->attach_to_view().empty())
-		{
-			std::string viewSheet;
-			if (grpc::Status status = FindDrawingView(sheets, request->attach_to_view(), change.attachToView, viewSheet);
-				!status.ok())
-				return status;
-			if (viewSheet != sheetName)
-				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, request->name() + " is on " + sheetName + " and " +
-					request->attach_to_view() + " on " + viewSheet + ": an annotation can only go into a view of its own sheet");
-		}
+		Leaders leaders;
+		if (grpc::Status status = ReadChange(*request, d, t.sheetName, change, leaders.tips); !status.ok())
+			return status;
 
 		// Leaders' entities, resolved and selected while the view's sheet is
 		// showing.
-		std::unique_ptr<DrawingViewContext> leaderCtx;
 		if (request->leader_to_size() > 0)
 		{
-			leaderCtx = std::make_unique<DrawingViewContext>();
-			if (grpc::Status status = FindDrawingView(sheets, request->leader_to(0).view_name(), leaderCtx->view,
-				leaderCtx->sheetName); !status.ok())
+			if (grpc::Status status = MakeLeaderContext(request->leader_to(0).view_name(), d, response, leaders.ctx);
+				!status.ok())
 				return status;
-			leaderCtx->model = ViewModelOf(leaderCtx->view);
-			leaderCtx->ids = std::make_unique<PersistIds>(ext);
-			leaderCtx->modelIds = std::make_unique<PersistIds>(leaderCtx->model.ext);
-			leaderCtx->components = ViewComponents(leaderCtx->view, leaderCtx->model);
-			if (leaderCtx->model.type == swDocASSEMBLY)
-				leaderCtx->componentList = std::make_unique<ComponentList>(*leaderCtx->modelIds, math,
-					response->mutable_components(), ATL::CComQIPtr<IAssemblyDoc>(leaderCtx->model.doc.p));
 			if (!create)
-				ownerView = leaderCtx->view;
+				t.ownerView = leaders.ctx->view;
 		}
 		// A note's leaders are made with it, and SolidWorks moves a view's
 		// annotation into another view but not one of the sheet or its format
 		// (AttachAnnotation says true and leaves it, seen 2026-10-22): new
 		// leaders, or a sheet (format) note going into a view, mean a new note
 		// in the old one's place, which is then deleted.
-		const bool intoView = change.attachToView && owner != sld_mcp::v1::ANNOTATION_OWNER_VIEW;
-		if (intoView && !note)
+		const bool intoView = change.attachToView && t.owner != sld_mcp::v1::ANNOTATION_OWNER_VIEW;
+		if (intoView && !t.note)
 			return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, request->name() + " belongs to the " +
-				OwnerWord(owner) + ": SolidWorks only moves a view's annotations into another view (a note of the " +
-				OwnerWord(owner) + " is made again in the view)");
+				OwnerWord(t.owner) + ": SolidWorks only moves a view's annotations into another view (a note of the " +
+				OwnerWord(t.owner) + " is made again in the view)");
 		const bool remake = !create && (request->leader_to_size() > 0 || intoView);
 		if (remake)
 		{
-			if (!ownerView)
-				ownerView = change.attachToView;
+			if (!t.ownerView)
+				t.ownerView = change.attachToView;
 			change.attachToView.Release();
-			owner = sld_mcp::v1::ANNOTATION_OWNER_VIEW;
+			t.owner = sld_mcp::v1::ANNOTATION_OWNER_VIEW;
 		}
 
-		ATL::CComPtr<IAnnotation> annotation;
 		{
-			SheetActivation activation(drawing);
-			if (!activation.Show(sheetName))
-				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "couldn't switch to sheet " + sheetName);
-			EditModeScope editMode(drawing);
+			SheetActivation activation(d.drawing);
+			if (!activation.Show(t.sheetName))
+				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "couldn't switch to sheet " + t.sheetName);
+			EditModeScope editMode(d.drawing);
 			// A sheet-format annotation is edited in the format, the rest on the
 			// sheet; EditSheet also leaves any active view.
-			editMode.Set(owner == sld_mcp::v1::ANNOTATION_OWNER_SHEET_FORMAT);
+			editMode.Set(t.owner == sld_mcp::v1::ANNOTATION_OWNER_SHEET_FORMAT);
 
-			std::vector<ViewEntityItem> items;
-			if (leaderCtx)
+			if (leaders.ctx)
 			{
 				VARIANT_BOOL ok = VARIANT_FALSE;
-				drawing->ActivateView(FromUtf8(ViewName(leaderCtx->view)), &ok);
+				d.drawing->ActivateView(FromUtf8(ViewName(leaders.ctx->view)), &ok);
 				for (int i = 0; i < request->leader_to_size(); ++i)
 				{
 					ViewEntityItem item;
-					if (grpc::Status status = ResolveDrawingRef(*leaderCtx, request->leader_to(i),
+					if (grpc::Status status = ResolveDrawingRef(*leaders.ctx, request->leader_to(i),
 						"leader " + std::to_string(i + 1), item); !status.ok())
 						return status;
-					items.push_back(item);
+					leaders.items.push_back(item);
 				}
 			}
 
 			AnnotationState before;
 			if (!create)
-				before = ReadState(found.annotation, note);
+				before = ReadState(t.found.annotation, t.note);
 			if (intoView && request->leader_to_size() == 0 && before.hasLeader && !before.arrows.empty())
 				return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, request->name() +
 					" has leaders: going into a view it's made again, and they can't come along -- give attach_to "
@@ -886,137 +1123,15 @@ grpc::Status SolidWorksService::SetupDrawingAnnotation(grpc::ServerContext* cont
 
 			if (create || remake)
 			{
-				// SolidWorks puts a new note in the active view (none: the sheet;
-				// the format while it's being edited) and gives it a leader to
-				// each entity selected, its arrow where the entity was picked.
-				// (ActivateView, even of no view, ends editing the sheet format.)
-				VARIANT_BOOL ok = VARIANT_FALSE;
-				if (owner == sld_mcp::v1::ANNOTATION_OWNER_VIEW)
-					drawing->ActivateView(FromUtf8(ViewName(ownerView)), &ok);
-				else if (owner == sld_mcp::v1::ANNOTATION_OWNER_SHEET)
-					drawing->ActivateView(ATL::CComBSTR(L""), &ok);
-				doc->ClearSelection2(VARIANT_TRUE);
-				for (size_t i = 0; i < items.size(); ++i)
-				{
-					std::optional<Eigen::Vector2d> tip;
-					if (i < tips.size())
-						tip = tips[i];
-					if (!SelectLeaderEntity(doc, *leaderCtx, items[i], tip))
-					{
-						doc->ClearSelection2(VARIANT_TRUE);
-						return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks wouldn't select leader " +
-							std::to_string(i + 1) + "'s entity in " + ViewName(leaderCtx->view));
-					}
-				}
-				if (onDimension)
-				{
-					VARIANT_BOOL selected = VARIANT_FALSE;
-					if (FAILED(onDimension->Select3(VARIANT_TRUE, nullptr, &selected)) || !selected)
-					{
-						doc->ClearSelection2(VARIANT_TRUE);
-						return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
-							"SolidWorks wouldn't select " + request->attach_to_dimension());
-					}
-				}
-				if (request->has_gdt())
-				{
-					// A frame / datum symbol goes on what's selected, like a note's
-					// leaders.
-					// A surface finish symbol is made where it goes; standing on its
-					// entity (no position) that's the arrow point.
-					const Eigen::Vector2d insertAt = change.position ? *change.position
-						: !tips.empty() ? tips[0] : Eigen::Vector2d(Eigen::Vector2d::Zero());
-					grpc::Status status = InsertGdtSymbol(doc, ext, request->gdt(), Eigen::Vector3d(insertAt.x(), insertAt.y(), 0.0), annotation);
-					doc->ClearSelection2(VARIANT_TRUE);
-					if (!status.ok())
-						return status;
-				}
-				else
-				{
-					const ATL::CComBSTR text = change.text ? FromUtf8(*change.text) : before.text;
-					ATL::CComPtr<IDispatch> noteDisp;
-					HRESULT hr = doc->InsertNote(text, &noteDisp);
-					doc->ClearSelection2(VARIANT_TRUE);
-					if (FAILED(hr))
-						return ComError("IModelDoc2::InsertNote", hr);
-					ATL::CComQIPtr<INote> made(noteDisp.p);
-					ATL::CComPtr<IDispatch> annotationDisp;
-					if (made && SUCCEEDED(made->GetAnnotation(&annotationDisp)) && annotationDisp)
-						annotation = ATL::CComQIPtr<IAnnotation>(annotationDisp.p);
-					if (!annotation)
-						return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't add the note");
-					note = made;
-					change.text.reset();
-				}
-
-				// Where did it go?
-				std::string ownerName;
-				const auto actual = AnnotationOwnerOf(annotation, &ownerName);
-				const std::string expectedName = owner == sld_mcp::v1::ANNOTATION_OWNER_VIEW ? ViewName(ownerView)
-					: owner == sld_mcp::v1::ANNOTATION_OWNER_SHEET ? sheetName : ownerName;
-				if (actual != owner || ownerName != expectedName)
-				{
-					DeleteAnnotations(doc, ext, { annotation });
-					auto place = [](sld_mcp::v1::AnnotationOwner o, const std::string& name) {
-						return std::string("the ") + OwnerWord(o) +
-							(o == sld_mcp::v1::ANNOTATION_OWNER_SHEET_FORMAT ? std::string() : " " + name);
-					};
-					return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks put the " + std::string(request->has_gdt()
-						? "symbol" : "note") + " in " + place(actual, ownerName) + " instead of " + place(owner, expectedName) +
-						" (on " + sheetName + "); it was deleted again");
-				}
-				const bool gdtAttaches = request->has_gdt() && (!items.empty() || onDimension);
-				if (request->has_gdt())
-				{
-					// A datum symbol has no leader of its own (its triangle sits on
-					// the entity); a frame on a dimension none either.
-					if (gdtAttaches && !GdtAttached(annotation))
-					{
-						DeleteAnnotations(doc, ext, { annotation });
-						return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks didn't attach the symbol to " +
-							(onDimension ? request->attach_to_dimension() : std::string("the entity")) + "; it was deleted again");
-					}
-				}
-				else
-				{
-					long leaders = 0;
-					annotation->GetLeaderCount(&leaders);
-					if (leaders != static_cast<long>(items.size()))
-					{
-						DeleteAnnotations(doc, ext, { annotation });
-						return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks gave the note " +
-							std::to_string(leaders) + " leader(s) for " + std::to_string(items.size()) + " entities; it was deleted again");
-					}
-				}
-
-				if (remake)
-				{
-					CopyLook(before, annotation, note);
-					if (!change.position && before.hasPosition)
-						change.position = before.position.head<2>();
-				}
-				else if (!change.position && !gdtAttaches)
-				{
-					// Unplaced: above its view, or the sheet's middle.
-					ATL::CComVariant outline;
-					std::vector<double> o;
-					if (ownerView && SUCCEEDED(ownerView->GetOutline(&outline)))
-						o = comvariant::ToDoubles(outline);
-					if (o.size() >= 4)
-						change.position = Eigen::Vector2d(o[0], o[3] + 0.010);
-					else
-					{
-						SheetSetup setup;
-						if (const DrawingSheet* sheet = FindSheet(sheets, sheetName); sheet && ReadSheetSetup(sheet->sheet, setup).ok())
-							change.position = Eigen::Vector2d(setup.width / 2, setup.height / 2);
-					}
-				}
+				if (grpc::Status status = MakeAnnotation(d, *request, leaders, before, t, change); !status.ok())
+					return status;
 			}
 			else
-				annotation = found.annotation;
+				t.annotation = t.found.annotation;
+			IAnnotation* const annotation = t.annotation;
 
-			grpc::Status status = ApplyChange(doc, drawing, ext, annotation, note, change);
-			if (status.ok() && remake && !DeleteAnnotations(doc, ext, { found.annotation }))
+			grpc::Status status = ApplyChange(doc, d.drawing, ext, annotation, t.note, change);
+			if (status.ok() && remake && !DeleteAnnotations(doc, ext, { t.found.annotation }))
 				status = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
 					"SolidWorks didn't delete " + request->name() + " after making its replacement with the new leaders");
 			doc->ClearSelection2(VARIANT_TRUE);
@@ -1025,42 +1140,18 @@ grpc::Status SolidWorksService::SetupDrawingAnnotation(grpc::ServerContext* cont
 				if (create || remake)
 					DeleteAnnotations(doc, ext, { annotation });
 				else
-					RestoreState(annotation, note, before);
+					RestoreState(annotation, t.note, before);
 				doc->GraphicsRedraw2();
 				return status;
 			}
 			doc->GraphicsRedraw2();
 		}
 
-		// Described with the ids inspect_drawing gives (the drawing's, and the
-		// owner view's assembly's components).
-		PersistIds ids(ext);
-		std::string ownerName;
-		std::unique_ptr<PersistIds> modelIds;
-		std::unique_ptr<ComponentList> components;
-		if (leaderCtx && leaderCtx->componentList)
-			components = std::move(leaderCtx->componentList);
-		else if (AnnotationOwnerOf(annotation, &ownerName) == sld_mcp::v1::ANNOTATION_OWNER_VIEW)
-			for (const auto& s : sheets)
-				for (const auto& v : s.views)
-					if (ViewName(v) == ownerName)
-						if (const ViewModel model = ViewModelOf(v); model.type == swDocASSEMBLY)
-						{
-							modelIds = std::make_unique<PersistIds>(model.ext);
-							components = std::make_unique<ComponentList>(*modelIds, math, response->mutable_components(),
-								ATL::CComQIPtr<IAssemblyDoc>(model.doc.p));
-						}
-		DescribeAnnotation(annotation, ids, components.get(), response->mutable_annotation());
-		for (const auto& s : DrawingSheets(drawing))
-			if (s.name == sheetName)
-			{
-				DrawingBudget budget;
-				DescribeSheet(s, original, ext, math, {}, false, false, budget, response->mutable_sheet());
-			}
+		DescribeSetup(d, t, leaders, response);
 		response->set_created(create);
 		if (remake)
 			response->set_replaced(request->name());
-		response->set_active_sheet(original);
+		response->set_active_sheet(d.activeSheet);
 		return grpc::Status::OK;
 	});
 }

@@ -150,6 +150,26 @@ impl PaperSize {
 /// swDwgPaperSizes_e's user-defined size.
 pub const PAPER_USER_DEFINED: i32 = 12;
 
+/// A swDwgPaperSizes_e value in words.
+pub fn paper_name(size: i32) -> Option<&'static str> {
+    Some(match size {
+        0 => "A (letter) landscape",
+        1 => "A (letter) portrait",
+        2 => "B",
+        3 => "C",
+        4 => "D",
+        5 => "E",
+        6 => "A4 landscape",
+        7 => "A4 portrait",
+        8 => "A3",
+        9 => "A2",
+        10 => "A1",
+        11 => "A0",
+        PAPER_USER_DEFINED => "user defined",
+        _ => return None,
+    })
+}
+
 /// Largest sheet side paper_size_mm takes.
 const MAX_SHEET_MM: f64 = 10_000.0;
 
@@ -691,7 +711,7 @@ fn file_name(path: &str) -> &str {
 pub fn sheet_size_text(sheet: &proto::SheetInfo) -> String {
     let mm = |m: f64| (m * MM_PER_M * 10.0).round() / 10.0;
     let size = format!("{} x {} mm", mm(sheet.width), mm(sheet.height));
-    match crate::drawing::paper_name(sheet.paper_size) {
+    match paper_name(sheet.paper_size) {
         Some(paper) if sheet.paper_size != PAPER_USER_DEFINED => format!("{paper} ({size})"),
         _ => size,
     }

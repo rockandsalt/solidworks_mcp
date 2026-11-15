@@ -379,6 +379,7 @@ function Test-Addin {
     & cl.exe /nologo /std:c++17 /EHsc /MD /D_UNICODE /DUNICODE /D_USE_MATH_DEFINES "/I$projectDir" "/I$($settings.SwTypeLibDir)" `
         "/I$generatedDir" "/I$(Join-Path $dependencyDir 'include')" `
         (Join-Path $projectDir 'tests\MeshCancellation.cpp') (Join-Path $projectDir 'tests\PmiPreferences.cpp') `
+        (Join-Path $projectDir 'tests\SketchGeometry.cpp') `
         "/Fo$outDir\" "/Fe$testExe" `
         /link @objects @libraries ws2_32.lib crypt32.lib iphlpapi.lib bcrypt.lib dbghelp.lib `
         ole32.lib oleaut32.lib uuid.lib user32.lib advapi32.lib shell32.lib

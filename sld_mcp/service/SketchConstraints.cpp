@@ -798,12 +798,11 @@ grpc::Status SolidWorksService::AddSketchDimensions(grpc::ServerContext* context
 			return grpc::Status::OK;
 		}();
 
-		doc->ClearSelection2(VARIANT_TRUE);
-		const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_TRUE);
+		const HRESULT closeHr = CloseSketch(doc, sketchManager);
 		if (!failure.ok())
 			return failure;
-		if (FAILED(closeHr))
-			return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
+		if (grpc::Status status = CheckSketchClosed(doc, closeHr, sketchName, "the dimensions were added"); !status.ok())
+			return status;
 		response->set_sketch_name(sketchName);
 		return grpc::Status::OK;
 	});
@@ -934,12 +933,11 @@ grpc::Status SolidWorksService::AddSketchRelations(grpc::ServerContext* context,
 			return grpc::Status::OK;
 		}();
 
-		doc->ClearSelection2(VARIANT_TRUE);
-		const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_TRUE);
+		const HRESULT closeHr = CloseSketch(doc, sketchManager);
 		if (!failure.ok())
 			return failure;
-		if (FAILED(closeHr))
-			return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
+		if (grpc::Status status = CheckSketchClosed(doc, closeHr, sketchName, "the relations were added"); !status.ok())
+			return status;
 		response->set_sketch_name(sketchName);
 		response->set_added(added);
 		return grpc::Status::OK;
@@ -1091,12 +1089,11 @@ grpc::Status SolidWorksService::FullyDefineSketch(grpc::ServerContext* context,
 			ReadSketchState(sketch, sketchPid, response->mutable_state());
 		const size_t relationsAfter = SketchRelations(sketch).size();
 
-		doc->ClearSelection2(VARIANT_TRUE);
-		const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_TRUE);
+		const HRESULT closeHr = CloseSketch(doc, sketchManager);
 		if (!failure.ok())
 			return failure;
-		if (FAILED(closeHr))
-			return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
+		if (grpc::Status status = CheckSketchClosed(doc, closeHr, sketchName, "the sketch was fully defined"); !status.ok())
+			return status;
 
 		// What it added, read from the closed sketch.
 		for (const auto& display : FeatureDimensions(sketchFeature))

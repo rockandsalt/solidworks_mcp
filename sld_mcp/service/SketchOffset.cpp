@@ -278,26 +278,19 @@ grpc::Status SolidWorksService::OffsetSketchEntities(grpc::ServerContext* contex
 			return grpc::Status::OK;
 		}();
 
-		// Closed without the exit rebuild, as MirrorSketchEntities does: when the
-		// new entities break the profile of the sketch's feature, InsertSketch(TRUE)
-		// would open the Repair Sketch dialog.
-		doc->ClearSelection2(VARIANT_TRUE);
-		const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_FALSE);
+		const HRESULT closeHr = CloseSketch(doc, sketchManager);
 		if (!failure.ok())
 		{
 			if (SUCCEEDED(closeHr) && fromModel && !existing)
+			{
 				DeleteSketchFeature(doc, sketchFeature);
-			VARIANT_BOOL restored = VARIANT_FALSE;
-			doc->EditRebuild3(&restored);
+				VARIANT_BOOL restored = VARIANT_FALSE;
+				doc->EditRebuild3(&restored);
+			}
 			return failure;
 		}
-		if (FAILED(closeHr))
-			return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
-		if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
-			return grpc::Status(grpc::StatusCode::INTERNAL,
-				"the entities were offset, but SolidWorks left \"" + sketchName + "\" open for editing");
-		VARIANT_BOOL rebuilt = VARIANT_FALSE;
-		doc->EditRebuild3(&rebuilt);
+		if (grpc::Status status = CheckSketchClosed(doc, closeHr, sketchName, "the entities were offset"); !status.ok())
+			return status;
 
 		ATL::CComPtr<ISketch> sketch;
 		if (grpc::Status status = SketchOf(sketchFeature, sketch); !status.ok())
@@ -523,24 +516,19 @@ grpc::Status SolidWorksService::ConvertEntities(grpc::ServerContext* context,
 			return grpc::Status::OK;
 		}();
 
-		// Closed without the exit rebuild, as OffsetSketchEntities does.
-		doc->ClearSelection2(VARIANT_TRUE);
-		const HRESULT closeHr = is3D ? sketchManager->Insert3DSketch(VARIANT_FALSE) : sketchManager->InsertSketch(VARIANT_FALSE);
+		const HRESULT closeHr = CloseSketch(doc, sketchManager, is3D);
 		if (!failure.ok())
 		{
 			if (SUCCEEDED(closeHr) && !existing)
+			{
 				DeleteSketchFeature(doc, sketchFeature);
-			VARIANT_BOOL restored = VARIANT_FALSE;
-			doc->EditRebuild3(&restored);
+				VARIANT_BOOL restored = VARIANT_FALSE;
+				doc->EditRebuild3(&restored);
+			}
 			return failure;
 		}
-		if (FAILED(closeHr))
-			return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
-		if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
-			return grpc::Status(grpc::StatusCode::INTERNAL,
-				"the entities were converted, but SolidWorks left \"" + sketchName + "\" open for editing");
-		VARIANT_BOOL rebuilt = VARIANT_FALSE;
-		doc->EditRebuild3(&rebuilt);
+		if (grpc::Status status = CheckSketchClosed(doc, closeHr, sketchName, "the entities were converted"); !status.ok())
+			return status;
 
 		ATL::CComPtr<ISketch> sketch;
 		if (grpc::Status status = SketchOf(sketchFeature, sketch); !status.ok())

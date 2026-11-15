@@ -3,6 +3,7 @@
 #include "Common.h"
 #include "AssemblyHelpers.h"
 #include "DimensionHelpers.h"
+#include "FeatureTreeHelpers.h"
 #include "SketchHelpers.h"
 
 using namespace sld_mcp::service;
@@ -164,9 +165,7 @@ grpc::Status SolidWorksService::CreateHelix(grpc::ServerContext* context,
 		if (!selected)
 			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks wouldn't select " + sketchName);
 
-		// InsertHelix returns nothing: the new feature is the new last one.
-		ATL::CComPtr<IFeature> lastBefore;
-		doc->IFeatureByPositionReverse(0, &lastBefore);
+		const NewFeatureWatch watch(doc);
 		hr = doc->InsertHelix(
 			request->reverse_direction() ? VARIANT_TRUE : VARIANT_FALSE,
 			request->clockwise() ? VARIANT_TRUE : VARIANT_FALSE,
@@ -181,12 +180,11 @@ grpc::Status SolidWorksService::CreateHelix(grpc::ServerContext* context,
 		doc->ClearSelection2(VARIANT_TRUE);
 		if (FAILED(hr))
 			return ComError("IModelDoc2::InsertHelix", hr);
-		ATL::CComPtr<IFeature> helix;
-		doc->IFeatureByPositionReverse(0, &helix);
+		const ATL::CComPtr<IFeature> helix = watch.Added();
 
 		const std::string why =
 			"check the sizes: too few turns, or a taper that narrows the helix down to nothing, won't build";
-		if (!helix || SameObject(helix, lastBefore))
+		if (!helix)
 			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION,
 				"SolidWorks couldn't make a helix from " + sketchName + " -- " + why);
 		VARIANT_BOOL warning = VARIANT_FALSE;

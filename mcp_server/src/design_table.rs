@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::addin::proto;
-use crate::delete::problems_text;
+use crate::feature_text::problems_text;
 use crate::macro_run::Closed;
 
 /// The add-in's limits.

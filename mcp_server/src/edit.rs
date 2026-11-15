@@ -11,7 +11,7 @@ use serde::Deserialize;
 
 use crate::addin::proto;
 use crate::assembly::{self, MateAlign, MateKind};
-use crate::delete;
+use crate::feature_text;
 use crate::diagnose;
 use crate::inspect::{IdRegistry, Kind, MM_PER_M, mm, round};
 
@@ -244,7 +244,7 @@ pub(crate) fn error_text(code: i32, warning: bool) -> String {
         return String::new();
     }
     let how = if warning { "warns" } else { "fails to rebuild" };
-    format!(" SolidWorks says it {how}: {}.", delete::feature_error_name(code))
+    format!(" SolidWorks says it {how}: {}.", feature_text::feature_error_name(code))
 }
 
 pub fn extrude_reply_text(params: &EditExtrudeParams, reply: &proto::EditExtrudeResponse) -> String {
@@ -271,7 +271,7 @@ pub fn extrude_reply_text(params: &EditExtrudeParams, reply: &proto::EditExtrude
         definition_text(after)
     );
     text += &error_text(after.error_code, after.error_is_warning);
-    text += &delete::problems_text(&reply.new_errors);
+    text += &feature_text::problems_text(&reply.new_errors);
     text += " The model was rebuilt; earlier body ids and coordinates of the changed geometry may \
              be out of date -- inspect_model again.";
     text
@@ -514,7 +514,7 @@ pub fn mate_reply_text(ids: &mut IdRegistry, reply: &proto::EditMateResponse) ->
         text += " Earlier inspect_model coordinates of moved components are out of date (their ids \
                  still work).";
     }
-    text += &delete::problems_text(&reply.new_errors);
+    text += &feature_text::problems_text(&reply.new_errors);
     text
 }
 

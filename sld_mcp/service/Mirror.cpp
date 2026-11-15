@@ -252,20 +252,11 @@ grpc::Status SolidWorksService::MirrorSketchEntities(grpc::ServerContext* contex
 			return grpc::Status::OK;
 		}();
 
-		// Closed without the exit rebuild, as DeleteSketchEntities does: when
-		// the new entities break the profile of the sketch's feature,
-		// InsertSketch(TRUE) would open the Repair Sketch dialog.
-		doc->ClearSelection2(VARIANT_TRUE);
-		const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_FALSE);
+		const HRESULT closeHr = CloseSketch(doc, sketchManager);
 		if (!failure.ok())
 			return failure;
-		if (FAILED(closeHr))
-			return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
-		if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
-			return grpc::Status(grpc::StatusCode::INTERNAL,
-				"the entities were mirrored, but SolidWorks left \"" + sketchName + "\" open for editing");
-		VARIANT_BOOL rebuilt = VARIANT_FALSE;
-		doc->EditRebuild3(&rebuilt);
+		if (grpc::Status status = CheckSketchClosed(doc, closeHr, sketchName, "the entities were mirrored"); !status.ok())
+			return status;
 
 		// What changed, read from the closed sketch: the new segments; the new
 		// points that are no segment's end or center (only when points were

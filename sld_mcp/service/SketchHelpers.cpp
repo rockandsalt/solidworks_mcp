@@ -725,8 +725,8 @@ namespace sld_mcp::service
 		HRESULT hr = doc->ClearSelection2(VARIANT_TRUE);
 		if (FAILED(hr))
 			return ComError("IModelDoc2::ClearSelection2", hr);
-		// After a sketch was closed with nothing selected (dimension_sketch,
-		// add_sketch_relations), the next InsertSketch does nothing, also in another
+		// After a sketch was closed with nothing selected (CloseSketch, so every
+		// sketch RPC), the next InsertSketch does nothing, also in another
 		// document, and the one after works (seen 2026-10-31; why isn't known).
 		for (int attempt = 0; attempt < 2 && !sketch; ++attempt)
 		{
@@ -752,6 +752,53 @@ namespace sld_mcp::service
 		return grpc::Status::OK;
 	}
 
+	HRESULT CloseSketch(IModelDoc2* doc, ISketchManager* sketchManager, bool is3D)
+	{
+		doc->ClearSelection2(VARIANT_TRUE);
+		const HRESULT hr = is3D ? sketchManager->Insert3DSketch(VARIANT_FALSE) : sketchManager->InsertSketch(VARIANT_FALSE);
+		VARIANT_BOOL rebuilt = VARIANT_FALSE;
+		doc->EditRebuild3(&rebuilt);
+		return hr;
+	}
+
+	grpc::Status CheckSketchClosed(IModelDoc2* doc, HRESULT closeHr, const std::string& sketchName,
+		const std::string& done)
+	{
+		if (FAILED(closeHr))
+			return ComError("ISketchManager::InsertSketch / Insert3DSketch (closing the sketch)", closeHr);
+		if (!CheckNoOpenSketch(doc).ok())
+			return grpc::Status(grpc::StatusCode::INTERNAL,
+				done + ", but SolidWorks left \"" + sketchName + "\" open for editing");
+		return grpc::Status::OK;
+	}
+
+	std::vector<Eigen::Vector2d> ArcBoundingPoints(const Eigen::Vector2d& center, double radius,
+		const Eigen::Vector2d& start, const Eigen::Vector2d& end, bool clockwise)
+	{
+		std::vector<Eigen::Vector2d> points{start, end};
+		const double from = std::atan2(start.y() - center.y(), start.x() - center.x());
+		double sweep = std::atan2(end.y() - center.y(), end.x() - center.x()) - from;
+		if (clockwise && sweep > 0)
+			sweep -= 2 * M_PI;
+		if (!clockwise && sweep < 0)
+			sweep += 2 * M_PI;
+		const Eigen::Vector2d quadrants[] = {{radius, 0.0}, {0.0, radius}, {-radius, 0.0}, {0.0, -radius}};
+		for (int i = 0; i < 4; ++i)
+		{
+			// Whether quadrant i's angle lies on the arc: its turn from the
+			// start, the arc's way round, is within the sweep.
+			double d = i * M_PI / 2 - from;
+			if (sweep < 0)
+				d = -d;
+			d = std::fmod(d, 2 * M_PI);
+			if (d < 0)
+				d += 2 * M_PI;
+			if (d <= std::abs(sweep) + 1e-12)
+				points.push_back(center + quadrants[i]);
+		}
+		return points;
+	}
+
 	// Deletes a (closed) sketch feature, e.g. one left empty by a failed
 	// RPC. Best effort.
 	void DeleteSketchFeature(IModelDoc2* doc, IFeature* sketchFeature)
@@ -770,11 +817,16 @@ namespace sld_mcp::service
 		HRESULT hr = doc->ClearSelection2(VARIANT_TRUE);
 		if (FAILED(hr))
 			return ComError("IModelDoc2::ClearSelection2", hr);
-		hr = sketchManager->Insert3DSketch(VARIANT_TRUE);
-		if (FAILED(hr))
-			return ComError("ISketchManager::Insert3DSketch", hr);
-		hr = doc->IGetActiveSketch2(&sketch);
-		if (FAILED(hr) || !sketch)
+		// Twice, as OpenNewSketch: CloseSketch leaves nothing selected, after
+		// which the next InsertSketch may do nothing.
+		for (int attempt = 0; attempt < 2 && !sketch; ++attempt)
+		{
+			hr = sketchManager->Insert3DSketch(VARIANT_TRUE);
+			if (FAILED(hr))
+				return ComError("ISketchManager::Insert3DSketch", hr);
+			doc->IGetActiveSketch2(&sketch);
+		}
+		if (!sketch)
 			return grpc::Status(grpc::StatusCode::INTERNAL, "SolidWorks didn't open a new 3D sketch");
 		return grpc::Status::OK;
 	}

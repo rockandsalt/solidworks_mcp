@@ -729,7 +729,7 @@ pub fn reply_text(ids: &mut IdRegistry, reply: &proto::CreateReferenceGeometryRe
         if f.error_code != 0 {
             line += &format!(
                 ". SolidWorks warns: {}",
-                crate::delete::feature_error_name(f.error_code)
+                crate::feature_text::feature_error_name(f.error_code)
             );
         }
         lines.push(line);

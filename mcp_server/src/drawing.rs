@@ -19,7 +19,7 @@ use rmcp::{ErrorData as McpError, schemars};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::DimensionKind;
+use crate::sketch_tools::DimensionKind;
 use crate::addin::proto;
 use crate::assembly::Placement;
 use crate::inspect::{IdRegistry, Kind, MM_PER_M, curve_name, mm, round};
@@ -408,25 +408,6 @@ fn view_type_name(t: i32) -> &'static str {
         10 => "alternate_position",
         _ => "other",
     }
-}
-
-pub fn paper_name(size: i32) -> Option<&'static str> {
-    Some(match size {
-        0 => "A (letter) landscape",
-        1 => "A (letter) portrait",
-        2 => "B",
-        3 => "C",
-        4 => "D",
-        5 => "E",
-        6 => "A4 landscape",
-        7 => "A4 portrait",
-        8 => "A3",
-        9 => "A2",
-        10 => "A1",
-        11 => "A0",
-        12 => "user defined",
-        _ => return None,
-    })
 }
 
 pub fn display_mode_name(mode: i32) -> Option<&'static str> {
@@ -823,7 +804,7 @@ pub fn render_inspect(
         if sheet.active {
             obj.insert("active".into(), json!(true));
         }
-        if let Some(paper) = paper_name(sheet.paper_size) {
+        if let Some(paper) = crate::files::paper_name(sheet.paper_size) {
             obj.insert("paper".into(), json!(paper));
         }
         if sheet.width > 0.0 && sheet.height > 0.0 {

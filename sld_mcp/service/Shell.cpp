@@ -3,6 +3,7 @@
 #include "Common.h"
 #include "AssemblyHelpers.h"
 #include "DimensionHelpers.h"
+#include "FeatureTreeHelpers.h"
 #include "ReferenceHelpers.h"
 #include "SeedHelpers.h"
 
@@ -172,21 +173,18 @@ grpc::Status SolidWorksService::ShellBody(grpc::ServerContext* context,
 		if (grpc::Status status = SelectForShell(doc, ext, *request, thick, open, bodies); !status.ok())
 			return status;
 
-		// InsertFeatureShell returns nothing: the new feature is the new last one.
 		const double volumeBefore = SolidVolume(doc);
-		ATL::CComPtr<IFeature> lastBefore;
-		doc->IFeatureByPositionReverse(0, &lastBefore);
+		const NewFeatureWatch watch(doc);
 		HRESULT hr = doc->InsertFeatureShell(thickness, request->outward() ? VARIANT_TRUE : VARIANT_FALSE);
 		doc->ClearSelection2(VARIANT_TRUE);
 		if (FAILED(hr))
 			return ComError("IModelDoc2::InsertFeatureShell", hr);
-		ATL::CComPtr<IFeature> shell;
-		doc->IFeatureByPositionReverse(0, &shell);
+		const ATL::CComPtr<IFeature> shell = watch.Added();
 
 		const std::string tooThick =
 			"the walls are probably too thick for the body (inward walls must leave room inside: less than half "
 			"its thinnest part when closed, and no more than its smallest curve radius); try thinner ones, or outward";
-		if (!shell || SameObject(shell, lastBefore))
+		if (!shell)
 			return grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks couldn't shell that body -- " + tooThick);
 		if (grpc::Status status = KeepIfBuilt(doc, shell, tooThick); !status.ok())
 			return status;

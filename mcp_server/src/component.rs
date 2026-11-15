@@ -19,7 +19,7 @@ use glam::{DMat3, DQuat, DVec3};
 
 use crate::addin::proto;
 use crate::assembly::{self, placement_text};
-use crate::{delete, edit, files, motion};
+use crate::{edit, feature_text, files, motion};
 use crate::inspect::{IdRegistry, Kind, MM_PER_M, direction as unit_text, mm, point_mm, round};
 
 /// More than this in one call is almost certainly a mistake (and slow).
@@ -372,7 +372,7 @@ pub fn replace_reply_text(
         .filter(|p| broken.is_empty() || p.type_name != "MateGroup")
         .cloned()
         .collect();
-    let problems = delete::problems_text(&problems);
+    let problems = feature_text::problems_text(&problems);
     if !problems.is_empty() {
         text += &format!("\n{}", problems.trim_start());
     }
@@ -478,7 +478,7 @@ pub fn fix_reply_text(ids: &mut IdRegistry, params: &FixComponentsParams, reply:
         text += "\nThe rebuild moved floated components to satisfy their mates: earlier inspect_model \
                  coordinates of them are out of date (their ids still work).";
     }
-    let problems = delete::problems_text(&reply.new_errors);
+    let problems = feature_text::problems_text(&reply.new_errors);
     if !problems.is_empty() {
         text += &format!("\n{}", problems.trim_start());
         if params.fixed {
@@ -740,7 +740,7 @@ pub fn move_reply_text(ids: &mut IdRegistry, params: &MoveComponentParams, reque
         }
     }
 
-    let problems = delete::problems_text(&reply.new_errors);
+    let problems = feature_text::problems_text(&reply.new_errors);
     if !problems.is_empty() {
         text += &format!("\nAfter the move: {}", problems.trim_start());
         if !params.restore {

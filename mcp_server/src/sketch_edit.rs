@@ -4,9 +4,9 @@
 use rmcp::{ErrorData as McpError, schemars};
 use serde::Deserialize;
 
-use crate::SketchTarget;
+use crate::sketch_tools::SketchTarget;
 use crate::addin::proto;
-use crate::delete::problems_text;
+use crate::feature_text::problems_text;
 use crate::inspect::{IdRegistry, Kind, MM_PER_M, SKETCH_KINDS};
 use crate::mirror::{sketch_ref, unique};
 use crate::sketch;
@@ -596,7 +596,7 @@ mod tests {
         assert!(convert_request(&ids, &convert(&[&edge, &face])).is_err());
 
         let mut p = convert(&[&edge, &line]);
-        p.target.plane = Some(crate::SketchPlane::Top);
+        p.target.plane = Some(crate::sketch_tools::SketchPlane::Top);
         let r = convert_request(&ids, &p).unwrap();
         assert_eq!(r.plane(), proto::Plane::Top);
         assert_eq!(r.model_persist_ids, vec![b"edge".to_vec()]);
@@ -611,7 +611,7 @@ mod tests {
         let r = convert_request(&ids, &p).unwrap();
         assert!(r.sketch_3d && r.on_persist_id.is_empty());
         assert_eq!(r.plane(), proto::Plane::Unspecified);
-        p.target.plane = Some(crate::SketchPlane::Top);
+        p.target.plane = Some(crate::sketch_tools::SketchPlane::Top);
         assert!(convert_request(&ids, &p).is_err());
 
         let mut p = convert(&[&edge]);
@@ -625,7 +625,7 @@ mod tests {
 
         let mut p = convert(&[&edge]);
         p.target.on = Some(face);
-        p.target.plane = Some(crate::SketchPlane::Top);
+        p.target.plane = Some(crate::sketch_tools::SketchPlane::Top);
         assert!(convert_request(&ids, &p).is_err());
 
         for bad in [point.as_str(), "edge:99", "line:99", "origin", "Boss-Extrude1"] {

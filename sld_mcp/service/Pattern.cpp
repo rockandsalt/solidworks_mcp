@@ -152,19 +152,6 @@ namespace
 		return {v.x(), v.y()};
 	}
 
-	// Whether `angle` lies on the arc that starts at `from` and turns
-	// `sweep` radians (negative: clockwise).
-	bool OnSweep(double from, double sweep, double angle)
-	{
-		double d = angle - from;
-		if (sweep < 0)
-			d = -d;
-		d = std::fmod(d, 2 * M_PI);
-		if (d < 0)
-			d += 2 * M_PI;
-		return d <= std::abs(sweep) + 1e-12;
-	}
-
 	// Grows `lo`/`hi` to take in an entity of a sketch, by what SolidWorks
 	// says of it: points and line ends, circles whole, arcs from end to end
 	// (with the quadrant points they pass). Other segments by their end and
@@ -194,21 +181,12 @@ namespace
 					add(q);
 				return;
 			}
-			const Point2 s = At(item.start()), e = At(item.end());
-			add(s);
-			add(e);
 			int direction = 1;  // 1 counterclockwise, -1 clockwise
 			if (ATL::CComQIPtr<ISketchArc> arc(entity); arc)
 				arc->GetRotationDir(&direction);
-			const double from = std::atan2(s.y - c.y, s.x - c.x);
-			double sweep = std::atan2(e.y - c.y, e.x - c.x) - from;
-			if (direction < 0 && sweep > 0)
-				sweep -= 2 * M_PI;
-			if (direction >= 0 && sweep < 0)
-				sweep += 2 * M_PI;
-			for (int i = 0; i < 4; ++i)
-				if (OnSweep(from, sweep, i * M_PI / 2))
-					add(quadrants[i]);
+			const Point2 s = At(item.start()), e = At(item.end());
+			for (const Eigen::Vector2d& p : ArcBoundingPoints({c.x, c.y}, r, {s.x, s.y}, {e.x, e.y}, direction < 0))
+				add({p.x(), p.y()});
 			return;
 		}
 		for (const auto* v : {&item.start(), &item.end(), &item.center()})
@@ -958,20 +936,11 @@ grpc::Status SolidWorksService::PatternSketchEntities(grpc::ServerContext* conte
 			return grpc::Status::OK;
 		}();
 
-		// Closed without the exit rebuild, as DeleteSketchEntities does: when
-		// the new entities break the profile of the sketch's feature,
-		// InsertSketch(TRUE) would open the Repair Sketch dialog.
-		doc->ClearSelection2(VARIANT_TRUE);
-		const HRESULT closeHr = sketchManager->InsertSketch(VARIANT_FALSE);
+		const HRESULT closeHr = CloseSketch(doc, sketchManager);
 		if (!failure.ok())
 			return failure;
-		if (FAILED(closeHr))
-			return ComError("ISketchManager::InsertSketch (closing the sketch)", closeHr);
-		if (grpc::Status status = CheckNoOpenSketch(doc); !status.ok())
-			return grpc::Status(grpc::StatusCode::INTERNAL,
-				"the entities were patterned, but SolidWorks left \"" + sketchName + "\" open for editing");
-		VARIANT_BOOL rebuilt = VARIANT_FALSE;
-		doc->EditRebuild3(&rebuilt);
+		if (grpc::Status status = CheckSketchClosed(doc, closeHr, sketchName, "the entities were patterned"); !status.ok())
+			return status;
 
 		sketch.Release();
 		if (grpc::Status status = SketchOf(sketchFeature, sketch); !status.ok())

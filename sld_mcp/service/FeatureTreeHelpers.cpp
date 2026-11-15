@@ -239,6 +239,20 @@ namespace sld_mcp::service
 		return type == "ProfileFeature" || type == "3DProfileFeature";
 	}
 
+	NewFeatureWatch::NewFeatureWatch(IModelDoc2* doc) : m_doc(doc)
+	{
+		m_doc->IFeatureByPositionReverse(0, &m_lastBefore);
+	}
+
+	ATL::CComPtr<IFeature> NewFeatureWatch::Added() const
+	{
+		ATL::CComPtr<IFeature> last;
+		m_doc->IFeatureByPositionReverse(0, &last);
+		if (!last || SameObject(last, m_lastBefore))
+			return nullptr;
+		return last;
+	}
+
 	std::string ProfileSketchName(IFeature* feature)
 	{
 		// A rib absorbs only a hidden copy of its sketch, "Sketch2<2>"; the

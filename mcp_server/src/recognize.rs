@@ -525,6 +525,16 @@ struct Recognizer<'a> {
     used: Vec<bool>,
 }
 
+/// What Recognizer::rounds_json found, each a list of reply entries.
+struct Rounds {
+    bosses: Vec<Value>,
+    fillets: Vec<Value>,
+    /// Rounded ends (partial cylinders).
+    arcs: Vec<Value>,
+    /// Conical chamfers (planar_chamfers adds the planar ones).
+    chamfers: Vec<Value>,
+}
+
 impl Recognizer<'_> {
     fn ids(&self, ids: &mut IdRegistry, faces: &[usize]) -> Value {
         json!(faces.iter().filter_map(|&f| ids.id_for(Kind::Face, &self.topo.faces[f].persist_id)).collect::<Vec<_>>())
@@ -538,6 +548,226 @@ impl Recognizer<'_> {
 
     fn body_id(&self, ids: &mut IdRegistry, f: usize) -> Value {
         ids.id_for(Kind::Body, &self.topo.faces[f].body_persist_id).map_or(Value::Null, Value::String)
+    }
+
+    /// Holes (simple, counterbore, countersink); `summary` gets a line per
+    /// kind of hole.
+    fn holes_json(&mut self, ids: &mut IdRegistry, summary: &mut Vec<String>) -> Vec<Value> {
+        let mut hole_list = Vec::new();
+        let mut hole_lines: BTreeMap<String, usize> = BTreeMap::new();
+        for hole in holes(&self.topo, &self.rounds) {
+            let Some(shape) = hole_shape(&self.topo, &self.rounds, &hole) else { continue };
+            let cylinders: Vec<usize> = shape.steps.iter().map(|s| s.0).filter(|&i| !self.rounds[i].cone).collect();
+            let Some(diameter) = cylinders.iter().map(|&i| 2.0 * self.rounds[i].radius).reduce(f64::min) else {
+                continue; // only cones: a conical pocket
+            };
+            let mut obj = Map::new();
+            let first = shape.steps[0].0;
+            let kind = if self.rounds[first].cone {
+                obj.insert(
+                    "countersink".into(),
+                    json!({ "diameter_mm": mm(2.0 * self.rounds[first].r_max),
+                            "angle_deg": deg(2.0 * self.rounds[first].half_angle) }),
+                );
+                "countersink"
+            } else if 2.0 * self.rounds[first].radius > diameter + TOL {
+                obj.insert(
+                    "counterbore".into(),
+                    json!({ "diameter_mm": mm(2.0 * self.rounds[first].radius), "depth_mm": mm(shape.steps[0].2) }),
+                );
+                "counterbore"
+            } else {
+                "simple"
+            };
+            let last = shape.steps[shape.steps.len() - 1].0;
+            if !shape.through && self.rounds[last].cone {
+                obj.insert("drill_point_angle_deg".into(), json!(deg(2.0 * self.rounds[last].half_angle)));
+            }
+            obj.insert("kind".into(), json!(kind));
+            obj.insert("diameter_mm".into(), json!(mm(diameter)));
+            obj.insert("through".into(), json!(shape.through));
+            obj.insert("depth_mm".into(), json!(mm(shape.depth)));
+            obj.insert("entry_mm".into(), point_json(shape.entry));
+            obj.insert("direction".into(), dir_json(shape.direction));
+            if shape.steps.len() > 1 {
+                let steps: Vec<Value> = shape
+                    .steps
+                    .iter()
+                    .map(|&(i, from, to)| {
+                        let round = &self.rounds[i];
+                        let mut s = Map::new();
+                        s.insert("surface".into(), json!(if round.cone { "cone" } else { "cylinder" }));
+                        if round.cone {
+                            s.insert("diameters_mm".into(), json!([mm(2.0 * round.r_max), mm(2.0 * round.r_min)]));
+                        } else {
+                            s.insert("diameter_mm".into(), json!(mm(2.0 * round.radius)));
+                        }
+                        s.insert("from_mm".into(), json!(mm(from)));
+                        s.insert("to_mm".into(), json!(mm(to)));
+                        Value::Object(s)
+                    })
+                    .collect();
+                obj.insert("steps".into(), json!(steps));
+            }
+            let faces: Vec<usize> = hole
+                .rounds
+                .iter()
+                .flat_map(|&i| self.rounds[i].faces.iter().copied())
+                .chain(hole.planes.iter().copied())
+                .collect();
+            obj.insert("faces".into(), self.ids(ids, &faces));
+            obj.insert("body".into(), self.body_id(ids, faces[0]));
+            self.take(&faces);
+            let mut line = format!("Ø{} {kind} hole", num(diameter));
+            line += &if shape.through { ", through".to_string() } else { format!(", {} deep", num(shape.depth)) };
+            if let Some(Value::Object(c)) = obj.get("counterbore") {
+                line += &format!(" (counterbore Ø{} x {})", c["diameter_mm"], c["depth_mm"]);
+            }
+            if let Some(Value::Object(c)) = obj.get("countersink") {
+                line += &format!(" (countersink Ø{} x {}°)", c["diameter_mm"], c["angle_deg"]);
+            }
+            *hole_lines.entry(line).or_default() += 1;
+            hole_list.push(Value::Object(obj));
+        }
+        summary.extend(hole_lines.iter().map(|(line, n)| format!("{n} x {line}")));
+        hole_list
+    }
+
+    /// The cylinders, cones and tori no hole took: bosses, fillets, rounded
+    /// ends (partial cylinders) and conical chamfers.
+    fn rounds_json(&mut self, ids: &mut IdRegistry, summary: &mut Vec<String>) -> Rounds {
+        let mut bosses = Vec::new();
+        let mut fillets: BTreeMap<(i64, &str), Vec<usize>> = BTreeMap::new();
+        let mut arcs = Vec::new();
+        let mut chamfers = Vec::new();
+        for i in 0..self.rounds.len() {
+            let round = &self.rounds[i];
+            if round.faces.iter().any(|&f| self.used[f]) {
+                continue;
+            }
+            let faces = round.faces.clone();
+            if !round.cone && round.full() && round.concave == Some(false) {
+                bosses.push(json!({
+                    "diameter_mm": mm(2.0 * round.radius),
+                    "length_mm": mm(round.length()),
+                    "axis": dir_json(round.axis.a),
+                    "from_mm": point_json(round.axis.point(round.t0)),
+                    "to_mm": point_json(round.axis.point(round.t1)),
+                    "faces": self.ids(ids, &faces),
+                    "body": self.body_id(ids, faces[0]),
+                }));
+            } else if !round.cone && !round.full() && round.span < FILLET_MAX_SPAN {
+                let kind = match round.concave {
+                    Some(true) => "fillet",
+                    Some(false) => "round",
+                    None => "blend",
+                };
+                fillets.entry(((round.radius * 1e7).round() as i64, kind)).or_default().extend(&faces);
+            } else if !round.cone && !round.full() {
+                arcs.push(json!({
+                    "radius_mm": mm(round.radius),
+                    "span_deg": deg(round.span),
+                    "concave": round.concave,
+                    "axis": dir_json(round.axis.a),
+                    "axis_point_mm": point_json(round.axis.point(round.t0)),
+                    "length_mm": mm(round.length()),
+                    "faces": self.ids(ids, &faces),
+                }));
+            } else if round.cone && round.concave == Some(false) && round.r_max - round.r_min > TOL {
+                chamfers.push(json!({
+                    "kind": "conical",
+                    "axial_mm": mm(round.length()),
+                    "radial_mm": mm(round.r_max - round.r_min),
+                    "angle_deg": deg(round.half_angle),
+                    "faces": self.ids(ids, &faces),
+                }));
+            } else {
+                continue;
+            }
+            self.take(&faces);
+        }
+        // Tori are fillets around a circular edge (minor radius = fillet radius).
+        for f in 0..self.topo.faces.len() {
+            let face = &self.topo.faces[f];
+            if self.used[f] || face.surface_type() != S::Torus {
+                continue;
+            }
+            let kind = match torus_convex(face) {
+                Some(true) => "round",
+                Some(false) => "fillet",
+                None => "blend",
+            };
+            fillets.entry(((face.minor_radius * 1e7).round() as i64, kind)).or_default().push(f);
+            self.used[f] = true;
+        }
+        if !bosses.is_empty() {
+            summary.push(format!("{} cylindrical boss(es)/shaft(s)", bosses.len()));
+        }
+        let fillet_list: Vec<Value> = fillets
+            .iter()
+            .map(|(&(radius, kind), faces)| {
+                summary.push(format!("{kind}s R{}: {} face(s)", num(radius as f64 / 1e7), faces.len()));
+                json!({ "radius_mm": mm(radius as f64 / 1e7), "kind": kind, "faces": self.ids(ids, faces) })
+            })
+            .collect();
+        if !arcs.is_empty() {
+            summary.push(format!("{} rounded end(s) (partial cylinders, e.g. slot ends)", arcs.len()));
+        }
+        Rounds { bosses, fillets: fillet_list, arcs, chamfers }
+    }
+
+    /// Planar chamfers: a narrow face between two planes, leaning on both.
+    fn planar_chamfers(&mut self, ids: &mut IdRegistry, chamfers: &mut Vec<Value>) {
+        for f in 0..self.topo.faces.len() {
+            if self.used[f] || self.topo.faces[f].surface_type() != S::Plane {
+                continue;
+            }
+            if let Some((mut obj, a, b)) = planar_chamfer(&self.topo, f) {
+                obj.insert("kind".into(), json!("planar"));
+                obj.insert("faces".into(), self.ids(ids, &[f]));
+                // legs_mm[0] lies on between[0], legs_mm[1] on between[1].
+                obj.insert("between".into(), self.ids(ids, &[a, b]));
+                chamfers.push(Value::Object(obj));
+                self.used[f] = true;
+            }
+        }
+    }
+
+    /// The planar faces left, grouped by direction and sorted along it.
+    fn planes_json(&mut self, ids: &mut IdRegistry, summary: &mut Vec<String>) -> Vec<Value> {
+        let mut directions: Vec<(V, Vec<(f64, usize)>)> = Vec::new();
+        for f in 0..self.topo.faces.len() {
+            if self.used[f] || self.topo.faces[f].surface_type() != S::Plane {
+                continue;
+            }
+            let (Some(n), Some(o)) = (self.topo.normal(f), self.topo.faces[f].origin.as_ref()) else { continue };
+            let at = |d: V| dot(xyz(o), d);
+            match directions.iter_mut().find(|(d, _)| parallel(*d, n)) {
+                Some((d, faces)) => faces.push((at(*d), f)),
+                None => directions.push((n, vec![(at(n), f)])),
+            }
+            self.used[f] = true;
+        }
+        let plane_count: usize = directions.iter().map(|(_, faces)| faces.len()).sum();
+        if plane_count > 0 {
+            summary.push(format!("{plane_count} planar face(s) in {} direction(s)", directions.len()));
+        }
+        let planes: Vec<Value> = directions
+            .iter_mut()
+            .map(|(d, faces)| {
+                faces.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let levels: Vec<Value> = faces
+                    .iter()
+                    .map(|&(at, f)| {
+                        let facing = self.topo.normal(f).is_some_and(|n| dot(n, *d) > 0.0);
+                        json!({ "at_mm": mm(at), "facing": if facing { "+" } else { "-" },
+                                "face": ids.id_for(Kind::Face, &self.topo.faces[f].persist_id) })
+                    })
+                    .collect();
+                json!({ "direction": dir_json(*d), "faces": levels })
+            })
+            .collect();
+        planes
     }
 }
 
@@ -561,217 +791,13 @@ pub fn render(ids: &mut IdRegistry, reply: &proto::InspectModelResponse) -> Valu
         out.insert("imported".into(), json!(imported));
     }
     let mut summary: Vec<String> = Vec::new();
-
-    // ---- Holes
-    let mut hole_list = Vec::new();
-    let mut hole_lines: BTreeMap<String, usize> = BTreeMap::new();
-    for hole in holes(&r.topo, &r.rounds) {
-        let Some(shape) = hole_shape(&r.topo, &r.rounds, &hole) else { continue };
-        let cylinders: Vec<usize> = shape.steps.iter().map(|s| s.0).filter(|&i| !r.rounds[i].cone).collect();
-        let Some(diameter) = cylinders.iter().map(|&i| 2.0 * r.rounds[i].radius).reduce(f64::min) else {
-            continue; // only cones: a conical pocket
-        };
-        let mut obj = Map::new();
-        let first = shape.steps[0].0;
-        let kind = if r.rounds[first].cone {
-            obj.insert(
-                "countersink".into(),
-                json!({ "diameter_mm": mm(2.0 * r.rounds[first].r_max),
-                        "angle_deg": deg(2.0 * r.rounds[first].half_angle) }),
-            );
-            "countersink"
-        } else if 2.0 * r.rounds[first].radius > diameter + TOL {
-            obj.insert(
-                "counterbore".into(),
-                json!({ "diameter_mm": mm(2.0 * r.rounds[first].radius), "depth_mm": mm(shape.steps[0].2) }),
-            );
-            "counterbore"
-        } else {
-            "simple"
-        };
-        let last = shape.steps[shape.steps.len() - 1].0;
-        if !shape.through && r.rounds[last].cone {
-            obj.insert("drill_point_angle_deg".into(), json!(deg(2.0 * r.rounds[last].half_angle)));
-        }
-        obj.insert("kind".into(), json!(kind));
-        obj.insert("diameter_mm".into(), json!(mm(diameter)));
-        obj.insert("through".into(), json!(shape.through));
-        obj.insert("depth_mm".into(), json!(mm(shape.depth)));
-        obj.insert("entry_mm".into(), point_json(shape.entry));
-        obj.insert("direction".into(), dir_json(shape.direction));
-        if shape.steps.len() > 1 {
-            let steps: Vec<Value> = shape
-                .steps
-                .iter()
-                .map(|&(i, from, to)| {
-                    let round = &r.rounds[i];
-                    let mut s = Map::new();
-                    s.insert("surface".into(), json!(if round.cone { "cone" } else { "cylinder" }));
-                    if round.cone {
-                        s.insert("diameters_mm".into(), json!([mm(2.0 * round.r_max), mm(2.0 * round.r_min)]));
-                    } else {
-                        s.insert("diameter_mm".into(), json!(mm(2.0 * round.radius)));
-                    }
-                    s.insert("from_mm".into(), json!(mm(from)));
-                    s.insert("to_mm".into(), json!(mm(to)));
-                    Value::Object(s)
-                })
-                .collect();
-            obj.insert("steps".into(), json!(steps));
-        }
-        let faces: Vec<usize> = hole
-            .rounds
-            .iter()
-            .flat_map(|&i| r.rounds[i].faces.iter().copied())
-            .chain(hole.planes.iter().copied())
-            .collect();
-        obj.insert("faces".into(), r.ids(ids, &faces));
-        obj.insert("body".into(), r.body_id(ids, faces[0]));
-        r.take(&faces);
-        let mut line = format!("Ø{} {kind} hole", num(diameter));
-        line += &if shape.through { ", through".to_string() } else { format!(", {} deep", num(shape.depth)) };
-        if let Some(Value::Object(c)) = obj.get("counterbore") {
-            line += &format!(" (counterbore Ø{} x {})", c["diameter_mm"], c["depth_mm"]);
-        }
-        if let Some(Value::Object(c)) = obj.get("countersink") {
-            line += &format!(" (countersink Ø{} x {}°)", c["diameter_mm"], c["angle_deg"]);
-        }
-        *hole_lines.entry(line).or_default() += 1;
-        hole_list.push(Value::Object(obj));
-    }
-    summary.extend(hole_lines.iter().map(|(line, n)| format!("{n} x {line}")));
-
-    // ---- Bosses, fillets, rounded ends, conical chamfers
-    let mut bosses = Vec::new();
-    let mut fillets: BTreeMap<(i64, &str), Vec<usize>> = BTreeMap::new();
-    let mut arcs = Vec::new();
-    let mut chamfers = Vec::new();
-    for i in 0..r.rounds.len() {
-        let round = &r.rounds[i];
-        if round.faces.iter().any(|&f| r.used[f]) {
-            continue;
-        }
-        let faces = round.faces.clone();
-        if !round.cone && round.full() && round.concave == Some(false) {
-            bosses.push(json!({
-                "diameter_mm": mm(2.0 * round.radius),
-                "length_mm": mm(round.length()),
-                "axis": dir_json(round.axis.a),
-                "from_mm": point_json(round.axis.point(round.t0)),
-                "to_mm": point_json(round.axis.point(round.t1)),
-                "faces": r.ids(ids, &faces),
-                "body": r.body_id(ids, faces[0]),
-            }));
-        } else if !round.cone && !round.full() && round.span < FILLET_MAX_SPAN {
-            let kind = match round.concave {
-                Some(true) => "fillet",
-                Some(false) => "round",
-                None => "blend",
-            };
-            fillets.entry(((round.radius * 1e7).round() as i64, kind)).or_default().extend(&faces);
-        } else if !round.cone && !round.full() {
-            arcs.push(json!({
-                "radius_mm": mm(round.radius),
-                "span_deg": deg(round.span),
-                "concave": round.concave,
-                "axis": dir_json(round.axis.a),
-                "axis_point_mm": point_json(round.axis.point(round.t0)),
-                "length_mm": mm(round.length()),
-                "faces": r.ids(ids, &faces),
-            }));
-        } else if round.cone && round.concave == Some(false) && round.r_max - round.r_min > TOL {
-            chamfers.push(json!({
-                "kind": "conical",
-                "axial_mm": mm(round.length()),
-                "radial_mm": mm(round.r_max - round.r_min),
-                "angle_deg": deg(round.half_angle),
-                "faces": r.ids(ids, &faces),
-            }));
-        } else {
-            continue;
-        }
-        r.take(&faces);
-    }
-    // Tori are fillets around a circular edge (minor radius = fillet radius).
-    for f in 0..r.topo.faces.len() {
-        let face = &r.topo.faces[f];
-        if r.used[f] || face.surface_type() != S::Torus {
-            continue;
-        }
-        let kind = match torus_convex(face) {
-            Some(true) => "round",
-            Some(false) => "fillet",
-            None => "blend",
-        };
-        fillets.entry(((face.minor_radius * 1e7).round() as i64, kind)).or_default().push(f);
-        r.used[f] = true;
-    }
-    if !bosses.is_empty() {
-        summary.push(format!("{} cylindrical boss(es)/shaft(s)", bosses.len()));
-    }
-    let fillet_list: Vec<Value> = fillets
-        .iter()
-        .map(|(&(radius, kind), faces)| {
-            summary.push(format!("{kind}s R{}: {} face(s)", num(radius as f64 / 1e7), faces.len()));
-            json!({ "radius_mm": mm(radius as f64 / 1e7), "kind": kind, "faces": r.ids(ids, faces) })
-        })
-        .collect();
-    if !arcs.is_empty() {
-        summary.push(format!("{} rounded end(s) (partial cylinders, e.g. slot ends)", arcs.len()));
-    }
-
-    // ---- Planar chamfers: a narrow face between two planes, leaning on both
-    for f in 0..r.topo.faces.len() {
-        if r.used[f] || r.topo.faces[f].surface_type() != S::Plane {
-            continue;
-        }
-        if let Some((mut obj, a, b)) = planar_chamfer(&r.topo, f) {
-            obj.insert("kind".into(), json!("planar"));
-            obj.insert("faces".into(), r.ids(ids, &[f]));
-            // legs_mm[0] lies on between[0], legs_mm[1] on between[1].
-            obj.insert("between".into(), r.ids(ids, &[a, b]));
-            chamfers.push(Value::Object(obj));
-            r.used[f] = true;
-        }
-    }
+    let hole_list = r.holes_json(ids, &mut summary);
+    let Rounds { bosses, fillets: fillet_list, arcs, mut chamfers } = r.rounds_json(ids, &mut summary);
+    r.planar_chamfers(ids, &mut chamfers);
     if !chamfers.is_empty() {
         summary.push(format!("{} chamfer(s)", chamfers.len()));
     }
-
-    // ---- Planar faces by direction
-    let mut directions: Vec<(V, Vec<(f64, usize)>)> = Vec::new();
-    for f in 0..r.topo.faces.len() {
-        if r.used[f] || r.topo.faces[f].surface_type() != S::Plane {
-            continue;
-        }
-        let (Some(n), Some(o)) = (r.topo.normal(f), r.topo.faces[f].origin.as_ref()) else { continue };
-        let at = |d: V| dot(xyz(o), d);
-        match directions.iter_mut().find(|(d, _)| parallel(*d, n)) {
-            Some((d, faces)) => faces.push((at(*d), f)),
-            None => directions.push((n, vec![(at(n), f)])),
-        }
-        r.used[f] = true;
-    }
-    let plane_count: usize = directions.iter().map(|(_, faces)| faces.len()).sum();
-    if plane_count > 0 {
-        summary.push(format!("{plane_count} planar face(s) in {} direction(s)", directions.len()));
-    }
-    let planes: Vec<Value> = directions
-        .iter_mut()
-        .map(|(d, faces)| {
-            faces.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let levels: Vec<Value> = faces
-                .iter()
-                .map(|&(at, f)| {
-                    let facing = r.topo.normal(f).is_some_and(|n| dot(n, *d) > 0.0);
-                    json!({ "at_mm": mm(at), "facing": if facing { "+" } else { "-" },
-                            "face": ids.id_for(Kind::Face, &r.topo.faces[f].persist_id) })
-                })
-                .collect();
-            json!({ "direction": dir_json(*d), "faces": levels })
-        })
-        .collect();
-
+    let planes = r.planes_json(ids, &mut summary);
     let other: Vec<usize> = (0..r.topo.faces.len()).filter(|&f| !r.used[f]).collect();
     if !other.is_empty() {
         summary.push(format!("{} other face(s) not recognized", other.len()));

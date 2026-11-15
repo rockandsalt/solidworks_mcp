@@ -78,6 +78,21 @@ namespace sld_mcp::service
 	// A feature's profile: its first absorbed sketch, or empty.
 	std::string ProfileSketchName(IFeature* feature);
 
+	// For API calls that return no feature (InsertHelix, InsertRib,
+	// InsertFeatureShell): made before the call, Added() after it is the new
+	// last feature of the tree, or null if the last one didn't change (no
+	// feature was made).
+	class NewFeatureWatch
+	{
+	public:
+		explicit NewFeatureWatch(IModelDoc2* doc);
+		ATL::CComPtr<IFeature> Added() const;
+
+	private:
+		IModelDoc2* m_doc;
+		ATL::CComPtr<IFeature> m_lastBefore;
+	};
+
 	// Removes the entries for feature `name` from a list of problems.
 	void DropProblem(google::protobuf::RepeatedPtrField<sld_mcp::v1::FeatureProblem>* problems,
 		const std::string& name);

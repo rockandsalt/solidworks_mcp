@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::addin::proto;
-use crate::delete::{feature_error_name, type_label};
+use crate::feature_text::{feature_error_name, type_label};
 use crate::edit::{feature_target, raw_end_condition_name};
 use crate::feature_edit::fillet_kind;
 use crate::hole::fastener_text;

@@ -126,213 +126,6 @@ impl AddinClient {
         Ok(response.into_inner().document)
     }
 
-    pub async fn set_document_units(
-        &self,
-        request: proto::SetDocumentUnitsRequest,
-    ) -> Result<proto::SetDocumentUnitsResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.set_document_units(request).await?.into_inner())
-    }
-
-    /// Paper size in meters.
-    pub async fn new_drawing(
-        &self,
-        request: proto::NewDrawingRequest,
-    ) -> Result<proto::NewDrawingResponse, tonic::Status> {
-        let mut client = self.client()?;
-        let response = client.new_drawing(request).await?;
-        Ok(response.into_inner())
-    }
-
-    /// Lengths in meters.
-    pub async fn create_rectangle_sketch(
-        &self,
-        request: proto::CreateRectangleSketchRequest,
-    ) -> Result<proto::CreateRectangleSketchResponse, tonic::Status> {
-        let mut client = self.client()?;
-        let response = client.create_rectangle_sketch(request).await?;
-        Ok(response.into_inner())
-    }
-
-    /// Coordinates in meters.
-    pub async fn add_sketch_entities(
-        &self,
-        request: proto::AddSketchEntitiesRequest,
-    ) -> Result<proto::AddSketchEntitiesResponse, tonic::Status> {
-        let mut client = self.client()?;
-        let response = client.add_sketch_entities(request).await?;
-        Ok(response.into_inner())
-    }
-
-    /// Depth in meters.
-    pub async fn extrude_sketch(
-        &self,
-        request: proto::ExtrudeSketchRequest,
-    ) -> Result<proto::ExtrudeSketchResponse, tonic::Status> {
-        let mut client = self.client()?;
-        let response = client.extrude_sketch(request).await?;
-        Ok(response.into_inner())
-    }
-
-    /// Angle in radians.
-    pub async fn revolve_sketch(
-        &self,
-        request: proto::RevolveSketchRequest,
-    ) -> Result<proto::RevolveSketchResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.revolve_sketch(request).await?.into_inner())
-    }
-
-    /// Diameter in meters, twist in radians.
-    pub async fn sweep_sketch(
-        &self,
-        request: proto::SweepSketchRequest,
-    ) -> Result<proto::SweepSketchResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.sweep_sketch(request).await?.into_inner())
-    }
-
-    pub async fn loft_sketch(
-        &self,
-        request: proto::LoftSketchRequest,
-    ) -> Result<proto::LoftSketchResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.loft_sketch(request).await?.into_inner())
-    }
-
-    /// Radius in meters.
-    pub async fn fillet_edges(
-        &self,
-        request: proto::FilletEdgesRequest,
-    ) -> Result<proto::EdgeFeatureResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.fillet_edges(request).await?.into_inner())
-    }
-
-    /// Distances in meters, angle in radians.
-    pub async fn chamfer_edges(
-        &self,
-        request: proto::ChamferEdgesRequest,
-    ) -> Result<proto::EdgeFeatureResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.chamfer_edges(request).await?.into_inner())
-    }
-
-    /// Sizes in meters, angles in radians.
-    pub async fn create_helix(
-        &self,
-        request: proto::CreateHelixRequest,
-    ) -> Result<proto::CreateHelixResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.create_helix(request).await?.into_inner())
-    }
-
-    /// Thicknesses in meters.
-    pub async fn shell_body(
-        &self,
-        request: proto::ShellBodyRequest,
-    ) -> Result<proto::EdgeFeatureResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.shell_body(request).await?.into_inner())
-    }
-
-    /// Thickness in meters, draft in radians.
-    pub async fn rib_sketch(
-        &self,
-        request: proto::RibSketchRequest,
-    ) -> Result<proto::RibSketchResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.rib_sketch(request).await?.into_inner())
-    }
-
-    /// Angle in radians.
-    pub async fn draft_faces(
-        &self,
-        request: proto::DraftFacesRequest,
-    ) -> Result<proto::DraftFacesResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.draft_faces(request).await?.into_inner())
-    }
-
-    pub async fn mirror_features(
-        &self,
-        request: proto::MirrorFeaturesRequest,
-    ) -> Result<proto::MirrorFeaturesResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.mirror_features(request).await?.into_inner())
-    }
-
-    pub async fn mirror_sketch_entities(
-        &self,
-        request: proto::MirrorSketchEntitiesRequest,
-    ) -> Result<proto::MirrorSketchEntitiesResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.mirror_sketch_entities(request).await?.into_inner())
-    }
-
-    /// Lengths in meters.
-    pub async fn offset_sketch_entities(
-        &self,
-        request: proto::OffsetSketchEntitiesRequest,
-    ) -> Result<proto::OffsetSketchEntitiesResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.offset_sketch_entities(request).await?.into_inner())
-    }
-
-    pub async fn convert_entities(
-        &self,
-        request: proto::ConvertEntitiesRequest,
-    ) -> Result<proto::ConvertEntitiesResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.convert_entities(request).await?.into_inner())
-    }
-
-    /// Lengths in meters, angles in radians.
-    pub async fn sketch_corners(
-        &self,
-        request: proto::SketchCornersRequest,
-    ) -> Result<proto::SketchEditResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.sketch_corners(request).await?.into_inner())
-    }
-
-    /// Points in meters.
-    pub async fn trim_sketch_entity(
-        &self,
-        request: proto::TrimSketchEntityRequest,
-    ) -> Result<proto::SketchEditResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.trim_sketch_entity(request).await?.into_inner())
-    }
-
-    /// Lengths in meters, angles in radians.
-    pub async fn pattern_features(
-        &self,
-        request: proto::PatternFeaturesRequest,
-    ) -> Result<proto::PatternFeaturesResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.pattern_features(request).await?.into_inner())
-    }
-
-    /// Lengths in meters, angles in radians.
-    pub async fn pattern_sketch_entities(
-        &self,
-        request: proto::PatternSketchEntitiesRequest,
-    ) -> Result<proto::PatternSketchEntitiesResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.pattern_sketch_entities(request).await?.into_inner())
-    }
-
-    /// Lengths in meters.
-    pub async fn inspect_model(
-        &self,
-        request: proto::InspectModelRequest,
-    ) -> Result<proto::InspectModelResponse, tonic::Status> {
-        let mut client = self.client()?;
-        let response = client.inspect_model(request).await?;
-        Ok(response.into_inner())
-    }
-
     /// The active part's (or assembly's) tessellation; coordinates in meters.
     pub async fn get_mesh(
         &self,
@@ -344,165 +137,6 @@ impl AddinClient {
             .max_decoding_message_size(MAX_MESH_MESSAGE);
         let response = client.get_mesh(request).await?;
         Ok(response.into_inner())
-    }
-
-    pub async fn inspect_sketch(
-        &self,
-        request: proto::InspectSketchRequest,
-    ) -> Result<proto::InspectSketchResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.inspect_sketch(request).await?.into_inner())
-    }
-
-    pub async fn inspect_feature(
-        &self,
-        request: proto::InspectFeatureRequest,
-    ) -> Result<proto::InspectFeatureResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.inspect_feature(request).await?.into_inner())
-    }
-
-    /// Values in meters / radians.
-    pub async fn add_sketch_dimensions(
-        &self,
-        request: proto::AddSketchDimensionsRequest,
-    ) -> Result<proto::AddSketchDimensionsResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.add_sketch_dimensions(request).await?.into_inner())
-    }
-
-    pub async fn add_sketch_relations(
-        &self,
-        request: proto::AddSketchRelationsRequest,
-    ) -> Result<proto::AddSketchRelationsResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.add_sketch_relations(request).await?.into_inner())
-    }
-
-    pub async fn fully_define_sketch(
-        &self,
-        request: proto::FullyDefineSketchRequest,
-    ) -> Result<proto::FullyDefineSketchResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.fully_define_sketch(request).await?.into_inner())
-    }
-
-    /// Value in meters / radians.
-    pub async fn set_dimension_value(
-        &self,
-        request: proto::SetDimensionValueRequest,
-    ) -> Result<proto::SetDimensionValueResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.set_dimension_value(request).await?.into_inner())
-    }
-
-    /// Deviations in meters / radians.
-    pub async fn set_dimension_tolerance(
-        &self,
-        request: proto::SetDimensionToleranceRequest,
-    ) -> Result<proto::SetDimensionToleranceResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.set_dimension_tolerance(request).await?.into_inner())
-    }
-
-    /// Lengths in meters, angles in radians.
-    pub async fn hole_wizard(
-        &self,
-        request: proto::HoleWizardRequest,
-    ) -> Result<proto::HoleWizardResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.hole_wizard(request).await?.into_inner())
-    }
-
-    /// Distance in meters, angle in radians.
-    pub async fn add_mate(
-        &self,
-        request: proto::AddMateRequest,
-    ) -> Result<proto::AddMateResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.add_mate(request).await?.into_inner())
-    }
-
-    /// Positions in meters.
-    pub async fn insert_components(
-        &self,
-        request: proto::InsertComponentsRequest,
-    ) -> Result<proto::InsertComponentsResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.insert_components(request).await?.into_inner())
-    }
-
-    pub async fn replace_components(
-        &self,
-        request: proto::ReplaceComponentsRequest,
-    ) -> Result<proto::ReplaceComponentsResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.replace_components(request).await?.into_inner())
-    }
-
-    pub async fn fix_components(
-        &self,
-        request: proto::FixComponentsRequest,
-    ) -> Result<proto::FixComponentsResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.fix_components(request).await?.into_inner())
-    }
-
-    /// Moves a component while SolidWorks solves its mates; meters / radians.
-    pub async fn move_component(
-        &self,
-        request: proto::MoveComponentRequest,
-    ) -> Result<proto::MoveComponentResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.move_component(request).await?.into_inner())
-    }
-
-    /// Drives a distance / angle mate of the active assembly through a range
-    /// of values, checking interference at each; meters / radians.
-    pub async fn sweep_mate(
-        &self,
-        request: proto::SweepMateRequest,
-    ) -> Result<proto::SweepMateResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.sweep_mate(request).await?.into_inner())
-    }
-
-    /// Nudges components of the active assembly to see how they can move;
-    /// meters / radians, everything put back.
-    pub async fn inspect_mobility(
-        &self,
-        request: proto::InspectMobilityRequest,
-    ) -> Result<proto::InspectMobilityResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.inspect_mobility(request).await?.into_inner())
-    }
-
-    /// Where the components of the active assembly (or a drawing view's)
-    /// overlap; meters.
-    pub async fn check_interference(
-        &self,
-        request: proto::CheckInterferenceRequest,
-    ) -> Result<proto::CheckInterferenceResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.check_interference(request).await?.into_inner())
-    }
-
-    pub async fn measure(&self, request: proto::MeasureRequest) -> Result<proto::MeasureResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.measure(request).await?.into_inner())
-    }
-
-    pub async fn selection(&self, request: proto::SelectionRequest) -> Result<proto::SelectionResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.user_selection(request).await?.into_inner())
-    }
-
-    pub async fn get_mass_properties(
-        &self,
-        request: proto::GetMassPropertiesRequest,
-    ) -> Result<proto::GetMassPropertiesResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.get_mass_properties(request).await?.into_inner())
     }
 
     /// The active document's 3D annotations (PMI); meters / radians.
@@ -527,192 +161,6 @@ impl AddinClient {
         Ok(client.inspect_drawing(request).await?.into_inner())
     }
 
-    /// Text positions in sheet meters.
-    pub async fn add_drawing_dimensions(
-        &self,
-        request: proto::AddDrawingDimensionsRequest,
-    ) -> Result<proto::AddDrawingDimensionsResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.add_drawing_dimensions(request).await?.into_inner())
-    }
-
-    pub async fn insert_model_items(
-        &self,
-        request: proto::InsertModelItemsRequest,
-    ) -> Result<proto::InsertModelItemsResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.insert_model_items(request).await?.into_inner())
-    }
-
-    /// Paper size in meters.
-    pub async fn setup_sheet(
-        &self,
-        request: proto::SetupSheetRequest,
-    ) -> Result<proto::SetupSheetResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.setup_sheet(request).await?.into_inner())
-    }
-
-    /// Positions in sheet meters.
-    pub async fn setup_drawing_view(
-        &self,
-        request: proto::SetupDrawingViewRequest,
-    ) -> Result<proto::SetupDrawingViewResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.setup_drawing_view(request).await?.into_inner())
-    }
-
-    /// Positions in sheet meters.
-    pub async fn derive_drawing_view(
-        &self,
-        request: proto::DeriveDrawingViewRequest,
-    ) -> Result<proto::SetupDrawingViewResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.derive_drawing_view(request).await?.into_inner())
-    }
-
-    /// Positions in sheet meters.
-    pub async fn shape_drawing_view(
-        &self,
-        request: proto::ShapeDrawingViewRequest,
-    ) -> Result<proto::SetupDrawingViewResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.shape_drawing_view(request).await?.into_inner())
-    }
-
-    /// Positions in sheet meters (or a view's own coordinates).
-    pub async fn setup_drawing_annotation(
-        &self,
-        request: proto::SetupDrawingAnnotationRequest,
-    ) -> Result<proto::SetupDrawingAnnotationResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.setup_drawing_annotation(request).await?.into_inner())
-    }
-
-    /// A feature control frame or datum symbol on the active part or
-    /// assembly.
-    pub async fn add_model_annotation(
-        &self,
-        request: proto::AddModelAnnotationRequest,
-    ) -> Result<proto::AddModelAnnotationResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.add_model_annotation(request).await?.into_inner())
-    }
-
-    /// A DimXpert dimension on faces of the active part.
-    pub async fn add_pmi_dimension(
-        &self,
-        request: proto::AddPmiDimensionRequest,
-    ) -> Result<proto::AddPmiDimensionResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.add_pmi_dimension(request).await?.into_inner())
-    }
-
-    pub async fn auto_dimension_scheme(
-        &self,
-        request: proto::AutoDimensionSchemeRequest,
-    ) -> Result<proto::AutoDimensionSchemeResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.auto_dimension_scheme(request).await?.into_inner())
-    }
-
-    /// Document properties of the active document by SolidWorks id.
-    pub async fn document_preferences(
-        &self,
-        request: proto::DocumentPreferencesRequest,
-    ) -> Result<proto::DocumentPreferencesResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.document_preferences(request).await?.into_inner())
-    }
-
-    pub async fn delete_drawing_annotations(
-        &self,
-        request: proto::DeleteDrawingAnnotationsRequest,
-    ) -> Result<proto::DeleteDrawingAnnotationsResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.delete_drawing_annotations(request).await?.into_inner())
-    }
-
-    pub async fn setup_drawing_table(
-        &self,
-        request: proto::SetupDrawingTableRequest,
-    ) -> Result<proto::SetupDrawingTableResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.setup_drawing_table(request).await?.into_inner())
-    }
-
-    pub async fn add_balloons(
-        &self,
-        request: proto::AddBalloonsRequest,
-    ) -> Result<proto::AddBalloonsResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.add_balloons(request).await?.into_inner())
-    }
-
-    pub async fn add_center_marks(
-        &self,
-        request: proto::AddCenterMarksRequest,
-    ) -> Result<proto::AddCenterMarksResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.add_center_marks(request).await?.into_inner())
-    }
-
-    pub async fn add_centerlines(
-        &self,
-        request: proto::AddCenterlinesRequest,
-    ) -> Result<proto::AddCenterMarksResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.add_centerlines(request).await?.into_inner())
-    }
-
-    pub async fn draw_sheet_format(
-        &self,
-        request: proto::DrawSheetFormatRequest,
-    ) -> Result<proto::DrawSheetFormatResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.draw_sheet_format(request).await?.into_inner())
-    }
-
-    pub async fn custom_properties(
-        &self,
-        request: proto::CustomPropertiesRequest,
-    ) -> Result<proto::CustomPropertiesResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.custom_properties(request).await?.into_inner())
-    }
-
-    pub async fn part_material(
-        &self,
-        request: proto::PartMaterialRequest,
-    ) -> Result<proto::PartMaterialResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.part_material(request).await?.into_inner())
-    }
-
-    pub async fn delete_features(
-        &self,
-        request: proto::DeleteFeaturesRequest,
-    ) -> Result<proto::DeleteFeaturesResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.delete_features(request).await?.into_inner())
-    }
-
-    pub async fn delete_sketch_entities(
-        &self,
-        request: proto::DeleteSketchEntitiesRequest,
-    ) -> Result<proto::DeleteSketchEntitiesResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.delete_sketch_entities(request).await?.into_inner())
-    }
-
-    pub async fn diagnose_model(
-        &self,
-        request: proto::DiagnoseModelRequest,
-    ) -> Result<proto::DiagnoseModelResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.diagnose_model(request).await?.into_inner())
-    }
-
     /// The image of a whole sheet; can be several MB for a big sheet at a
     /// high resolution.
     pub async fn render_drawing(
@@ -722,149 +170,149 @@ impl AddinClient {
         let mut client = self.client()?.max_decoding_message_size(MAX_MESH_MESSAGE);
         Ok(client.render_drawing(request).await?.into_inner())
     }
+}
 
-    pub async fn edit_extrude(
-        &self,
-        request: proto::EditExtrudeRequest,
-    ) -> Result<proto::EditExtrudeResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.edit_extrude(request).await?.into_inner())
-    }
+/// The RPCs that only send their request and return the reply: one line
+/// each, with what the wire's numbers mean.
+macro_rules! rpcs {
+    ($($(#[$doc:meta])* $name:ident($request:ty) -> $response:ty;)*) => {
+        impl AddinClient {
+            $(
+                $(#[$doc])*
+                pub async fn $name(&self, request: $request) -> Result<$response, tonic::Status> {
+                    let mut client = self.client()?;
+                    Ok(client.$name(request).await?.into_inner())
+                }
+            )*
+        }
+    };
+}
 
-    pub async fn edit_mate(
-        &self,
-        request: proto::EditMateRequest,
-    ) -> Result<proto::EditMateResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.edit_mate(request).await?.into_inner())
-    }
-
-    pub async fn edit_fillet(
-        &self,
-        request: proto::EditFilletRequest,
-    ) -> Result<proto::EditFilletResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.edit_fillet(request).await?.into_inner())
-    }
-
-    pub async fn edit_pattern(
-        &self,
-        request: proto::EditPatternRequest,
-    ) -> Result<proto::EditPatternResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.edit_pattern(request).await?.into_inner())
-    }
-
-    pub async fn edit_sweep(
-        &self,
-        request: proto::EditSweepRequest,
-    ) -> Result<proto::EditSweepResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.edit_sweep(request).await?.into_inner())
-    }
-
-    pub async fn save_document(
-        &self,
-        request: proto::SaveDocumentRequest,
-    ) -> Result<proto::SaveDocumentResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.save_document(request).await?.into_inner())
-    }
-
-    pub async fn open_document(
-        &self,
-        request: proto::OpenDocumentRequest,
-    ) -> Result<proto::OpenDocumentResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.open_document(request).await?.into_inner())
-    }
-
-    pub async fn close_document(
-        &self,
-        request: proto::CloseDocumentRequest,
-    ) -> Result<proto::CloseDocumentResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.close_document(request).await?.into_inner())
-    }
-
-    pub async fn file_references(
-        &self,
-        request: proto::FileReferencesRequest,
-    ) -> Result<proto::FileReferencesResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.file_references(request).await?.into_inner())
-    }
-
-    pub async fn undo(&self, request: proto::UndoRequest) -> Result<proto::UndoResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.undo(request).await?.into_inner())
-    }
-
-    pub async fn run_macro(&self, request: proto::RunMacroRequest) -> Result<proto::RunMacroResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.run_macro(request).await?.into_inner())
-    }
-
-    pub async fn set_visibility(
-        &self,
-        request: proto::SetVisibilityRequest,
-    ) -> Result<proto::SetVisibilityResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.set_visibility(request).await?.into_inner())
-    }
-
-    pub async fn create_reference_geometry(
-        &self,
-        request: proto::CreateReferenceGeometryRequest,
-    ) -> Result<proto::CreateReferenceGeometryResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.create_reference_geometry(request).await?.into_inner())
-    }
-
-    pub async fn configurations(
-        &self,
-        request: proto::ConfigurationsRequest,
-    ) -> Result<proto::ConfigurationsResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.configurations(request).await?.into_inner())
-    }
-
-    pub async fn set_suppression(
-        &self,
-        request: proto::SetSuppressionRequest,
-    ) -> Result<proto::SetSuppressionResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.set_suppression(request).await?.into_inner())
-    }
-
-    pub async fn equations(
-        &self,
-        request: proto::EquationsRequest,
-    ) -> Result<proto::EquationsResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.equations(request).await?.into_inner())
-    }
-
-    pub async fn design_table(
-        &self,
-        request: proto::DesignTableRequest,
-    ) -> Result<proto::DesignTableResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.design_table(request).await?.into_inner())
-    }
-
-    pub async fn rollback(&self, request: proto::RollbackRequest) -> Result<proto::RollbackResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.rollback(request).await?.into_inner())
-    }
-
-    pub async fn reorder_feature(
-        &self,
-        request: proto::ReorderFeatureRequest,
-    ) -> Result<proto::ReorderFeatureResponse, tonic::Status> {
-        let mut client = self.client()?;
-        Ok(client.reorder_feature(request).await?.into_inner())
-    }
+rpcs! {
+    set_document_units(proto::SetDocumentUnitsRequest) -> proto::SetDocumentUnitsResponse;
+    /// Paper size in meters.
+    new_drawing(proto::NewDrawingRequest) -> proto::NewDrawingResponse;
+    /// Lengths in meters.
+    create_rectangle_sketch(proto::CreateRectangleSketchRequest) -> proto::CreateRectangleSketchResponse;
+    /// Coordinates in meters.
+    add_sketch_entities(proto::AddSketchEntitiesRequest) -> proto::AddSketchEntitiesResponse;
+    /// Depth in meters.
+    extrude_sketch(proto::ExtrudeSketchRequest) -> proto::ExtrudeSketchResponse;
+    /// Angle in radians.
+    revolve_sketch(proto::RevolveSketchRequest) -> proto::RevolveSketchResponse;
+    /// Diameter in meters, twist in radians.
+    sweep_sketch(proto::SweepSketchRequest) -> proto::SweepSketchResponse;
+    loft_sketch(proto::LoftSketchRequest) -> proto::LoftSketchResponse;
+    /// Radius in meters.
+    fillet_edges(proto::FilletEdgesRequest) -> proto::EdgeFeatureResponse;
+    /// Distances in meters, angle in radians.
+    chamfer_edges(proto::ChamferEdgesRequest) -> proto::EdgeFeatureResponse;
+    /// Sizes in meters, angles in radians.
+    create_helix(proto::CreateHelixRequest) -> proto::CreateHelixResponse;
+    /// Thicknesses in meters.
+    shell_body(proto::ShellBodyRequest) -> proto::EdgeFeatureResponse;
+    /// Thickness in meters, draft in radians.
+    rib_sketch(proto::RibSketchRequest) -> proto::RibSketchResponse;
+    /// Angle in radians.
+    draft_faces(proto::DraftFacesRequest) -> proto::DraftFacesResponse;
+    mirror_features(proto::MirrorFeaturesRequest) -> proto::MirrorFeaturesResponse;
+    mirror_sketch_entities(proto::MirrorSketchEntitiesRequest) -> proto::MirrorSketchEntitiesResponse;
+    /// Lengths in meters.
+    offset_sketch_entities(proto::OffsetSketchEntitiesRequest) -> proto::OffsetSketchEntitiesResponse;
+    convert_entities(proto::ConvertEntitiesRequest) -> proto::ConvertEntitiesResponse;
+    /// Lengths in meters, angles in radians.
+    sketch_corners(proto::SketchCornersRequest) -> proto::SketchEditResponse;
+    /// Points in meters.
+    trim_sketch_entity(proto::TrimSketchEntityRequest) -> proto::SketchEditResponse;
+    /// Lengths in meters, angles in radians.
+    pattern_features(proto::PatternFeaturesRequest) -> proto::PatternFeaturesResponse;
+    /// Lengths in meters, angles in radians.
+    pattern_sketch_entities(proto::PatternSketchEntitiesRequest) -> proto::PatternSketchEntitiesResponse;
+    /// Lengths in meters.
+    inspect_model(proto::InspectModelRequest) -> proto::InspectModelResponse;
+    inspect_sketch(proto::InspectSketchRequest) -> proto::InspectSketchResponse;
+    inspect_feature(proto::InspectFeatureRequest) -> proto::InspectFeatureResponse;
+    /// Values in meters / radians.
+    add_sketch_dimensions(proto::AddSketchDimensionsRequest) -> proto::AddSketchDimensionsResponse;
+    add_sketch_relations(proto::AddSketchRelationsRequest) -> proto::AddSketchRelationsResponse;
+    fully_define_sketch(proto::FullyDefineSketchRequest) -> proto::FullyDefineSketchResponse;
+    /// Value in meters / radians.
+    set_dimension_value(proto::SetDimensionValueRequest) -> proto::SetDimensionValueResponse;
+    /// Deviations in meters / radians.
+    set_dimension_tolerance(proto::SetDimensionToleranceRequest) -> proto::SetDimensionToleranceResponse;
+    /// Lengths in meters, angles in radians.
+    hole_wizard(proto::HoleWizardRequest) -> proto::HoleWizardResponse;
+    /// Distance in meters, angle in radians.
+    add_mate(proto::AddMateRequest) -> proto::AddMateResponse;
+    /// Positions in meters.
+    insert_components(proto::InsertComponentsRequest) -> proto::InsertComponentsResponse;
+    replace_components(proto::ReplaceComponentsRequest) -> proto::ReplaceComponentsResponse;
+    fix_components(proto::FixComponentsRequest) -> proto::FixComponentsResponse;
+    /// Moves a component while SolidWorks solves its mates; meters / radians.
+    move_component(proto::MoveComponentRequest) -> proto::MoveComponentResponse;
+    /// Drives a distance / angle mate of the active assembly through a range
+    /// of values, checking interference at each; meters / radians.
+    sweep_mate(proto::SweepMateRequest) -> proto::SweepMateResponse;
+    /// Nudges components of the active assembly to see how they can move;
+    /// meters / radians, everything put back.
+    inspect_mobility(proto::InspectMobilityRequest) -> proto::InspectMobilityResponse;
+    /// Where the components of the active assembly (or a drawing view's)
+    /// overlap; meters.
+    check_interference(proto::CheckInterferenceRequest) -> proto::CheckInterferenceResponse;
+    measure(proto::MeasureRequest) -> proto::MeasureResponse;
+    user_selection(proto::SelectionRequest) -> proto::SelectionResponse;
+    get_mass_properties(proto::GetMassPropertiesRequest) -> proto::GetMassPropertiesResponse;
+    /// Text positions in sheet meters.
+    add_drawing_dimensions(proto::AddDrawingDimensionsRequest) -> proto::AddDrawingDimensionsResponse;
+    insert_model_items(proto::InsertModelItemsRequest) -> proto::InsertModelItemsResponse;
+    /// Paper size in meters.
+    setup_sheet(proto::SetupSheetRequest) -> proto::SetupSheetResponse;
+    /// Positions in sheet meters.
+    setup_drawing_view(proto::SetupDrawingViewRequest) -> proto::SetupDrawingViewResponse;
+    /// Positions in sheet meters.
+    derive_drawing_view(proto::DeriveDrawingViewRequest) -> proto::SetupDrawingViewResponse;
+    /// Positions in sheet meters.
+    shape_drawing_view(proto::ShapeDrawingViewRequest) -> proto::SetupDrawingViewResponse;
+    /// Positions in sheet meters (or a view's own coordinates).
+    setup_drawing_annotation(proto::SetupDrawingAnnotationRequest) -> proto::SetupDrawingAnnotationResponse;
+    /// A feature control frame or datum symbol on the active part or
+    /// assembly.
+    add_model_annotation(proto::AddModelAnnotationRequest) -> proto::AddModelAnnotationResponse;
+    /// A DimXpert dimension on faces of the active part.
+    add_pmi_dimension(proto::AddPmiDimensionRequest) -> proto::AddPmiDimensionResponse;
+    auto_dimension_scheme(proto::AutoDimensionSchemeRequest) -> proto::AutoDimensionSchemeResponse;
+    /// Document properties of the active document by SolidWorks id.
+    document_preferences(proto::DocumentPreferencesRequest) -> proto::DocumentPreferencesResponse;
+    delete_drawing_annotations(proto::DeleteDrawingAnnotationsRequest) -> proto::DeleteDrawingAnnotationsResponse;
+    setup_drawing_table(proto::SetupDrawingTableRequest) -> proto::SetupDrawingTableResponse;
+    add_balloons(proto::AddBalloonsRequest) -> proto::AddBalloonsResponse;
+    add_center_marks(proto::AddCenterMarksRequest) -> proto::AddCenterMarksResponse;
+    add_centerlines(proto::AddCenterlinesRequest) -> proto::AddCenterMarksResponse;
+    draw_sheet_format(proto::DrawSheetFormatRequest) -> proto::DrawSheetFormatResponse;
+    custom_properties(proto::CustomPropertiesRequest) -> proto::CustomPropertiesResponse;
+    part_material(proto::PartMaterialRequest) -> proto::PartMaterialResponse;
+    delete_features(proto::DeleteFeaturesRequest) -> proto::DeleteFeaturesResponse;
+    delete_sketch_entities(proto::DeleteSketchEntitiesRequest) -> proto::DeleteSketchEntitiesResponse;
+    diagnose_model(proto::DiagnoseModelRequest) -> proto::DiagnoseModelResponse;
+    edit_extrude(proto::EditExtrudeRequest) -> proto::EditExtrudeResponse;
+    edit_mate(proto::EditMateRequest) -> proto::EditMateResponse;
+    edit_fillet(proto::EditFilletRequest) -> proto::EditFilletResponse;
+    edit_pattern(proto::EditPatternRequest) -> proto::EditPatternResponse;
+    edit_sweep(proto::EditSweepRequest) -> proto::EditSweepResponse;
+    save_document(proto::SaveDocumentRequest) -> proto::SaveDocumentResponse;
+    open_document(proto::OpenDocumentRequest) -> proto::OpenDocumentResponse;
+    close_document(proto::CloseDocumentRequest) -> proto::CloseDocumentResponse;
+    file_references(proto::FileReferencesRequest) -> proto::FileReferencesResponse;
+    undo(proto::UndoRequest) -> proto::UndoResponse;
+    run_macro(proto::RunMacroRequest) -> proto::RunMacroResponse;
+    set_visibility(proto::SetVisibilityRequest) -> proto::SetVisibilityResponse;
+    create_reference_geometry(proto::CreateReferenceGeometryRequest) -> proto::CreateReferenceGeometryResponse;
+    configurations(proto::ConfigurationsRequest) -> proto::ConfigurationsResponse;
+    set_suppression(proto::SetSuppressionRequest) -> proto::SetSuppressionResponse;
+    equations(proto::EquationsRequest) -> proto::EquationsResponse;
+    design_table(proto::DesignTableRequest) -> proto::DesignTableResponse;
+    rollback(proto::RollbackRequest) -> proto::RollbackResponse;
+    reorder_feature(proto::ReorderFeatureRequest) -> proto::ReorderFeatureResponse;
 }
 
 /// Largest GetMesh reply accepted: about 5 million triangles with normals.

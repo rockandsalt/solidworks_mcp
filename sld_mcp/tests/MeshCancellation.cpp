@@ -375,10 +375,11 @@ namespace
 }
 
 bool TestPmiPreferences();
+bool TestArcBoundingPoints();
 
 int main()
 {
-	if (!TestPmiPreferences())
+	if (!TestPmiPreferences() || !TestArcBoundingPoints())
 		return 1;
 	if (!TestGateAdmissionAndExceptions() || !TestGateLifecycle(ExecutionPolicy::Cancellable) ||
 		!TestGateLifecycle(ExecutionPolicy::CompleteOperation))

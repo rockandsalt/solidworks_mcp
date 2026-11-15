@@ -6,7 +6,7 @@ use rmcp::{ErrorData as McpError, schemars};
 use serde::Deserialize;
 
 use crate::addin::proto;
-use crate::delete::problems_text;
+use crate::feature_text::problems_text;
 use crate::inspect::{IdRegistry, Kind, SKETCH_KINDS};
 use crate::mirror::{body_id, feature_target, sketch_ref, unique};
 use crate::refgeom::{self, Shape};
