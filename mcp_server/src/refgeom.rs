@@ -389,7 +389,7 @@ pub(crate) enum Shape {
     Feature,
 }
 
-fn standard_plane(s: &str) -> Option<proto::Plane> {
+pub(crate) fn standard_plane(s: &str) -> Option<proto::Plane> {
     let s = s.to_ascii_lowercase();
     let s = s.strip_suffix(" plane").unwrap_or(&s);
     match s {

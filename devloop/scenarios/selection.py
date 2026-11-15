@@ -5,7 +5,9 @@
 # selecting faces / edges / features / bodies / sketch lines / vertices by
 # id and reading them back; append, clear, refusals; then an assembly of two
 # blocks, a pick on the second one's face reported in assembly space with
-# its component, and a component selected by id. Run with:
+# its component, and a component selected by id; then a drawing of the
+# block: a "user" pick on a view edge read back with inspect_drawing's id,
+# dimensioned with it; the view and a dimension picked. Run with:
 #   py devloop/mcp_client.py run devloop/scenarios/selection.py
 
 import re
@@ -53,7 +55,7 @@ faces = mcp.call("inspect_model", what="faces").json["faces"]
 
 
 def cap(value):
-    return [f for f in faces if abs(f["normal"][thin]) > 0.99 and abs(f["point_on_plane_mm"][thin] - value) < 1e-6][0]
+    return [f for f in faces if "normal" in f and abs(f["normal"][thin]) > 0.99 and abs(f["point_on_plane_mm"][thin] - value) < 1e-6][0]
 
 
 top, bottom = cap(hi[thin]), cap(lo[thin])
@@ -130,6 +132,16 @@ mcp.call("selection", select=["No Such Feature"], expect_error=True)
 mcp.call("selection", clear=True, select=[top["id"]], expect_error=True)
 mcp.call("selection", append=True, expect_error=True)
 mcp.call("save_document", path=str(block_file))
+# Saving a new part the first time gives its faces and edges new persist ids (features and
+# bodies keep theirs; seen 2026-11-14): the old ones still resolve, but don't match what a
+# drawing's views say they draw. So the drawing part below takes the saved part's.
+faces = mcp.call("inspect_model", what="faces").json["faces"]
+top, bottom = cap(hi[thin]), cap(lo[thin])
+hole = [f for f in faces if f.get("hole")][0]
+hole_edges = [e["id"] for e in mcp.call("inspect_model", what="edges", within=hole["id"]).json["edges"]]
+# A corner of each cap (its outline's lines have end vertices; the hole's rim has none).
+cap_vertex = {c["id"]: [e for e in mcp.call("inspect_model", what="edges", within=c["id"]).json["edges"]
+                        if "start_vertex" in e][0]["start_vertex"] for c in (top, bottom)}
 
 # ---- An assembly of two blocks -----------------------------------------------------------------
 mcp.call("create_assembly")
@@ -170,3 +182,177 @@ print("    measure", planes, ":", r.text)
 assert "90" in r.text, r.text
 selection(clear=True)
 mcp.call("save_document")
+
+# ---- A drawing of the block: the user picks a view edge -------------------------------------------
+mcp.call("create_drawing", sheet_format="a3 - iso")
+mcp.call("create_drawing_view", model=str(block_file), at_mm=[150, 150], scale="1:1")
+dv = [v for s in mcp.call("inspect_drawing", view="Drawing View1").json["sheets"] for v in s["views"]
+      if v["name"] == "Drawing View1"][0]
+lines = [e for e in dv["entities"] if e["type"] == "line"]
+target = max(lines, key=lambda e: e["length_mm"])
+# A third of the way along, off any other edge's end.
+at = [a + (b - a) / 3 for a, b in zip(target["start"], target["end"])]
+
+
+def user_picks(type_, point_mm=(0, 0), name=""):
+    """Selects what SelectByID2 finds at `point_mm` (sheet mm) or by `name`, as a click would."""
+    x, y = (c / 1000 for c in point_mm)
+    r = mcp.call("run_macro", code=f'''
+Sub main()
+    Set doc = Application.SldWorks.ActiveDoc
+    doc.ClearSelection2 True
+    McpPrint "picked=" & doc.Extension.SelectByID2("{name}", "{type_}", {x!r}, {y!r}, 0, False, 0, Nothing, 0)
+End Sub
+''')
+    assert "picked=True" in r.text, r.text
+
+
+user_picks("EDGE", at)
+j = selection()
+# SelectByID2 of a view's edge selects the view too (before the edge).
+picked = [i for i in j["selected"] if "drawing_view" not in i]
+assert len(picked) == 1, j
+e = picked[0]
+print("    picked", e, "target", target, "at", at)
+assert e["id"] == target["id"] and e["view"] == "Drawing View1", (e, target)
+assert e["start"] == target["start"] and e["end"] == target["end"], (e, target)
+assert close(e["picked_at_mm"], at, 0.5), (e["picked_at_mm"], at)
+
+# The id goes straight into add_drawing_dimensions.
+r = mcp.call("add_drawing_dimensions", dimensions=[{"kind": "length", "entities": [e["id"]]}])
+print("    dimension:", r.text)
+dim = re.findall(r"(\S+@Drawing View1)\S* =", r.text)
+assert dim, r.text
+
+# Selected by id, read back; nothing clicked.
+j = selection(select=[target["id"]])
+assert [i["id"] for i in j["selected"]] == [target["id"]] and "picked_at_mm" not in j["selected"][0], j
+
+# The view itself, and the dimension just added.
+user_picks("DRAWINGVIEW", name="Drawing View1")
+j = selection()
+assert j["selected"] == [{"drawing_view": "Drawing View1"}], j
+user_picks("DIMENSION", name=dim[0])
+j = selection()
+d = j["selected"][0]
+assert d["type"] == "dimension" and d["dimension"].startswith(dim[0]) and d["view"] == "Drawing View1", j
+assert d["attached"] == [target["id"]], j
+
+# ---- Drawing <-> model ---------------------------------------------------------------------------
+# Each view entity says what it is in the part: the part's id for it and its features.
+assert target["model_id"].startswith("edge:") and boss in target["features"], target
+j = selection(select=[target["id"]])
+s = j["selected"][0]
+assert s["model_id"] == target["model_id"] and s["features"] == target["features"], j
+assert s["model"].lower() == block_file.name.lower(), j
+
+# Model -> drawing: the part's ids and feature names select what the views draw of them.
+j = selection(select=[target["model_id"]])
+assert [i["id"] for i in j["selected"]] == [target["id"]], j
+drawn_by_boss = {e["id"] for e in dv["entities"] if boss in e.get("features", [])}
+j = selection(select=[boss])
+assert {i["id"] for i in j["selected"]} == drawn_by_boss and drawn_by_boss, (j, drawn_by_boss)
+boss_id = [f["id"] for f in model["features"] if f["name"] == boss][0]
+j = selection(select=[boss_id])
+assert {i["id"] for i in j["selected"]} == drawn_by_boss, j
+# A face: the edges around it. The view faces one of the caps (the one with the hole: its
+# outline and the hole's rim, everything the view draws); the other is behind it.
+seen_caps = {}
+for cap_face in (top, bottom):
+    try:
+        j = selection(select=[cap_face["id"]])
+        seen_caps[cap_face["id"]] = [i["id"] for i in j["selected"]]
+    except ToolError as error:
+        assert "isn't drawn" in str(error), error
+assert len(seen_caps) == 1, seen_caps
+seen_cap, seen_edges = next(iter(seen_caps.items()))
+assert set(seen_edges) == {e["id"] for e in dv["entities"]}, (seen_caps, dv)
+# A corner of the cap the view faces: drawn, as a view vertex.
+corner = cap_vertex[seen_cap]
+j = selection(select=[corner])
+assert [i["model_id"] for i in j["selected"]] == [corner], j
+assert j["selected"][0]["id"].startswith("view_vertex:"), j
+# A hole edge the view doesn't draw (the blind hole's far end at least): refused, and the
+# user's pick (the view and an edge of it: listing the view's silhouettes picks in it, and
+# a pick on a selected view starts dragging it) is still selected and hasn't moved.
+drawn_models = {e.get("model_id") for e in dv["entities"]}
+hidden = [e for e in hole_edges if e not in drawn_models]
+assert hidden, (hole_edges, drawn_models)
+user_picks("EDGE", at)
+r = mcp.call("selection", select=[hidden[0]], expect_error=True)
+assert "isn't drawn" in r.text, r.text
+j = selection()
+assert [i.get("id") for i in j["selected"] if "drawing_view" not in i] == [target["id"]], j
+assert {"drawing_view": "Drawing View1"} in j["selected"], j
+again = [e for s in mcp.call("inspect_drawing", view="Drawing View1").json["sheets"] for v in s["views"]
+         if v["name"] == "Drawing View1" for e in v["entities"] if e["id"] == target["id"]]
+assert again and again[0]["start"] == target["start"] and again[0]["end"] == target["end"], (again, target)
+
+# The feature picked under the view in the drawing's tree: the part's feature, with the part's id.
+user_picks("BODYFEATURE", name=f"{boss}@{block_file.stem}-1@Drawing View1")
+j = selection()
+f = j["selected"][0]
+assert f["id"] == boss_id and f["name"] == boss and f["view"] == "Drawing View1", (j, boss_id)
+
+# Refusals: planes and the origin in a drawing; a view entity with them.
+mcp.call("selection", select=["top"], expect_error=True)
+mcp.call("selection", select=[target["id"], "top"], expect_error=True)
+j = selection(clear=True)
+assert j["selected"] == [] and "inspect_drawing" in j["note"], j
+
+# ---- An assembly view: which component's edge ------------------------------------------------------
+mcp.call("create_drawing_view", model=str(asm_file), at_mm=[300, 150], scale="1:1", name="Assembly")
+av = [v for s in mcp.call("inspect_drawing", view="Assembly").json["sheets"] for v in s["views"]
+      if v["name"] == "Assembly"][0]
+by_component = {}
+for e in av["entities"]:
+    assert e.get("model_id", "").startswith("edge:") and boss in e["features"], e
+    by_component.setdefault(e["component"], []).append(e)
+assert len(by_component) == 2, by_component.keys()
+# The same edge of each block: its own model id, and selecting that id finds that one.
+for comp, entities in by_component.items():
+    e = max(entities, key=lambda e: e.get("length_mm", 0))
+    j = selection(select=[e["model_id"]])
+    assert [i["id"] for i in j["selected"]] == [e["id"]], (comp, e, j)
+assert len({e["model_id"] for e in av["entities"]}) == len(av["entities"]), av["entities"]
+asm_edge = max(av["entities"], key=lambda e: e.get("length_mm", 0))
+selection(clear=True)
+
+# ---- A pin: silhouettes are their cylinder's face ----------------------------------------------------
+pin_file = out / "selection-pin.SLDPRT"
+mcp.call("create_part")
+mcp.call("sketch", shape="circle", center=[0, 0], diameter_mm=10)
+mcp.call("extrude_sketch", depth_mm=30)
+mcp.call("save_document", path=str(pin_file))
+cylinder = mcp.call("inspect_model", what="faces", surface_type="cylinder").json["faces"][0]
+mcp.call("create_drawing", sheet_format="a3 - iso")
+for orientation, at in [("top", [120, 150]), ("right", [250, 150])]:
+    mcp.call("create_drawing_view", model=str(pin_file), at_mm=at, scale="1:1", orientation=orientation)
+# Listing silhouettes picks in the view, and a pick on something selected starts dragging it:
+# list them with a view selected (TrackerEscape cancels the drag).
+user_picks("DRAWINGVIEW", name="Drawing View1")
+pin_views = [v for s in mcp.call("inspect_drawing").json["sheets"] for v in s["views"]]
+silhouettes = []
+for v in pin_views:
+    listed = [x for s in mcp.call("inspect_drawing", view=v["name"]).json["sheets"] for x in s["views"]
+              if x["name"] == v["name"]][0]
+    silhouettes += [e for e in listed["entities"] if e["id"].startswith("silhouette:")]
+print("    pin silhouettes:", silhouettes)
+assert silhouettes and all(e["model_id"] == cylinder["id"] for e in silhouettes), (silhouettes, cylinder)
+# Selecting the face: its silhouettes and rims in both views (selecting a silhouette with its
+# view selects the view too: an item without an id).
+j = selection(select=[cylinder["id"]])
+got = {i["id"] for i in j["selected"] if i.get("id")}
+sil_sheet1 = {e["id"] for e in silhouettes}
+assert sil_sheet1 <= got, (j, silhouettes)
+
+# ---- Back in the models: the drawing's model ids are inspect_model's ----------------------------------
+mcp.call("open_document", path=str(block_file))
+j = selection(select=[target["model_id"]])
+assert j["selected"][0]["id"] == target["model_id"], j
+block_edges = {e["id"] for e in mcp.call("inspect_model", what="edges").json["edges"]}
+assert target["model_id"] in block_edges, (target, block_edges)
+mcp.call("open_document", path=str(asm_file))
+asm_edges = {e["id"] for e in mcp.call("inspect_model", what="edges").json["edges"]}
+assert asm_edge["model_id"] in asm_edges, (asm_edge, sorted(asm_edges))
+selection(clear=True)

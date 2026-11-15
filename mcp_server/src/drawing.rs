@@ -210,7 +210,7 @@ fn kind_for(kind: proto::ViewEntityKind) -> Kind {
     }
 }
 
-fn entity_ref(view: &str, e: &proto::ViewEntity) -> proto::DrawingEntityRef {
+pub fn entity_ref(view: &str, e: &proto::ViewEntity) -> proto::DrawingEntityRef {
     proto::DrawingEntityRef {
         view_name: view.to_string(),
         kind: e.kind,
@@ -452,7 +452,7 @@ pub fn scale_text(numerator: f64, denominator: f64) -> Option<String> {
         .then(|| format!("{}:{}", short_number(numerator), short_number(denominator)))
 }
 
-fn file_name(path: &str) -> &str {
+pub fn file_name(path: &str) -> &str {
     path.rsplit(['\\', '/']).next().unwrap_or(path)
 }
 
@@ -598,6 +598,65 @@ pub fn inspect_request(params: &InspectDrawingParams) -> proto::InspectDrawingRe
     }
 }
 
+/// The same entity in the view's model as inspect_model names it there
+/// (silhouettes: their face), minted for that model's document: the id
+/// works once that model is the active document.
+fn model_id(ids: &mut IdRegistry, view: &proto::ViewInfo, e: &proto::ViewEntity) -> Option<String> {
+    if view.model_file.is_empty() || e.model_persist_id.is_empty() {
+        return None;
+    }
+    let kind = match e.kind() {
+        proto::ViewEntityKind::Vertex => Kind::Vertex,
+        proto::ViewEntityKind::Silhouette => Kind::Face,
+        _ => Kind::Edge,
+    };
+    let key = crate::files::file_key(&view.model_file);
+    ids.in_document(&key, file_name(&view.model_file), |ids| ids.id_for(kind, &e.model_persist_id))
+}
+
+/// One view entity's inspect_drawing JSON (id, sheet geometry, ...); its
+/// sheet geometry goes into `cache` for add_drawing_dimensions.
+fn entity_json(
+    ids: &mut IdRegistry,
+    cache: &mut Cache,
+    view: &proto::ViewInfo,
+    mapper: &Mapper,
+    e: &proto::ViewEntity,
+) -> Option<Value> {
+    let view_name = view.name.as_str();
+    let (shape, mut fields) = entity_shape(mapper, e)?;
+    let id = id_for(ids, &entity_ref(view_name, e))?;
+    let label = fields.get("type").and_then(Value::as_str).unwrap_or("").to_string();
+    let mut entry = Map::new();
+    entry.insert("id".into(), json!(id));
+    entry.append(&mut fields);
+    if let Some(model_id) = model_id(ids, view, e) {
+        entry.insert("model_id".into(), json!(model_id));
+    }
+    if !e.features.is_empty() {
+        let names: Vec<&str> = e.features.iter().map(|f| f.name.as_str()).collect();
+        entry.insert("features".into(), json!(names));
+    }
+    if let Some(c) = ids.id_for(Kind::Component, &e.component_persist_id) {
+        entry.insert("component".into(), json!(c));
+    }
+    cache.entities.insert(id, EntityGeom { shape, label, view: view_name.to_string() });
+    Some(Value::Object(entry))
+}
+
+/// A selected entity of `view` (described without its entities) as
+/// inspect_drawing lists it; None without the view's sheet geometry.
+pub fn selected_entity_json(
+    ids: &mut IdRegistry,
+    cache: &mut Cache,
+    view: &proto::ViewInfo,
+    e: &proto::ViewEntity,
+) -> Option<Value> {
+    let placements = placements(view);
+    let mapper = Mapper { xform: ViewXform::of(view)?, placement: placements.get(&e.component_persist_id) };
+    entity_json(ids, cache, view, &mapper, e)
+}
+
 fn view_json(
     ids: &mut IdRegistry,
     cache: &mut Cache,
@@ -689,24 +748,9 @@ fn view_json(
         if let Some(xform) = xform {
             for e in &view.entities {
                 let mapper = Mapper { xform, placement: placements.get(&e.component_persist_id) };
-                let Some((shape, mut fields)) = entity_shape(&mapper, e) else { continue };
-                let Some(id) = id_for(ids, &entity_ref(&view.name, e)) else { continue };
-                let label = fields.get("type").and_then(Value::as_str).unwrap_or("").to_string();
-                let mut entry = Map::new();
-                entry.insert("id".into(), json!(id));
-                entry.append(&mut fields);
-                // The same edge's inspect_model id, when the part has been
-                // inspected: ties the drawing back to the 3D model.
-                if e.kind() == proto::ViewEntityKind::Edge
-                    && let Some(model_id) = ids.existing_id(&e.persist_id)
-                {
-                    entry.insert("model_edge".into(), json!(model_id));
+                if let Some(entry) = entity_json(ids, cache, view, &mapper, e) {
+                    entities.push(entry);
                 }
-                if let Some(c) = ids.id_for(Kind::Component, &e.component_persist_id) {
-                    entry.insert("component".into(), json!(c));
-                }
-                cache.entities.insert(id, EntityGeom { shape, label, view: view.name.clone() });
-                entities.push(Value::Object(entry));
             }
         }
         let total = entities.len();
@@ -1495,6 +1539,43 @@ mod tests {
 
     fn spec(kind: DimensionKind, entities: &[&str], at_mm: Option<[f64; 2]>) -> DrawingDimensionSpec {
         DrawingDimensionSpec { kind, entities: entities.iter().map(|e| e.to_string()).collect(), at_mm }
+    }
+
+    #[test]
+    fn selected_entities_get_inspect_drawings_ids_and_geometry() {
+        // Selected after an inspect_drawing: the same id.
+        let (mut ids, mut cache) = inspected();
+        let top = edge(b"top", proto::CurveType::Line, [0.0, 0.05, 0.0], [0.1, 0.05, 0.0]);
+        let v = selected_entity_json(&mut ids, &mut cache, &front_view(), &top).unwrap();
+        assert_eq!(v["id"], "view_edge:1", "{v}");
+        assert_eq!(v["start"], json!([100.0, 125.0]), "{v}");
+
+        // Selected first: its sheet geometry is enough to place a dimension.
+        let mut ids = IdRegistry::default();
+        let mut cache = Cache::default();
+        let v = selected_entity_json(&mut ids, &mut cache, &front_view(), &top).unwrap();
+        let id = v["id"].as_str().unwrap().to_string();
+        let params = AddDrawingDimensionsParams { dimensions: vec![spec(DimensionKind::Horizontal, &[&id], None)] };
+        let (request, _) = dimensions_request(&ids, &cache, &params).unwrap();
+        assert_eq!(request.dimensions[0].refs[0].persist_id, b"top".to_vec());
+    }
+
+    #[test]
+    fn entities_name_their_model_counterparts() {
+        let mut ids = IdRegistry::default();
+        ids.set_document("file:c:\\parts\\bracket.slddrw", "bracket.SLDDRW");
+        let mut top = edge(b"top", proto::CurveType::Line, [0.0, 0.05, 0.0], [0.1, 0.05, 0.0]);
+        top.model_persist_id = b"model-top".to_vec();
+        top.features = vec![proto::ModelFeatureRef { name: "Boss-Extrude1".into(), persist_id: b"boss".to_vec() }];
+        let v = selected_entity_json(&mut ids, &mut Cache::default(), &front_view(), &top).unwrap();
+        assert_eq!(v["features"], json!(["Boss-Extrude1"]), "{v}");
+        let model_id = v["model_id"].as_str().unwrap().to_string();
+        assert!(model_id.starts_with("edge:"), "{v}");
+        // The part's id, for when the part is active: it's inspect_model's there.
+        assert!(ids.persist_id(&model_id).is_none());
+        ids.set_document(&crate::files::file_key(r"C:\parts\bracket.SLDPRT"), "bracket.SLDPRT");
+        assert_eq!(ids.persist_id(&model_id), Some(b"model-top".to_vec()));
+        assert_eq!(ids.id_for(Kind::Edge, b"model-top"), Some(model_id));
     }
 
     #[test]

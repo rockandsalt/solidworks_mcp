@@ -196,6 +196,40 @@ namespace sld_mcp::service
 	bool ListViewEntities(IView* view, IComponent2* component, const std::string& componentPid,
 		sld_mcp::v1::ViewEntityKind kind, PersistIds& ids, size_t& budget, std::vector<ViewEntityItem>& out);
 
+	// What a view's entities and features are in the view's model:
+	// IModelDocExtension::GetCorresponding on the model (part views), or on
+	// the component's part and then the assembly's component's
+	// GetCorrespondingEntity / GetCorresponding (assembly views; the
+	// assembly's GetCorresponding gives nothing for them). `modelIds` must be
+	// the model's.
+	class ModelCounterparts
+	{
+	public:
+		ModelCounterparts(const ViewModel& model, PersistIds& modelIds);
+
+		// The model's object for `obj` (an edge, vertex, face or feature of
+		// the view, of `component` in assembly views); null if none.
+		ATL::CComPtr<IDispatch> Find(IDispatch* obj, IComponent2* component);
+
+		// ViewEntity's model_persist_id, model_face_persist_ids and features.
+		void Describe(const ViewEntityItem& item, sld_mcp::v1::ViewEntity* out);
+
+	private:
+		struct Part
+		{
+			ATL::CComPtr<IModelDocExtension> ext;
+			ATL::CComPtr<IComponent2> own;  // the assembly's component
+		};
+		const Part* PartOf(IComponent2* component);
+		void Lookup(const ViewEntityItem& item, sld_mcp::v1::ViewEntity* out);
+
+		ViewModel m_model;
+		PersistIds& m_ids;
+		std::map<std::string, Part> m_parts;  // by the view component's Name2
+		// Described entities' model fields, by kind / component / persist id.
+		std::map<std::string, sld_mcp::v1::ViewEntity> m_described;
+	};
+
 	// Caps shared by everything one InspectDrawing call lists.
 	struct DrawingBudget
 	{
@@ -288,6 +322,7 @@ namespace sld_mcp::service
 		std::unique_ptr<PersistIds> modelIds;
 		std::vector<ATL::CComPtr<IComponent2>> components;
 		std::unique_ptr<ComponentList> componentList;  // assemblies
+		std::unique_ptr<ModelCounterparts> counterparts;  // made on first use, from model / modelIds
 		// Visible entities by kind and component persist id.
 		std::map<std::pair<int, std::string>, std::vector<ViewEntityItem>> entities;
 	};
@@ -296,6 +331,24 @@ namespace sld_mcp::service
 	// `where`) if it isn't visible in the view any more.
 	grpc::Status ResolveDrawingRef(DrawingViewContext& ctx, const sld_mcp::v1::DrawingEntityRef& ref,
 		const std::string& where, ViewEntityItem& out);
+
+	// A selected edge, silhouette or vertex `obj` of the view (in `component`,
+	// assembly views) as InspectDrawing lists it, with the same key: the
+	// listed entity that is the same COM object, else the only one with its
+	// persist id. False if it's neither or none of those.
+	bool DescribeSelectedViewEntity(DrawingViewContext& ctx, IDispatch* obj, IComponent2* component,
+		sld_mcp::v1::ViewEntity* out);
+
+	// ctx.counterparts, made the first time; null without the model's ids.
+	ModelCounterparts* CounterpartsOf(DrawingViewContext& ctx);
+
+	// A view as InspectDrawing describes it, without its entities or annotations.
+	void DescribeViewOnly(IView* view, IModelDocExtension* drawingExt, IMathUtility* math, sld_mcp::v1::ViewInfo* info);
+
+	// Selecting a silhouette picks in the view, and a pick on a selected view
+	// starts a modal drag that holds SolidWorks' main thread: select view
+	// entities only through these two, which guard against it
+	// (DrawingHelpers.cpp, TrackerEscape; drawings.md "Silhouettes pick").
 
 	// Adds the entity to the selection (silhouettes through their own Select2).
 	bool SelectViewEntity(IView* view, const ViewEntityItem& item);

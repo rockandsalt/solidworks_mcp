@@ -177,6 +177,29 @@ impl IdRegistry {
         self.by_bytes.get(&(self.document, persist_id.to_vec())).cloned()
     }
 
+    /// Runs `f` with the document with this key (see `files::document_key`)
+    /// as the one IDs are minted for, then makes the active one active
+    /// again: IDs for another document's entities, e.g. the model a drawing
+    /// view shows, which work once that document is active.
+    pub fn in_document<R>(&mut self, key: &str, name: &str, f: impl FnOnce(&mut IdRegistry) -> R) -> R {
+        let active = self.document;
+        let index = self.document_index(key);
+        if self.documents[index].1.is_empty() {
+            self.documents[index].1 = name.to_string();
+        }
+        self.document = index;
+        let out = f(self);
+        self.document = active;
+        out
+    }
+
+    /// The key of the document an ID belongs to and its persist ID, whether
+    /// or not that document is active.
+    pub fn lookup(&self, id: &str) -> Option<(&str, &[u8])> {
+        let (doc, bytes) = self.by_id.get(id.trim())?;
+        Some((self.documents.get(*doc).map_or("", |d| d.0.as_str()), bytes.as_slice()))
+    }
+
     /// The persist ID behind a short ID handed out earlier for the active
     /// document. `unknown_id` says why there's none.
     pub fn persist_id(&self, id: &str) -> Option<Vec<u8>> {

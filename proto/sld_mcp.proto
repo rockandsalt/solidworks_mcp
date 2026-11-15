@@ -776,14 +776,17 @@ service SolidWorks {
   // sketch is open, or SolidWorks computes nothing.
   rpc GetMassProperties(GetMassPropertiesRequest) returns (GetMassPropertiesResponse);
 
-  // The selection in the active part or assembly: what the user picked in
-  // SolidWorks (faces, edges, vertices, features, bodies, components, sketch
-  // entities), each described as InspectModel describes it, with its persist
-  // id for other RPCs. With `select`, the selection is first replaced (or,
-  // with `append`, added to) by those entities, as clicking them would:
+  // The selection in the active document: what the user picked in
+  // SolidWorks. Parts and assemblies: faces, edges, vertices, features,
+  // bodies, components, sketch entities, each described as InspectModel
+  // describes it, with its persist id for other RPCs. Drawings: view edges,
+  // silhouettes and vertices as InspectDrawing lists them (their
+  // DrawingEntityRef keys), annotations, and views. With `select` /
+  // `select_view_entities`, the selection is first replaced (or, with
+  // `append`, added to) by those entities, as clicking them would:
   // highlighted on screen. `clear` empties it. Changes nothing in the model.
   // NOT_FOUND / INVALID_ARGUMENT for entities that can't be;
-  // FAILED_PRECONDITION if the active document isn't a part or assembly or
+  // FAILED_PRECONDITION if no part, assembly or drawing is active or
   // SolidWorks won't select one (hidden, suppressed).
   rpc UserSelection(SelectionRequest) returns (SelectionResponse);
 }
@@ -3605,6 +3608,22 @@ message ViewEntity {
   // SILHOUETTE: its end points; VERTEX: start = the point. Model space.
   Vec3 start = 6;
   Vec3 end = 7;
+  // The same entity in the view's model (silhouettes: their face), by
+  // IModelDocExtension::GetCorresponding (assembly views: in the
+  // component's part, then IComponent2::GetCorrespondingEntity): its
+  // persist id as InspectModel gives it in that model. Empty when
+  // SolidWorks gives no counterpart (model not loaded, ...).
+  bytes model_persist_id = 8;
+  // That model entity's faces (edges: the one or two meeting at it;
+  // silhouettes: their face) and the features that made them, by the
+  // model's persist ids.
+  repeated bytes model_face_persist_ids = 9;
+  repeated ModelFeatureRef features = 10;
+}
+
+message ModelFeatureRef {
+  string name = 1;
+  bytes persist_id = 2;
 }
 
 // Names an entity of a drawing view, from InspectDrawing's ViewInfo.name
@@ -5307,6 +5326,9 @@ message SelectionRequest {
   bool append = 2;
   // Empty the selection (before `select`, if any).
   bool clear = 3;
+  // Drawings (in place of `select`): view entities from InspectDrawing, all
+  // on one sheet, which is shown.
+  repeated DrawingEntityRef select_view_entities = 4;
 }
 
 // A vertex (InspectModel hands vertices out on edges only).
@@ -5322,7 +5344,8 @@ message SelectedItem {
   int32 select_type = 1;
   int32 mark = 2;
   // Where it was picked (ISelectionMgr::GetSelectionPoint2), in model or
-  // assembly space; set for faces, edges, vertices and sketch entities.
+  // assembly space (drawings: sheet meters); set for faces, edges, vertices,
+  // sketch entities and view entities.
   Vec3 point = 3;
   oneof item {
     FaceInfo face = 4;
@@ -5332,11 +5355,20 @@ message SelectedItem {
     BodyInfo body = 8;
     bytes component_persist_id = 9;
     SketchItem sketch_item = 10;
+    // Drawings: an entity of view `view_name` (as InspectDrawing lists it),
+    // an annotation in it, or a view itself (its name). A feature picked
+    // under a view in the drawing's tree is `feature`, the view model's
+    // (IModelDocExtension::GetCorresponding), by that model's persist ids.
+    ViewEntity view_entity = 13;
+    AnnotationInfo annotation = 14;
+    string drawing_view = 15;
   }
   // Sketch items: their sketch's name; their positions are in its
   // coordinates (model coordinates in a 3D sketch).
   string sketch_name = 11;
   bool sketch_3d = 12;
+  // Drawings: the view (or sheet) the item is in.
+  string view_name = 16;
 }
 
 message SelectionResponse {
@@ -5347,4 +5379,7 @@ message SelectionResponse {
   // Assemblies: the components the items are in, with their placements
   // (geometry as in InspectModel: see local_geometry).
   repeated ComponentInfo components = 3;
+  // Drawings: the views the items are in, as InspectDrawing describes them
+  // (no entities or annotations), for their sheet geometry.
+  repeated ViewInfo views = 4;
 }

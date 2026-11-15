@@ -393,6 +393,88 @@ namespace sld_mcp::service
 		}
 	}
 
+	namespace
+	{
+		// SolidWorks' silhouette code picks in the view (GetVisibleEntities,
+		// ISilhouetteEdge's methods), and a pick that lands on a selected view
+		// starts dragging it: a modal mouse loop (CRectTracker::Track) that
+		// waits for a click, holding SolidWorks' main thread (seen
+		// 2026-11-14). While one of these calls runs, a thread timer posts
+		// Escape whenever a window has captured the mouse; the loop takes it
+		// as cancel, so nothing moves. An Escape no loop took is removed.
+		class TrackerEscape
+		{
+		public:
+			TrackerEscape() : m_timer(::SetTimer(nullptr, 0, 100, &TrackerEscape::OnTimer)) {}
+			~TrackerEscape()
+			{
+				if (m_timer)
+					::KillTimer(nullptr, m_timer);
+				MSG msg;
+				while (::PeekMessageW(&msg, reinterpret_cast<HWND>(-1), WM_KEYDOWN, WM_KEYDOWN, PM_REMOVE))
+				{
+				}
+			}
+			TrackerEscape(const TrackerEscape&) = delete;
+			TrackerEscape& operator=(const TrackerEscape&) = delete;
+
+		private:
+			static void CALLBACK OnTimer(HWND, UINT, UINT_PTR, DWORD)
+			{
+				if (::GetCapture())
+					::PostThreadMessageW(::GetCurrentThreadId(), WM_KEYDOWN, VK_ESCAPE, 0);
+			}
+			UINT_PTR m_timer;
+		};
+
+		bool MathPointCoordinates(IMathPoint* point, sld_mcp::v1::Vec3* out)
+		{
+			ATL::CComVariant data;
+			if (!point || FAILED(point->get_ArrayData(&data)))
+				return false;
+			const std::vector<double> p = comvariant::ToDoubles(data);
+			if (p.size() < 3 || !std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2]))
+				return false;
+			SetVec3(out, p.data());
+			return true;
+		}
+
+		// ISilhouetteEdge's methods are only called through SilhouetteFace,
+		// SilhouetteEnds, SelectViewEntity and SelectViewEntityAt (and
+		// GetVisibleEntities in ListViewEntities): they pick in the view, so
+		// each runs under a TrackerEscape.
+
+		// The silhouette's face; null if SolidWorks gives none.
+		ATL::CComPtr<IFace2> SilhouetteFace(ISilhouetteEdge* silhouette)
+		{
+			TrackerEscape escape;
+			ATL::CComPtr<IFace2> face;
+			if (FAILED(silhouette->GetFace(&face)))
+				face.Release();
+			return face;
+		}
+
+		// The silhouette's end points (model space), each unset if SolidWorks
+		// gives none.
+		struct SilhouetteEndPoints
+		{
+			std::optional<sld_mcp::v1::Vec3> start, end;
+		};
+
+		SilhouetteEndPoints SilhouetteEnds(ISilhouetteEdge* silhouette)
+		{
+			TrackerEscape escape;
+			SilhouetteEndPoints out;
+			ATL::CComPtr<IMathPoint> start, end;
+			sld_mcp::v1::Vec3 p;
+			if (SUCCEEDED(silhouette->GetStartPoint(&start)) && MathPointCoordinates(start, &p))
+				out.start = p;
+			if (SUCCEEDED(silhouette->GetEndPoint(&end)) && MathPointCoordinates(end, &p))
+				out.end = p;
+			return out;
+		}
+	}
+
 	// What GetVisibleEntities2 is asked about: an assembly view's visible
 	// components one by one, or (part views) a null component.
 	std::vector<ATL::CComPtr<IComponent2>> ViewComponents(IView* view, const ViewModel& model)
@@ -419,9 +501,13 @@ namespace sld_mcp::service
 		sld_mcp::v1::ViewEntityKind kind, PersistIds& ids, size_t& budget, std::vector<ViewEntityItem>& out)
 	{
 		ATL::CComVariant entities;
+		std::optional<TrackerEscape> escape;
+		if (kind == sld_mcp::v1::VIEW_ENTITY_KIND_SILHOUETTE)
+			escape.emplace();
 		// GetVisibleEntities2's silhouettes in a part view can have no face
 		// and no end points (after the view's scale changed, until the next
-		// GetVisibleEntities call); GetVisibleEntities' are whole.
+		// GetVisibleEntities call); GetVisibleEntities' are whole. It picks in
+		// the view (about 1 s a view; see TrackerEscape).
 		const HRESULT hr = kind == sld_mcp::v1::VIEW_ENTITY_KIND_SILHOUETTE
 			? view->GetVisibleEntities(component, SwViewEntityType(kind), &entities)
 			: view->GetVisibleEntities2(component, SwViewEntityType(kind), &entities);
@@ -442,10 +528,9 @@ namespace sld_mcp::service
 			item.componentPid = componentPid;
 			if (kind == sld_mcp::v1::VIEW_ENTITY_KIND_SILHOUETTE)
 			{
-				ATL::CComQIPtr<ISilhouetteEdge> silhouette(disp.p);
-				ATL::CComPtr<IFace2> face;
-				if (silhouette && SUCCEEDED(silhouette->GetFace(&face)) && face)
-					item.persistId = ids.Get(face);
+				if (ATL::CComQIPtr<ISilhouetteEdge> silhouette(disp.p); silhouette)
+					if (const ATL::CComPtr<IFace2> face = SilhouetteFace(silhouette))
+						item.persistId = ids.Get(face);
 			}
 			else
 				item.persistId = ids.Get(disp);
@@ -455,20 +540,117 @@ namespace sld_mcp::service
 		return true;
 	}
 
+	ModelCounterparts::ModelCounterparts(const ViewModel& model, PersistIds& modelIds)
+		: m_model(model), m_ids(modelIds)
+	{
+	}
+
+	const ModelCounterparts::Part* ModelCounterparts::PartOf(IComponent2* component)
+	{
+		if (!component)
+			return nullptr;
+		ATL::CComBSTR name;
+		component->get_Name2(&name);
+		const std::string key = ToUtf8(name);
+		if (auto it = m_parts.find(key); it != m_parts.end())
+			return it->second.ext ? &it->second : nullptr;
+		Part& part = m_parts[key];
+		ATL::CComQIPtr<IAssemblyDoc> assembly(m_model.doc.p);
+		ATL::CComPtr<IDispatch> docDisp;
+		if (assembly && SUCCEEDED(component->GetModelDoc2(&docDisp)) && docDisp)
+			if (ATL::CComQIPtr<IModelDoc2> doc(docDisp.p); doc)
+				if (ATL::CComPtr<IComponent2> own = AssemblyComponentOf(assembly, component))
+				{
+					doc->get_Extension(&part.ext);
+					part.own = own;
+				}
+		return part.ext ? &part : nullptr;
+	}
+
+	ATL::CComPtr<IDispatch> ModelCounterparts::Find(IDispatch* obj, IComponent2* component)
+	{
+		ATL::CComPtr<IDispatch> found;
+		if (!obj || !m_model.ext)
+			return found;
+		if (m_model.type != swDocASSEMBLY)
+		{
+			if (FAILED(m_model.ext->GetCorresponding(obj, &found)))
+				found.Release();
+			return found;
+		}
+		const Part* part = PartOf(component);
+		ATL::CComPtr<IDispatch> inPart;
+		if (!part || FAILED(part->ext->GetCorresponding(obj, &inPart)) || !inPart)
+			return found;
+		const ATL::CComQIPtr<IEntity> entity(inPart.p);
+		if (FAILED(entity.p ? part->own->GetCorrespondingEntity(inPart, &found) : part->own->GetCorresponding(inPart, &found)))
+			found.Release();
+		return found;
+	}
+
+	void ModelCounterparts::Describe(const ViewEntityItem& item, sld_mcp::v1::ViewEntity* out)
+	{
+		// Both silhouettes of a face are the same model face, and
+		// GetCorresponding on a face takes 0.1-0.6 s (seen 2026-11-14).
+		std::string key;
+		if (!item.persistId.empty())
+		{
+			key = std::to_string(static_cast<int>(item.kind)) + "/" + item.componentPid + "/" + item.persistId;
+			if (auto it = m_described.find(key); it != m_described.end())
+			{
+				out->MergeFrom(it->second);
+				return;
+			}
+		}
+		sld_mcp::v1::ViewEntity modelSide;
+		Lookup(item, &modelSide);
+		out->MergeFrom(modelSide);
+		if (!key.empty())
+			m_described.emplace(key, std::move(modelSide));
+	}
+
+	void ModelCounterparts::Lookup(const ViewEntityItem& item, sld_mcp::v1::ViewEntity* out)
+	{
+		ATL::CComPtr<IDispatch> drawn = item.obj;
+		if (ATL::CComQIPtr<ISilhouetteEdge> silhouette(item.obj.p); silhouette)
+		{
+			drawn.Release();
+			if (const ATL::CComPtr<IFace2> face = SilhouetteFace(silhouette))
+				face->QueryInterface(IID_PPV_ARGS(&drawn));
+		}
+		const ATL::CComPtr<IDispatch> model = Find(drawn, item.component);
+		if (!model)
+			return;
+		out->set_model_persist_id(m_ids.Get(model));
+		std::vector<ATL::CComPtr<IFace2>> faces;
+		if (ATL::CComQIPtr<IFace2> face(model.p); face)
+			faces.push_back(ATL::CComPtr<IFace2>(face));
+		else if (ATL::CComQIPtr<IEdge> edge(model.p); edge)
+		{
+			ATL::CComVariant adjacent;
+			if (SUCCEEDED(edge->GetTwoAdjacentFaces2(&adjacent)))
+				for (const auto& disp : comvariant::ToDispatches(adjacent))
+					if (ATL::CComQIPtr<IFace2> f(disp.p); f)
+						faces.push_back(ATL::CComPtr<IFace2>(f));
+		}
+		std::set<std::string> features;
+		for (const auto& face : faces)
+		{
+			out->add_model_face_persist_ids(m_ids.Get(face));
+			ATL::CComPtr<IFeature> feature;
+			if (FAILED(face->IGetFeature(&feature)) || !feature)
+				continue;
+			const std::string name = FeatureName(feature);
+			if (!features.insert(name).second)
+				continue;
+			auto* ref = out->add_features();
+			ref->set_name(name);
+			ref->set_persist_id(m_ids.Get(feature));
+		}
+	}
+
 	namespace
 	{
-		bool MathPointCoordinates(IMathPoint* point, sld_mcp::v1::Vec3* out)
-		{
-			ATL::CComVariant data;
-			if (!point || FAILED(point->get_ArrayData(&data)))
-				return false;
-			const std::vector<double> p = comvariant::ToDoubles(data);
-			if (p.size() < 3 || !std::isfinite(p[0]) || !std::isfinite(p[1]) || !std::isfinite(p[2]))
-				return false;
-			SetVec3(out, p.data());
-			return true;
-		}
-
 		// A view vertex's point in its model. IVertex::GetPoint on the vertices
 		// GetVisibleEntities2 hands out comes back shifted by the view's
 		// position on the sheet (model x + view x, model y + view y; SOLIDWORKS
@@ -538,12 +720,11 @@ namespace sld_mcp::service
 			case sld_mcp::v1::VIEW_ENTITY_KIND_SILHOUETTE:
 				if (ATL::CComQIPtr<ISilhouetteEdge> silhouette(item.obj.p); silhouette)
 				{
-					ATL::CComPtr<IMathPoint> start, end;
-					sld_mcp::v1::Vec3 p;
-					if (SUCCEEDED(silhouette->GetStartPoint(&start)) && MathPointCoordinates(start, &p))
-						*out->mutable_start() = p;
-					if (SUCCEEDED(silhouette->GetEndPoint(&end)) && MathPointCoordinates(end, &p))
-						*out->mutable_end() = p;
+					const SilhouetteEndPoints ends = SilhouetteEnds(silhouette);
+					if (ends.start)
+						*out->mutable_start() = *ends.start;
+					if (ends.end)
+						*out->mutable_end() = *ends.end;
 				}
 				break;
 			default:
@@ -737,8 +918,13 @@ namespace sld_mcp::service
 						if (!ListViewEntities(view, component, componentPid, kind, ids, budget.entities, items))
 							budget.truncated = true;
 				}
+				ModelCounterparts counterparts(model, modelIds);
 				for (const auto& item : items)
-					DescribeViewEntity(item, viewPosition, ids, info->add_entities());
+				{
+					sld_mcp::v1::ViewEntity* entity = info->add_entities();
+					DescribeViewEntity(item, viewPosition, ids, entity);
+					counterparts.Describe(item, entity);
+				}
 			}
 			DescribeViewAnnotations(view, includeAnnotations, ids, components ? &*components : nullptr, budget, info);
 		}
@@ -788,33 +974,181 @@ namespace sld_mcp::service
 		}
 	}
 
+	void DescribeViewOnly(IView* view, IModelDocExtension* drawingExt, IMathUtility* math, sld_mcp::v1::ViewInfo* info)
+	{
+		DrawingBudget budget;
+		DescribeView(view, drawingExt, math, false, false, false, budget, info);
+	}
+
+	namespace
+	{
+		// The view's visible entities of one kind of the component with
+		// persist id `componentPid` (empty: a part view's), listed once per
+		// context. Null if that component isn't visible in the view.
+		const std::vector<ViewEntityItem>* ListedEntities(DrawingViewContext& ctx, sld_mcp::v1::ViewEntityKind kind,
+			const std::string& componentPid)
+		{
+			ATL::CComPtr<IComponent2> component;
+			if (!componentPid.empty())
+			{
+				if (ctx.componentList)
+					for (const auto& c : ctx.components)
+						if (c && ctx.componentList->Add(c) == componentPid)
+						{
+							component = c;
+							break;
+						}
+				if (!component)
+					return nullptr;
+			}
+			auto key = std::make_pair(static_cast<int>(kind), componentPid);
+			auto it = ctx.entities.find(key);
+			if (it == ctx.entities.end())
+			{
+				std::vector<ViewEntityItem> items;
+				size_t unlimited = std::numeric_limits<size_t>::max();
+				ListViewEntities(ctx.view, component, componentPid, kind, *ctx.ids, unlimited, items);
+				it = ctx.entities.emplace(key, std::move(items)).first;
+			}
+			return &it->second;
+		}
+
+		ATL::CComPtr<IUnknown> Identity(IDispatch* obj)
+		{
+			ATL::CComPtr<IUnknown> identity;
+			if (obj)
+				obj->QueryInterface(IID_PPV_ARGS(&identity));
+			return identity;
+		}
+
+		// Both silhouettes of a cylinder have its face's persist id, and every
+		// listing hands out new objects: their end points tell them apart.
+		bool SameSilhouetteEnds(IDispatch* a, IDispatch* b)
+		{
+			ATL::CComQIPtr<ISilhouetteEdge> first(a), second(b);
+			if (!first || !second)
+				return false;
+			const SilhouetteEndPoints p = SilhouetteEnds(first), q = SilhouetteEnds(second);
+			if (!p.start || !p.end || !q.start || !q.end)
+				return false;
+			const auto same = [](const sld_mcp::v1::Vec3& u, const sld_mcp::v1::Vec3& v) {
+				return std::abs(u.x() - v.x()) < 1e-9 && std::abs(u.y() - v.y()) < 1e-9 && std::abs(u.z() - v.z()) < 1e-9;
+			};
+			return same(*p.start, *q.start) && same(*p.end, *q.end);
+		}
+
+		Eigen::Vector2d ViewPosition(IView* view)
+		{
+			ATL::CComVariant position;
+			if (SUCCEEDED(view->get_Position(&position)))
+				if (const std::vector<double> p = comvariant::ToDoubles(position); p.size() >= 2)
+					return Eigen::Vector2d(p[0], p[1]);
+			return Eigen::Vector2d::Zero();
+		}
+
+		// The entity listed in ctx that is the same COM object as `obj` (one
+		// selected by id), found without calling it: a selected silhouette's
+		// methods pick in the view.
+		const ViewEntityItem* AlreadyListed(const DrawingViewContext& ctx, IDispatch* obj)
+		{
+			const ATL::CComPtr<IUnknown> identity = Identity(obj);
+			if (identity)
+				for (const auto& [key, listed] : ctx.entities)
+					for (const auto& item : listed)
+						if (Identity(item.obj) == identity)
+							return &item;
+			return nullptr;
+		}
+
+		// What InspectDrawing lists a selected object under: its kind and
+		// persist id in the drawing (silhouettes: their face's), and the
+		// entity that knows its component (silhouettes: the face).
+		struct SelectedKey
+		{
+			sld_mcp::v1::ViewEntityKind kind = sld_mcp::v1::VIEW_ENTITY_KIND_UNSPECIFIED;
+			std::string persistId;
+			ATL::CComQIPtr<IEntity> entity;
+		};
+
+		// Null for anything but an edge, silhouette or vertex.
+		std::optional<SelectedKey> KeyOfSelected(PersistIds& ids, IDispatch* obj)
+		{
+			SelectedKey key;
+			key.entity = obj;
+			if (ATL::CComQIPtr<ISilhouetteEdge> silhouette(obj); silhouette)
+			{
+				key.kind = sld_mcp::v1::VIEW_ENTITY_KIND_SILHOUETTE;
+				if (const ATL::CComPtr<IFace2> face = SilhouetteFace(silhouette))
+				{
+					key.persistId = ids.Get(face);
+					key.entity = face;
+				}
+			}
+			else if (ATL::CComQIPtr<IEdge>(obj).p)
+				key.kind = sld_mcp::v1::VIEW_ENTITY_KIND_EDGE;
+			else if (ATL::CComQIPtr<IVertex>(obj).p)
+				key.kind = sld_mcp::v1::VIEW_ENTITY_KIND_VERTEX;
+			else
+				return std::nullopt;
+			if (key.kind != sld_mcp::v1::VIEW_ENTITY_KIND_SILHOUETTE)
+				key.persistId = ids.Get(obj);
+			return key;
+		}
+
+		// The persist id of the component a selected entity is in, as ctx
+		// lists components (empty: a part view, or no component known).
+		// `component` is GetSelectedObjectsComponent4's; an entity selected
+		// through the API (IView::SelectEntity) has none, and its own
+		// GetComponent is it. Null if ctx doesn't know the component.
+		std::optional<std::string> ComponentPidOfSelected(DrawingViewContext& ctx, IComponent2* component,
+			IEntity* entity)
+		{
+			if (!ctx.componentList)
+				return std::string();
+			ATL::CComPtr<IComponent2> owner(component);
+			if (!owner && entity)
+			{
+				ATL::CComPtr<IDispatch> ownerDisp;
+				if (SUCCEEDED(entity->GetComponent(&ownerDisp)) && ownerDisp)
+					ownerDisp->QueryInterface(IID_PPV_ARGS(&owner));
+			}
+			if (!owner)
+				return std::string();
+			std::string pid = ctx.componentList->Add(owner);
+			if (pid.empty())
+				return std::nullopt;
+			return pid;
+		}
+
+		// The listed entity a selected `obj` with `key` is (a fresh listing
+		// hands out new objects, so not by identity): silhouettes the one
+		// with its persist id and end points, else the only one with its
+		// persist id. Null if that tells none.
+		const ViewEntityItem* MatchListed(const std::vector<ViewEntityItem>& items, IDispatch* obj, const SelectedKey& key)
+		{
+			const ViewEntityItem* onlyOne = nullptr;
+			int samePersistId = 0;
+			for (const auto& item : items)
+			{
+				if (item.persistId != key.persistId)
+					continue;
+				if (key.kind == sld_mcp::v1::VIEW_ENTITY_KIND_SILHOUETTE && SameSilhouetteEnds(obj, item.obj))
+					return &item;
+				if (++samePersistId == 1)
+					onlyOne = &item;
+			}
+			return samePersistId == 1 ? onlyOne : nullptr;
+		}
+	}
+
 	grpc::Status ResolveDrawingRef(DrawingViewContext& ctx, const sld_mcp::v1::DrawingEntityRef& ref,
 		const std::string& where, ViewEntityItem& out)
 	{
-		ATL::CComPtr<IComponent2> component;
-		if (!ref.component_persist_id().empty())
-		{
-			if (ctx.componentList)
-				for (const auto& c : ctx.components)
-					if (c && ctx.componentList->Add(c) == ref.component_persist_id())
-					{
-						component = c;
-						break;
-					}
-			if (!component)
-				return grpc::Status(grpc::StatusCode::NOT_FOUND, where +
-					": its component isn't visible in " + ViewName(ctx.view) + " any more -- inspect the drawing again");
-		}
-		auto key = std::make_pair(static_cast<int>(ref.kind()), ref.component_persist_id());
-		auto it = ctx.entities.find(key);
-		if (it == ctx.entities.end())
-		{
-			std::vector<ViewEntityItem> items;
-			size_t unlimited = std::numeric_limits<size_t>::max();
-			ListViewEntities(ctx.view, component, ref.component_persist_id(), ref.kind(), *ctx.ids, unlimited, items);
-			it = ctx.entities.emplace(key, std::move(items)).first;
-		}
-		for (const auto& item : it->second)
+		const std::vector<ViewEntityItem>* items = ListedEntities(ctx, ref.kind(), ref.component_persist_id());
+		if (!items)
+			return grpc::Status(grpc::StatusCode::NOT_FOUND, where +
+				": its component isn't visible in " + ViewName(ctx.view) + " any more -- inspect the drawing again");
+		for (const auto& item : *items)
 			if (item.persistId == ref.persist_id() && item.ordinal == ref.ordinal())
 			{
 				out = item;
@@ -825,8 +1159,41 @@ namespace sld_mcp::service
 			"for current ids");
 	}
 
+	bool DescribeSelectedViewEntity(DrawingViewContext& ctx, IDispatch* obj, IComponent2* component,
+		sld_mcp::v1::ViewEntity* out)
+	{
+		const ViewEntityItem* found = AlreadyListed(ctx, obj);
+		if (!found)
+		{
+			const std::optional<SelectedKey> key = KeyOfSelected(*ctx.ids, obj);
+			if (!key)
+				return false;
+			const std::optional<std::string> componentPid = ComponentPidOfSelected(ctx, component, key->entity);
+			if (!componentPid)
+				return false;
+			const std::vector<ViewEntityItem>* items = ListedEntities(ctx, key->kind, *componentPid);
+			found = items ? MatchListed(*items, obj, *key) : nullptr;
+			if (!found)
+				return false;
+		}
+		DescribeViewEntity(*found, ViewPosition(ctx.view), *ctx.ids, out);
+		if (ModelCounterparts* counterparts = CounterpartsOf(ctx))
+			counterparts->Describe(*found, out);
+		return true;
+	}
+
+	ModelCounterparts* CounterpartsOf(DrawingViewContext& ctx)
+	{
+		if (!ctx.counterparts && ctx.modelIds)
+			ctx.counterparts = std::make_unique<ModelCounterparts>(ctx.model, *ctx.modelIds);
+		return ctx.counterparts.get();
+	}
+
 	bool SelectViewEntity(IView* view, const ViewEntityItem& item)
 	{
+		std::optional<TrackerEscape> escape;
+		if (item.kind == sld_mcp::v1::VIEW_ENTITY_KIND_SILHOUETTE)
+			escape.emplace();
 		VARIANT_BOOL selected = VARIANT_FALSE;
 		if (SUCCEEDED(view->SelectEntity(item.obj, VARIANT_TRUE, &selected)) && selected)
 			return true;
@@ -856,7 +1223,10 @@ namespace sld_mcp::service
 		}
 		VARIANT_BOOL selected = VARIANT_FALSE;
 		if (ATL::CComQIPtr<ISilhouetteEdge> silhouette(item.obj.p); silhouette)
+		{
+			TrackerEscape escape;
 			silhouette->Select2(VARIANT_TRUE, data, &selected);
+		}
 		else if (ATL::CComQIPtr<IEntity> entity(item.obj.p); entity)
 			entity->Select4(VARIANT_TRUE, data, &selected);
 		return selected != VARIANT_FALSE;

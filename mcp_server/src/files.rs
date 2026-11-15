@@ -390,9 +390,14 @@ pub fn describe(doc: &proto::Document) -> String {
 pub fn document_key(reply: &proto::GetActiveDocumentResponse) -> (String, String) {
     match &reply.document {
         None => (String::new(), String::new()),
-        Some(doc) if !doc.path.is_empty() => (format!("file:{}", doc.path.to_lowercase()), doc.title.clone()),
+        Some(doc) if !doc.path.is_empty() => (file_key(&doc.path), doc.title.clone()),
         Some(doc) => (format!("new:{}:{}", reply.session, doc.title), doc.title.clone()),
     }
+}
+
+/// `document_key` of the saved document at `path`.
+pub fn file_key(path: &str) -> String {
+    format!("file:{}", path.to_lowercase())
 }
 
 /// Names of the bits set in `bits`, from a (bit, name) table; unknown bits

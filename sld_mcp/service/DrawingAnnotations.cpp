@@ -479,23 +479,8 @@ namespace
 	bool SelectLeaderEntity(IModelDoc2* doc, DrawingViewContext& ctx, const ViewEntityItem& item,
 		const std::optional<Eigen::Vector2d>& tip)
 	{
-		ATL::CComPtr<ISelectionMgr> selections;
-		ATL::CComPtr<ISelectData> data;
-		if (tip && SUCCEEDED(doc->get_ISelectionManager(&selections)) && selections &&
-			SUCCEEDED(selections->CreateSelectData(&data)) && data)
-		{
-			data->put_X(tip->x());
-			data->put_Y(tip->y());
-			data->put_Z(0.0);
-			data->put_View(ctx.view);
-			VARIANT_BOOL selected = VARIANT_FALSE;
-			if (ATL::CComQIPtr<ISilhouetteEdge> silhouette(item.obj.p); silhouette)
-				silhouette->Select2(VARIANT_TRUE, data, &selected);
-			else if (ATL::CComQIPtr<IEntity> entity(item.obj.p); entity)
-				entity->Select4(VARIANT_TRUE, data, &selected);
-			if (selected)
-				return true;
-		}
+		if (tip && SelectViewEntityAt(doc, ctx.view, item, tip, 0))
+			return true;
 		return SelectViewEntity(ctx.view, item);
 	}
 

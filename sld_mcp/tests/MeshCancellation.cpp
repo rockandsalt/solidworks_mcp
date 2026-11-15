@@ -96,6 +96,9 @@ namespace
 		passed = passed && PolicyFor(selection) == read;
 		selection.add_select()->set_feature_name("Boss-Extrude1");
 		passed = passed && PolicyFor(selection) == change;
+		sld_mcp::v1::SelectionRequest drawing;
+		drawing.add_select_view_entities()->set_view_name("Drawing View1");
+		passed = passed && PolicyFor(drawing) == change;
 		sld_mcp::v1::SelectionRequest clear;
 		clear.set_clear(true);
 		passed = passed && PolicyFor(clear) == change;

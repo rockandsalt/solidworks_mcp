@@ -1224,9 +1224,9 @@ struct SolidWorksTools {
     /// Sheet geometry of the drawing view entities inspect_drawing listed,
     /// for checking and placing drawing dimensions.
     drawings: Arc<Mutex<drawing::Cache>>,
-    /// The active document's units, as of the tool call's start (None:
-    /// nothing open, or the add-in didn't answer).
-    units: Arc<Mutex<Option<proto::DocumentUnits>>>,
+    /// The active document (type, units, ...), as of the tool call's start
+    /// (None: nothing open, or the add-in didn't answer).
+    active: Arc<Mutex<Option<proto::Document>>>,
 }
 
 #[tool_router]
@@ -1246,7 +1246,7 @@ impl SolidWorksTools {
             renderer: Arc::default(),
             mesh: Arc::default(),
             drawings: Arc::default(),
-            units: Arc::default(),
+            active: Arc::default(),
         }
     }
 
@@ -2499,8 +2499,10 @@ impl SolidWorksTools {
                        (type, orientation, scale, model, outline on the sheet, which model axes \
                        point right / up). With `view`, also its visible edges with ids \
                        (\"view_edge:3\"; \"silhouette:1\" for a curved face's outline) and sheet \
-                       positions, and its dimensions and annotations. Sheet mm from the lower-left \
-                       corner; sizes are the model's."
+                       positions, what each is in the model (`model_id`: inspect_model's id for the \
+                       same edge, face or vertex, usable while that model is the active document; \
+                       `features` it comes from), and its dimensions and annotations. Sheet mm \
+                       from the lower-left corner; sizes are the model's."
     )]
     async fn inspect_drawing(
         &self,
@@ -3871,7 +3873,12 @@ impl SolidWorksTools {
                        bodies, components, sketch entities), each with its id for the other tools \
                        (\"face:7\" for hole_wizard, sketch `on`, fillet_edges, ...), its geometry as \
                        inspect_model gives it, and where it was clicked (`picked_at_mm`, to screen \
-                       precision: e.g. roughly where to put a hole). Call it first when the user says this / here / the selected ...: \
+                       precision: e.g. roughly where to put a hole). In a drawing: view edges, \
+                       silhouettes and vertices with inspect_drawing's ids (\"view_edge:3\" for \
+                       add_drawing_dimensions, ...), sheet geometry and what they are in the model \
+                       (`model_id`, `features`), annotations, views, features picked in the tree; \
+                       there `picked_at_mm` is on the sheet, and `select` also takes the model's \
+                       ids and feature names, to show where the views draw them. Call it first when the user says this / here / the selected ...: \
                        other tools replace the selection. `select` highlights entities for the user \
                        instead; `clear` empties it. Changes nothing in the model."
     )]
@@ -3879,7 +3886,9 @@ impl SolidWorksTools {
         &self,
         Parameters(params): Parameters<selection::SelectionParams>,
     ) -> Result<CallToolResult, McpError> {
-        let request = {
+        let request = if !params.select.is_empty() && self.active_is_drawing().await {
+            self.drawing_selection_request(&params).await?
+        } else {
             let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             selection::request(&ids, &params)?
         };
@@ -3887,7 +3896,8 @@ impl SolidWorksTools {
         assembly::place_selection_reply(&mut reply);
         let json = {
             let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            selection::render(&mut ids, &reply)
+            let mut cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            selection::render(&mut ids, &mut cache, &reply)
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
     }
@@ -4661,8 +4671,8 @@ impl SolidWorksTools {
     /// (Save As), so its ids carry over.
     async fn track_document(&self, rename: bool) {
         let active = self.addin.get_active_document(Some(DOCUMENT_CHECK_TIMEOUT)).await;
-        *self.units.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
-            active.as_ref().ok().and_then(|reply| reply.document.as_ref()).and_then(|doc| doc.units.clone());
+        *self.active.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            active.as_ref().ok().and_then(|reply| reply.document.clone());
         match active {
             Ok(reply) => {
                 let (key, name) = files::document_key(&reply);
@@ -4678,9 +4688,60 @@ impl SolidWorksTools {
         }
     }
 
+    /// Whether the active document is a drawing: as of the tool call's
+    /// start, else (that check failed) asked again; false if that can't be
+    /// told.
+    async fn active_is_drawing(&self) -> bool {
+        let snapshot = self.active.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ref().map(|d| d.r#type());
+        let kind = match snapshot {
+            Some(kind) => Some(kind),
+            None => self
+                .addin
+                .get_active_document(Some(DOCUMENT_CHECK_TIMEOUT))
+                .await
+                .ok()
+                .and_then(|reply| reply.document)
+                .map(|doc| doc.r#type()),
+        };
+        kind == Some(proto::DocumentType::Drawing)
+    }
+
+    /// selection's `select` in a drawing: view entity ids as given, model
+    /// ids and feature names as the view entities that draw them, found in
+    /// the views showing their models (docs/notes/selection.md). The
+    /// selection is left alone until the add-in selects them.
+    async fn drawing_selection_request(
+        &self,
+        params: &selection::SelectionParams,
+    ) -> Result<proto::SelectionRequest, McpError> {
+        selection::check(params)?;
+        let picks = {
+            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            selection::drawing_picks(&ids, params)?
+        };
+        let refs = match selection::view_refs(&picks) {
+            Some(refs) => refs,
+            None => {
+                let overview = self
+                    .addin
+                    .inspect_drawing(selection::overview_request())
+                    .await
+                    .map_err(|status| self.addin_error(status))?;
+                let detail = match selection::detail_request(&picks, &overview) {
+                    Some(request) => {
+                        self.addin.inspect_drawing(request).await.map_err(|status| self.addin_error(status))?
+                    }
+                    None => overview,
+                };
+                selection::resolve_picks(&picks, &detail)?
+            }
+        };
+        selection::drawing_request(params, refs)
+    }
+
     /// The active document's units as of this tool call's start.
     fn active_units(&self) -> Option<proto::DocumentUnits> {
-        self.units.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
+        self.active.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ref().and_then(|doc| doc.units)
     }
 
     /// The persist ID behind an id handed out by inspect_model.
