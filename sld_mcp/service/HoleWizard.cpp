@@ -264,6 +264,12 @@ namespace
 		case swWzdHole:
 			// Screw fit, drill angle, ...
 			values[0] = fit;
+			// Value5 and Value6 both -1 make a through-all hole fail (null
+			// feature; blind holes don't mind). Either at 0 works and gives a
+			// plain hole (seen 2026-11-18, 2025 SP5): presumably the far-side
+			// countersink, which only a through hole has.
+			values[4] = 0.0;
+			values[5] = 0.0;
 			break;
 		case swWzdTap:
 			// Thread depth, near/far c-sink diameter/angle, drill angle, cosmetic

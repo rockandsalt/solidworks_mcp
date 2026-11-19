@@ -1,5 +1,6 @@
 # hole_wizard against real SolidWorks: face mode with several locations,
-# with none (the face's center), each hole kind, the user's own sketch of
+# with none (the face's center), each hole kind (a plain hole also through
+# all), the user's own sketch of
 # points as the placement sketch, and the refusals, which must leave nothing
 # behind. Written as a characterization test before HoleWizard.cpp was split
 # into steps (2026-10-26). Run with:
@@ -71,6 +72,16 @@ r = mcp.call("hole_wizard", kind="countersink", size="M5", on=far, locations=[[1
              countersink_angle_deg=90)
 print("    countersink:", r.text)
 assert "1 M5 countersink" in r.text and "x 90°" in r.text, r.text
+
+# A plain hole through all: failed until 2026-11-18 (HoleWizard5 with Value5
+# and Value6 both -1 makes no through-all hole). It must go through the 10 mm:
+# an M5 clearance hole (normal fit, Ø5.5) removes a full cylinder.
+volume = mcp.call("inspect_model", what="bodies").json["bodies"][0]["volume_mm3"]
+r = mcp.call("hole_wizard", kind="hole", size="M5", on=far, locations=[[10, 0, -10]], through_all=True)
+print("    hole through all:", r.text)
+assert "1 M5 hole" in r.text and "through all" in r.text, r.text
+removed = volume - mcp.call("inspect_model", what="bodies").json["bodies"][0]["volume_mm3"]
+assert abs(removed - 3.141592653589793 * 2.75 ** 2 * 10) < 0.5, f"through-all hole removed {removed} mm3"
 
 before = features()
 # Location 2 is beyond the plate. (A location inside an earlier hole is NOT
