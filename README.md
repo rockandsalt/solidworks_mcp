@@ -4,6 +4,8 @@ An [MCP](https://modelcontextprotocol.io) server that lets AI assistants such as
 Claude and Codex model in SOLIDWORKS: sketch, build and edit features,
 assemble components, make drawings, and inspect the result.
 
+https://github.com/user-attachments/assets/2af9d51d-89a5-4be4-aa0d-1814073a9147
+
 ```
 MCP client ──stdio──▶ mcp_server.exe ──gRPC (localhost)──▶ sld_mcp.dll (SOLIDWORKS add-in) ──COM──▶ SOLIDWORKS
 ```
