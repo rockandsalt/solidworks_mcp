@@ -9,7 +9,24 @@
 # 60 x 40 x 10 plate. With this machine's template it spans x 0..10,
 # y -30..30, z -20..20 (docs/notes/devloop.md: Front Plane faces +X).
 
+import math
 import re
+
+# Radius of an M5 clearance hole (normal fit, Ø5.5).
+M5_R = 2.75
+
+
+def m5_cylinder_mm3(depth: float) -> float:
+    return math.pi * M5_R ** 2 * depth
+
+
+# A blind M5 clearance hole `depth` mm deep, with its 118° drill point.
+def m5_hole_mm3(depth: float) -> float:
+    return m5_cylinder_mm3(depth) + math.pi * M5_R ** 2 * (M5_R / math.tan(math.radians(59))) / 3
+
+
+def volume() -> float:
+    return sum(b["volume_mm3"] for b in mcp.call("inspect_model", what="bodies").json["bodies"])
 
 
 def features() -> list[str]:
@@ -50,11 +67,16 @@ far, near = face_at(0, 10), face_at(0, 0)
 # ---- Face mode --------------------------------------------------------------
 # Three locations in one feature; the points are projected onto the face, so
 # x = 7 lands on x = 10.
+before_volume = volume()
 r = mcp.call("hole_wizard", kind="hole", size="M5", on=far, depth_mm=5,
              locations=[[10, -20, 10], [7, 0, 10], [10, 20, 10]])
 print("    3 holes:", r.text)
 assert r.text.startswith("created ") and "3 M5 holes" in r.text, r.text
 same_points(centers(r.text), [[10, -20, 10], [10, 0, 10], [10, 20, 10]], "3 holes")
+# All three are cut: until 2026-11-21 only the first was, the points added to
+# the placement sketch got holes only at a later forced rebuild.
+removed = before_volume - volume()
+assert abs(removed - 3 * m5_hole_mm3(5)) < 0.5, f"3 holes removed {removed} mm3, expected {3 * m5_hole_mm3(5)}"
 
 # No locations: one hole at the center of the face's box (through the plate,
 # so the far face's center is taken from here on).
@@ -76,12 +98,12 @@ assert "1 M5 countersink" in r.text and "x 90°" in r.text, r.text
 # A plain hole through all: failed until 2026-11-18 (HoleWizard5 with Value5
 # and Value6 both -1 makes no through-all hole). It must go through the 10 mm:
 # an M5 clearance hole (normal fit, Ø5.5) removes a full cylinder.
-volume = mcp.call("inspect_model", what="bodies").json["bodies"][0]["volume_mm3"]
+before_volume = volume()
 r = mcp.call("hole_wizard", kind="hole", size="M5", on=far, locations=[[10, 0, -10]], through_all=True)
 print("    hole through all:", r.text)
 assert "1 M5 hole" in r.text and "through all" in r.text, r.text
-removed = volume - mcp.call("inspect_model", what="bodies").json["bodies"][0]["volume_mm3"]
-assert abs(removed - 3.141592653589793 * 2.75 ** 2 * 10) < 0.5, f"through-all hole removed {removed} mm3"
+removed = before_volume - volume()
+assert abs(removed - m5_cylinder_mm3(10)) < 0.5, f"through-all hole removed {removed} mm3"
 
 before = features()
 # Location 2 is beyond the plate. (A location inside an earlier hole is NOT

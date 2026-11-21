@@ -650,6 +650,15 @@ namespace
 		const HRESULT closeHr = CloseSketch(doc, sketchManager);
 		if (failure.ok())
 			failure = CheckSketchClosed(doc, closeHr, FeatureName(result.placementFeature), "the hole locations were added");
+		// The close's EditRebuild3 doesn't regenerate the hole feature: the
+		// added points only got holes at a later forced rebuild (seen
+		// 2026-11-21, 2025 SP5). Best effort: false may just mean some other
+		// feature has a rebuild error.
+		if (failure.ok())
+		{
+			VARIANT_BOOL rebuilt = VARIANT_FALSE;
+			doc->ForceRebuild3(VARIANT_FALSE, &rebuilt);
+		}
 		if (failure.ok() &&
 			(!FindHolePlacementSketch(result.hole, result.placementFeature, result.placement).ok() ||
 				SketchPoints(result.placement).size() != points.size()))
