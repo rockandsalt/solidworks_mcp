@@ -3779,8 +3779,10 @@ message SetupDrawingViewRequest {
   // The model's configuration to show. Empty = keep (create: the model's
   // active configuration).
   string configuration = 5;
-  // A named view of the model: "*Front", "*Top", "*Isometric", ..., or a
-  // view saved in the model. Empty = keep (create: "*Front"). Only for
+  // A named view of the model: "*Front", "*Top", "*Isometric", ... (in
+  // English whatever the UI language: the add-in finds SolidWorks' own
+  // name for it), or a view saved in the model. Empty = keep (create:
+  // "*Front"). Only for
   // views made from the model (named / standard views); derived views
   // follow their base view.
   string orientation = 6;

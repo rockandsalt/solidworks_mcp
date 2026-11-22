@@ -803,13 +803,11 @@ namespace
 	}
 
 	// A named view of the model as SolidWorks spells it ("*front" ->
-	// "*Front"); `wanted` itself if the model isn't open or has no such view.
+	// "*Front", "*Front" -> "*Vorderseite" in German); `wanted` itself if
+	// the model isn't open or has no such view.
 	std::string NamedViewSpelling(IModelDoc2* model, const std::string& wanted)
 	{
-		for (const auto& name : ModelViewNames(model))
-			if (EqualsIgnoringCase(name, wanted))
-				return name;
-		return wanted;
+		return NamedViewIn(ModelViewNames(model), wanted);
 	}
 
 	grpc::Status NoNamedView(IModelDoc2* model, const std::string& modelPath, const std::string& wanted)
@@ -1162,9 +1160,13 @@ namespace
 
 		if (!c.orientation.empty())
 		{
+			// Spelled as the view's model has it, after its model was replaced.
+			ATL::CComPtr<IModelDoc2> model;
+			view->get_ReferencedDocument(&model);
+			const std::string orientation = NamedViewSpelling(model, c.orientation);
 			ATL::CComBSTR current;
 			view->GetOrientationName(&current);
-			if (!EqualsIgnoringCase(ToUtf8(current), c.orientation))
+			if (!EqualsIgnoringCase(ToUtf8(current), orientation))
 			{
 				// ShowNamedView2 in a drawing turns the selected view (else the
 				// one made last), whatever ActivateView says.
@@ -1173,16 +1175,12 @@ namespace
 					status = grpc::Status(grpc::StatusCode::FAILED_PRECONDITION, "SolidWorks wouldn't select " + viewName);
 				else
 				{
-					doc->ShowNamedView2(FromUtf8(c.orientation), -1);
+					doc->ShowNamedView2(FromUtf8(orientation), -1);
 					doc->ClearSelection2(VARIANT_TRUE);
 					current.Empty();
 					view->GetOrientationName(&current);
-					if (!EqualsIgnoringCase(ToUtf8(current), c.orientation))
-					{
-						ATL::CComPtr<IModelDoc2> model;
-						view->get_ReferencedDocument(&model);
+					if (!EqualsIgnoringCase(ToUtf8(current), orientation))
 						status = NoNamedView(model, ViewModelPath(view), c.orientation);
-					}
 				}
 				if (!step(status))
 					return first;
@@ -1354,8 +1352,7 @@ grpc::Status SolidWorksService::SetupDrawingView(grpc::ServerContext* context,
 			if (grpc::Status status = FindConfiguration(swApp, modelPath, request->configuration(), change.configuration);
 				!status.ok())
 				return status;
-		if (!request->orientation().empty())
-			change.orientation = NamedViewSpelling(OpenModel(swApp, modelPath), request->orientation());
+		change.orientation = request->orientation();
 		if (request->has_position())
 			change.position = std::make_pair(request->position().x(), request->position().y());
 		switch (request->scale_case())
@@ -1404,17 +1401,30 @@ grpc::Status SolidWorksService::SetupDrawingView(grpc::ServerContext* context,
 			ViewState before;
 			if (create)
 			{
-				const std::string orientation = change.orientation.empty() ? "*Front" : change.orientation;
+				const std::string wanted = change.orientation.empty() ? "*Front" : change.orientation;
 				const auto [x, y] = change.position.value_or(std::make_pair(sheetBefore.width / 2, sheetBefore.height / 2));
-				doc->ClearSelection2(VARIANT_TRUE);
-				HRESULT hr = drawing->CreateDrawViewFromModelView3(ATL::CComBSTR(change.modelPath.c_str()),
-					FromUtf8(orientation), x, y, 0.0, &view);
+				auto createView = [&](const std::string& orientation) {
+					doc->ClearSelection2(VARIANT_TRUE);
+					return drawing->CreateDrawViewFromModelView3(ATL::CComBSTR(change.modelPath.c_str()),
+						FromUtf8(orientation), x, y, 0.0, &view);
+				};
+				const std::string orientation = NamedViewSpelling(OpenModel(swApp, change.modelPath), wanted);
+				HRESULT hr = createView(orientation);
+				// Null for a named view the model doesn't have. A model that
+				// wasn't open had no names to spell it from: SolidWorks has
+				// loaded it now, so a standard view is tried again in its
+				// language.
+				ATL::CComPtr<IModelDoc2> model;
+				if (SUCCEEDED(hr) && !view)
+				{
+					model = OpenModel(swApp, change.modelPath);
+					if (const std::string spelled = NamedViewSpelling(model, wanted); spelled != orientation)
+						hr = createView(spelled);
+				}
 				if (FAILED(hr))
 					return ComError("IDrawingDoc::CreateDrawViewFromModelView3", hr);
-				// Null for a named view the model doesn't have.
 				if (!view)
-					return NoNamedView(OpenModel(swApp, change.modelPath), ToUtf8(ATL::CComBSTR(change.modelPath.c_str())),
-						orientation);
+					return NoNamedView(model, ToUtf8(ATL::CComBSTR(change.modelPath.c_str())), wanted);
 				// Made as asked; the rest is the change.
 				change.modelPath.clear();
 				change.orientation.clear();

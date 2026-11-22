@@ -124,6 +124,12 @@ namespace sld_mcp::service
 
 	bool EqualsIgnoringCase(const std::string& a, const std::string& b);
 
+	// `wanted` as `names` (IModelDoc2::GetModelViewNames) spells it: the name
+	// itself in any case, else an English standard view ("*Front", ...) by
+	// its place in the list, since SolidWorks translates their names but
+	// keeps their order; `wanted` itself if neither.
+	std::string NamedViewIn(const std::vector<std::string>& names, const std::string& wanted);
+
 	// SolidWorks refuses a sheet name another sheet has in any case.
 	bool SameSheetName(const std::string& a, const std::string& b);
 

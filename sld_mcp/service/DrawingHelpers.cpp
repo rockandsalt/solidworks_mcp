@@ -1250,6 +1250,27 @@ namespace sld_mcp::service
 		return _wcsicmp(FromUtf8(a), FromUtf8(b)) == 0;
 	}
 
+	std::string NamedViewIn(const std::vector<std::string>& names, const std::string& wanted)
+	{
+		for (const auto& name : names)
+			if (EqualsIgnoringCase(name, wanted))
+				return name;
+		// The order GetModelViewNames lists them in, before the model's own
+		// views (seen in English and German, SOLIDWORKS 2025).
+		static const char* const standard[] = { "*Normal To", "*Front", "*Back", "*Left", "*Right", "*Top",
+			"*Bottom", "*Isometric", "*Trimetric", "*Dimetric" };
+		constexpr size_t count = sizeof(standard) / sizeof(standard[0]);
+		// Only standard views start with '*': any other first ten aren't the
+		// list this order was seen in, and a wrong view is worse than a refusal.
+		if (names.size() < count ||
+			!std::all_of(names.begin(), names.begin() + count, [](const std::string& n) { return n.rfind('*', 0) == 0; }))
+			return wanted;
+		for (size_t i = 0; i < count; ++i)
+			if (EqualsIgnoringCase(standard[i], wanted))
+				return names[i];
+		return wanted;
+	}
+
 	// SolidWorks refuses a sheet name another sheet has in any case.
 	bool SameSheetName(const std::string& a, const std::string& b)
 	{

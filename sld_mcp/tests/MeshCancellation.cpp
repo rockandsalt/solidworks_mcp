@@ -376,10 +376,11 @@ namespace
 
 bool TestPmiPreferences();
 bool TestArcBoundingPoints();
+bool TestNamedViewIn();
 
 int main()
 {
-	if (!TestPmiPreferences() || !TestArcBoundingPoints())
+	if (!TestPmiPreferences() || !TestArcBoundingPoints() || !TestNamedViewIn())
 		return 1;
 	if (!TestGateAdmissionAndExceptions() || !TestGateLifecycle(ExecutionPolicy::Cancellable) ||
 		!TestGateLifecycle(ExecutionPolicy::CompleteOperation))
