@@ -50,7 +50,10 @@ pub fn find() -> Result<Target, String> {
         Err(_) => None,
     };
     choose(pinned, live_instances()).ok_or_else(|| match instances_dir() {
-        Some(dir) => format!("no running SolidWorks has the add-in loaded (no instance file in {})", dir.display()),
+        Some(dir) => format!(
+            "no running SolidWorks has the add-in loaded (no instance file in {})",
+            dir.display()
+        ),
         None => "LOCALAPPDATA isn't set, so the add-in's instance file can't be found".to_string(),
     })
 }
@@ -67,7 +70,11 @@ fn choose(pinned: Option<u16>, instances: Vec<InstanceFile>) -> Option<Target> {
     instances
         .into_iter()
         .max_by(|a, b| a.started.cmp(&b.started))
-        .map(|file| Target { port: file.port, token: Some(file.token), pid: Some(file.pid) })
+        .map(|file| Target {
+            port: file.port,
+            token: Some(file.token),
+            pid: Some(file.pid),
+        })
 }
 
 fn instances_dir() -> Option<PathBuf> {
@@ -96,7 +103,11 @@ fn live_instances() -> Vec<InstanceFile> {
         if is_solidworks(file.pid) {
             live.push(file);
         } else {
-            tracing::info!("deleting {} (SolidWorks pid {} is gone)", path.display(), file.pid);
+            tracing::info!(
+                "deleting {} (SolidWorks pid {} is gone)",
+                path.display(),
+                file.pid
+            );
             let _ = std::fs::remove_file(&path);
         }
     }
@@ -121,10 +132,13 @@ fn is_solidworks(pid: u32) -> bool {
             return false;
         }
         let mut exit_code = 0u32;
-        let running = GetExitCodeProcess(process, &mut exit_code) != 0 && exit_code == STILL_ACTIVE as u32;
+        let running =
+            GetExitCodeProcess(process, &mut exit_code) != 0 && exit_code == STILL_ACTIVE as u32;
         let mut name = [0u16; 1024];
         let mut len = name.len() as u32;
-        let named = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, name.as_mut_ptr(), &mut len) != 0;
+        let named =
+            QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, name.as_mut_ptr(), &mut len)
+                != 0;
         CloseHandle(process);
         running
             && named
@@ -144,27 +158,55 @@ mod tests {
     use super::*;
 
     fn file(pid: u32, port: u16, started: &str) -> InstanceFile {
-        InstanceFile { pid, port, token: format!("token{pid}"), started: started.into() }
+        InstanceFile {
+            pid,
+            port,
+            token: format!("token{pid}"),
+            started: started.into(),
+        }
     }
 
     #[test]
     fn newest_solidworks_wins() {
-        let files = vec![file(1, 6001, "2026-10-25T09:00:00Z"), file(2, 6002, "2026-10-25T10:00:00Z")];
+        let files = vec![
+            file(1, 6001, "2026-10-25T09:00:00Z"),
+            file(2, 6002, "2026-10-25T10:00:00Z"),
+        ];
         assert_eq!(
             choose(None, files),
-            Some(Target { port: 6002, token: Some("token2".into()), pid: Some(2) })
+            Some(Target {
+                port: 6002,
+                token: Some("token2".into()),
+                pid: Some(2)
+            })
         );
         assert_eq!(choose(None, Vec::new()), None);
     }
 
     #[test]
     fn pinned_port_takes_its_files_token_if_any() {
-        let files = || vec![file(1, 6001, "2026-10-25T09:00:00Z"), file(2, 6002, "2026-10-25T10:00:00Z")];
+        let files = || {
+            vec![
+                file(1, 6001, "2026-10-25T09:00:00Z"),
+                file(2, 6002, "2026-10-25T10:00:00Z"),
+            ]
+        };
         assert_eq!(
             choose(Some(6001), files()),
-            Some(Target { port: 6001, token: Some("token1".into()), pid: Some(1) })
+            Some(Target {
+                port: 6001,
+                token: Some("token1".into()),
+                pid: Some(1)
+            })
         );
-        assert_eq!(choose(Some(7000), files()), Some(Target { port: 7000, token: None, pid: None }));
+        assert_eq!(
+            choose(Some(7000), files()),
+            Some(Target {
+                port: 7000,
+                token: None,
+                pid: None
+            })
+        );
     }
 
     #[test]

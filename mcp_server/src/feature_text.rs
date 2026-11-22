@@ -13,10 +13,9 @@ pub const LISTED: usize = 30;
 /// talks about request items by number, since the model knows them by id.
 pub fn with_legend(error: McpError, noun: &str, given: &[String]) -> McpError {
     let marker = format!("{noun} ");
-    let numbered = error
-        .message
-        .match_indices(&marker)
-        .any(|(at, _)| error.message[at + marker.len()..].starts_with(|c: char| c.is_ascii_digit()));
+    let numbered = error.message.match_indices(&marker).any(|(at, _)| {
+        error.message[at + marker.len()..].starts_with(|c: char| c.is_ascii_digit())
+    });
     if !numbered || given.len() < 2 {
         return error;
     }
@@ -126,9 +125,22 @@ mod tests {
     #[test]
     fn legend_only_for_numbered_messages() {
         let given = vec!["line:3".to_string(), "point:5".to_string()];
-        let e = with_legend(McpError::internal_error("entity 2 is an end point of Line1", None), "entity", &given);
-        assert!(e.message.ends_with("(entity 1 = line:3, entity 2 = point:5)"), "{}", e.message);
-        let e = with_legend(McpError::internal_error("the entity sketch is gone", None), "entity", &given);
+        let e = with_legend(
+            McpError::internal_error("entity 2 is an end point of Line1", None),
+            "entity",
+            &given,
+        );
+        assert!(
+            e.message
+                .ends_with("(entity 1 = line:3, entity 2 = point:5)"),
+            "{}",
+            e.message
+        );
+        let e = with_legend(
+            McpError::internal_error("the entity sketch is gone", None),
+            "entity",
+            &given,
+        );
         assert_eq!(e.message, "the entity sketch is gone");
     }
 }

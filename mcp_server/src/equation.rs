@@ -59,8 +59,15 @@ fn find<'a>(equations: &'a [proto::EquationInfo], name: &str) -> Option<&'a prot
 }
 
 /// The request for `params`, checked against the document's `equations`.
-pub fn request(params: &EquationsParams, equations: &[proto::EquationInfo]) -> Result<proto::EquationsRequest, McpError> {
-    let existing = equations.iter().map(|e| format!("\"{}\"", e.name)).collect::<Vec<_>>().join(", ");
+pub fn request(
+    params: &EquationsParams,
+    equations: &[proto::EquationInfo],
+) -> Result<proto::EquationsRequest, McpError> {
+    let existing = equations
+        .iter()
+        .map(|e| format!("\"{}\"", e.name))
+        .collect::<Vec<_>>()
+        .join(", ");
 
     let mut delete = Vec::new();
     for name in &params.delete {
@@ -75,7 +82,10 @@ pub fn request(params: &EquationsParams, equations: &[proto::EquationInfo]) -> R
                 format!("the document has no equation for \"{name}\" -- it has {existing}")
             }));
         };
-        if !delete.iter().any(|d: &String| d.eq_ignore_ascii_case(&found.name)) {
+        if !delete
+            .iter()
+            .any(|d: &String| d.eq_ignore_ascii_case(&found.name))
+        {
             delete.push(found.name.clone());
         }
     }
@@ -85,7 +95,10 @@ pub fn request(params: &EquationsParams, equations: &[proto::EquationInfo]) -> R
         let name = change.name.trim().trim_matches('"').trim();
         let expression = change.expression.trim();
         if name.is_empty() || name.contains('"') {
-            return Err(invalid(format!("\"{}\" isn't an equation name: give a global variable or dimension name without quotes", change.name)));
+            return Err(invalid(format!(
+                "\"{}\" isn't an equation name: give a global variable or dimension name without quotes",
+                change.name
+            )));
         }
         if expression.is_empty() {
             return Err(invalid(format!("give \"{name}\" an expression")));
@@ -94,19 +107,31 @@ pub fn request(params: &EquationsParams, equations: &[proto::EquationInfo]) -> R
             return Err(invalid(format!("\"{name}\" is set twice")));
         }
         if delete.iter().any(|d| d.eq_ignore_ascii_case(name)) {
-            return Err(invalid(format!("\"{name}\" is both deleted and set -- setting it replaces its equation")));
+            return Err(invalid(format!(
+                "\"{name}\" is both deleted and set -- setting it replaces its equation"
+            )));
         }
         // The document's spelling: SolidWorks would take ours and rename the variable.
         let name = find(equations, name).map_or(name, |e| e.name.as_str());
-        set.push(proto::EquationChange { name: name.to_string(), expression: expression.to_string() });
+        set.push(proto::EquationChange {
+            name: name.to_string(),
+            expression: expression.to_string(),
+        });
     }
 
     let deleted = |name: &str| delete.iter().any(|d| d.eq_ignore_ascii_case(name));
     let is_set = |name: &str| set.iter().any(|s| s.name.eq_ignore_ascii_case(name));
     // Equations that stay as they are mustn't lose a global variable: SolidWorks
     // would read it as 0 there (seen 2026-11-02).
-    for e in equations.iter().filter(|e| !deleted(&e.name) && !is_set(&e.name)) {
-        if let Some(gone) = quoted_names(&e.equation).into_iter().skip(1).find(|n| is_global_name(n) && deleted(n)) {
+    for e in equations
+        .iter()
+        .filter(|e| !deleted(&e.name) && !is_set(&e.name))
+    {
+        if let Some(gone) = quoted_names(&e.equation)
+            .into_iter()
+            .skip(1)
+            .find(|n| is_global_name(n) && deleted(n))
+        {
             return Err(invalid(format!(
                 "\"{gone}\" is used by {} -- delete or change that equation too (SolidWorks would read \"{gone}\" as 0 there)",
                 e.equation
@@ -115,23 +140,34 @@ pub fn request(params: &EquationsParams, equations: &[proto::EquationInfo]) -> R
     }
     // New expressions may only use global variables that exist by then.
     for (i, change) in set.iter().enumerate() {
-        for used in quoted_names(&change.expression).into_iter().filter(|n| is_global_name(n)) {
+        for used in quoted_names(&change.expression)
+            .into_iter()
+            .filter(|n| is_global_name(n))
+        {
             let exists = find(equations, used).is_some_and(|e| e.global) && !deleted(used);
             let earlier = set[..i].iter().any(|s| s.name.eq_ignore_ascii_case(used));
             if exists || earlier {
                 continue;
             }
-            return Err(invalid(if set[i + 1..].iter().any(|s| s.name.eq_ignore_ascii_case(used)) {
-                format!("\"{}\" uses \"{used}\", which is set later in the list -- set \"{used}\" first", change.name)
-            } else if used.eq_ignore_ascii_case(&change.name) {
-                format!("\"{}\" uses itself", change.name)
-            } else {
-                format!(
-                    "\"{}\" uses \"{used}\", which is no global variable of the document (dimension names look like \
+            return Err(invalid(
+                if set[i + 1..]
+                    .iter()
+                    .any(|s| s.name.eq_ignore_ascii_case(used))
+                {
+                    format!(
+                        "\"{}\" uses \"{used}\", which is set later in the list -- set \"{used}\" first",
+                        change.name
+                    )
+                } else if used.eq_ignore_ascii_case(&change.name) {
+                    format!("\"{}\" uses itself", change.name)
+                } else {
+                    format!(
+                        "\"{}\" uses \"{used}\", which is no global variable of the document (dimension names look like \
                      D1@Sketch1)",
-                    change.name
-                )
-            }));
+                        change.name
+                    )
+                },
+            ));
         }
     }
     Ok(proto::EquationsRequest { delete, set })
@@ -171,7 +207,12 @@ pub fn equations_json(reply: &proto::EquationsResponse, length_unit: &str) -> Va
     })
 }
 
-pub fn equations_text(params: &EquationsParams, request: &proto::EquationsRequest, reply: &proto::EquationsResponse, length_unit: &str) -> String {
+pub fn equations_text(
+    params: &EquationsParams,
+    request: &proto::EquationsRequest,
+    reply: &proto::EquationsResponse,
+    length_unit: &str,
+) -> String {
     let mut said = Vec::new();
     if !request.delete.is_empty() {
         let list: Vec<String> = request.delete.iter().map(|n| format!("\"{n}\"")).collect();
@@ -181,7 +222,10 @@ pub fn equations_text(params: &EquationsParams, request: &proto::EquationsReques
         let list: Vec<String> = request
             .set
             .iter()
-            .map(|s| find(&reply.equations, &s.name).map_or_else(|| format!("\"{}\"", s.name), |e| e.equation.clone()))
+            .map(|s| {
+                find(&reply.equations, &s.name)
+                    .map_or_else(|| format!("\"{}\"", s.name), |e| e.equation.clone())
+            })
             .collect();
         said.push(format!("set {}", list.join("; ")));
     }
@@ -223,23 +267,41 @@ mod tests {
     }
 
     fn set(name: &str, expression: &str) -> EquationSet {
-        EquationSet { name: name.into(), expression: expression.into() }
+        EquationSet {
+            name: name.into(),
+            expression: expression.into(),
+        }
     }
 
     fn params(set: Vec<EquationSet>, delete: &[&str]) -> EquationsParams {
-        EquationsParams { set, delete: delete.iter().map(|s| s.to_string()).collect() }
+        EquationsParams {
+            set,
+            delete: delete.iter().map(|s| s.to_string()).collect(),
+        }
     }
 
     #[test]
     fn names_in_quotes() {
-        assert_eq!(quoted_names("\"D1@Sketch1\" = \"Width\" * 2 + \"Half\""), vec!["D1@Sketch1", "Width", "Half"]);
+        assert_eq!(
+            quoted_names("\"D1@Sketch1\" = \"Width\" * 2 + \"Half\""),
+            vec!["D1@Sketch1", "Width", "Half"]
+        );
         assert!(quoted_names("50").is_empty());
     }
 
     #[test]
     fn requests() {
-        let r = request(&params(vec![set(" \"Depth\" ", " \"width\" + 1 "), set("D1@Sketch1", "\"Depth\"")], &[]), &doc())
-            .unwrap();
+        let r = request(
+            &params(
+                vec![
+                    set(" \"Depth\" ", " \"width\" + 1 "),
+                    set("D1@Sketch1", "\"Depth\""),
+                ],
+                &[],
+            ),
+            &doc(),
+        )
+        .unwrap();
         assert_eq!(r.set[0].name, "Depth");
         assert_eq!(r.set[0].expression, "\"width\" + 1");
         assert_eq!(r.set[1].name, "D1@Sketch1");
@@ -248,13 +310,35 @@ mod tests {
 
         // Deleting what's still used, unless that goes or changes too.
         let e = request(&params(vec![], &["half"]), &doc()).unwrap_err();
-        assert!(e.message.contains("\"Half\" is used by \"D1@Boss-Extrude1\""), "{}", e.message);
+        assert!(
+            e.message
+                .contains("\"Half\" is used by \"D1@Boss-Extrude1\""),
+            "{}",
+            e.message
+        );
         let r = request(&params(vec![], &["half", "D1@Boss-Extrude1"]), &doc()).unwrap();
         assert_eq!(r.delete, vec!["Half", "D1@Boss-Extrude1"]);
-        assert!(request(&params(vec![set("D1@Boss-Extrude1", "\"Width\"")], &["Half"]), &doc()).is_ok());
+        assert!(
+            request(
+                &params(vec![set("D1@Boss-Extrude1", "\"Width\"")], &["Half"]),
+                &doc()
+            )
+            .is_ok()
+        );
 
-        assert!(request(&params(vec![], &["Nope"]), &doc()).unwrap_err().message.contains("it has \"Width\""));
-        assert!(request(&params(vec![set("Width", "1"), set("width", "2")], &[]), &doc()).is_err());
+        assert!(
+            request(&params(vec![], &["Nope"]), &doc())
+                .unwrap_err()
+                .message
+                .contains("it has \"Width\"")
+        );
+        assert!(
+            request(
+                &params(vec![set("Width", "1"), set("width", "2")], &[]),
+                &doc()
+            )
+            .is_err()
+        );
         assert!(request(&params(vec![set("Width", "1")], &["Width"]), &doc()).is_err());
         assert!(request(&params(vec![set("Width", " ")], &[]), &doc()).is_err());
         let e = request(&params(vec![set("A", "\"B\""), set("B", "1")], &[]), &doc()).unwrap_err();
@@ -262,9 +346,21 @@ mod tests {
         let e = request(&params(vec![set("A", "\"Nope\" * 2")], &[]), &doc()).unwrap_err();
         assert!(e.message.contains("no global variable"), "{}", e.message);
         // A deleted global can't be used by a new equation either.
-        assert!(request(&params(vec![set("D1@Boss-Extrude1", "\"Half\"")], &["Half"]), &doc()).is_err());
+        assert!(
+            request(
+                &params(vec![set("D1@Boss-Extrude1", "\"Half\"")], &["Half"]),
+                &doc()
+            )
+            .is_err()
+        );
         // Dimensions and functions are SolidWorks' to check.
-        assert!(request(&params(vec![set("A", "\"D1@Sketch1\" * sin(30)")], &[]), &doc()).is_ok());
+        assert!(
+            request(
+                &params(vec![set("A", "\"D1@Sketch1\" * sin(30)")], &[]),
+                &doc()
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -277,18 +373,35 @@ mod tests {
             value: 0.03,
             driven: false,
         });
-        let reply = proto::EquationsResponse { equations, new_errors: vec![] };
+        let reply = proto::EquationsResponse {
+            equations,
+            new_errors: vec![],
+        };
         let p = params(vec![set("Width", "50")], &[]);
         let r = request(&p, &doc()).unwrap();
         let text = equations_text(&p, &r, &reply, "millimeters");
-        assert!(text.starts_with("set \"Width\" = 50; the model was rebuilt.\n"), "{text}");
+        assert!(
+            text.starts_with("set \"Width\" = 50; the model was rebuilt.\n"),
+            "{text}"
+        );
         let json: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
-        assert_eq!(json["equations"][0], json!({ "name": "Width", "equation": "\"Width\" = 50", "value": 50.0, "global_variable": true }));
+        assert_eq!(
+            json["equations"][0],
+            json!({ "name": "Width", "equation": "\"Width\" = 50", "value": 50.0, "global_variable": true })
+        );
         assert_eq!(json["equations"][2]["value_mm"], json!(30.0));
 
         let empty = proto::EquationsResponse::default();
-        let text = equations_text(&EquationsParams::default(), &proto::EquationsRequest::default(), &empty, "inches");
+        let text = equations_text(
+            &EquationsParams::default(),
+            &proto::EquationsRequest::default(),
+            &empty,
+            "inches",
+        );
         assert!(text.starts_with("the document has no equations"), "{text}");
-        assert!(text.contains("inches (the document's length unit)"), "{text}");
+        assert!(
+            text.contains("inches (the document's length unit)"),
+            "{text}"
+        );
     }
 }

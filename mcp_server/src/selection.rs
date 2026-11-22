@@ -42,18 +42,28 @@ pub struct SelectionParams {
 /// What every call is refused for, in any document.
 pub fn check(params: &SelectionParams) -> Result<(), McpError> {
     if params.clear && (params.append || !params.select.is_empty()) {
-        return Err(invalid("clear empties the selection; give it alone, or give select without clear"));
+        return Err(invalid(
+            "clear empties the selection; give it alone, or give select without clear",
+        ));
     }
     if params.append && params.select.is_empty() {
-        return Err(invalid("append adds `select` to the selection; give what to select"));
+        return Err(invalid(
+            "append adds `select` to the selection; give what to select",
+        ));
     }
     if params.select.len() > MAX_SELECT {
-        return Err(invalid(format!("at most {MAX_SELECT} entities, got {}", params.select.len())));
+        return Err(invalid(format!(
+            "at most {MAX_SELECT} entities, got {}",
+            params.select.len()
+        )));
     }
     Ok(())
 }
 
-pub fn request(ids: &IdRegistry, params: &SelectionParams) -> Result<proto::SelectionRequest, McpError> {
+pub fn request(
+    ids: &IdRegistry,
+    params: &SelectionParams,
+) -> Result<proto::SelectionRequest, McpError> {
     check(params)?;
     let mut select = Vec::new();
     for (i, entity) in params.select.iter().enumerate() {
@@ -69,16 +79,27 @@ pub fn request(ids: &IdRegistry, params: &SelectionParams) -> Result<proto::Sele
             let persist_id = ids.persist_id(entity).ok_or_else(|| {
                 invalid(format!(
                     "{what}: {}",
-                    ids.unknown_id(entity, "inspect_model", "call inspect_model for current ones")
+                    ids.unknown_id(
+                        entity,
+                        "inspect_model",
+                        "call inspect_model for current ones"
+                    )
                 ))
             })?;
-            proto::GeometryRef { target: Some(proto::geometry_ref::Target::ModelPersistId(persist_id)) }
+            proto::GeometryRef {
+                target: Some(proto::geometry_ref::Target::ModelPersistId(persist_id)),
+            }
         } else {
             geometry_ref(ids, entity, &what)?.0
         };
         select.push(r);
     }
-    Ok(proto::SelectionRequest { select, append: params.append, clear: params.clear, ..Default::default() })
+    Ok(proto::SelectionRequest {
+        select,
+        append: params.append,
+        clear: params.clear,
+        ..Default::default()
+    })
 }
 
 /// Something to select in a drawing: a view entity by its id, or a model
@@ -88,30 +109,48 @@ pub enum DrawingPick {
     View(proto::DrawingEntityRef),
     /// An inspect_model id (face, edge, vertex, feature) of the model
     /// document `key` (`files::document_key`).
-    ModelId { id: String, key: String, kind: Kind, persist_id: Vec<u8> },
+    ModelId {
+        id: String,
+        key: String,
+        kind: Kind,
+        persist_id: Vec<u8>,
+    },
     /// A feature by name, in whatever views' models have it.
     FeatureName(String),
 }
 
 /// `select` in a drawing: view entity ids as they are, model ids and
 /// feature names to look for in the views.
-pub fn drawing_picks(ids: &IdRegistry, params: &SelectionParams) -> Result<Vec<DrawingPick>, McpError> {
+pub fn drawing_picks(
+    ids: &IdRegistry,
+    params: &SelectionParams,
+) -> Result<Vec<DrawingPick>, McpError> {
     let mut picks = Vec::new();
     for (i, entity) in params.select.iter().enumerate() {
         let what = format!("select[{i}]");
         let entity = entity.trim();
         let pick = match Kind::of_id(entity) {
             Some(k) if DRAWING_KINDS.contains(&k) => DrawingPick::View(
-                drawing::decode_ref(ids, entity).map_err(|e| invalid(format!("{what}: {}", e.message)))?,
+                drawing::decode_ref(ids, entity)
+                    .map_err(|e| invalid(format!("{what}: {}", e.message)))?,
             ),
             Some(kind @ (Kind::Face | Kind::Edge | Kind::Vertex | Kind::Feature)) => {
                 let (key, bytes) = ids.lookup(entity).ok_or_else(|| {
                     invalid(format!(
                         "{what}: {}",
-                        ids.unknown_id(entity, "inspect_model or inspect_drawing (model_id)", "call one for current ones")
+                        ids.unknown_id(
+                            entity,
+                            "inspect_model or inspect_drawing (model_id)",
+                            "call one for current ones"
+                        )
                     ))
                 })?;
-                DrawingPick::ModelId { id: entity.to_string(), key: key.to_string(), kind, persist_id: bytes.to_vec() }
+                DrawingPick::ModelId {
+                    id: entity.to_string(),
+                    key: key.to_string(),
+                    kind,
+                    persist_id: bytes.to_vec(),
+                }
             }
             Some(_) => {
                 return Err(invalid(format!(
@@ -120,7 +159,9 @@ pub fn drawing_picks(ids: &IdRegistry, params: &SelectionParams) -> Result<Vec<D
                      feature names) to select where the views show them"
                 )));
             }
-            None if entity.eq_ignore_ascii_case("origin") || crate::refgeom::standard_plane(entity).is_some() => {
+            None if entity.eq_ignore_ascii_case("origin")
+                || crate::refgeom::standard_plane(entity).is_some() =>
+            {
                 return Err(invalid(format!(
                     "{what}: {entity:?} names a part's or assembly's plane or origin, which a drawing view \
                      doesn't list -- select view entities, or model faces, edges and features"
@@ -145,7 +186,8 @@ pub fn resolve_picks(
     let found = |pick: &DrawingPick, sheet: &proto::SheetInfo| -> Vec<proto::DrawingEntityRef> {
         let mut refs = Vec::new();
         for view in &sheet.views {
-            let model = (!view.model_file.is_empty()).then(|| crate::files::file_key(&view.model_file));
+            let model =
+                (!view.model_file.is_empty()).then(|| crate::files::file_key(&view.model_file));
             for e in &view.entities {
                 if pick_matches(pick, model.as_deref(), e) {
                     refs.push(drawing::entity_ref(&view.name, e));
@@ -156,10 +198,19 @@ pub fn resolve_picks(
     };
     let mut sheets: Vec<&proto::SheetInfo> = reply.sheets.iter().collect();
     sheets.sort_by_key(|s| !s.active);
-    let models = picks.iter().filter(|p| !matches!(p, DrawingPick::View(_))).collect::<Vec<_>>();
-    let Some(sheet) = sheets.iter().find(|s| models.iter().any(|p| !found(p, s).is_empty())) else {
+    let models = picks
+        .iter()
+        .filter(|p| !matches!(p, DrawingPick::View(_)))
+        .collect::<Vec<_>>();
+    let Some(sheet) = sheets
+        .iter()
+        .find(|s| models.iter().any(|p| !found(p, s).is_empty()))
+    else {
         let names: Vec<String> = models.iter().map(|p| pick_label(p)).collect();
-        return Err(invalid(format!("{} isn't drawn in any view of the drawing {NOT_DRAWN}", names.join(", "))));
+        return Err(invalid(format!(
+            "{} isn't drawn in any view of the drawing {NOT_DRAWN}",
+            names.join(", ")
+        )));
     };
     let mut refs: Vec<proto::DrawingEntityRef> = Vec::new();
     for pick in picks {
@@ -214,7 +265,12 @@ fn pick_matches(pick: &DrawingPick, model: Option<&str>, e: &proto::ViewEntity) 
     match pick {
         DrawingPick::View(_) => false,
         DrawingPick::FeatureName(name) => e.features.iter().any(|f| &f.name == name),
-        DrawingPick::ModelId { key, kind, persist_id, .. } => {
+        DrawingPick::ModelId {
+            key,
+            kind,
+            persist_id,
+            ..
+        } => {
             if model != Some(key.as_str()) {
                 return false;
             }
@@ -248,7 +304,10 @@ pub fn view_refs(picks: &[DrawingPick]) -> Option<Vec<proto::DrawingEntityRef>> 
 /// InspectDrawing for the views (and the models they show), without
 /// entities: where to look for model picks.
 pub fn overview_request() -> proto::InspectDrawingRequest {
-    proto::InspectDrawingRequest { skip_sheet_format: true, ..Default::default() }
+    proto::InspectDrawingRequest {
+        skip_sheet_format: true,
+        ..Default::default()
+    }
 }
 
 /// InspectDrawing for the entities of the views that could draw `picks`
@@ -258,9 +317,20 @@ pub fn detail_request(
     overview: &proto::InspectDrawingResponse,
 ) -> Option<proto::InspectDrawingRequest> {
     let entity_views = views_for_picks(picks, overview);
-    let include_vertices = picks.iter().any(|p| matches!(p, DrawingPick::ModelId { kind: Kind::Vertex, .. }));
-    (!entity_views.is_empty())
-        .then(|| proto::InspectDrawingRequest { entity_views, include_vertices, ..overview_request() })
+    let include_vertices = picks.iter().any(|p| {
+        matches!(
+            p,
+            DrawingPick::ModelId {
+                kind: Kind::Vertex,
+                ..
+            }
+        )
+    });
+    (!entity_views.is_empty()).then(|| proto::InspectDrawingRequest {
+        entity_views,
+        include_vertices,
+        ..overview_request()
+    })
 }
 
 /// The SelectionRequest selecting `refs`, view entities of a drawing.
@@ -269,7 +339,10 @@ pub fn drawing_request(
     refs: Vec<proto::DrawingEntityRef>,
 ) -> Result<proto::SelectionRequest, McpError> {
     if refs.len() > MAX_SELECT {
-        return Err(invalid(format!("that's {} view entities, more than {MAX_SELECT} at a time: select fewer", refs.len())));
+        return Err(invalid(format!(
+            "that's {} view entities, more than {MAX_SELECT} at a time: select fewer",
+            refs.len()
+        )));
     }
     Ok(proto::SelectionRequest {
         append: params.append,
@@ -282,7 +355,9 @@ pub fn drawing_request(
 /// The views to list entities of for `picks`: those showing a model a
 /// model id is from, and with a feature name every view with a model.
 fn views_for_picks(picks: &[DrawingPick], overview: &proto::InspectDrawingResponse) -> Vec<String> {
-    let any_name = picks.iter().any(|p| matches!(p, DrawingPick::FeatureName(_)));
+    let any_name = picks
+        .iter()
+        .any(|p| matches!(p, DrawingPick::FeatureName(_)));
     let keys: Vec<&str> = picks
         .iter()
         .filter_map(|p| match p {
@@ -310,13 +385,24 @@ fn item_json(
     item: &proto::SelectedItem,
 ) -> Value {
     let in_drawing = is_drawing(reply);
-    let mut value =
-        if in_drawing { drawing_item_json(ids, cache, reply, item) } else { model_item_json(ids, reply, item) };
+    let mut value = if in_drawing {
+        drawing_item_json(ids, cache, reply, item)
+    } else {
+        model_item_json(ids, reply, item)
+    };
     if let Value::Object(obj) = &mut value {
         // Exactly [0, 0, 0]: selected without a click (through the API).
         // Clicks land at screen precision, never exactly on the origin.
-        if let Some(p) = item.point.as_ref().filter(|p| (p.x, p.y, p.z) != (0.0, 0.0, 0.0)) {
-            let at = if in_drawing { sheet_mm(DVec2::new(p.x, p.y)) } else { point_mm(p) };
+        if let Some(p) = item
+            .point
+            .as_ref()
+            .filter(|p| (p.x, p.y, p.z) != (0.0, 0.0, 0.0))
+        {
+            let at = if in_drawing {
+                sheet_mm(DVec2::new(p.x, p.y))
+            } else {
+                point_mm(p)
+            };
             obj.insert("picked_at_mm".into(), at);
         }
         if item.mark != 0 {
@@ -327,11 +413,18 @@ fn item_json(
 }
 
 fn is_drawing(reply: &proto::SelectionResponse) -> bool {
-    reply.document.as_ref().is_some_and(|d| d.r#type() == proto::DocumentType::Drawing)
+    reply
+        .document
+        .as_ref()
+        .is_some_and(|d| d.r#type() == proto::DocumentType::Drawing)
 }
 
 /// A part's or assembly's selected item as inspect_model gives it.
-fn model_item_json(ids: &mut IdRegistry, reply: &proto::SelectionResponse, item: &proto::SelectedItem) -> Value {
+fn model_item_json(
+    ids: &mut IdRegistry,
+    reply: &proto::SelectionResponse,
+    item: &proto::SelectedItem,
+) -> Value {
     use proto::selected_item::Item;
     match &item.item {
         Some(Item::Face(f)) => inspect::face_json(ids, f),
@@ -340,17 +433,23 @@ fn model_item_json(ids: &mut IdRegistry, reply: &proto::SelectionResponse, item:
         Some(Item::Body(b)) => inspect::body_json(ids, b),
         Some(Item::Vertex(v)) => {
             let mut obj = Map::new();
-            obj.insert("id".into(), ids.id_for(Kind::Vertex, &v.persist_id).map_or(Value::Null, Value::String));
+            obj.insert(
+                "id".into(),
+                ids.id_for(Kind::Vertex, &v.persist_id)
+                    .map_or(Value::Null, Value::String),
+            );
             inspect::insert_component(ids, &mut obj, &v.component_persist_id);
             if let Some(p) = &v.position {
                 obj.insert("at_mm".into(), point_mm(p));
             }
             Value::Object(obj)
         }
-        Some(Item::ComponentPersistId(pid)) => match reply.components.iter().find(|c| &c.persist_id == pid) {
-            Some(c) => crate::assembly::component_json(ids, c),
-            None => json!({ "id": ids.id_for(Kind::Component, pid) }),
-        },
+        Some(Item::ComponentPersistId(pid)) => {
+            match reply.components.iter().find(|c| &c.persist_id == pid) {
+                Some(c) => crate::assembly::component_json(ids, c),
+                None => json!({ "id": ids.id_for(Kind::Component, pid) }),
+            }
+        }
         Some(Item::SketchItem(s)) => {
             let mut value = crate::sketch::item_json(ids, s, item.sketch_3d);
             if let Value::Object(obj) = &mut value
@@ -382,7 +481,9 @@ fn drawing_item_json(
 ) -> Value {
     use proto::selected_item::Item;
     let view = reply.views.iter().find(|v| v.name == item.view_name);
-    let model_file = view.map(|v| v.model_file.as_str()).filter(|f| !f.is_empty());
+    let model_file = view
+        .map(|v| v.model_file.as_str())
+        .filter(|f| !f.is_empty());
     let mut value = match &item.item {
         Some(Item::ViewEntity(e)) => view.and_then(|v| drawing::selected_entity_json(ids, cache, v, e)).unwrap_or_else(|| {
             json!({
@@ -426,15 +527,27 @@ fn drawing_item_json(
 
 /// The selection JSON. Drawing views' sheet geometry goes into `cache`, so
 /// add_drawing_dimensions takes the ids without an inspect_drawing first.
-pub fn render(ids: &mut IdRegistry, cache: &mut drawing::Cache, reply: &proto::SelectionResponse) -> Value {
+pub fn render(
+    ids: &mut IdRegistry,
+    cache: &mut drawing::Cache,
+    reply: &proto::SelectionResponse,
+) -> Value {
     let mut out = Map::new();
     if let Some(doc) = &reply.document {
         out.insert("document".into(), json!(doc.title));
     }
     cache.sheet_changed(&reply.views, false);
-    let selected: Vec<Value> = reply.items.iter().map(|item| item_json(ids, cache, reply, item)).collect();
+    let selected: Vec<Value> = reply
+        .items
+        .iter()
+        .map(|item| item_json(ids, cache, reply, item))
+        .collect();
     if selected.is_empty() {
-        let find = if is_drawing(reply) { "inspect_drawing" } else { "inspect_model" };
+        let find = if is_drawing(reply) {
+            "inspect_drawing"
+        } else {
+            "inspect_model"
+        };
         out.insert(
             "note".into(),
             json!(format!("nothing is selected in SolidWorks -- ask the user to pick it there, or find it with {find}")),
@@ -451,9 +564,16 @@ mod tests {
     #[test]
     fn refuses_contradictions() {
         let ids = IdRegistry::default();
-        let both = SelectionParams { select: vec!["front".into()], clear: true, ..Default::default() };
+        let both = SelectionParams {
+            select: vec!["front".into()],
+            clear: true,
+            ..Default::default()
+        };
         assert!(request(&ids, &both).is_err());
-        let append = SelectionParams { append: true, ..Default::default() };
+        let append = SelectionParams {
+            append: true,
+            ..Default::default()
+        };
         assert!(request(&ids, &append).is_err());
         assert!(request(&ids, &SelectionParams::default()).is_ok());
     }
@@ -461,7 +581,10 @@ mod tests {
     #[test]
     fn names_and_planes_go_through() {
         let ids = IdRegistry::default();
-        let params = SelectionParams { select: vec!["Boss-Extrude1".into(), "top".into()], ..Default::default() };
+        let params = SelectionParams {
+            select: vec!["Boss-Extrude1".into(), "top".into()],
+            ..Default::default()
+        };
         let r = request(&ids, &params).unwrap();
         assert_eq!(r.select.len(), 2);
         assert!(!r.append && !r.clear);
@@ -470,7 +593,10 @@ mod tests {
     #[test]
     fn unknown_ids_are_refused() {
         let ids = IdRegistry::default();
-        let params = SelectionParams { select: vec!["face:99".into()], ..Default::default() };
+        let params = SelectionParams {
+            select: vec!["face:99".into()],
+            ..Default::default()
+        };
         assert!(request(&ids, &params).is_err());
     }
 
@@ -484,21 +610,40 @@ mod tests {
             ..Default::default()
         };
         let id = drawing::id_for(&mut ids, &r).unwrap();
-        let params = SelectionParams { select: vec![id], ..Default::default() };
+        let params = SelectionParams {
+            select: vec![id],
+            ..Default::default()
+        };
         let error = request(&ids, &params).unwrap_err();
-        assert!(error.message.contains("isn't a drawing"), "{}", error.message);
+        assert!(
+            error.message.contains("isn't a drawing"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]
     fn view_picks_go_straight_to_the_addin() {
-        let r = proto::DrawingEntityRef { view_name: "V1".into(), persist_id: vec![7], ..Default::default() };
+        let r = proto::DrawingEntityRef {
+            view_name: "V1".into(),
+            persist_id: vec![7],
+            ..Default::default()
+        };
         let refs = view_refs(&[DrawingPick::View(r.clone())]).unwrap();
         assert_eq!(refs, vec![r.clone()]);
-        let mixed = [DrawingPick::View(r), DrawingPick::FeatureName("Boss-Extrude1".into())];
+        let mixed = [
+            DrawingPick::View(r),
+            DrawingPick::FeatureName("Boss-Extrude1".into()),
+        ];
         assert!(view_refs(&mixed).is_none());
-        let params = SelectionParams { append: true, ..Default::default() };
+        let params = SelectionParams {
+            append: true,
+            ..Default::default()
+        };
         let request = drawing_request(&params, refs).unwrap();
-        assert!(request.append && request.select.is_empty() && request.select_view_entities.len() == 1);
+        assert!(
+            request.append && request.select.is_empty() && request.select_view_entities.len() == 1
+        );
         let many = vec![proto::DrawingEntityRef::default(); MAX_SELECT + 1];
         assert!(drawing_request(&params, many).is_err());
     }
@@ -508,7 +653,10 @@ mod tests {
         let overview = drawing_of_block();
         let edge = [model_pick("edge:1", Kind::Edge, b"e1")];
         let request = detail_request(&edge, &overview).unwrap();
-        assert_eq!(request.entity_views, vec!["V2".to_string(), "V1".to_string()]);
+        assert_eq!(
+            request.entity_views,
+            vec!["V2".to_string(), "V1".to_string()]
+        );
         assert!(!request.include_vertices && request.skip_sheet_format);
         let vertex = [model_pick("vertex:1", Kind::Vertex, b"v1")];
         assert!(detail_request(&vertex, &overview).unwrap().include_vertices);
@@ -520,19 +668,33 @@ mod tests {
     }
 
     fn drawing_document() -> Option<proto::Document> {
-        Some(proto::Document { title: "Draw".into(), r#type: proto::DocumentType::Drawing as i32, ..Default::default() })
+        Some(proto::Document {
+            title: "Draw".into(),
+            r#type: proto::DocumentType::Drawing as i32,
+            ..Default::default()
+        })
     }
 
     #[test]
     fn unknown_drawing_items_point_to_inspect_drawing() {
         let reply = proto::SelectionResponse {
             document: drawing_document(),
-            items: vec![proto::SelectedItem { select_type: 99, ..Default::default() }],
+            items: vec![proto::SelectedItem {
+                select_type: 99,
+                ..Default::default()
+            }],
             ..Default::default()
         };
-        let v = render(&mut IdRegistry::default(), &mut drawing::Cache::default(), &reply);
+        let v = render(
+            &mut IdRegistry::default(),
+            &mut drawing::Cache::default(),
+            &reply,
+        );
         let note = v["selected"][0]["note"].as_str().unwrap();
-        assert!(note.contains("the drawing") && note.contains("inspect_drawing"), "{v}");
+        assert!(
+            note.contains("the drawing") && note.contains("inspect_drawing"),
+            "{v}"
+        );
         assert!(v["selected"][0].get("view").is_none(), "{v}");
     }
 
@@ -544,12 +706,20 @@ mod tests {
             items: vec![
                 proto::SelectedItem {
                     view_name: "Drawing View1".into(),
-                    point: Some(proto::Vec3 { x: 0.1, y: 0.125, z: 0.0 }),
-                    item: Some(proto::selected_item::Item::ViewEntity(proto::ViewEntity::default())),
+                    point: Some(proto::Vec3 {
+                        x: 0.1,
+                        y: 0.125,
+                        z: 0.0,
+                    }),
+                    item: Some(proto::selected_item::Item::ViewEntity(
+                        proto::ViewEntity::default(),
+                    )),
                     ..Default::default()
                 },
                 proto::SelectedItem {
-                    item: Some(proto::selected_item::Item::DrawingView("Drawing View2".into())),
+                    item: Some(proto::selected_item::Item::DrawingView(
+                        "Drawing View2".into(),
+                    )),
                     ..Default::default()
                 },
             ],
@@ -559,19 +729,31 @@ mod tests {
         let v = render(&mut ids, &mut cache, &reply);
         // No view described: no sheet geometry, so no id.
         let e = &v["selected"][0];
-        assert!(e["id"].is_null() && e["note"].as_str().unwrap().contains("inspect_drawing"), "{v}");
+        assert!(
+            e["id"].is_null() && e["note"].as_str().unwrap().contains("inspect_drawing"),
+            "{v}"
+        );
         assert_eq!(e["view"], "Drawing View1");
         assert_eq!(e["picked_at_mm"], json!([100.0, 125.0]));
         assert_eq!(v["selected"][1]["drawing_view"], "Drawing View2");
     }
 
-    fn view_entity(kind: proto::ViewEntityKind, pid: &[u8], model: &[u8], faces: &[&[u8]], feature: &str) -> proto::ViewEntity {
+    fn view_entity(
+        kind: proto::ViewEntityKind,
+        pid: &[u8],
+        model: &[u8],
+        faces: &[&[u8]],
+        feature: &str,
+    ) -> proto::ViewEntity {
         proto::ViewEntity {
             kind: kind as i32,
             persist_id: pid.to_vec(),
             model_persist_id: model.to_vec(),
             model_face_persist_ids: faces.iter().map(|f| f.to_vec()).collect(),
-            features: vec![proto::ModelFeatureRef { name: feature.into(), persist_id: feature.as_bytes().to_vec() }],
+            features: vec![proto::ModelFeatureRef {
+                name: feature.into(),
+                persist_id: feature.as_bytes().to_vec(),
+            }],
             ..Default::default()
         }
     }
@@ -589,13 +771,32 @@ mod tests {
         };
         proto::InspectDrawingResponse {
             sheets: vec![
-                proto::SheetInfo { name: "Sheet2".into(), views: vec![view("V2", vec![
-                    view_entity(K::Edge, b"d3", b"e2", &[b"f2"], "Boss-Extrude1"),
-                ])], ..Default::default() },
-                proto::SheetInfo { name: "Sheet1".into(), active: true, views: vec![view("V1", vec![
-                    view_entity(K::Edge, b"d1", b"e1", &[b"f1", b"f2"], "Boss-Extrude1"),
-                    view_entity(K::Silhouette, b"d2", b"f3", &[b"f3"], "Boss-Extrude2"),
-                ])], ..Default::default() },
+                proto::SheetInfo {
+                    name: "Sheet2".into(),
+                    views: vec![view(
+                        "V2",
+                        vec![view_entity(
+                            K::Edge,
+                            b"d3",
+                            b"e2",
+                            &[b"f2"],
+                            "Boss-Extrude1",
+                        )],
+                    )],
+                    ..Default::default()
+                },
+                proto::SheetInfo {
+                    name: "Sheet1".into(),
+                    active: true,
+                    views: vec![view(
+                        "V1",
+                        vec![
+                            view_entity(K::Edge, b"d1", b"e1", &[b"f1", b"f2"], "Boss-Extrude1"),
+                            view_entity(K::Silhouette, b"d2", b"f3", &[b"f3"], "Boss-Extrude2"),
+                        ],
+                    )],
+                    ..Default::default()
+                },
             ],
             ..Default::default()
         }
@@ -614,7 +815,9 @@ mod tests {
     fn model_picks_find_what_the_views_draw() {
         let reply = drawing_of_block();
         let views = |refs: Vec<proto::DrawingEntityRef>| -> Vec<(String, Vec<u8>)> {
-            refs.into_iter().map(|r| (r.view_name, r.persist_id)).collect()
+            refs.into_iter()
+                .map(|r| (r.view_name, r.persist_id))
+                .collect()
         };
         // An edge; a face by its silhouette and the edges around it.
         let r = resolve_picks(&[model_pick("edge:1", Kind::Edge, b"e1")], &reply).unwrap();
@@ -622,7 +825,11 @@ mod tests {
         let r = resolve_picks(&[model_pick("face:3", Kind::Face, b"f3")], &reply).unwrap();
         assert_eq!(views(r), vec![("V1".to_string(), b"d2".to_vec())]);
         // A feature by id or name: on the active sheet first.
-        let r = resolve_picks(&[model_pick("feature:1", Kind::Feature, b"Boss-Extrude1")], &reply).unwrap();
+        let r = resolve_picks(
+            &[model_pick("feature:1", Kind::Feature, b"Boss-Extrude1")],
+            &reply,
+        )
+        .unwrap();
         assert_eq!(views(r), vec![("V1".to_string(), b"d1".to_vec())]);
         let r = resolve_picks(&[DrawingPick::FeatureName("Boss-Extrude2".into())], &reply).unwrap();
         assert_eq!(views(r), vec![("V1".to_string(), b"d2".to_vec())]);
@@ -630,8 +837,16 @@ mod tests {
         let r = resolve_picks(&[model_pick("edge:2", Kind::Edge, b"e2")], &reply).unwrap();
         assert_eq!(views(r), vec![("V2".to_string(), b"d3".to_vec())]);
         // Across sheets, or nowhere: refused.
-        let both = [model_pick("edge:1", Kind::Edge, b"e1"), model_pick("edge:2", Kind::Edge, b"e2")];
-        assert!(resolve_picks(&both, &reply).unwrap_err().message.contains("Sheet2"));
+        let both = [
+            model_pick("edge:1", Kind::Edge, b"e1"),
+            model_pick("edge:2", Kind::Edge, b"e2"),
+        ];
+        assert!(
+            resolve_picks(&both, &reply)
+                .unwrap_err()
+                .message
+                .contains("Sheet2")
+        );
         let hidden = resolve_picks(&[model_pick("edge:9", Kind::Edge, b"e9")], &reply).unwrap_err();
         assert!(hidden.message.contains("isn't drawn"), "{}", hidden.message);
         // Another model's ids don't match the same bytes.
@@ -649,12 +864,26 @@ mod tests {
         ids.set_document(&key, "Block.SLDPRT");
         let edge = ids.id_for(Kind::Edge, b"e1").unwrap();
         ids.set_document("file:c:\\d\\draw.slddrw", "Draw.SLDDRW");
-        let params = SelectionParams { select: vec![edge.clone(), "Boss-Extrude1".into()], ..Default::default() };
+        let params = SelectionParams {
+            select: vec![edge.clone(), "Boss-Extrude1".into()],
+            ..Default::default()
+        };
         let picks = drawing_picks(&ids, &params).unwrap();
-        assert_eq!(picks[0], DrawingPick::ModelId { id: edge, key, kind: Kind::Edge, persist_id: b"e1".to_vec() });
+        assert_eq!(
+            picks[0],
+            DrawingPick::ModelId {
+                id: edge,
+                key,
+                kind: Kind::Edge,
+                persist_id: b"e1".to_vec()
+            }
+        );
         assert_eq!(picks[1], DrawingPick::FeatureName("Boss-Extrude1".into()));
         for refused in ["top", "origin", "body:1", "face:99"] {
-            let params = SelectionParams { select: vec![refused.into()], ..Default::default() };
+            let params = SelectionParams {
+                select: vec![refused.into()],
+                ..Default::default()
+            };
             assert!(drawing_picks(&ids, &params).is_err(), "{refused}");
         }
     }
@@ -673,25 +902,39 @@ mod tests {
                 })),
                 ..Default::default()
             }],
-            views: vec![proto::ViewInfo { name: "V1".into(), model_file: "C:\\d\\Block.SLDPRT".into(), ..Default::default() }],
+            views: vec![proto::ViewInfo {
+                name: "V1".into(),
+                model_file: "C:\\d\\Block.SLDPRT".into(),
+                ..Default::default()
+            }],
             document: drawing_document(),
             ..Default::default()
         };
         let v = render(&mut ids, &mut drawing::Cache::default(), &reply);
         let f = &v["selected"][0];
-        assert_eq!((f["name"].as_str(), f["model"].as_str(), f["view"].as_str()),
-            (Some("Boss-Extrude1"), Some("Block.SLDPRT"), Some("V1")), "{v}");
+        assert_eq!(
+            (f["name"].as_str(), f["model"].as_str(), f["view"].as_str()),
+            (Some("Boss-Extrude1"), Some("Block.SLDPRT"), Some("V1")),
+            "{v}"
+        );
         let id = f["id"].as_str().unwrap();
         // The model's id: unknown in the drawing, known once the model is active.
         assert!(ids.persist_id(id).is_none());
-        ids.set_document(&crate::files::file_key("C:\\d\\Block.SLDPRT"), "Block.SLDPRT");
+        ids.set_document(
+            &crate::files::file_key("C:\\d\\Block.SLDPRT"),
+            "Block.SLDPRT",
+        );
         assert_eq!(ids.persist_id(id), Some(b"boss".to_vec()));
     }
 
     #[test]
     fn empty_selection_says_so() {
         let mut ids = IdRegistry::default();
-        let v = render(&mut ids, &mut drawing::Cache::default(), &proto::SelectionResponse::default());
+        let v = render(
+            &mut ids,
+            &mut drawing::Cache::default(),
+            &proto::SelectionResponse::default(),
+        );
         assert!(v["note"].as_str().unwrap().contains("nothing is selected"));
         assert_eq!(v["selected"], json!([]));
     }
@@ -701,7 +944,11 @@ mod tests {
         let mut ids = IdRegistry::default();
         let reply = proto::SelectionResponse {
             items: vec![proto::SelectedItem {
-                point: Some(proto::Vec3 { x: 0.01, y: 0.02, z: 0.0 }),
+                point: Some(proto::Vec3 {
+                    x: 0.01,
+                    y: 0.02,
+                    z: 0.0,
+                }),
                 item: Some(proto::selected_item::Item::Face(proto::FaceInfo {
                     persist_id: vec![1, 2, 3],
                     feature_name: "Boss-Extrude1".into(),

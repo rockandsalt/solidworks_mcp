@@ -10,8 +10,8 @@ use rmcp::{ErrorData as McpError, schemars};
 use serde::Deserialize;
 
 use crate::addin::proto;
-use crate::feature_text;
 use crate::edit::{error_text, feature_target};
+use crate::feature_text;
 use crate::inspect::{IdRegistry, Kind, MM_PER_M, mm, round};
 use crate::mirror::{self, unique};
 use crate::pattern;
@@ -31,18 +31,29 @@ fn invalid(message: impl Into<String>) -> McpError {
 
 fn positive_mm(value: Option<f64>, name: &str) -> Result<Option<f64>, McpError> {
     match value {
-        Some(v) if !(v.is_finite() && v > 0.0) => Err(invalid(format!("{name} must be more than 0, got {v}"))),
+        Some(v) if !(v.is_finite() && v > 0.0) => {
+            Err(invalid(format!("{name} must be more than 0, got {v}")))
+        }
         v => Ok(v.map(|v| v / MM_PER_M)),
     }
 }
 
 fn dimensions_text(dimensions: &[proto::DimensionInfo]) -> String {
     let names: Vec<&str> = dimensions.iter().map(|d| d.name.as_str()).collect();
-    if names.is_empty() { String::new() } else { format!(" Its dimensions: {}.", names.join(", ")) }
+    if names.is_empty() {
+        String::new()
+    } else {
+        format!(" Its dimensions: {}.", names.join(", "))
+    }
 }
 
 fn listed(items: &[String]) -> String {
-    let mut text = items.iter().take(LISTED).cloned().collect::<Vec<_>>().join(", ");
+    let mut text = items
+        .iter()
+        .take(LISTED)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
     if items.len() > LISTED {
         text += &format!(" and {} more", items.len() - LISTED);
     }
@@ -103,19 +114,28 @@ fn entity_ids(ids: &IdRegistry, list: &[String], field: &str) -> Result<Vec<Vec<
         .collect()
 }
 
-pub fn fillet_request(ids: &IdRegistry, p: &EditFilletParams) -> Result<proto::EditFilletRequest, McpError> {
+pub fn fillet_request(
+    ids: &IdRegistry,
+    p: &EditFilletParams,
+) -> Result<proto::EditFilletRequest, McpError> {
     let feature = feature_target(ids, &p.feature, "fillet")?;
     if p.edges.is_some() && !p.add_edges.is_empty() {
-        return Err(invalid("give edges (replacing what the fillet rounds) or add_edges, not both"));
+        return Err(invalid(
+            "give edges (replacing what the fillet rounds) or add_edges, not both",
+        ));
     }
     let edges = entity_ids(ids, p.edges.as_deref().unwrap_or_default(), "edges")?;
     if p.edges.is_some() && edges.is_empty() {
-        return Err(invalid("edges is empty -- give the edge or face ids to round, or delete the fillet"));
+        return Err(invalid(
+            "edges is empty -- give the edge or face ids to round, or delete the fillet",
+        ));
     }
     let add_edges = entity_ids(ids, &p.add_edges, "add_edges")?;
     let remove_edges = entity_ids(ids, &p.remove_edges, "remove_edges")?;
     if edges.len() + add_edges.len() + remove_edges.len() > MAX_EDGES {
-        return Err(invalid(format!("at most {MAX_EDGES} edges and faces per call")));
+        return Err(invalid(format!(
+            "at most {MAX_EDGES} edges and faces per call"
+        )));
     }
     Ok(proto::EditFilletRequest {
         feature: Some(feature),
@@ -140,7 +160,12 @@ pub(crate) fn fillet_kind(fillet_type: i32) -> &'static str {
 fn fillet_items(ids: &mut IdRegistry, d: &proto::FilletDefinition) -> Vec<String> {
     d.items
         .iter()
-        .filter_map(|item| ids.id_for(if item.face { Kind::Face } else { Kind::Edge }, &item.persist_id))
+        .filter_map(|item| {
+            ids.id_for(
+                if item.face { Kind::Face } else { Kind::Edge },
+                &item.persist_id,
+            )
+        })
         .collect()
 }
 
@@ -153,14 +178,25 @@ fn fillet_definition_text(ids: &mut IdRegistry, d: &proto::FilletDefinition) -> 
         text += ", tangent propagation";
     }
     let items = fillet_items(ids, d);
-    text += &format!(" on {}", if items.is_empty() { "nothing SolidWorks hands out".into() } else { listed(&items) });
+    text += &format!(
+        " on {}",
+        if items.is_empty() {
+            "nothing SolidWorks hands out".into()
+        } else {
+            listed(&items)
+        }
+    );
     if d.other_items > 0 {
         text += &format!(" (and {} loops or features)", d.other_items);
     }
     text
 }
 
-pub fn fillet_reply_text(ids: &mut IdRegistry, params: &EditFilletParams, reply: &proto::EditFilletResponse) -> String {
+pub fn fillet_reply_text(
+    ids: &mut IdRegistry,
+    params: &EditFilletParams,
+    reply: &proto::EditFilletResponse,
+) -> String {
     let Some(before) = &reply.before else {
         return "SolidWorks didn't describe the fillet.".into();
     };
@@ -269,9 +305,9 @@ impl EditPatternParams {
 
 fn instances(count: Option<u32>, name: &str, lowest: u32) -> Result<Option<i32>, McpError> {
     match count {
-        Some(n) if !(lowest..=MAX_INSTANCES).contains(&n) => {
-            Err(invalid(format!("{name} must be {lowest} to {MAX_INSTANCES} (the original included), got {n}")))
-        }
+        Some(n) if !(lowest..=MAX_INSTANCES).contains(&n) => Err(invalid(format!(
+            "{name} must be {lowest} to {MAX_INSTANCES} (the original included), got {n}"
+        ))),
         n => Ok(n.map(|n| n as i32)),
     }
 }
@@ -280,20 +316,27 @@ fn present(s: &Option<String>) -> Option<&str> {
     s.as_deref().map(str::trim).filter(|s| !s.is_empty())
 }
 
-pub fn pattern_request(ids: &IdRegistry, p: &EditPatternParams) -> Result<proto::EditPatternRequest, McpError> {
+pub fn pattern_request(
+    ids: &IdRegistry,
+    p: &EditPatternParams,
+) -> Result<proto::EditPatternRequest, McpError> {
     let feature = feature_target(ids, &p.feature, "pattern")?;
     let (spacing, equal_spacing) = match (p.spacing_mm, p.angle_deg, p.spacing_deg) {
         (None, None, None) => (None, None),
         (Some(s), None, None) => (positive_mm(Some(s), "spacing_mm")?, None),
         (None, Some(a), None) => {
             if !(a.is_finite() && a > 0.0 && a <= 360.0) {
-                return Err(invalid(format!("angle_deg must be more than 0 and at most 360, got {a}")));
+                return Err(invalid(format!(
+                    "angle_deg must be more than 0 and at most 360, got {a}"
+                )));
             }
             (Some(a.to_radians()), Some(true))
         }
         (None, None, Some(s)) => {
             if !(s.is_finite() && s > 0.0 && s < 360.0) {
-                return Err(invalid(format!("spacing_deg must be more than 0 and less than 360, got {s}")));
+                return Err(invalid(format!(
+                    "spacing_deg must be more than 0 and less than 360, got {s}"
+                )));
             }
             (Some(s.to_radians()), Some(false))
         }
@@ -304,21 +347,33 @@ pub fn pattern_request(ids: &IdRegistry, p: &EditPatternParams) -> Result<proto:
         }
     };
     let direction = match (present(&p.direction), present(&p.axis)) {
-        (Some(_), Some(_)) => return Err(invalid("give direction (linear patterns) or axis (circular), not both")),
+        (Some(_), Some(_)) => {
+            return Err(invalid(
+                "give direction (linear patterns) or axis (circular), not both",
+            ));
+        }
         (Some(d), None) => Some(pattern::direction_ref(ids, d, "direction")?),
         (None, Some(a)) => Some(pattern::axis_ref(ids, a)?),
         (None, None) => None,
     };
-    let direction2 = present(&p.direction2).map(|d| pattern::direction_ref(ids, d, "direction2")).transpose()?;
-    if p.count2 == Some(1) && (p.spacing2_mm.is_some() || p.reverse_direction2.is_some() || direction2.is_some()) {
-        return Err(invalid("count2 = 1 removes the second direction; give nothing else for it"));
+    let direction2 = present(&p.direction2)
+        .map(|d| pattern::direction_ref(ids, d, "direction2"))
+        .transpose()?;
+    if p.count2 == Some(1)
+        && (p.spacing2_mm.is_some() || p.reverse_direction2.is_some() || direction2.is_some())
+    {
+        return Err(invalid(
+            "count2 = 1 removes the second direction; give nothing else for it",
+        ));
     }
     let features = match &p.features {
         None => Vec::new(),
         Some(list) => {
             let list = unique(list);
             if list.is_empty() {
-                return Err(invalid("features is empty -- give the features to copy, or leave it out to keep them"));
+                return Err(invalid(
+                    "features is empty -- give the features to copy, or leave it out to keep them",
+                ));
             }
             if list.len() > MAX_FEATURES {
                 return Err(invalid(format!("at most {MAX_FEATURES} features per call")));
@@ -359,7 +414,8 @@ fn side_name(ids: &mut IdRegistry, s: &proto::PatternSide) -> String {
         "edge" => Some(Kind::Edge),
         _ => None,
     };
-    kind.and_then(|k| ids.id_for(k, &s.persist_id)).unwrap_or_else(|| s.what.clone())
+    kind.and_then(|k| ids.id_for(k, &s.persist_id))
+        .unwrap_or_else(|| s.what.clone())
 }
 
 fn reversed(r: bool) -> &'static str {
@@ -377,7 +433,12 @@ fn pattern_definition_text(ids: &mut IdRegistry, d: &proto::PatternDefinition) -
         } else {
             format!("spread evenly over {degrees} degrees")
         };
-        format!("{} instances round {}{}, {how}", s1.count, side_name(ids, &s1), reversed(s1.reverse))
+        format!(
+            "{} instances round {}{}, {how}",
+            s1.count,
+            side_name(ids, &s1),
+            reversed(s1.reverse)
+        )
     } else {
         format!(
             "{} instances along {}{}, {} mm apart",
@@ -401,7 +462,11 @@ fn pattern_definition_text(ids: &mut IdRegistry, d: &proto::PatternDefinition) -
 }
 
 fn pattern_label(d: &proto::PatternDefinition) -> String {
-    let kind = if d.circular { "circular pattern" } else { "linear pattern" };
+    let kind = if d.circular {
+        "circular pattern"
+    } else {
+        "linear pattern"
+    };
     let of = if !d.features.is_empty() {
         d.features.join(", ")
     } else {
@@ -413,12 +478,20 @@ fn pattern_label(d: &proto::PatternDefinition) -> String {
     format!("{} ({kind} of {of})", d.name)
 }
 
-pub fn pattern_reply_text(ids: &mut IdRegistry, params: &EditPatternParams, reply: &proto::EditPatternResponse) -> String {
+pub fn pattern_reply_text(
+    ids: &mut IdRegistry,
+    params: &EditPatternParams,
+    reply: &proto::EditPatternResponse,
+) -> String {
     let Some(before) = &reply.before else {
         return "SolidWorks didn't describe the pattern.".into();
     };
     let Some(after) = &reply.after else {
-        let mut text = format!("{}: {}.", pattern_label(before), pattern_definition_text(ids, before));
+        let mut text = format!(
+            "{}: {}.",
+            pattern_label(before),
+            pattern_definition_text(ids, before)
+        );
         text += &error_text(before.error_code, before.error_is_warning);
         text += &dimensions_text(&before.dimensions);
         if !params.changes_anything() {
@@ -489,19 +562,28 @@ fn feature_name(name: Option<&str>, field: &str) -> Result<String, McpError> {
     }
 }
 
-pub fn sweep_request(ids: &IdRegistry, p: &EditSweepParams) -> Result<proto::EditSweepRequest, McpError> {
+pub fn sweep_request(
+    ids: &IdRegistry,
+    p: &EditSweepParams,
+) -> Result<proto::EditSweepRequest, McpError> {
     let feature = feature_target(ids, &p.feature, "sweep")?;
     let sketch_name = feature_name(present(&p.sketch_name), "sketch_name")?;
     if p.circle_diameter_mm.is_some() && !sketch_name.is_empty() {
-        return Err(invalid("give sketch_name (a profile sketch) or circle_diameter_mm, not both"));
+        return Err(invalid(
+            "give sketch_name (a profile sketch) or circle_diameter_mm, not both",
+        ));
     }
     if let Some(t) = p.twist_deg
         && !(t.is_finite() && t.abs() <= MAX_TWIST_DEG)
     {
-        return Err(invalid(format!("twist_deg must be within +-{MAX_TWIST_DEG}, got {t}")));
+        return Err(invalid(format!(
+            "twist_deg must be within +-{MAX_TWIST_DEG}, got {t}"
+        )));
     }
     if p.circle_diameter_mm.is_some() && p.twist_deg.is_some_and(|t| t != 0.0) {
-        return Err(invalid("a circular profile can't be twisted -- drop twist_deg or give a profile sketch"));
+        return Err(invalid(
+            "a circular profile can't be twisted -- drop twist_deg or give a profile sketch",
+        ));
     }
     Ok(proto::EditSweepRequest {
         feature: Some(feature),
@@ -540,7 +622,11 @@ pub fn sweep_reply_text(params: &EditSweepParams, reply: &proto::EditSweepRespon
         return "SolidWorks didn't describe the sweep.".into();
     };
     let Some(after) = &reply.after else {
-        let mut text = format!("{}: {}.", sweep_label(before), sweep_definition_text(before));
+        let mut text = format!(
+            "{}: {}.",
+            sweep_label(before),
+            sweep_definition_text(before)
+        );
         text += &error_text(before.error_code, before.error_is_warning);
         text += &dimensions_text(&before.dimensions);
         if !params.changes_anything() {
@@ -585,20 +671,39 @@ mod tests {
         };
         let r = fillet_request(&ids, &p).unwrap();
         assert_eq!(r.radius, Some(0.003));
-        assert_eq!(r.add_edges, vec![b"edge-bytes".to_vec(), b"face-bytes".to_vec()]);
+        assert_eq!(
+            r.add_edges,
+            vec![b"edge-bytes".to_vec(), b"face-bytes".to_vec()]
+        );
         assert!(r.edges.is_empty() && r.remove_edges.is_empty() && r.tangent_propagation.is_none());
 
         for bad in [
-            EditFilletParams { feature: "Fillet1".into(), radius_mm: Some(0.0), ..Default::default() },
-            EditFilletParams { feature: "Fillet1".into(), edges: Some(vec![]), ..Default::default() },
+            EditFilletParams {
+                feature: "Fillet1".into(),
+                radius_mm: Some(0.0),
+                ..Default::default()
+            },
+            EditFilletParams {
+                feature: "Fillet1".into(),
+                edges: Some(vec![]),
+                ..Default::default()
+            },
             EditFilletParams {
                 feature: "Fillet1".into(),
                 edges: Some(vec![edge.clone()]),
                 add_edges: vec![face.clone()],
                 ..Default::default()
             },
-            EditFilletParams { feature: "Fillet1".into(), add_edges: vec!["vertex:1".into()], ..Default::default() },
-            EditFilletParams { feature: "Fillet1".into(), remove_edges: vec!["edge:99".into()], ..Default::default() },
+            EditFilletParams {
+                feature: "Fillet1".into(),
+                add_edges: vec!["vertex:1".into()],
+                ..Default::default()
+            },
+            EditFilletParams {
+                feature: "Fillet1".into(),
+                remove_edges: vec!["edge:99".into()],
+                ..Default::default()
+            },
         ] {
             assert!(fillet_request(&ids, &bad).is_err(), "{bad:?}");
         }
@@ -611,13 +716,21 @@ mod tests {
             name: "Fillet1".into(),
             radius: 0.002,
             tangent_propagation: true,
-            items: vec![proto::FilletItem { persist_id: b"edge-bytes".to_vec(), face: false }],
+            items: vec![proto::FilletItem {
+                persist_id: b"edge-bytes".to_vec(),
+                face: false,
+            }],
             ..Default::default()
         };
-        let reply = proto::EditFilletResponse { before: Some(before.clone()), ..Default::default() };
+        let reply = proto::EditFilletResponse {
+            before: Some(before.clone()),
+            ..Default::default()
+        };
         let text = fillet_reply_text(&mut ids, &EditFilletParams::default(), &reply);
         assert!(
-            text.starts_with(&format!("Fillet1 (constant-radius fillet): 2 mm radius, tangent propagation on {edge}.")),
+            text.starts_with(&format!(
+                "Fillet1 (constant-radius fillet): 2 mm radius, tangent propagation on {edge}."
+            )),
             "{text}"
         );
         assert!(text.contains("Nothing was changed"), "{text}");
@@ -625,12 +738,22 @@ mod tests {
         let after = proto::FilletDefinition {
             radius: 0.003,
             items: vec![
-                proto::FilletItem { persist_id: b"edge-bytes".to_vec(), face: false },
-                proto::FilletItem { persist_id: b"new-face".to_vec(), face: true },
+                proto::FilletItem {
+                    persist_id: b"edge-bytes".to_vec(),
+                    face: false,
+                },
+                proto::FilletItem {
+                    persist_id: b"new-face".to_vec(),
+                    face: true,
+                },
             ],
             ..before.clone()
         };
-        let reply = proto::EditFilletResponse { before: Some(before), after: Some(after), new_errors: vec![] };
+        let reply = proto::EditFilletResponse {
+            before: Some(before),
+            after: Some(after),
+            new_errors: vec![],
+        };
         let text = fillet_reply_text(&mut ids, &EditFilletParams::default(), &reply);
         assert!(
             text.starts_with(&format!(
@@ -644,7 +767,12 @@ mod tests {
     #[test]
     fn pattern_request_converts_and_checks() {
         let (ids, edge, _) = registry();
-        let p = EditPatternParams { feature: "CirPattern1".into(), count: Some(8), angle_deg: Some(180.0), ..Default::default() };
+        let p = EditPatternParams {
+            feature: "CirPattern1".into(),
+            count: Some(8),
+            angle_deg: Some(180.0),
+            ..Default::default()
+        };
         let r = pattern_request(&ids, &p).unwrap();
         assert_eq!((r.count, r.equal_spacing), (Some(8), Some(true)));
         assert!((r.spacing.unwrap() - std::f64::consts::PI).abs() < 1e-12);
@@ -660,17 +788,47 @@ mod tests {
             ..Default::default()
         };
         let r = pattern_request(&ids, &p).unwrap();
-        assert_eq!((r.spacing, r.equal_spacing, r.count2, r.spacing2), (Some(0.0125), None, Some(3), Some(0.02)));
+        assert_eq!(
+            (r.spacing, r.equal_spacing, r.count2, r.spacing2),
+            (Some(0.0125), None, Some(3), Some(0.02))
+        );
         assert!(r.direction2.unwrap().target.is_some());
         assert_eq!(r.features.len(), 1);
 
         for bad in [
-            EditPatternParams { feature: "x".into(), count: Some(1), ..Default::default() },
-            EditPatternParams { feature: "x".into(), spacing_mm: Some(5.0), angle_deg: Some(90.0), ..Default::default() },
-            EditPatternParams { feature: "x".into(), angle_deg: Some(400.0), ..Default::default() },
-            EditPatternParams { feature: "x".into(), direction: Some(edge.clone()), axis: Some(edge.clone()), ..Default::default() },
-            EditPatternParams { feature: "x".into(), count2: Some(1), spacing2_mm: Some(5.0), ..Default::default() },
-            EditPatternParams { feature: "x".into(), features: Some(vec![]), ..Default::default() },
+            EditPatternParams {
+                feature: "x".into(),
+                count: Some(1),
+                ..Default::default()
+            },
+            EditPatternParams {
+                feature: "x".into(),
+                spacing_mm: Some(5.0),
+                angle_deg: Some(90.0),
+                ..Default::default()
+            },
+            EditPatternParams {
+                feature: "x".into(),
+                angle_deg: Some(400.0),
+                ..Default::default()
+            },
+            EditPatternParams {
+                feature: "x".into(),
+                direction: Some(edge.clone()),
+                axis: Some(edge.clone()),
+                ..Default::default()
+            },
+            EditPatternParams {
+                feature: "x".into(),
+                count2: Some(1),
+                spacing2_mm: Some(5.0),
+                ..Default::default()
+            },
+            EditPatternParams {
+                feature: "x".into(),
+                features: Some(vec![]),
+                ..Default::default()
+            },
         ] {
             assert!(pattern_request(&ids, &bad).is_err(), "{bad:?}");
         }
@@ -692,7 +850,10 @@ mod tests {
             direction1: Some(side(3, 0.01)),
             ..Default::default()
         };
-        let after = proto::PatternDefinition { direction1: Some(side(5, 0.008)), ..before.clone() };
+        let after = proto::PatternDefinition {
+            direction1: Some(side(5, 0.008)),
+            ..before.clone()
+        };
         let reply = proto::EditPatternResponse {
             before: Some(before),
             after: Some(after),
@@ -721,7 +882,10 @@ mod tests {
             }),
             ..Default::default()
         };
-        let reply = proto::EditPatternResponse { before: Some(circular), ..Default::default() };
+        let reply = proto::EditPatternResponse {
+            before: Some(circular),
+            ..Default::default()
+        };
         let text = pattern_reply_text(&mut ids, &EditPatternParams::default(), &reply);
         assert!(
             text.starts_with("CirPattern1 (circular pattern of Cut-Extrude1): 6 instances round Axis1, evenly all the way round."),
@@ -732,22 +896,40 @@ mod tests {
     #[test]
     fn sweep_request_converts_and_checks() {
         let (ids, _, _) = registry();
-        let p = EditSweepParams { feature: "Sweep1".into(), path: Some(" Sketch3 ".into()), twist_deg: Some(90.0), ..Default::default() };
+        let p = EditSweepParams {
+            feature: "Sweep1".into(),
+            path: Some(" Sketch3 ".into()),
+            twist_deg: Some(90.0),
+            ..Default::default()
+        };
         let r = sweep_request(&ids, &p).unwrap();
         assert_eq!(r.path, "Sketch3");
         assert!(r.sketch_name.is_empty() && r.circle_diameter.is_none());
         assert!((r.twist_angle.unwrap() - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
 
         for bad in [
-            EditSweepParams { feature: "Sweep1".into(), path: Some("feature:3".into()), ..Default::default() },
-            EditSweepParams { feature: "Sweep1".into(), circle_diameter_mm: Some(-1.0), ..Default::default() },
+            EditSweepParams {
+                feature: "Sweep1".into(),
+                path: Some("feature:3".into()),
+                ..Default::default()
+            },
+            EditSweepParams {
+                feature: "Sweep1".into(),
+                circle_diameter_mm: Some(-1.0),
+                ..Default::default()
+            },
             EditSweepParams {
                 feature: "Sweep1".into(),
                 circle_diameter_mm: Some(4.0),
                 sketch_name: Some("Sketch2".into()),
                 ..Default::default()
             },
-            EditSweepParams { feature: "Sweep1".into(), circle_diameter_mm: Some(4.0), twist_deg: Some(30.0), ..Default::default() },
+            EditSweepParams {
+                feature: "Sweep1".into(),
+                circle_diameter_mm: Some(4.0),
+                twist_deg: Some(30.0),
+                ..Default::default()
+            },
         ] {
             assert!(sweep_request(&ids, &bad).is_err(), "{bad:?}");
         }
@@ -767,7 +949,11 @@ mod tests {
             path: "Sketch3".into(),
             ..before.clone()
         };
-        let reply = proto::EditSweepResponse { before: Some(before), after: Some(after), new_errors: vec![] };
+        let reply = proto::EditSweepResponse {
+            before: Some(before),
+            after: Some(after),
+            new_errors: vec![],
+        };
         let text = sweep_reply_text(&EditSweepParams::default(), &reply);
         assert!(
             text.starts_with("changed Sweep1 (sweep): was Sketch2 along Sketch1; now a 4 mm circle along Sketch3."),

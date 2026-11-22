@@ -110,7 +110,10 @@ pub fn parse_scale(scale: &str) -> Result<(f64, f64), McpError> {
 
 /// A sheet name without surrounding blanks; None for a missing or blank one.
 fn name(value: Option<&str>) -> Option<String> {
-    value.map(str::trim).filter(|v| !v.is_empty()).map(str::to_string)
+    value
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
 }
 
 /// The setup shared by add_sheet and edit_sheet, into `request`.
@@ -150,9 +153,16 @@ pub fn add_request(params: &AddSheetParams) -> Result<proto::SetupSheetRequest, 
     Ok(request)
 }
 
-pub fn activate_request(params: &ActivateSheetParams) -> Result<proto::SetupSheetRequest, McpError> {
-    let sheet = name(Some(&params.sheet)).ok_or_else(|| invalid("give the sheet's name, e.g. \"Sheet2\""))?;
-    Ok(proto::SetupSheetRequest { sheet_name: sheet, activate: true, ..Default::default() })
+pub fn activate_request(
+    params: &ActivateSheetParams,
+) -> Result<proto::SetupSheetRequest, McpError> {
+    let sheet = name(Some(&params.sheet))
+        .ok_or_else(|| invalid("give the sheet's name, e.g. \"Sheet2\""))?;
+    Ok(proto::SetupSheetRequest {
+        sheet_name: sheet,
+        activate: true,
+        ..Default::default()
+    })
 }
 
 pub fn edit_request(params: &EditSheetParams) -> Result<proto::SetupSheetRequest, McpError> {
@@ -205,8 +215,15 @@ fn views_text(sheet: &proto::SheetInfo) -> (String, Vec<String>) {
         }
         views.push(text);
         if let Some(outline) = &v.outline {
-            let (lo, hi) = (outline.min.clone().unwrap_or_default(), outline.max.clone().unwrap_or_default());
-            if lo.x < -slack || lo.y < -slack || hi.x > sheet.width + slack || hi.y > sheet.height + slack {
+            let (lo, hi) = (
+                outline.min.clone().unwrap_or_default(),
+                outline.max.clone().unwrap_or_default(),
+            );
+            if lo.x < -slack
+                || lo.y < -slack
+                || hi.x > sheet.width + slack
+                || hi.y > sheet.height + slack
+            {
                 outside.push(format!(
                     "{} (x {:.0}..{:.0}, y {:.0}..{:.0} mm)",
                     v.name,
@@ -229,7 +246,10 @@ fn views_text(sheet: &proto::SheetInfo) -> (String, Vec<String>) {
 /// The reply to add_sheet / activate_sheet / edit_sheet.
 pub fn reply_text(request: &proto::SetupSheetRequest, reply: &proto::SetupSheetResponse) -> String {
     let Some(sheet) = &reply.sheet else {
-        return format!("done; the drawing's sheets: {}", reply.sheet_names.join(", "));
+        return format!(
+            "done; the drawing's sheets: {}",
+            reply.sheet_names.join(", ")
+        );
     };
     let setup = files::sheet_text(sheet, &reply.sheet_format_path);
     let mut text = if reply.added {
@@ -237,11 +257,18 @@ pub fn reply_text(request: &proto::SetupSheetRequest, reply: &proto::SetupSheetR
     } else if request.activate {
         format!("{} is now the active sheet: {setup}", sheet.name)
     } else {
-        let active = if sheet.active { " (the active sheet)".to_string() } else { format!("; the active sheet is still {}", reply.active_sheet) };
+        let active = if sheet.active {
+            " (the active sheet)".to_string()
+        } else {
+            format!("; the active sheet is still {}", reply.active_sheet)
+        };
         format!("set up {setup}{active}")
     };
     let (views, outside) = views_text(sheet);
-    text += &format!(". It has {views}. The drawing's sheets: {}.", reply.sheet_names.join(", "));
+    text += &format!(
+        ". It has {views}. The drawing's sheets: {}.",
+        reply.sheet_names.join(", ")
+    );
 
     let mut notes = Vec::new();
     if !outside.is_empty() {
@@ -252,7 +279,10 @@ pub fn reply_text(request: &proto::SetupSheetRequest, reply: &proto::SetupSheetR
             outside.join(", ")
         ));
     }
-    if request.paper_size.is_some() && request.sheet_format.is_empty() && !reply.sheet_format_path.is_empty() {
+    if request.paper_size.is_some()
+        && request.sheet_format.is_empty()
+        && !reply.sheet_format_path.is_empty()
+    {
         notes.push(format!(
             "the {} was kept; if it was drawn for another paper size, pass sheet_format for one that fits",
             files::sheet_format_text(&reply.sheet_format_path)
@@ -296,48 +326,132 @@ mod tests {
         let r = add_request(&params).unwrap();
         assert!(r.add && !r.activate);
         assert_eq!(
-            (r.sheet_name.as_str(), r.paper_size, r.sheet_format.as_str(), r.scale_numerator, r.scale_denominator, r.first_angle),
+            (
+                r.sheet_name.as_str(),
+                r.paper_size,
+                r.sheet_format.as_str(),
+                r.scale_numerator,
+                r.scale_denominator,
+                r.first_angle
+            ),
             ("Details", Some(6), "a4 - iso", Some(1.0), 5.0, Some(true))
         );
         // Nothing given: a copy of the active sheet with SolidWorks' next name.
         let r = add_request(&AddSheetParams::default()).unwrap();
-        assert_eq!(r, proto::SetupSheetRequest { add: true, ..Default::default() });
-        let r = add_request(&AddSheetParams { paper_size_mm: Some([500.0, 250.0]), ..Default::default() }).unwrap();
+        assert_eq!(
+            r,
+            proto::SetupSheetRequest {
+                add: true,
+                ..Default::default()
+            }
+        );
+        let r = add_request(&AddSheetParams {
+            paper_size_mm: Some([500.0, 250.0]),
+            ..Default::default()
+        })
+        .unwrap();
         assert_eq!((r.paper_size, r.width, r.height), (Some(12), 0.5, 0.25));
-        assert!(add_request(&AddSheetParams { scale: Some("2".into()), ..Default::default() }).is_err());
-        assert!(add_request(&AddSheetParams { sheet_format: Some("C:\\x\\a.drwdot".into()), ..Default::default() }).is_err());
+        assert!(
+            add_request(&AddSheetParams {
+                scale: Some("2".into()),
+                ..Default::default()
+            })
+            .is_err()
+        );
+        assert!(
+            add_request(&AddSheetParams {
+                sheet_format: Some("C:\\x\\a.drwdot".into()),
+                ..Default::default()
+            })
+            .is_err()
+        );
     }
 
     #[test]
     fn edit_needs_a_change() {
-        assert!(edit_request(&EditSheetParams { sheet: Some("Sheet2".into()), ..Default::default() }).is_err());
-        assert!(edit_request(&EditSheetParams { rename: Some(" ".into()), ..Default::default() }).is_err());
-        let r = edit_request(&EditSheetParams { projection: Some(Projection::ThirdAngle), ..Default::default() }).unwrap();
-        assert_eq!((r.sheet_name.as_str(), r.first_angle, r.add), ("", Some(false), false));
-        let r = edit_request(&EditSheetParams { sheet: Some("Sheet2".into()), rename: Some("Parts list".into()), ..Default::default() })
-            .unwrap();
-        assert_eq!((r.sheet_name.as_str(), r.new_name.as_str()), ("Sheet2", "Parts list"));
+        assert!(
+            edit_request(&EditSheetParams {
+                sheet: Some("Sheet2".into()),
+                ..Default::default()
+            })
+            .is_err()
+        );
+        assert!(
+            edit_request(&EditSheetParams {
+                rename: Some(" ".into()),
+                ..Default::default()
+            })
+            .is_err()
+        );
+        let r = edit_request(&EditSheetParams {
+            projection: Some(Projection::ThirdAngle),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            (r.sheet_name.as_str(), r.first_angle, r.add),
+            ("", Some(false), false)
+        );
+        let r = edit_request(&EditSheetParams {
+            sheet: Some("Sheet2".into()),
+            rename: Some("Parts list".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            (r.sheet_name.as_str(), r.new_name.as_str()),
+            ("Sheet2", "Parts list")
+        );
         assert!(activate_request(&ActivateSheetParams { sheet: "  ".into() }).is_err());
-        assert!(activate_request(&ActivateSheetParams { sheet: "Sheet2".into() }).unwrap().activate);
+        assert!(
+            activate_request(&ActivateSheetParams {
+                sheet: "Sheet2".into()
+            })
+            .unwrap()
+            .activate
+        );
     }
 
-    fn view(name: &str, kind: i32, sheet_scale: bool, min: [f64; 2], max: [f64; 2]) -> proto::ViewInfo {
-        let v = |p: [f64; 2]| Some(proto::Vec3 { x: p[0], y: p[1], z: 0.0 });
+    fn view(
+        name: &str,
+        kind: i32,
+        sheet_scale: bool,
+        min: [f64; 2],
+        max: [f64; 2],
+    ) -> proto::ViewInfo {
+        let v = |p: [f64; 2]| {
+            Some(proto::Vec3 {
+                x: p[0],
+                y: p[1],
+                z: 0.0,
+            })
+        };
         proto::ViewInfo {
             name: name.into(),
             r#type: kind,
             scale_numerator: 1.0,
             scale_denominator: 2.0,
             uses_sheet_scale: sheet_scale,
-            base_view: if kind == PROJECTED_VIEW { "Drawing View1".into() } else { String::new() },
-            outline: Some(proto::Box3 { min: v(min), max: v(max) }),
+            base_view: if kind == PROJECTED_VIEW {
+                "Drawing View1".into()
+            } else {
+                String::new()
+            },
+            outline: Some(proto::Box3 {
+                min: v(min),
+                max: v(max),
+            }),
             ..Default::default()
         }
     }
 
     #[test]
     fn reply_flags_views_off_the_sheet_and_kept_formats() {
-        let request = proto::SetupSheetRequest { paper_size: Some(6), first_angle: Some(true), ..Default::default() };
+        let request = proto::SetupSheetRequest {
+            paper_size: Some(6),
+            first_angle: Some(true),
+            ..Default::default()
+        };
         let reply = proto::SetupSheetResponse {
             sheet: Some(proto::SheetInfo {
                 name: "Sheet1".into(),
@@ -350,7 +464,13 @@ mod tests {
                 first_angle: true,
                 views: vec![
                     view("Drawing View1", 7, true, [0.05, 0.05], [0.1, 0.1]),
-                    view("Drawing View2", PROJECTED_VIEW, false, [0.05, 0.2], [0.1, 0.25]),
+                    view(
+                        "Drawing View2",
+                        PROJECTED_VIEW,
+                        false,
+                        [0.05, 0.2],
+                        [0.1, 0.25],
+                    ),
                 ],
                 ..Default::default()
             }),
@@ -369,15 +489,33 @@ mod tests {
             ),
             "{text}"
         );
-        assert!(text.contains("Drawing View2 (x 50..100, y 200..250 mm)") && !text.contains("Drawing View1 (x"), "{text}");
+        assert!(
+            text.contains("Drawing View2 (x 50..100, y 200..250 mm)")
+                && !text.contains("Drawing View1 (x"),
+            "{text}"
+        );
         assert!(text.contains("sheet format a3 - iso was kept"), "{text}");
         assert!(text.contains("projected views stayed"), "{text}");
 
         // Another sheet changed in the background, nothing to flag.
-        let request = proto::SetupSheetRequest { sheet_name: "Sheet2".into(), scale_numerator: Some(1.0), scale_denominator: 1.0, ..Default::default() };
+        let request = proto::SetupSheetRequest {
+            sheet_name: "Sheet2".into(),
+            scale_numerator: Some(1.0),
+            scale_denominator: 1.0,
+            ..Default::default()
+        };
         let mut reply = reply;
-        reply.sheet = Some(proto::SheetInfo { name: "Sheet2".into(), active: false, views: vec![], ..reply.sheet.unwrap() });
+        reply.sheet = Some(proto::SheetInfo {
+            name: "Sheet2".into(),
+            active: false,
+            views: vec![],
+            ..reply.sheet.unwrap()
+        });
         let text = reply_text(&request, &reply);
-        assert!(text.contains("; the active sheet is still Sheet1. It has no views yet.") && !text.contains("Note"), "{text}");
+        assert!(
+            text.contains("; the active sheet is still Sheet1. It has no views yet.")
+                && !text.contains("Note"),
+            "{text}"
+        );
     }
 }

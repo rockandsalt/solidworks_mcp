@@ -274,11 +274,31 @@ pub fn geometry_request(
         GeometryKind::CoordinateSystem => "coordinate_system",
     };
     let given = [
-        ("point_kind", params.point_kind.is_some(), geometry == GeometryKind::Point),
-        ("distance_mm", params.distance_mm.is_some(), geometry == GeometryKind::Point),
-        ("percent", params.percent.is_some(), geometry == GeometryKind::Point),
-        ("count", params.count.is_some(), geometry == GeometryKind::Point),
-        ("references", !params.references.is_empty(), geometry != GeometryKind::CoordinateSystem),
+        (
+            "point_kind",
+            params.point_kind.is_some(),
+            geometry == GeometryKind::Point,
+        ),
+        (
+            "distance_mm",
+            params.distance_mm.is_some(),
+            geometry == GeometryKind::Point,
+        ),
+        (
+            "percent",
+            params.percent.is_some(),
+            geometry == GeometryKind::Point,
+        ),
+        (
+            "count",
+            params.count.is_some(),
+            geometry == GeometryKind::Point,
+        ),
+        (
+            "references",
+            !params.references.is_empty(),
+            geometry != GeometryKind::CoordinateSystem,
+        ),
     ];
     let cs = geometry == GeometryKind::CoordinateSystem;
     let cs_given = [
@@ -294,7 +314,10 @@ pub fn geometry_request(
         .iter()
         .find(|(_, given, applies)| *given && !applies)
         .map(|(name, _, _)| *name)
-        .or(cs_given.iter().find(|(_, given)| *given && !cs).map(|(name, _)| *name));
+        .or(cs_given
+            .iter()
+            .find(|(_, given)| *given && !cs)
+            .map(|(name, _)| *name));
     if let Some(name) = stray {
         return Err(invalid(format!("geometry \"{key}\" doesn't take {name}")));
     }
@@ -323,21 +346,36 @@ pub fn geometry_request(
                     .references
                     .into_iter()
                     .map(|r| match r {
-                        Reference::Entity(entity) => {
-                            PlaneReference { entity, relation: None, offset_mm: None, angle_deg: None, flip: false }
-                        }
+                        Reference::Entity(entity) => PlaneReference {
+                            entity,
+                            relation: None,
+                            offset_mm: None,
+                            angle_deg: None,
+                            flip: false,
+                        },
                         Reference::Plane(p) => p,
                     })
                     .collect(),
                 name: params.name,
             };
             let given = params.references.iter().map(|r| r.entity.clone()).collect();
-            (plane_request(ids, &params)?, plane_from_text(&params), given)
+            (
+                plane_request(ids, &params)?,
+                plane_from_text(&params),
+                given,
+            )
         }
         GeometryKind::Axis => {
-            let params = ReferenceAxisParams { references: entities(params.references)?, name: params.name };
+            let params = ReferenceAxisParams {
+                references: entities(params.references)?,
+                name: params.name,
+            };
             let refs: Vec<&str> = params.references.iter().map(String::as_str).collect();
-            (axis_request(ids, &params)?, from_text(&refs), params.references.clone())
+            (
+                axis_request(ids, &params)?,
+                from_text(&refs),
+                params.references.clone(),
+            )
         }
         GeometryKind::Point => {
             let params = ReferencePointParams {
@@ -349,7 +387,11 @@ pub fn geometry_request(
                 name: params.name,
             };
             let refs: Vec<&str> = params.references.iter().map(String::as_str).collect();
-            (point_request(ids, &params)?, from_text(&refs), params.references.clone())
+            (
+                point_request(ids, &params)?,
+                from_text(&refs),
+                params.references.clone(),
+            )
         }
         GeometryKind::CoordinateSystem => {
             let params = CoordinateSystemParams {
@@ -362,12 +404,21 @@ pub fn geometry_request(
                 flip_z: params.flip_z,
                 name: params.name,
             };
-            let given: Vec<String> = [&params.origin, &params.x_axis, &params.y_axis, &params.z_axis]
-                .iter()
-                .filter_map(|r| (*r).clone())
-                .collect();
+            let given: Vec<String> = [
+                &params.origin,
+                &params.x_axis,
+                &params.y_axis,
+                &params.z_axis,
+            ]
+            .iter()
+            .filter_map(|r| (*r).clone())
+            .collect();
             let refs: Vec<&str> = given.iter().map(String::as_str).collect();
-            (coordinate_system_request(ids, &params)?, from_text(&refs), Vec::new())
+            (
+                coordinate_system_request(ids, &params)?,
+                from_text(&refs),
+                Vec::new(),
+            )
         }
     })
 }
@@ -401,7 +452,11 @@ pub(crate) fn standard_plane(s: &str) -> Option<proto::Plane> {
 }
 
 /// One reference string -> its wire ref and shape. `what` names it in errors.
-pub(crate) fn geometry_ref(ids: &IdRegistry, entity: &str, what: &str) -> Result<(proto::GeometryRef, Shape), McpError> {
+pub(crate) fn geometry_ref(
+    ids: &IdRegistry,
+    entity: &str,
+    what: &str,
+) -> Result<(proto::GeometryRef, Shape), McpError> {
     use proto::geometry_ref::Target;
     let entity = entity.trim();
     if entity.is_empty() {
@@ -418,7 +473,11 @@ pub(crate) fn geometry_ref(ids: &IdRegistry, entity: &str, what: &str) -> Result
                 let persist_id = ids.persist_id(entity).ok_or_else(|| {
                     invalid(format!(
                         "{what}: {}",
-                        ids.unknown_id(entity, "inspect_model", "call inspect_model for current ones")
+                        ids.unknown_id(
+                            entity,
+                            "inspect_model",
+                            "call inspect_model for current ones"
+                        )
                     ))
                 })?;
                 let shape = match kind {
@@ -454,15 +513,29 @@ pub(crate) fn geometry_ref(ids: &IdRegistry, entity: &str, what: &str) -> Result
             }
         }
     };
-    Ok((proto::GeometryRef { target: Some(target) }, shape))
+    Ok((
+        proto::GeometryRef {
+            target: Some(target),
+        },
+        shape,
+    ))
 }
 
 fn name(name: &Option<String>) -> String {
-    name.as_deref().map(str::trim).unwrap_or_default().to_string()
+    name.as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string()
 }
 
-fn request(geometry: proto::create_reference_geometry_request::Geometry, name: String) -> proto::CreateReferenceGeometryRequest {
-    proto::CreateReferenceGeometryRequest { geometry: Some(geometry), name }
+fn request(
+    geometry: proto::create_reference_geometry_request::Geometry,
+    name: String,
+) -> proto::CreateReferenceGeometryRequest {
+    proto::CreateReferenceGeometryRequest {
+        geometry: Some(geometry),
+        name,
+    }
 }
 
 pub fn plane_request(
@@ -471,21 +544,31 @@ pub fn plane_request(
 ) -> Result<proto::CreateReferenceGeometryRequest, McpError> {
     let n = params.references.len();
     if n == 0 || n > MAX_PLANE_REFERENCES {
-        return Err(invalid(format!("a plane takes 1 to {MAX_PLANE_REFERENCES} references, got {n}")));
+        return Err(invalid(format!(
+            "a plane takes 1 to {MAX_PLANE_REFERENCES} references, got {n}"
+        )));
     }
     let mut references = Vec::new();
     for (i, r) in params.references.iter().enumerate() {
         let what = format!("reference {}", i + 1);
         let (geometry, _) = geometry_ref(ids, &r.entity, &what)?;
         let relation = match (r.relation, r.offset_mm, r.angle_deg) {
-            (_, Some(_), Some(_)) => return Err(invalid(format!("{what}: give offset_mm or angle_deg, not both"))),
+            (_, Some(_), Some(_)) => {
+                return Err(invalid(format!(
+                    "{what}: give offset_mm or angle_deg, not both"
+                )));
+            }
             (None | Some(PlaneRelation::Distance), Some(_), None) => PlaneRelation::Distance,
             (None | Some(PlaneRelation::Angle), None, Some(_)) => PlaneRelation::Angle,
             (Some(PlaneRelation::Distance), None, None) => {
-                return Err(invalid(format!("{what}: relation \"distance\" needs offset_mm")));
+                return Err(invalid(format!(
+                    "{what}: relation \"distance\" needs offset_mm"
+                )));
             }
             (Some(PlaneRelation::Angle), None, None) => {
-                return Err(invalid(format!("{what}: relation \"angle\" needs angle_deg")));
+                return Err(invalid(format!(
+                    "{what}: relation \"angle\" needs angle_deg"
+                )));
             }
             (Some(other), Some(_), None) | (Some(other), None, Some(_)) => {
                 return Err(invalid(format!(
@@ -523,12 +606,20 @@ pub fn plane_request(
             flip: r.flip,
         });
     }
-    let mids = params.references.iter().filter(|r| r.relation == Some(PlaneRelation::MidPlane)).count();
+    let mids = params
+        .references
+        .iter()
+        .filter(|r| r.relation == Some(PlaneRelation::MidPlane))
+        .count();
     if mids == 1 {
-        return Err(invalid("a mid plane needs two references with relation \"mid_plane\""));
+        return Err(invalid(
+            "a mid plane needs two references with relation \"mid_plane\"",
+        ));
     }
     Ok(request(
-        proto::create_reference_geometry_request::Geometry::Plane(proto::ReferencePlaneSpec { references }),
+        proto::create_reference_geometry_request::Geometry::Plane(proto::ReferencePlaneSpec {
+            references,
+        }),
         name(&params.name),
     ))
 }
@@ -548,13 +639,18 @@ pub fn axis_request(
         .map(|(i, r)| geometry_ref(ids, r, &format!("reference {}", i + 1)).map(|(g, _)| g))
         .collect::<Result<_, _>>()?;
     Ok(request(
-        proto::create_reference_geometry_request::Geometry::Axis(proto::ReferenceAxisSpec { references }),
+        proto::create_reference_geometry_request::Geometry::Axis(proto::ReferenceAxisSpec {
+            references,
+        }),
         name(&params.name),
     ))
 }
 
 /// The point kind the references and options call for, when not given.
-fn infer_point_kind(params: &ReferencePointParams, shapes: &[Shape]) -> Result<PointKind, McpError> {
+fn infer_point_kind(
+    params: &ReferencePointParams,
+    shapes: &[Shape],
+) -> Result<PointKind, McpError> {
     if params.distance_mm.is_some() || params.percent.is_some() || params.count.is_some() {
         return Ok(PointKind::Along);
     }
@@ -571,7 +667,9 @@ fn infer_point_kind(params: &ReferencePointParams, shapes: &[Shape]) -> Result<P
             "can't tell what point to make from one feature -- give `point_kind` (\"at\" a \
              reference point, ...) or other references",
         )),
-        [S::Point, S::Surface | S::Feature] | [S::Surface | S::Feature, S::Point] => Ok(PointKind::Projection),
+        [S::Point, S::Surface | S::Feature] | [S::Surface | S::Feature, S::Point] => {
+            Ok(PointKind::Projection)
+        }
         _ => Ok(PointKind::Intersection),
     }
 }
@@ -582,7 +680,9 @@ pub fn point_request(
 ) -> Result<proto::CreateReferenceGeometryRequest, McpError> {
     let n = params.references.len();
     if n == 0 || n > 2 {
-        return Err(invalid(format!("a reference point takes 1 or 2 references, got {n}")));
+        return Err(invalid(format!(
+            "a reference point takes 1 or 2 references, got {n}"
+        )));
     }
     let mut references = Vec::new();
     let mut shapes = Vec::new();
@@ -596,7 +696,10 @@ pub fn point_request(
         None => infer_point_kind(params, &shapes)?,
     };
     // A projection takes the point first.
-    if kind == PointKind::Projection && shapes[0] != Shape::Point && shapes.get(1) == Some(&Shape::Point) {
+    if kind == PointKind::Projection
+        && shapes[0] != Shape::Point
+        && shapes.get(1) == Some(&Shape::Point)
+    {
         references.swap(0, 1);
     }
 
@@ -607,11 +710,15 @@ pub fn point_request(
     };
     if kind == PointKind::Along {
         if n != 1 {
-            return Err(invalid("a point along a curve takes one reference: the edge or sketch segment"));
+            return Err(invalid(
+                "a point along a curve takes one reference: the edge or sketch segment",
+            ));
         }
         let count = params.count.unwrap_or(1);
         if count == 0 || count > MAX_POINTS {
-            return Err(invalid(format!("count must be 1 to {MAX_POINTS}, got {count}")));
+            return Err(invalid(format!(
+                "count must be 1 to {MAX_POINTS}, got {count}"
+            )));
         }
         spec.count = count as i32;
         spec.along = match (params.distance_mm, params.percent) {
@@ -634,9 +741,14 @@ pub fn point_request(
         }
         .into();
     } else if params.distance_mm.is_some() || params.percent.is_some() || params.count.is_some() {
-        return Err(invalid("distance_mm, percent and count only go with point_kind \"along\""));
+        return Err(invalid(
+            "distance_mm, percent and count only go with point_kind \"along\"",
+        ));
     }
-    Ok(request(proto::create_reference_geometry_request::Geometry::Point(spec), name(&params.name)))
+    Ok(request(
+        proto::create_reference_geometry_request::Geometry::Point(spec),
+        name(&params.name),
+    ))
 }
 
 pub fn coordinate_system_request(
@@ -644,7 +756,9 @@ pub fn coordinate_system_request(
     params: &CoordinateSystemParams,
 ) -> Result<proto::CreateReferenceGeometryRequest, McpError> {
     let one = |r: &Option<String>, what: &str| -> Result<Option<proto::GeometryRef>, McpError> {
-        r.as_deref().map(|r| geometry_ref(ids, r, what).map(|(g, _)| g)).transpose()
+        r.as_deref()
+            .map(|r| geometry_ref(ids, r, what).map(|(g, _)| g))
+            .transpose()
     };
     let spec = proto::CoordinateSystemSpec {
         origin: one(&params.origin, "origin")?,
@@ -655,9 +769,14 @@ pub fn coordinate_system_request(
         flip_y: params.flip_y,
         flip_z: params.flip_z,
     };
-    let axes = [&spec.x_axis, &spec.y_axis, &spec.z_axis].iter().filter(|a| a.is_some()).count();
+    let axes = [&spec.x_axis, &spec.y_axis, &spec.z_axis]
+        .iter()
+        .filter(|a| a.is_some())
+        .count();
     if axes == 3 {
-        return Err(invalid("give at most two of x_axis, y_axis and z_axis: the third follows from them"));
+        return Err(invalid(
+            "give at most two of x_axis, y_axis and z_axis: the third follows from them",
+        ));
     }
     Ok(request(
         proto::create_reference_geometry_request::Geometry::CoordinateSystem(spec),
@@ -680,9 +799,16 @@ fn where_text(f: &proto::FeatureInfo) -> String {
         return "(SolidWorks didn't say where it is)".into();
     };
     match (f.type_name.as_str(), &r.origin, &r.direction) {
-        ("RefPlane", Some(o), Some(n)) => format!("plane with normal {} through {}", dir_text(n), mm_text(o)),
+        ("RefPlane", Some(o), Some(n)) => {
+            format!("plane with normal {} through {}", dir_text(n), mm_text(o))
+        }
         ("RefAxis", Some(o), Some(d)) => {
-            format!("axis along {} through {} ({} mm shown)", dir_text(d), mm_text(o), mm(r.length))
+            format!(
+                "axis along {} through {} ({} mm shown)",
+                dir_text(d),
+                mm_text(o),
+                mm(r.length)
+            )
         }
         ("RefPoint", Some(o), _) => format!("point at {}", mm_text(o)),
         ("CoordSys", Some(o), _) => match (&r.x_axis, &r.y_axis, &r.z_axis) {
@@ -702,7 +828,11 @@ fn where_text(f: &proto::FeatureInfo) -> String {
 /// The JSON a feature gets in inspect_model, for the reply.
 fn feature_value(ids: &mut IdRegistry, f: &proto::FeatureInfo) -> Value {
     let mut obj = Map::new();
-    obj.insert("id".into(), ids.id_for(Kind::Feature, &f.persist_id).map_or(Value::Null, Value::String));
+    obj.insert(
+        "id".into(),
+        ids.id_for(Kind::Feature, &f.persist_id)
+            .map_or(Value::Null, Value::String),
+    );
     obj.insert("name".into(), Value::String(f.name.clone()));
     obj.insert("type".into(), Value::String(f.type_name.clone()));
     if let Some(r) = &f.reference {
@@ -712,7 +842,11 @@ fn feature_value(ids: &mut IdRegistry, f: &proto::FeatureInfo) -> Value {
 }
 
 /// The reply: what was made, where it is, and how to use it.
-pub fn reply_text(ids: &mut IdRegistry, reply: &proto::CreateReferenceGeometryResponse, from: &str) -> String {
+pub fn reply_text(
+    ids: &mut IdRegistry,
+    reply: &proto::CreateReferenceGeometryResponse,
+    from: &str,
+) -> String {
     let mut lines = Vec::new();
     let mut first_id = None;
     for f in &reply.features {
@@ -735,7 +869,11 @@ pub fn reply_text(ids: &mut IdRegistry, reply: &proto::CreateReferenceGeometryRe
         lines.push(line);
     }
     let mut text = if lines.len() > 1 {
-        let from = if from.is_empty() { String::new() } else { format!(" {from}") };
+        let from = if from.is_empty() {
+            String::new()
+        } else {
+            format!(" {from}")
+        };
         format!("{} features{from}:\n{}.", lines.len(), lines.join(".\n"))
     } else if from.is_empty() {
         format!("{}.", lines.concat())
@@ -750,7 +888,11 @@ pub fn reply_text(ids: &mut IdRegistry, reply: &proto::CreateReferenceGeometryRe
     } else if let Some(id) = &first_id {
         text += &format!(" Use {id} as a reference for other reference geometry or in add_mate.");
     }
-    let json: Vec<Value> = reply.features.iter().map(|f| feature_value(ids, f)).collect();
+    let json: Vec<Value> = reply
+        .features
+        .iter()
+        .map(|f| feature_value(ids, f))
+        .collect();
     text += &format!("\n{}", Value::Array(json));
     text
 }
@@ -784,8 +926,16 @@ pub fn plane_from_text(params: &ReferencePlaneParams) -> String {
 
 /// "from edge:3, origin" for the other replies.
 pub fn from_text(references: &[&str]) -> String {
-    let refs: Vec<&str> = references.iter().map(|r| r.trim()).filter(|r| !r.is_empty()).collect();
-    if refs.is_empty() { String::new() } else { format!("from {}", refs.join(", ")) }
+    let refs: Vec<&str> = references
+        .iter()
+        .map(|r| r.trim())
+        .filter(|r| !r.is_empty())
+        .collect();
+    if refs.is_empty() {
+        String::new()
+    } else {
+        format!("from {}", refs.join(", "))
+    }
 }
 
 #[cfg(test)]
@@ -801,16 +951,41 @@ mod tests {
     fn geometry_kinds_take_only_their_parameters() {
         use proto::create_reference_geometry_request::Geometry;
         // Plane references: ids or objects, mixed.
-        let plane = geometry(serde_json::json!({"geometry": "plane", "references": [{"entity": "top", "offset_mm": 20}, "origin"]}));
-        assert!(matches!(plane.unwrap().geometry, Some(Geometry::Plane(spec)) if spec.references.len() == 2));
-        let axis = geometry(serde_json::json!({"geometry": "axis", "references": ["front", {"entity": "top"}]}));
-        assert!(matches!(axis.unwrap().geometry, Some(Geometry::Axis(spec)) if spec.references.len() == 2));
-        assert!(matches!(geometry(serde_json::json!({"geometry": "coordinate_system", "origin": "origin"})).unwrap().geometry, Some(Geometry::CoordinateSystem(_))));
+        let plane = geometry(
+            serde_json::json!({"geometry": "plane", "references": [{"entity": "top", "offset_mm": 20}, "origin"]}),
+        );
+        assert!(
+            matches!(plane.unwrap().geometry, Some(Geometry::Plane(spec)) if spec.references.len() == 2)
+        );
+        let axis = geometry(
+            serde_json::json!({"geometry": "axis", "references": ["front", {"entity": "top"}]}),
+        );
+        assert!(
+            matches!(axis.unwrap().geometry, Some(Geometry::Axis(spec)) if spec.references.len() == 2)
+        );
+        assert!(matches!(
+            geometry(serde_json::json!({"geometry": "coordinate_system", "origin": "origin"}))
+                .unwrap()
+                .geometry,
+            Some(Geometry::CoordinateSystem(_))
+        ));
         for (args, needle) in [
-            (serde_json::json!({"geometry": "axis", "references": [{"entity": "top", "offset_mm": 5}]}), "for planes"),
-            (serde_json::json!({"geometry": "plane", "references": ["top"], "count": 2}), "doesn't take count"),
-            (serde_json::json!({"geometry": "axis", "references": ["top", "front"], "x_axis": "top"}), "doesn't take x_axis"),
-            (serde_json::json!({"geometry": "coordinate_system", "references": ["top"]}), "doesn't take references"),
+            (
+                serde_json::json!({"geometry": "axis", "references": [{"entity": "top", "offset_mm": 5}]}),
+                "for planes",
+            ),
+            (
+                serde_json::json!({"geometry": "plane", "references": ["top"], "count": 2}),
+                "doesn't take count",
+            ),
+            (
+                serde_json::json!({"geometry": "axis", "references": ["top", "front"], "x_axis": "top"}),
+                "doesn't take x_axis",
+            ),
+            (
+                serde_json::json!({"geometry": "coordinate_system", "references": ["top"]}),
+                "doesn't take references",
+            ),
         ] {
             let error = geometry(args.clone()).unwrap_err();
             assert!(error.message.contains(needle), "{args}: {}", error.message);
@@ -824,7 +999,13 @@ mod tests {
     }
 
     fn plane_ref(entity: &str) -> PlaneReference {
-        PlaneReference { entity: entity.into(), relation: None, offset_mm: None, angle_deg: None, flip: false }
+        PlaneReference {
+            entity: entity.into(),
+            relation: None,
+            offset_mm: None,
+            angle_deg: None,
+            flip: false,
+        }
     }
 
     #[test]
@@ -833,15 +1014,24 @@ mod tests {
         let face = ids.id_for(Kind::Face, b"face-bytes").unwrap();
         let params = ReferencePlaneParams {
             references: vec![
-                PlaneReference { offset_mm: Some(20.0), ..plane_ref("top") },
-                PlaneReference { angle_deg: Some(30.0), flip: true, ..plane_ref(&face) },
+                PlaneReference {
+                    offset_mm: Some(20.0),
+                    ..plane_ref("top")
+                },
+                PlaneReference {
+                    angle_deg: Some(30.0),
+                    flip: true,
+                    ..plane_ref(&face)
+                },
                 plane_ref("origin"),
             ],
             name: Some(" Mount ".into()),
         };
         let request = plane_request(&ids, &params).unwrap();
         assert_eq!(request.name, "Mount");
-        let Some(proto::create_reference_geometry_request::Geometry::Plane(spec)) = request.geometry else {
+        let Some(proto::create_reference_geometry_request::Geometry::Plane(spec)) =
+            request.geometry
+        else {
             panic!("not a plane");
         };
         let r = &spec.references;
@@ -849,39 +1039,96 @@ mod tests {
         assert!((r[0].distance - 0.02).abs() < 1e-12);
         assert_eq!(
             r[0].r#ref.as_ref().unwrap().target,
-            Some(proto::geometry_ref::Target::StandardPlane(proto::Plane::Top.into()))
+            Some(proto::geometry_ref::Target::StandardPlane(
+                proto::Plane::Top.into()
+            ))
         );
         assert_eq!(r[1].constraint(), proto::PlaneConstraint::Angle);
         assert!((r[1].angle - 30f64.to_radians()).abs() < 1e-12 && r[1].flip);
         assert_eq!(
             r[1].r#ref.as_ref().unwrap().target,
-            Some(proto::geometry_ref::Target::ModelPersistId(b"face-bytes".to_vec()))
+            Some(proto::geometry_ref::Target::ModelPersistId(
+                b"face-bytes".to_vec()
+            ))
         );
         assert_eq!(r[2].constraint(), proto::PlaneConstraint::Coincident);
-        assert_eq!(r[2].r#ref.as_ref().unwrap().target, Some(proto::geometry_ref::Target::Origin(true)));
+        assert_eq!(
+            r[2].r#ref.as_ref().unwrap().target,
+            Some(proto::geometry_ref::Target::Origin(true))
+        );
     }
 
     #[test]
     fn plane_rejects_mismatched_values() {
         let ids = registry();
-        let bad = |r: PlaneReference| plane_request(&ids, &ReferencePlaneParams { references: vec![r], name: None });
-        assert!(bad(PlaneReference { relation: Some(PlaneRelation::Distance), ..plane_ref("top") }).is_err());
-        assert!(bad(PlaneReference { relation: Some(PlaneRelation::Parallel), offset_mm: Some(5.0), ..plane_ref("top") }).is_err());
-        assert!(bad(PlaneReference { offset_mm: Some(-5.0), ..plane_ref("top") }).is_err());
-        assert!(bad(PlaneReference { relation: Some(PlaneRelation::MidPlane), ..plane_ref("top") }).is_err());
+        let bad = |r: PlaneReference| {
+            plane_request(
+                &ids,
+                &ReferencePlaneParams {
+                    references: vec![r],
+                    name: None,
+                },
+            )
+        };
+        assert!(
+            bad(PlaneReference {
+                relation: Some(PlaneRelation::Distance),
+                ..plane_ref("top")
+            })
+            .is_err()
+        );
+        assert!(
+            bad(PlaneReference {
+                relation: Some(PlaneRelation::Parallel),
+                offset_mm: Some(5.0),
+                ..plane_ref("top")
+            })
+            .is_err()
+        );
+        assert!(
+            bad(PlaneReference {
+                offset_mm: Some(-5.0),
+                ..plane_ref("top")
+            })
+            .is_err()
+        );
+        assert!(
+            bad(PlaneReference {
+                relation: Some(PlaneRelation::MidPlane),
+                ..plane_ref("top")
+            })
+            .is_err()
+        );
         assert!(bad(plane_ref("body:1")).is_err());
         assert!(bad(plane_ref("face:99")).is_err());
-        assert!(plane_request(&ids, &ReferencePlaneParams { references: vec![], name: None }).is_err());
+        assert!(
+            plane_request(
+                &ids,
+                &ReferencePlaneParams {
+                    references: vec![],
+                    name: None
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn names_and_plane_words_are_references() {
         let ids = registry();
         let (g, shape) = geometry_ref(&ids, "Right Plane", "r").unwrap();
-        assert_eq!(g.target, Some(proto::geometry_ref::Target::StandardPlane(proto::Plane::Right.into())));
+        assert_eq!(
+            g.target,
+            Some(proto::geometry_ref::Target::StandardPlane(
+                proto::Plane::Right.into()
+            ))
+        );
         assert_eq!(shape, Shape::Surface);
         let (g, shape) = geometry_ref(&ids, " Plane1 ", "r").unwrap();
-        assert_eq!(g.target, Some(proto::geometry_ref::Target::FeatureName("Plane1".into())));
+        assert_eq!(
+            g.target,
+            Some(proto::geometry_ref::Target::FeatureName("Plane1".into()))
+        );
         assert_eq!(shape, Shape::Feature);
     }
 
@@ -910,7 +1157,8 @@ mod tests {
         let edge = ids.id_for(Kind::Edge, b"e").unwrap();
         let vertex = ids.id_for(Kind::Vertex, b"v").unwrap();
         use proto::ReferencePointKind as K;
-        let kind = |refs: &[&str]| point_spec(point_request(&ids, &point_params(refs)).unwrap()).kind();
+        let kind =
+            |refs: &[&str]| point_spec(point_request(&ids, &point_params(refs)).unwrap()).kind();
         assert_eq!(kind(&[&face]), K::FaceCenter);
         assert_eq!(kind(&[&edge]), K::ArcCenter);
         assert_eq!(kind(&[&vertex]), K::AtPoint);
@@ -919,7 +1167,10 @@ mod tests {
         // A projection takes the point first, whichever order it's given in.
         let spec = point_spec(point_request(&ids, &point_params(&["front", &vertex])).unwrap());
         assert_eq!(spec.kind(), K::Projection);
-        assert_eq!(spec.references[0].target, Some(proto::geometry_ref::Target::ModelPersistId(b"v".to_vec())));
+        assert_eq!(
+            spec.references[0].target,
+            Some(proto::geometry_ref::Target::ModelPersistId(b"v".to_vec()))
+        );
     }
 
     #[test]
@@ -927,25 +1178,69 @@ mod tests {
         let mut ids = registry();
         let edge = ids.id_for(Kind::Edge, b"e").unwrap();
         let spec = point_spec(
-            point_request(&ids, &ReferencePointParams { percent: Some(25.0), ..point_params(&[&edge]) }).unwrap(),
+            point_request(
+                &ids,
+                &ReferencePointParams {
+                    percent: Some(25.0),
+                    ..point_params(&[&edge])
+                },
+            )
+            .unwrap(),
         );
         assert_eq!(spec.kind(), proto::ReferencePointKind::AlongCurve);
         assert_eq!(spec.along(), proto::AlongCurve::Percent);
         assert_eq!((spec.percent, spec.count), (25.0, 1));
-        let spec =
-            point_spec(point_request(&ids, &ReferencePointParams { count: Some(5), ..point_params(&[&edge]) }).unwrap());
+        let spec = point_spec(
+            point_request(
+                &ids,
+                &ReferencePointParams {
+                    count: Some(5),
+                    ..point_params(&[&edge])
+                },
+            )
+            .unwrap(),
+        );
         assert_eq!((spec.along(), spec.count), (proto::AlongCurve::Evenly, 5));
         let spec = point_spec(
-            point_request(&ids, &ReferencePointParams { distance_mm: Some(10.0), ..point_params(&[&edge]) }).unwrap(),
+            point_request(
+                &ids,
+                &ReferencePointParams {
+                    distance_mm: Some(10.0),
+                    ..point_params(&[&edge])
+                },
+            )
+            .unwrap(),
         );
         assert_eq!(spec.along(), proto::AlongCurve::Distance);
         assert!((spec.distance - 0.01).abs() < 1e-12);
-        assert!(point_request(&ids, &ReferencePointParams { count: Some(0), ..point_params(&[&edge]) }).is_err());
-        assert!(point_request(&ids, &ReferencePointParams { percent: Some(150.0), ..point_params(&[&edge]) }).is_err());
         assert!(
             point_request(
                 &ids,
-                &ReferencePointParams { kind: Some(PointKind::Center), count: Some(2), ..point_params(&[&edge]) }
+                &ReferencePointParams {
+                    count: Some(0),
+                    ..point_params(&[&edge])
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            point_request(
+                &ids,
+                &ReferencePointParams {
+                    percent: Some(150.0),
+                    ..point_params(&[&edge])
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            point_request(
+                &ids,
+                &ReferencePointParams {
+                    kind: Some(PointKind::Center),
+                    count: Some(2),
+                    ..point_params(&[&edge])
+                }
             )
             .is_err()
         );
@@ -964,12 +1259,18 @@ mod tests {
             flip_z: false,
             name: None,
         };
-        let request = coordinate_system_request(&ids, &params(Some("front"), None, Some("top"))).unwrap();
-        let Some(proto::create_reference_geometry_request::Geometry::CoordinateSystem(spec)) = request.geometry else {
+        let request =
+            coordinate_system_request(&ids, &params(Some("front"), None, Some("top"))).unwrap();
+        let Some(proto::create_reference_geometry_request::Geometry::CoordinateSystem(spec)) =
+            request.geometry
+        else {
             panic!("not a coordinate system");
         };
         assert!(spec.origin.is_none() && spec.y_axis.is_none() && spec.flip_y);
-        assert!(coordinate_system_request(&ids, &params(Some("front"), Some("top"), Some("right"))).is_err());
+        assert!(
+            coordinate_system_request(&ids, &params(Some("front"), Some("top"), Some("right")))
+                .is_err()
+        );
     }
 
     #[test]
@@ -981,15 +1282,25 @@ mod tests {
                 name: "Plane1".into(),
                 type_name: "RefPlane".into(),
                 reference: Some(proto::ReferenceGeometry {
-                    origin: Some(proto::Vec3 { x: 0.0, y: 0.0, z: 0.02 }),
-                    direction: Some(proto::Vec3 { x: 0.0, y: 0.0, z: 1.0 }),
+                    origin: Some(proto::Vec3 {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.02,
+                    }),
+                    direction: Some(proto::Vec3 {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 1.0,
+                    }),
                     ..Default::default()
                 }),
                 ..Default::default()
             }],
         };
         let text = reply_text(&mut ids, &reply, "offset from top by 20 mm");
-        assert!(text.starts_with("Created Plane1 (feature:1): plane with normal [0, 0, 1] through [0, 0, 20] mm"));
+        assert!(text.starts_with(
+            "Created Plane1 (feature:1): plane with normal [0, 0, 1] through [0, 0, 20] mm"
+        ));
         assert!(text.contains("on=\"feature:1\""));
         assert!(text.contains("\"point_on_plane_mm\":[0.0,0.0,20.0]"));
     }

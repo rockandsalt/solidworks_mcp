@@ -43,7 +43,9 @@ const MAX_GUIDES: usize = 20;
 fn feature_name(what: &str, name: &str) -> Result<String, McpError> {
     let name = name.trim();
     if name.is_empty() {
-        return Err(invalid(format!("{what}: a name is empty -- give feature-tree names such as \"Sketch1\"")));
+        return Err(invalid(format!(
+            "{what}: a name is empty -- give feature-tree names such as \"Sketch1\""
+        )));
     }
     if Kind::of_id(name).is_some() {
         return Err(invalid(format!(
@@ -71,10 +73,16 @@ pub fn request(params: &LoftParams, cut: bool) -> Result<proto::LoftSketchReques
         )));
     }
     if profiles.len() > MAX_PROFILES {
-        return Err(invalid(format!("at most {MAX_PROFILES} profiles, got {}", profiles.len())));
+        return Err(invalid(format!(
+            "at most {MAX_PROFILES} profiles, got {}",
+            profiles.len()
+        )));
     }
     if guide_curves.len() > MAX_GUIDES {
-        return Err(invalid(format!("at most {MAX_GUIDES} guide curves, got {}", guide_curves.len())));
+        return Err(invalid(format!(
+            "at most {MAX_GUIDES} guide curves, got {}",
+            guide_curves.len()
+        )));
     }
     let mut all: Vec<&String> = profiles.iter().chain(&guide_curves).collect();
     all.sort();
@@ -88,7 +96,9 @@ pub fn request(params: &LoftParams, cut: bool) -> Result<proto::LoftSketchReques
         return Err(invalid("a closed loft needs at least 3 profiles"));
     }
     if params.closed && (params.start_normal || params.end_normal) {
-        return Err(invalid("a closed loft has no start or end -- drop start_normal / end_normal"));
+        return Err(invalid(
+            "a closed loft has no start or end -- drop start_normal / end_normal",
+        ));
     }
     Ok(proto::LoftSketchRequest {
         profiles,
@@ -116,7 +126,11 @@ pub fn reply_text(request: &proto::LoftSketchRequest, reply: &proto::LoftSketchR
         1 => format!(" along guide curve {}", request.guide_curves[0]),
         _ => format!(" along guide curves {}", list(&request.guide_curves)),
     };
-    let closed = if request.closed { format!(", closed back to {}", request.profiles[0]) } else { String::new() };
+    let closed = if request.closed {
+        format!(", closed back to {}", request.profiles[0])
+    } else {
+        String::new()
+    };
     let tangency = match (request.start_normal, request.end_normal) {
         (true, true) => ", normal to the first and last profiles",
         (true, false) => ", normal to the first profile",
@@ -126,7 +140,11 @@ pub fn reply_text(request: &proto::LoftSketchRequest, reply: &proto::LoftSketchR
     format!(
         "created {} by {} through {}{guides}{closed}{tangency}.",
         reply.feature_name,
-        if request.cut { "cutting a loft" } else { "lofting" },
+        if request.cut {
+            "cutting a loft"
+        } else {
+            "lofting"
+        },
         list(&request.profiles),
     )
 }
@@ -163,7 +181,11 @@ mod tests {
         let err = request(&params(&["Sketch1", "feature:2"]), false).unwrap_err();
         assert!(err.message.contains("feature-tree name"), "{}", err.message);
         let err = request(&params(&["Sketch1", "Sketch1 "]), false).unwrap_err();
-        assert!(err.message.contains("Sketch1 is given more than once"), "{}", err.message);
+        assert!(
+            err.message.contains("Sketch1 is given more than once"),
+            "{}",
+            err.message
+        );
         let mut p = params(&["Sketch1", "Sketch2"]);
         p.guide_curves = vec!["Sketch2".into()];
         assert!(request(&p, false).is_err());
@@ -182,7 +204,10 @@ mod tests {
 
     #[test]
     fn reply_names_profiles_guides_and_options() {
-        let reply = proto::LoftSketchResponse { feature_name: "Loft1".into(), ..Default::default() };
+        let reply = proto::LoftSketchResponse {
+            feature_name: "Loft1".into(),
+            ..Default::default()
+        };
         let mut p = params(&["Sketch1", "Sketch2", "Sketch3"]);
         p.guide_curves = vec!["Sketch4".into()];
         assert_eq!(
@@ -191,7 +216,10 @@ mod tests {
         );
         p.guide_curves.clear();
         p.closed = true;
-        let reply = proto::LoftSketchResponse { feature_name: "Cut-Loft1".into(), ..Default::default() };
+        let reply = proto::LoftSketchResponse {
+            feature_name: "Cut-Loft1".into(),
+            ..Default::default()
+        };
         assert_eq!(
             reply_text(&request(&p, true).unwrap(), &reply),
             "created Cut-Loft1 by cutting a loft through Sketch1, Sketch2 and Sketch3, closed back to Sketch1."
@@ -199,7 +227,10 @@ mod tests {
         let mut p = params(&["Sketch1", "Sketch2"]);
         p.start_normal = true;
         p.end_normal = true;
-        let reply = proto::LoftSketchResponse { feature_name: "Loft2".into(), ..Default::default() };
+        let reply = proto::LoftSketchResponse {
+            feature_name: "Loft2".into(),
+            ..Default::default()
+        };
         assert_eq!(
             reply_text(&request(&p, false).unwrap(), &reply),
             "created Loft2 by lofting through Sketch1 and Sketch2, normal to the first and last profiles."

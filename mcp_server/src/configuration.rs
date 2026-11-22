@@ -19,7 +19,11 @@ fn invalid(message: impl Into<String>) -> McpError {
 }
 
 fn quoted(names: &[impl AsRef<str>]) -> String {
-    names.iter().map(|n| format!("\"{}\"", n.as_ref())).collect::<Vec<_>>().join(", ")
+    names
+        .iter()
+        .map(|n| format!("\"{}\"", n.as_ref()))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// "D1@Boss-Extrude1@block.Part" -> "D1@Boss-Extrude1", the name set_dimension takes.
@@ -42,7 +46,9 @@ pub fn scope(
         return Err(invalid("configurations has an empty entry"));
     }
     match (named.is_empty(), all_configurations.unwrap_or(false)) {
-        (false, true) => Err(invalid("give configurations or all_configurations=true, not both")),
+        (false, true) => Err(invalid(
+            "give configurations or all_configurations=true, not both",
+        )),
         (false, false) => Ok((
             proto::ConfigurationScope::Named as i32,
             named.into_iter().map(str::to_string).collect(),
@@ -58,7 +64,10 @@ pub fn values_text(reply: &proto::SetDimensionValueResponse) -> String {
     if reply.values.is_empty() {
         return String::new();
     }
-    let angle = reply.dimension.as_ref().is_some_and(|d| d.r#type() == proto::DimensionType::Angular);
+    let angle = reply
+        .dimension
+        .as_ref()
+        .is_some_and(|d| d.r#type() == proto::DimensionType::Angular);
     let list: Vec<String> = reply
         .values
         .iter()
@@ -109,17 +118,23 @@ pub fn request(params: &ConfigurationsParams) -> Result<proto::ConfigurationsReq
     let name = text(params.name.as_deref());
     let needs_name = |what: &str| -> Result<String, McpError> {
         if name.is_empty() {
-            Err(invalid(format!("give the name of the configuration to {what}")))
+            Err(invalid(format!(
+                "give the name of the configuration to {what}"
+            )))
         } else {
             Ok(name.clone())
         }
     };
-    if params.action != ConfigurationAction::Create && (params.parent.is_some() || params.description.is_some()) {
+    if params.action != ConfigurationAction::Create
+        && (params.parent.is_some() || params.description.is_some())
+    {
         return Err(invalid("parent and description are for action=\"create\""));
     }
     let action = match params.action {
         ConfigurationAction::List if !name.is_empty() => {
-            return Err(invalid("name is for create, activate or delete -- give an action"));
+            return Err(invalid(
+                "name is for create, activate or delete -- give an action",
+            ));
         }
         ConfigurationAction::List => None,
         ConfigurationAction::Create => Some(Action::Create(proto::CreateConfiguration {
@@ -154,7 +169,10 @@ pub fn configurations_json(reply: &proto::ConfigurationsResponse) -> Value {
                 obj.insert("suppressed_features".into(), json!(c.suppressed_features));
             }
             if !c.suppressed_components.is_empty() {
-                obj.insert("suppressed_components".into(), json!(c.suppressed_components));
+                obj.insert(
+                    "suppressed_components".into(),
+                    json!(c.suppressed_components),
+                );
             }
             Value::Object(obj)
         })
@@ -172,7 +190,11 @@ pub fn configurations_json(reply: &proto::ConfigurationsResponse) -> Value {
                     .iter()
                     .zip(&d.values)
                     .map(|(c, v)| {
-                        let v = if d.angle { round(v.to_degrees(), 4) } else { mm(*v) };
+                        let v = if d.angle {
+                            round(v.to_degrees(), 4)
+                        } else {
+                            mm(*v)
+                        };
                         (c.name.clone(), json!(v))
                     })
                     .collect();
@@ -185,24 +207,41 @@ pub fn configurations_json(reply: &proto::ConfigurationsResponse) -> Value {
     Value::Object(out)
 }
 
-pub fn configurations_text(params: &ConfigurationsParams, reply: &proto::ConfigurationsResponse) -> String {
+pub fn configurations_text(
+    params: &ConfigurationsParams,
+    reply: &proto::ConfigurationsResponse,
+) -> String {
     let name = text(params.name.as_deref());
     let mut text = match params.action {
         ConfigurationAction::List => String::new(),
         ConfigurationAction::Create => {
             let from = match text(params.parent.as_deref()) {
                 p if p.is_empty() => "a copy of the configuration that was active".to_string(),
-                p => format!("derived from \"{p}\": it follows its values and suppression until given its own"),
+                p => format!(
+                    "derived from \"{p}\": it follows its values and suppression until given its own"
+                ),
             };
-            format!("created configuration \"{name}\" ({from}); \"{}\" is now the active one.\n", reply.active)
+            format!(
+                "created configuration \"{name}\" ({from}); \"{}\" is now the active one.\n",
+                reply.active
+            )
         }
-        ConfigurationAction::Activate => format!("\"{}\" is now the active configuration.\n", reply.active),
+        ConfigurationAction::Activate => {
+            format!("\"{}\" is now the active configuration.\n", reply.active)
+        }
         ConfigurationAction::Delete => {
-            let others: Vec<&String> = reply.deleted.iter().filter(|d| !d.eq_ignore_ascii_case(&name)).collect();
+            let others: Vec<&String> = reply
+                .deleted
+                .iter()
+                .filter(|d| !d.eq_ignore_ascii_case(&name))
+                .collect();
             if others.is_empty() {
                 format!("deleted configuration \"{name}\".\n")
             } else {
-                format!("deleted configuration \"{name}\" and the ones derived from it: {}.\n", quoted(&others))
+                format!(
+                    "deleted configuration \"{name}\" and the ones derived from it: {}.\n",
+                    quoted(&others)
+                )
             }
         }
     };
@@ -234,10 +273,15 @@ pub fn suppression_request(
     use proto::feature_target::Target;
     let items = unique(&params.items);
     if items.is_empty() {
-        return Err(invalid("list what to suppress or unsuppress (ids from inspect_model, or names)"));
+        return Err(invalid(
+            "list what to suppress or unsuppress (ids from inspect_model, or names)",
+        ));
     }
     if items.len() > MAX_ITEMS {
-        return Err(invalid(format!("at most {MAX_ITEMS} per call, got {}", items.len())));
+        return Err(invalid(format!(
+            "at most {MAX_ITEMS} per call, got {}",
+            items.len()
+        )));
     }
     let items = items
         .into_iter()
@@ -264,16 +308,32 @@ pub fn suppression_request(
         params.all_configurations,
         proto::ConfigurationScope::Active,
     )?;
-    Ok(proto::SetSuppressionRequest { items, suppressed: params.suppressed, scope, configurations })
+    Ok(proto::SetSuppressionRequest {
+        items,
+        suppressed: params.suppressed,
+        scope,
+        configurations,
+    })
 }
 
 /// "suppressed Cut-Extrude1 (feature) in "Long". ..."
-pub fn suppression_text(params: &SetSuppressionParams, reply: &proto::SetSuppressionResponse) -> String {
-    let (verb, state) = if params.suppressed { ("suppressed", "suppressed") } else { ("unsuppressed", "unsuppressed") };
+pub fn suppression_text(
+    params: &SetSuppressionParams,
+    reply: &proto::SetSuppressionResponse,
+) -> String {
+    let (verb, state) = if params.suppressed {
+        ("suppressed", "suppressed")
+    } else {
+        ("unsuppressed", "unsuppressed")
+    };
     let mut parts = Vec::new();
     for item in &reply.items {
         let pick = |f: &dyn Fn(&proto::SuppressionState) -> bool| {
-            item.states.iter().filter(|s| f(s)).map(|s| s.configuration.as_str()).collect::<Vec<_>>()
+            item.states
+                .iter()
+                .filter(|s| f(s))
+                .map(|s| s.configuration.as_str())
+                .collect::<Vec<_>>()
         };
         let changed = pick(&|s| s.changed);
         let already = pick(&|s| !s.changed && s.suppressed == params.suppressed);
@@ -284,11 +344,21 @@ pub fn suppression_text(params: &SetSuppressionParams, reply: &proto::SetSuppres
             said.push(format!("{verb} {what} in {}", quoted(&changed)));
         }
         if !already.is_empty() {
-            let lead = if said.is_empty() { what.clone() } else { "it".to_string() };
-            said.push(format!("{lead} was already {state} in {}", quoted(&already)));
+            let lead = if said.is_empty() {
+                what.clone()
+            } else {
+                "it".to_string()
+            };
+            said.push(format!(
+                "{lead} was already {state} in {}",
+                quoted(&already)
+            ));
         }
         if !refused.is_empty() {
-            said.push(format!("SolidWorks didn't change {what} in {}: not {state}", quoted(&refused)));
+            said.push(format!(
+                "SolidWorks didn't change {what} in {}: not {state}",
+                quoted(&refused)
+            ));
         }
         parts.push(said.join("; ") + ".");
     }
@@ -321,12 +391,21 @@ mod tests {
         let active = proto::ConfigurationScope::Active;
         let unspecified = proto::ConfigurationScope::Unspecified;
         assert_eq!(scope(None, None, active).unwrap(), (active as i32, vec![]));
-        assert_eq!(scope(None, Some(false), unspecified).unwrap(), (unspecified as i32, vec![]));
-        assert_eq!(scope(None, Some(true), active).unwrap(), (proto::ConfigurationScope::All as i32, vec![]));
+        assert_eq!(
+            scope(None, Some(false), unspecified).unwrap(),
+            (unspecified as i32, vec![])
+        );
+        assert_eq!(
+            scope(None, Some(true), active).unwrap(),
+            (proto::ConfigurationScope::All as i32, vec![])
+        );
         let list = names(&[" Long ", "Short", "Long"]);
         assert_eq!(
             scope(Some(&list), None, active).unwrap(),
-            (proto::ConfigurationScope::Named as i32, names(&["Long", "Short"]))
+            (
+                proto::ConfigurationScope::Named as i32,
+                names(&["Long", "Short"])
+            )
         );
         assert!(scope(Some(&list), Some(true), active).is_err());
         assert!(scope(Some(&[]), None, active).is_err());
@@ -335,30 +414,50 @@ mod tests {
 
     #[test]
     fn dimension_names() {
-        assert_eq!(dimension_name("D1@Boss-Extrude1@block.Part"), "D1@Boss-Extrude1");
+        assert_eq!(
+            dimension_name("D1@Boss-Extrude1@block.Part"),
+            "D1@Boss-Extrude1"
+        );
         assert_eq!(dimension_name("D1@Sketch1"), "D1@Sketch1");
         assert_eq!(dimension_name("D1"), "D1");
     }
 
     fn params(action: ConfigurationAction, name: Option<&str>) -> ConfigurationsParams {
-        ConfigurationsParams { action, name: name.map(str::to_string), parent: None, description: None }
+        ConfigurationsParams {
+            action,
+            name: name.map(str::to_string),
+            parent: None,
+            description: None,
+        }
     }
 
     #[test]
     fn configuration_requests() {
         use proto::configurations_request::Action;
-        assert_eq!(request(&params(ConfigurationAction::List, None)).unwrap().action, None);
+        assert_eq!(
+            request(&params(ConfigurationAction::List, None))
+                .unwrap()
+                .action,
+            None
+        );
         assert!(request(&params(ConfigurationAction::List, Some("Long"))).is_err());
         assert!(request(&params(ConfigurationAction::Create, Some(" "))).is_err());
         assert!(request(&params(ConfigurationAction::Delete, None)).is_err());
         assert_eq!(
-            request(&params(ConfigurationAction::Activate, Some(" Long "))).unwrap().action,
+            request(&params(ConfigurationAction::Activate, Some(" Long ")))
+                .unwrap()
+                .action,
             Some(Action::Activate("Long".into()))
         );
         let mut p = params(ConfigurationAction::Create, Some("Long"));
         p.parent = Some("Default".into());
-        let Some(Action::Create(create)) = request(&p).unwrap().action else { panic!() };
-        assert_eq!((create.name.as_str(), create.parent.as_str()), ("Long", "Default"));
+        let Some(Action::Create(create)) = request(&p).unwrap().action else {
+            panic!()
+        };
+        assert_eq!(
+            (create.name.as_str(), create.parent.as_str()),
+            ("Long", "Default")
+        );
         let mut p = params(ConfigurationAction::Delete, Some("Long"));
         p.parent = Some("Default".into());
         assert!(request(&p).is_err());
@@ -368,7 +467,11 @@ mod tests {
     fn configuration_replies() {
         let reply = proto::ConfigurationsResponse {
             configurations: vec![
-                proto::ConfigurationInfo { name: "Default".into(), description: "Default".into(), ..Default::default() },
+                proto::ConfigurationInfo {
+                    name: "Default".into(),
+                    description: "Default".into(),
+                    ..Default::default()
+                },
                 proto::ConfigurationInfo {
                     name: "Long".into(),
                     parent: "Default".into(),
@@ -387,11 +490,17 @@ mod tests {
         let mut p = params(ConfigurationAction::Create, Some("Long"));
         p.parent = Some("Default".into());
         let text = configurations_text(&p, &reply);
-        assert!(text.starts_with("created configuration \"Long\" (derived from \"Default\""), "{text}");
+        assert!(
+            text.starts_with("created configuration \"Long\" (derived from \"Default\""),
+            "{text}"
+        );
         let json: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
         assert_eq!(json["configurations"][0], json!({ "name": "Default" }));
         assert_eq!(json["configurations"][1]["active"], json!(true));
-        assert_eq!(json["configurations"][1]["suppressed_features"][0], json!("Cut-Extrude1"));
+        assert_eq!(
+            json["configurations"][1]["suppressed_features"][0],
+            json!("Cut-Extrude1")
+        );
         assert_eq!(
             json["dimensions_that_differ"][0],
             json!({ "name": "D1@Boss-Extrude1", "values_mm": { "Default": 10.0, "Long": 30.0 } })
@@ -403,11 +512,20 @@ mod tests {
             ..Default::default()
         };
         let text = configurations_text(&params(ConfigurationAction::Delete, Some("long")), &reply);
-        assert!(text.starts_with("deleted configuration \"long\" and the ones derived from it: \"Long-short\"."), "{text}");
+        assert!(
+            text.starts_with(
+                "deleted configuration \"long\" and the ones derived from it: \"Long-short\"."
+            ),
+            "{text}"
+        );
     }
 
     fn state(configuration: &str, suppressed: bool, changed: bool) -> proto::SuppressionState {
-        proto::SuppressionState { configuration: configuration.into(), suppressed, changed }
+        proto::SuppressionState {
+            configuration: configuration.into(),
+            suppressed,
+            changed,
+        }
     }
 
     #[test]
@@ -424,17 +542,30 @@ mod tests {
             all_configurations: None,
         };
         let r = suppression_request(&ids, &p(&[&component, " Cut-Extrude1 "])).unwrap();
-        assert_eq!(r.items[0].target, Some(Target::PersistId(b"component".to_vec())));
+        assert_eq!(
+            r.items[0].target,
+            Some(Target::PersistId(b"component".to_vec()))
+        );
         assert_eq!(r.items[1].target, Some(Target::Name("Cut-Extrude1".into())));
         assert_eq!(r.scope, proto::ConfigurationScope::Active as i32);
         assert!(suppression_request(&ids, &p(&[])).is_err());
-        assert!(suppression_request(&ids, &p(&[&face])).unwrap_err().message.contains("can't be suppressed"));
+        assert!(
+            suppression_request(&ids, &p(&[&face]))
+                .unwrap_err()
+                .message
+                .contains("can't be suppressed")
+        );
         assert!(suppression_request(&ids, &p(&["feature:99"])).is_err());
     }
 
     #[test]
     fn suppression_replies() {
-        let params = SetSuppressionParams { items: vec![], suppressed: true, configurations: None, all_configurations: None };
+        let params = SetSuppressionParams {
+            items: vec![],
+            suppressed: true,
+            configurations: None,
+            all_configurations: None,
+        };
         let reply = proto::SetSuppressionResponse {
             items: vec![
                 proto::SuppressionChange {

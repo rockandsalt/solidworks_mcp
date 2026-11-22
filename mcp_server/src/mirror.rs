@@ -96,7 +96,9 @@ pub(crate) fn feature_target(
             ))
         })?),
         Some(Kind::Body) => {
-            return Err(invalid(format!("{what}: {feature} is a body -- pass bodies in `bodies`")));
+            return Err(invalid(format!(
+                "{what}: {feature} is a body -- pass bodies in `bodies`"
+            )));
         }
         Some(kind) if SKETCH_KINDS.contains(&kind) => {
             return Err(invalid(format!(
@@ -110,7 +112,9 @@ pub(crate) fn feature_target(
             )));
         }
     };
-    Ok(proto::FeatureTarget { target: Some(target) })
+    Ok(proto::FeatureTarget {
+        target: Some(target),
+    })
 }
 
 pub(crate) fn body_id(ids: &IdRegistry, body: &str, what: &str) -> Result<Vec<u8>, McpError> {
@@ -145,7 +149,9 @@ pub fn features_request(
         _ => {}
     }
     if features.len() + bodies.len() > MAX_FEATURES {
-        return Err(invalid(format!("at most {MAX_FEATURES} features or bodies per call")));
+        return Err(invalid(format!(
+            "at most {MAX_FEATURES} features or bodies per call"
+        )));
     }
     if params.merge.is_some() && bodies.is_empty() {
         return Err(invalid(
@@ -155,7 +161,14 @@ pub fn features_request(
     let features = features
         .iter()
         .enumerate()
-        .map(|(i, f)| feature_target(ids, f, &format!("feature {}", i + 1), "mirror_sketch_entities"))
+        .map(|(i, f)| {
+            feature_target(
+                ids,
+                f,
+                &format!("feature {}", i + 1),
+                "mirror_sketch_entities",
+            )
+        })
         .collect::<Result<_, _>>()?;
     let bodies = bodies
         .iter()
@@ -172,19 +185,30 @@ pub fn features_request(
 
 /// The given features / bodies, trimmed and once each, for error legends.
 pub fn given(params: &MirrorFeaturesParams) -> Vec<String> {
-    let list = if params.features.is_empty() { &params.bodies } else { &params.features };
+    let list = if params.features.is_empty() {
+        &params.bodies
+    } else {
+        &params.features
+    };
     unique(list).into_iter().map(str::to_string).collect()
 }
 
 /// "created Mirror1: Boss-Extrude1 mirrored about Right Plane. The part has 1 solid body."
-pub fn features_text(params: &MirrorFeaturesParams, reply: &proto::MirrorFeaturesResponse) -> String {
+pub fn features_text(
+    params: &MirrorFeaturesParams,
+    reply: &proto::MirrorFeaturesResponse,
+) -> String {
     let bodies = match reply.body_count {
         1 => "1 solid body".to_string(),
         n => format!("{n} solid bodies"),
     };
     // A face by the id it was given; planes by name.
     let plane = params.plane.trim();
-    let plane = if Kind::of_id(plane) == Some(Kind::Face) { plane } else { reply.plane.as_str() };
+    let plane = if Kind::of_id(plane) == Some(Kind::Face) {
+        plane
+    } else {
+        reply.plane.as_str()
+    };
     format!(
         "created {}: {} mirrored about {plane}. The part has {bodies}. The mirrored copies' faces and \
          edges have no ids yet, and faces the mirror joined may have new ones: inspect_model again \
@@ -201,15 +225,21 @@ pub(crate) fn sketch_ref(
     feature_tool: &str,
 ) -> Result<proto::SketchItemRef, McpError> {
     match Kind::of_id(entity) {
-        Some(kind) if SKETCH_KINDS.contains(&kind) => sketch::decode_ref(ids, entity).ok_or_else(|| {
-            invalid(format!(
-                "{what}: {}",
-                ids.unknown_id(entity, "inspect_sketch and the sketch tool", "call inspect_sketch for current ones")
-            ))
-        }),
-        _ if entity.eq_ignore_ascii_case("origin") => {
-            Err(invalid(format!("{what}: the sketch origin isn't an entity that can be copied or used here")))
+        Some(kind) if SKETCH_KINDS.contains(&kind) => {
+            sketch::decode_ref(ids, entity).ok_or_else(|| {
+                invalid(format!(
+                    "{what}: {}",
+                    ids.unknown_id(
+                        entity,
+                        "inspect_sketch and the sketch tool",
+                        "call inspect_sketch for current ones"
+                    )
+                ))
+            })
         }
+        _ if entity.eq_ignore_ascii_case("origin") => Err(invalid(format!(
+            "{what}: the sketch origin isn't an entity that can be copied or used here"
+        ))),
         _ => Err(invalid(format!(
             "{what}: {entity:?} isn't a sketch entity id -- give ids like \"line:3\" or \"point:7\" \
              from inspect_sketch (for features or bodies, use {feature_tool})"
@@ -223,7 +253,9 @@ pub fn sketch_request(
 ) -> Result<proto::MirrorSketchEntitiesRequest, McpError> {
     let entities = unique(&params.entities);
     if entities.is_empty() || entities.len() > MAX_SKETCH_ENTITIES {
-        return Err(invalid(format!("give between 1 and {MAX_SKETCH_ENTITIES} sketch entities")));
+        return Err(invalid(format!(
+            "give between 1 and {MAX_SKETCH_ENTITIES} sketch entities"
+        )));
     }
     let axis = params.axis.trim();
     if Kind::of_id(axis) != Some(Kind::Line) {
@@ -239,10 +271,17 @@ pub fn sketch_request(
         .map(|(i, e)| sketch_ref(ids, e, &format!("entity {}", i + 1), "mirror_features"))
         .collect::<Result<Vec<_>, _>>()?;
     if items.contains(&axis) {
-        return Err(invalid("entities include the axis -- the line to mirror about isn't mirrored itself"));
+        return Err(invalid(
+            "entities include the axis -- the line to mirror about isn't mirrored itself",
+        ));
     }
     Ok(proto::MirrorSketchEntitiesRequest {
-        sketch_name: params.sketch_name.as_deref().map(str::trim).unwrap_or_default().to_string(),
+        sketch_name: params
+            .sketch_name
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string(),
         items,
         axis: Some(axis),
     })
@@ -250,14 +289,29 @@ pub fn sketch_request(
 
 /// The given entities, trimmed and once each, for error legends.
 pub fn given_entities(params: &MirrorSketchParams) -> Vec<String> {
-    unique(&params.entities).into_iter().map(str::to_string).collect()
+    unique(&params.entities)
+        .into_iter()
+        .map(str::to_string)
+        .collect()
 }
 
 /// "mirrored line:1, line:2 about line:5 in Sketch1. New: line:6 (point:7 -> point:8), ...
 /// Sketch1 now has 1 closed and 0 open contours. ..."
-pub fn sketch_text(ids: &mut IdRegistry, params: &MirrorSketchParams, reply: &proto::MirrorSketchEntitiesResponse) -> String {
-    let new: Vec<String> = reply.items.iter().filter_map(|item| sketch::item_summary(ids, item)).collect();
-    let extended: Vec<String> = reply.extended.iter().filter_map(|item| sketch::item_summary(ids, item)).collect();
+pub fn sketch_text(
+    ids: &mut IdRegistry,
+    params: &MirrorSketchParams,
+    reply: &proto::MirrorSketchEntitiesResponse,
+) -> String {
+    let new: Vec<String> = reply
+        .items
+        .iter()
+        .filter_map(|item| sketch::item_summary(ids, item))
+        .collect();
+    let extended: Vec<String> = reply
+        .extended
+        .iter()
+        .filter_map(|item| sketch::item_summary(ids, item))
+        .collect();
     let mut text = format!(
         "mirrored {} about {} in {}.",
         unique(&params.entities).join(", "),
@@ -301,7 +355,13 @@ mod tests {
     }
 
     fn line(ids: &mut IdRegistry, id1: i64) -> (String, proto::SketchItemRef) {
-        let r = proto::SketchItemRef { sketch_persist_id: b"sk".to_vec(), point: false, id0: 0, id1, ..Default::default() };
+        let r = proto::SketchItemRef {
+            sketch_persist_id: b"sk".to_vec(),
+            point: false,
+            id0: 0,
+            id1,
+            ..Default::default()
+        };
         (sketch::ref_id(ids, Kind::Line, &r).unwrap(), r)
     }
 
@@ -319,7 +379,15 @@ mod tests {
         let mut ids = registry();
         let feature = ids.id_for(Kind::Feature, b"feat").unwrap();
         let face = ids.id_for(Kind::Face, b"face").unwrap();
-        let r = features_request(&ids, &features("Right", &["Boss-Extrude1", &feature, " Boss-Extrude1 "], &[])).unwrap();
+        let r = features_request(
+            &ids,
+            &features(
+                "Right",
+                &["Boss-Extrude1", &feature, " Boss-Extrude1 "],
+                &[],
+            ),
+        )
+        .unwrap();
         assert_eq!(r.features.len(), 2);
         assert!(r.bodies.is_empty() && r.merge);
         assert!(matches!(
@@ -327,7 +395,9 @@ mod tests {
             Some(proto::geometry_ref::Target::StandardPlane(p)) if p == proto::Plane::Right as i32
         ));
         let r = features_request(&ids, &features(&face, &["Cut-Extrude1"], &[])).unwrap();
-        assert!(matches!(r.plane.unwrap().target, Some(proto::geometry_ref::Target::ModelPersistId(p)) if p == b"face"));
+        assert!(
+            matches!(r.plane.unwrap().target, Some(proto::geometry_ref::Target::ModelPersistId(p)) if p == b"face")
+        );
     }
 
     #[test]
@@ -352,13 +422,22 @@ mod tests {
         assert!(features_request(&ids, &features("front", &[], &[])).is_err());
         assert!(features_request(&ids, &features("front", &["Boss-Extrude1"], &[&body])).is_err());
         for bad in [&body, &line, &edge, "feature:99"] {
-            assert!(features_request(&ids, &features("front", &[bad], &[])).is_err(), "{bad}");
+            assert!(
+                features_request(&ids, &features("front", &[bad], &[])).is_err(),
+                "{bad}"
+            );
         }
         for bad in ["Boss-Extrude1", "feature:1", &edge] {
-            assert!(features_request(&ids, &features("front", &[], &[bad])).is_err(), "{bad}");
+            assert!(
+                features_request(&ids, &features("front", &[], &[bad])).is_err(),
+                "{bad}"
+            );
         }
         for bad in [&edge, &vertex, &line, "origin", ""] {
-            assert!(features_request(&ids, &features(bad, &["Boss-Extrude1"], &[])).is_err(), "{bad}");
+            assert!(
+                features_request(&ids, &features(bad, &["Boss-Extrude1"], &[])).is_err(),
+                "{bad}"
+            );
         }
         let mut p = features("front", &["Boss-Extrude1"], &[]);
         p.merge = Some(true);
@@ -371,13 +450,21 @@ mod tests {
         let (a, ar) = line(&mut ids, 1);
         let (b, br) = line(&mut ids, 2);
         let (axis, axis_ref) = line(&mut ids, 3);
-        let params = MirrorSketchParams { entities: vec![a.clone(), b.clone(), a.clone()], axis: axis.clone(), sketch_name: None };
+        let params = MirrorSketchParams {
+            entities: vec![a.clone(), b.clone(), a.clone()],
+            axis: axis.clone(),
+            sketch_name: None,
+        };
         let r = sketch_request(&ids, &params).unwrap();
         assert_eq!(r.items, vec![ar, br]);
         assert_eq!(r.axis, Some(axis_ref));
         assert!(r.sketch_name.is_empty());
 
-        let bad = |entities: Vec<String>, axis: &str| MirrorSketchParams { entities, axis: axis.into(), sketch_name: None };
+        let bad = |entities: Vec<String>, axis: &str| MirrorSketchParams {
+            entities,
+            axis: axis.into(),
+            sketch_name: None,
+        };
         assert!(sketch_request(&ids, &bad(vec![], &axis)).is_err());
         assert!(sketch_request(&ids, &bad(vec![a.clone(), axis.clone()], &axis)).is_err());
         assert!(sketch_request(&ids, &bad(vec![a.clone()], "line:99")).is_err());
@@ -395,10 +482,19 @@ mod tests {
             body_count: 1,
         };
         let p = features("right", &["Boss-Extrude2"], &[]);
-        assert!(features_text(&p, &reply).starts_with("created Mirror1: Boss-Extrude2 mirrored about Right Plane. The part has 1 solid body."));
-        let reply = proto::MirrorFeaturesResponse { plane: "face".into(), body_count: 2, ..reply };
+        assert!(features_text(&p, &reply).starts_with(
+            "created Mirror1: Boss-Extrude2 mirrored about Right Plane. The part has 1 solid body."
+        ));
+        let reply = proto::MirrorFeaturesResponse {
+            plane: "face".into(),
+            body_count: 2,
+            ..reply
+        };
         let p = features("face:3", &["Boss-Extrude2"], &[]);
-        assert!(features_text(&p, &reply).contains("mirrored about face:3. The part has 2 solid bodies."));
+        assert!(
+            features_text(&p, &reply)
+                .contains("mirrored about face:3. The part has 2 solid bodies.")
+        );
 
         let mut ids = registry();
         let (a, _) = line(&mut ids, 1);
@@ -415,16 +511,37 @@ mod tests {
             state: None,
             new_errors: vec![],
             extended: vec![proto::SketchItem {
-                r#ref: Some(proto::SketchItemRef { sketch_persist_id: b"sk".to_vec(), point: false, id0: 0, id1: 1, ..Default::default() }),
+                r#ref: Some(proto::SketchItemRef {
+                    sketch_persist_id: b"sk".to_vec(),
+                    point: false,
+                    id0: 0,
+                    id1: 1,
+                    ..Default::default()
+                }),
                 r#type: proto::SketchItemType::Line as i32,
                 ..Default::default()
             }],
         };
-        let params = MirrorSketchParams { entities: vec![a.clone()], axis: axis.clone(), sketch_name: None };
+        let params = MirrorSketchParams {
+            entities: vec![a.clone()],
+            axis: axis.clone(),
+            sketch_name: None,
+        };
         let text = sketch_text(&mut ids, &params, &reply);
         let new_id = sketch::ref_id(&mut ids, Kind::Line, &new_ref).unwrap();
-        assert!(text.starts_with(&format!("mirrored {a} about {axis} in Sketch1. New: {new_id}.")), "{text}");
-        assert!(text.contains("Sketch1 now has 1 closed and 0 open contours."), "{text}");
-        assert!(text.contains(&format!("(each is held at its midpoint on the axis): {a}.")), "{text}");
+        assert!(
+            text.starts_with(&format!(
+                "mirrored {a} about {axis} in Sketch1. New: {new_id}."
+            )),
+            "{text}"
+        );
+        assert!(
+            text.contains("Sketch1 now has 1 closed and 0 open contours."),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("(each is held at its midpoint on the axis): {a}.")),
+            "{text}"
+        );
     }
 }

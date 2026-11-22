@@ -53,21 +53,32 @@ pub struct MeasureParams {
     pub arc: ArcPoint,
 }
 
-pub fn measure_request(ids: &IdRegistry, params: &MeasureParams) -> Result<proto::MeasureRequest, McpError> {
+pub fn measure_request(
+    ids: &IdRegistry,
+    params: &MeasureParams,
+) -> Result<proto::MeasureRequest, McpError> {
     if params.entities.is_empty() {
         return Err(invalid("give at least one entity to measure"));
     }
     if params.entities.len() > MAX_ENTITIES {
-        return Err(invalid(format!("at most {MAX_ENTITIES} entities, got {}", params.entities.len())));
+        return Err(invalid(format!(
+            "at most {MAX_ENTITIES} entities, got {}",
+            params.entities.len()
+        )));
     }
     let mut entities = Vec::new();
     for (i, e) in params.entities.iter().enumerate() {
         let what = format!("entities[{i}]");
         let r = if Kind::of_id(e) == Some(Kind::Component) {
             let persist_id = ids.persist_id(e).ok_or_else(|| {
-                invalid(format!("{what}: {}", ids.unknown_id(e, "inspect_model", "call inspect_model for current ones")))
+                invalid(format!(
+                    "{what}: {}",
+                    ids.unknown_id(e, "inspect_model", "call inspect_model for current ones")
+                ))
             })?;
-            proto::GeometryRef { target: Some(proto::geometry_ref::Target::ModelPersistId(persist_id)) }
+            proto::GeometryRef {
+                target: Some(proto::geometry_ref::Target::ModelPersistId(persist_id)),
+            }
         } else {
             geometry_ref(ids, e, &what)?.0
         };
@@ -78,7 +89,10 @@ pub fn measure_request(ids: &IdRegistry, params: &MeasureParams) -> Result<proto
         ArcPoint::Min => proto::ArcMeasure::Minimum,
         ArcPoint::Max => proto::ArcMeasure::Maximum,
     };
-    Ok(proto::MeasureRequest { entities, arc: arc.into() })
+    Ok(proto::MeasureRequest {
+        entities,
+        arc: arc.into(),
+    })
 }
 
 fn mm2(m2: f64) -> f64 {
@@ -91,7 +105,13 @@ pub fn measure_json(params: &MeasureParams, reply: &proto::MeasureResponse) -> V
         .entities
         .iter()
         .zip(&reply.measured)
-        .map(|(given, what)| if given.trim() == what { what.clone() } else { format!("{} ({what})", given.trim()) })
+        .map(|(given, what)| {
+            if given.trim() == what {
+                what.clone()
+            } else {
+                format!("{} ({what})", given.trim())
+            }
+        })
         .collect();
     out.insert("measured".into(), json!(measured));
     let several = params.entities.len() > 1;
@@ -116,14 +136,24 @@ pub fn measure_json(params: &MeasureParams, reply: &proto::MeasureResponse) -> V
         put("total_length_mm", reply.total_length, mm);
         put("total_area_mm2", reply.total_area, mm2);
     }
-    for (key, flag) in [("parallel", reply.parallel), ("perpendicular", reply.perpendicular), ("intersect", reply.intersect)] {
+    for (key, flag) in [
+        ("parallel", reply.parallel),
+        ("perpendicular", reply.perpendicular),
+        ("intersect", reply.intersect),
+    ] {
         if flag {
             out.insert(key.into(), json!(true));
         }
     }
     if let (Some(a), Some(b)) = (&reply.closest_point1, &reply.closest_point2) {
-        out.insert("closest_points_mm".into(), json!([point_mm(a), point_mm(b)]));
-        out.insert("delta_mm".into(), json!([mm(b.x - a.x), mm(b.y - a.y), mm(b.z - a.z)]));
+        out.insert(
+            "closest_points_mm".into(),
+            json!([point_mm(a), point_mm(b)]),
+        );
+        out.insert(
+            "delta_mm".into(),
+            json!([mm(b.x - a.x), mm(b.y - a.y), mm(b.z - a.z)]),
+        );
         if let Some(d) = reply.closest_distance {
             out.insert("closest_distance_mm".into(), json!(mm(d)));
         }
@@ -157,7 +187,10 @@ pub struct MassPropertiesParams {
     pub exclude_hidden: bool,
 }
 
-pub fn mass_request(ids: &IdRegistry, params: &MassPropertiesParams) -> Result<proto::GetMassPropertiesRequest, McpError> {
+pub fn mass_request(
+    ids: &IdRegistry,
+    params: &MassPropertiesParams,
+) -> Result<proto::GetMassPropertiesRequest, McpError> {
     let mut persist_ids: Vec<Vec<u8>> = Vec::new();
     for item in params.only.iter().flatten() {
         let item = item.trim();
@@ -175,7 +208,12 @@ pub fn mass_request(ids: &IdRegistry, params: &MassPropertiesParams) -> Result<p
     }
     Ok(proto::GetMassPropertiesRequest {
         persist_ids,
-        coordinate_system: params.coordinate_system.as_deref().map(str::trim).unwrap_or_default().to_string(),
+        coordinate_system: params
+            .coordinate_system
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string(),
         include_hidden: !params.exclude_hidden,
     })
 }
@@ -200,16 +238,30 @@ fn kg_mm2(i: f64) -> f64 {
 /// of inertia) and shown as 0.
 fn tensor(values: &[f64]) -> Option<Value> {
     let largest = values.iter().fold(0.0f64, |m, v| m.max(v.abs()));
-    let clean = |v: f64| if v.abs() < largest * 1e-9 { 0.0 } else { kg_mm2(v) };
+    let clean = |v: f64| {
+        if v.abs() < largest * 1e-9 {
+            0.0
+        } else {
+            kg_mm2(v)
+        }
+    };
     (values.len() == 9).then(|| {
-        json!(values.chunks(3).map(|row| row.iter().map(|&v| clean(v)).collect::<Vec<_>>()).collect::<Vec<_>>())
+        json!(
+            values
+                .chunks(3)
+                .map(|row| row.iter().map(|&v| clean(v)).collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        )
     })
 }
 
 pub fn mass_json(params: &MassPropertiesParams, reply: &proto::GetMassPropertiesResponse) -> Value {
     let mut out = Map::new();
     let document = reply.document.as_ref();
-    out.insert("document".into(), json!(document.map(|d| d.title.clone()).unwrap_or_default()));
+    out.insert(
+        "document".into(),
+        json!(document.map(|d| d.title.clone()).unwrap_or_default()),
+    );
     out.insert("configuration".into(), json!(reply.configuration));
     if !reply.measured.is_empty() {
         out.insert("measured".into(), json!(reply.measured));
@@ -230,9 +282,24 @@ pub fn mass_json(params: &MassPropertiesParams, reply: &proto::GetMassProperties
     if !reply.principal_moments.is_empty() {
         inertia.insert(
             "principal_moments".into(),
-            json!(reply.principal_moments.iter().map(|&p| kg_mm2(p)).collect::<Vec<_>>()),
+            json!(
+                reply
+                    .principal_moments
+                    .iter()
+                    .map(|&p| kg_mm2(p))
+                    .collect::<Vec<_>>()
+            ),
         );
-        inertia.insert("principal_axes".into(), json!(reply.principal_axes.iter().map(direction).collect::<Vec<_>>()));
+        inertia.insert(
+            "principal_axes".into(),
+            json!(
+                reply
+                    .principal_axes
+                    .iter()
+                    .map(direction)
+                    .collect::<Vec<_>>()
+            ),
+        );
     }
     if let Some(t) = tensor(&reply.inertia_at_center) {
         inertia.insert("at_center_of_mass".into(), t);
@@ -268,28 +335,61 @@ mod tests {
         ids.set_document("a", "Part1");
         let face = ids.id_for(Kind::Face, b"f").unwrap();
         let comp = ids.id_for(Kind::Component, b"c").unwrap();
-        let params = MeasureParams { entities: vec![face, comp, "front".into(), "Plane1".into()], arc: ArcPoint::Max };
+        let params = MeasureParams {
+            entities: vec![face, comp, "front".into(), "Plane1".into()],
+            arc: ArcPoint::Max,
+        };
         let r = measure_request(&ids, &params).unwrap();
         use proto::geometry_ref::Target;
-        assert_eq!(r.entities[0].target, Some(Target::ModelPersistId(b"f".to_vec())));
-        assert_eq!(r.entities[1].target, Some(Target::ModelPersistId(b"c".to_vec())));
-        assert_eq!(r.entities[2].target, Some(Target::StandardPlane(proto::Plane::Front.into())));
-        assert_eq!(r.entities[3].target, Some(Target::FeatureName("Plane1".into())));
+        assert_eq!(
+            r.entities[0].target,
+            Some(Target::ModelPersistId(b"f".to_vec()))
+        );
+        assert_eq!(
+            r.entities[1].target,
+            Some(Target::ModelPersistId(b"c".to_vec()))
+        );
+        assert_eq!(
+            r.entities[2].target,
+            Some(Target::StandardPlane(proto::Plane::Front.into()))
+        );
+        assert_eq!(
+            r.entities[3].target,
+            Some(Target::FeatureName("Plane1".into()))
+        );
         assert_eq!(r.arc(), proto::ArcMeasure::Maximum);
     }
 
     #[test]
     fn measure_request_refuses_nothing_and_unknown_ids() {
         let ids = IdRegistry::default();
-        assert!(measure_request(&ids, &MeasureParams { entities: vec![], arc: ArcPoint::Center }).is_err());
-        let e = measure_request(&ids, &MeasureParams { entities: vec!["face:99".into()], arc: ArcPoint::Center })
-            .unwrap_err();
+        assert!(
+            measure_request(
+                &ids,
+                &MeasureParams {
+                    entities: vec![],
+                    arc: ArcPoint::Center
+                }
+            )
+            .is_err()
+        );
+        let e = measure_request(
+            &ids,
+            &MeasureParams {
+                entities: vec!["face:99".into()],
+                arc: ArcPoint::Center,
+            },
+        )
+        .unwrap_err();
         assert!(e.message.contains("entities[0]"), "{}", e.message);
     }
 
     #[test]
     fn measure_json_converts_and_leaves_out_what_does_not_apply() {
-        let params = MeasureParams { entities: vec!["face:1".into(), "face:2".into()], arc: ArcPoint::Center };
+        let params = MeasureParams {
+            entities: vec!["face:1".into(), "face:2".into()],
+            arc: ArcPoint::Center,
+        };
         let reply = proto::MeasureResponse {
             measured: vec!["face".into(), "face".into()],
             distance: Some(0.01),
@@ -315,7 +415,10 @@ mod tests {
 
     #[test]
     fn measure_json_one_entity_has_no_totals() {
-        let params = MeasureParams { entities: vec!["edge:1".into()], arc: ArcPoint::Center };
+        let params = MeasureParams {
+            entities: vec!["edge:1".into()],
+            arc: ArcPoint::Center,
+        };
         let reply = proto::MeasureResponse {
             measured: vec!["edge".into()],
             length: Some(0.04),
@@ -333,11 +436,17 @@ mod tests {
         ids.set_document("a", "Asm1");
         let comp = ids.id_for(Kind::Component, b"c").unwrap();
         let face = ids.id_for(Kind::Face, b"f").unwrap();
-        let params = MassPropertiesParams { only: Some(vec![comp.clone(), comp]), ..Default::default() };
+        let params = MassPropertiesParams {
+            only: Some(vec![comp.clone(), comp]),
+            ..Default::default()
+        };
         let r = mass_request(&ids, &params).unwrap();
         assert_eq!(r.persist_ids, vec![b"c".to_vec()]);
         assert!(r.include_hidden);
-        let params = MassPropertiesParams { only: Some(vec![face]), ..Default::default() };
+        let params = MassPropertiesParams {
+            only: Some(vec![face]),
+            ..Default::default()
+        };
         assert!(mass_request(&ids, &params).is_err());
     }
 
@@ -364,8 +473,14 @@ mod tests {
         assert_eq!(j["volume_mm3"], json!(8000.0));
         assert_eq!(j["surface_area_mm2"], json!(2800.0));
         assert_eq!(j["center_of_mass_mm"], json!([20.0, 10.0, 5.0]));
-        assert_eq!(j["inertia_kg_mm2"]["principal_moments"], json!([2.6, 8.9, 10.5]));
-        assert_eq!(j["inertia_kg_mm2"]["at_center_of_mass"][1], json!([0.0, 8.9, 0.0]));
+        assert_eq!(
+            j["inertia_kg_mm2"]["principal_moments"],
+            json!([2.6, 8.9, 10.5])
+        );
+        assert_eq!(
+            j["inertia_kg_mm2"]["at_center_of_mass"][1],
+            json!([0.0, 8.9, 0.0])
+        );
         assert!(j["inertia_kg_mm2"].get("at_coordinate_system").is_none());
         assert!(j.get("note").is_none());
     }
@@ -373,7 +488,10 @@ mod tests {
     #[test]
     fn mass_json_flags_the_default_density() {
         let reply = proto::GetMassPropertiesResponse {
-            document: Some(proto::Document { r#type: proto::DocumentType::Part.into(), ..Default::default() }),
+            document: Some(proto::Document {
+                r#type: proto::DocumentType::Part.into(),
+                ..Default::default()
+            }),
             density: 1000.0,
             ..Default::default()
         };
@@ -382,8 +500,14 @@ mod tests {
 
     #[test]
     fn tensor_drops_round_off() {
-        let t = tensor(&[1.05e-5, -2.1e-40, 3e-6, -2.1e-40, 2.6e-6, 0.0, 3e-6, 0.0, 8.9e-6]).unwrap();
-        assert_eq!(t, json!([[10.5, 0.0, 3.0], [0.0, 2.6, 0.0], [3.0, 0.0, 8.9]]));
+        let t = tensor(&[
+            1.05e-5, -2.1e-40, 3e-6, -2.1e-40, 2.6e-6, 0.0, 3e-6, 0.0, 8.9e-6,
+        ])
+        .unwrap();
+        assert_eq!(
+            t,
+            json!([[10.5, 0.0, 3.0], [0.0, 2.6, 0.0], [3.0, 0.0, 8.9]])
+        );
         assert!(tensor(&[1.0; 8]).is_none());
     }
 

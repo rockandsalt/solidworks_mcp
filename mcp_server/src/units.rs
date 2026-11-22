@@ -118,7 +118,11 @@ fn length_unit(sw: i32) -> LengthUnit {
         10 => ("microinches", 0.0000254, 0),
         _ => ("millimeters", 1.0, 6),
     };
-    LengthUnit { plural, mm, decimals }
+    LengthUnit {
+        plural,
+        mm,
+        decimals,
+    }
 }
 
 /// Whether a document shows millimeters (or nothing is known about it).
@@ -211,7 +215,12 @@ pub fn reply_text(document: &proto::Document, before: Option<&proto::DocumentUni
     let units = document.units.clone().unwrap_or_default();
     let mut text = match before {
         Some(before) if *before != units => {
-            format!("{} units: {} (were {})", document.title, describe(&units), describe(before))
+            format!(
+                "{} units: {} (were {})",
+                document.title,
+                describe(&units),
+                describe(before)
+            )
         }
         Some(_) => format!("{} units: {} (unchanged)", document.title, describe(&units)),
         None => format!("{} units: {}", document.title, describe(&units)),
@@ -226,7 +235,12 @@ mod tests {
     use super::*;
 
     fn units(system: i32, length: i32) -> proto::DocumentUnits {
-        proto::DocumentUnits { unit_system: system, length_unit: length, length_decimals: 2, drafting_standard: 2 }
+        proto::DocumentUnits {
+            unit_system: system,
+            length_unit: length,
+            length_decimals: 2,
+            drafting_standard: 2,
+        }
     }
 
     #[test]
@@ -250,14 +264,39 @@ mod tests {
 
     #[test]
     fn changes_and_replies() {
-        let params = UnitsParams { units: Some(UnitSystem::Ips), decimals: Some(3), drafting_standard: Some(DraftingStandard::Ansi) };
-        assert_eq!(change(&params).unwrap(), proto::UnitsChange { unit_system: 3, length_decimals: Some(3), drafting_standard: 1 });
-        assert_eq!(change(&UnitsParams::default()).unwrap(), proto::UnitsChange::default());
-        assert!(change(&UnitsParams { decimals: Some(9), ..Default::default() }).is_err());
+        let params = UnitsParams {
+            units: Some(UnitSystem::Ips),
+            decimals: Some(3),
+            drafting_standard: Some(DraftingStandard::Ansi),
+        };
+        assert_eq!(
+            change(&params).unwrap(),
+            proto::UnitsChange {
+                unit_system: 3,
+                length_decimals: Some(3),
+                drafting_standard: 1
+            }
+        );
+        assert_eq!(
+            change(&UnitsParams::default()).unwrap(),
+            proto::UnitsChange::default()
+        );
+        assert!(
+            change(&UnitsParams {
+                decimals: Some(9),
+                ..Default::default()
+            })
+            .is_err()
+        );
 
         let doc = proto::Document {
             title: "Part1".into(),
-            units: Some(proto::DocumentUnits { unit_system: 3, length_unit: 3, length_decimals: 3, drafting_standard: 1 }),
+            units: Some(proto::DocumentUnits {
+                unit_system: 3,
+                length_unit: 3,
+                length_decimals: 3,
+                drafting_standard: 1,
+            }),
             ..Default::default()
         };
         let text = reply_text(&doc, Some(&units(5, 0)));
@@ -270,7 +309,13 @@ mod tests {
     #[test]
     fn inspect_replies_say_when_text_isnt_mm() {
         let noted = note_text_units(json!({"document": "Part1"}), Some(&units(3, 3)));
-        assert!(noted["document_units"].as_str().unwrap().contains("is in inches; the numbers here"), "{noted}");
+        assert!(
+            noted["document_units"]
+                .as_str()
+                .unwrap()
+                .contains("is in inches; the numbers here"),
+            "{noted}"
+        );
         assert_eq!(note_text_units(json!({}), Some(&units(5, 0))), json!({}));
         assert_eq!(note_text_units(json!({}), None), json!({}));
     }

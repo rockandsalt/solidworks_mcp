@@ -165,7 +165,9 @@ fn seeds(
         _ => {}
     }
     if features.len() + bodies.len() > MAX_FEATURES {
-        return Err(invalid(format!("at most {MAX_FEATURES} features or bodies per call")));
+        return Err(invalid(format!(
+            "at most {MAX_FEATURES} features or bodies per call"
+        )));
     }
     let features = features
         .iter()
@@ -198,7 +200,11 @@ fn spacing(spacing_mm: Option<f64>, what: &str) -> Result<f64, McpError> {
 }
 
 /// A linear pattern's direction string -> its wire ref. Points and arcs can't be directions.
-pub(crate) fn direction_ref(ids: &IdRegistry, direction: &str, what: &str) -> Result<proto::GeometryRef, McpError> {
+pub(crate) fn direction_ref(
+    ids: &IdRegistry,
+    direction: &str,
+    what: &str,
+) -> Result<proto::GeometryRef, McpError> {
     let (r, shape) = refgeom::geometry_ref(ids, direction, what)?;
     match shape {
         Shape::Edge | Shape::Segment | Shape::Feature | Shape::Surface => Ok(r),
@@ -237,7 +243,11 @@ pub(crate) fn axis_ref(ids: &IdRegistry, axis: &str) -> Result<proto::GeometryRe
 
 /// The angle between neighbouring instances (degrees) and whether it came from a total
 /// spread evenly; `angle_deg` as given. Checked to fit in one turn.
-fn round_spacing(count: u32, angle_deg: Option<f64>, spacing_deg: Option<f64>) -> Result<(f64, bool), McpError> {
+fn round_spacing(
+    count: u32,
+    angle_deg: Option<f64>,
+    spacing_deg: Option<f64>,
+) -> Result<(f64, bool), McpError> {
     match (angle_deg, spacing_deg) {
         (Some(_), Some(_)) => Err(invalid("give angle_deg or spacing_deg, not both")),
         (None, Some(s)) => {
@@ -255,16 +265,25 @@ fn round_spacing(count: u32, angle_deg: Option<f64>, spacing_deg: Option<f64>) -
         (angle, None) => {
             let a = angle.unwrap_or(360.0);
             if !(a.is_finite() && a > 0.0 && a <= 360.0) {
-                return Err(invalid(format!("angle_deg must be more than 0 and at most 360, got {a}")));
+                return Err(invalid(format!(
+                    "angle_deg must be more than 0 and at most 360, got {a}"
+                )));
             }
             // All the way round, the last instance stops a gap short of the first.
-            let gaps = if a >= 360.0 { count } else { count.saturating_sub(1) };
+            let gaps = if a >= 360.0 {
+                count
+            } else {
+                count.saturating_sub(1)
+            };
             Ok((a / f64::from(gaps.max(1)), true))
         }
     }
 }
 
-pub fn linear_request(ids: &IdRegistry, params: &LinearPatternParams) -> Result<proto::PatternFeaturesRequest, McpError> {
+pub fn linear_request(
+    ids: &IdRegistry,
+    params: &LinearPatternParams,
+) -> Result<proto::PatternFeaturesRequest, McpError> {
     let (features, bodies) = seeds(ids, &params.features, &params.bodies)?;
     let direction1 = proto::PatternDirection {
         direction: Some(direction_ref(ids, &params.direction, "direction")?),
@@ -272,29 +291,49 @@ pub fn linear_request(ids: &IdRegistry, params: &LinearPatternParams) -> Result<
         spacing: spacing(Some(params.spacing_mm), "spacing_mm")?,
         reverse: params.reverse_direction,
     };
-    let direction2 = match params.direction2.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+    let direction2 = match params
+        .direction2
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+    {
         Some(d) => Some(proto::PatternDirection {
             direction: Some(direction_ref(ids, d, "direction2")?),
-            count: count(params.count2.ok_or_else(|| invalid("give count2 with direction2"))?, "count2")?,
+            count: count(
+                params
+                    .count2
+                    .ok_or_else(|| invalid("give count2 with direction2"))?,
+                "count2",
+            )?,
             spacing: spacing(params.spacing2_mm, "spacing2_mm")?,
             reverse: params.reverse_direction2,
         }),
-        None if params.count2.is_some() || params.spacing2_mm.is_some() || params.reverse_direction2 => {
-            return Err(invalid("count2, spacing2_mm and reverse_direction2 need direction2"));
+        None if params.count2.is_some()
+            || params.spacing2_mm.is_some()
+            || params.reverse_direction2 =>
+        {
+            return Err(invalid(
+                "count2, spacing2_mm and reverse_direction2 need direction2",
+            ));
         }
         None => None,
     };
-    let instances = u64::from(params.count) * u64::from(params.count2.filter(|_| direction2.is_some()).unwrap_or(1));
+    let instances = u64::from(params.count)
+        * u64::from(params.count2.filter(|_| direction2.is_some()).unwrap_or(1));
     if instances > MAX_INSTANCES {
-        return Err(invalid(format!("at most {MAX_INSTANCES} instances in all, got {instances}")));
+        return Err(invalid(format!(
+            "at most {MAX_INSTANCES} instances in all, got {instances}"
+        )));
     }
     Ok(proto::PatternFeaturesRequest {
         features,
         bodies,
-        pattern: Some(proto::pattern_features_request::Pattern::Linear(proto::LinearFeaturePattern {
-            direction1: Some(direction1),
-            direction2,
-        })),
+        pattern: Some(proto::pattern_features_request::Pattern::Linear(
+            proto::LinearFeaturePattern {
+                direction1: Some(direction1),
+                direction2,
+            },
+        )),
     })
 }
 
@@ -306,23 +345,33 @@ pub fn circular_request(
     let count = count(params.count, "count")?;
     let (spacing_deg, even) = round_spacing(params.count, params.angle_deg, params.spacing_deg)?;
     // SolidWorks takes the total for evenly spread instances, else the step.
-    let angle_deg = if even { params.angle_deg.unwrap_or(360.0) } else { spacing_deg };
+    let angle_deg = if even {
+        params.angle_deg.unwrap_or(360.0)
+    } else {
+        spacing_deg
+    };
     Ok(proto::PatternFeaturesRequest {
         features,
         bodies,
-        pattern: Some(proto::pattern_features_request::Pattern::Circular(proto::CircularFeaturePattern {
-            axis: Some(axis_ref(ids, &params.axis)?),
-            count,
-            angle: angle_deg.to_radians(),
-            equal_spacing: even,
-            reverse: params.reverse_direction,
-        })),
+        pattern: Some(proto::pattern_features_request::Pattern::Circular(
+            proto::CircularFeaturePattern {
+                axis: Some(axis_ref(ids, &params.axis)?),
+                count,
+                angle: angle_deg.to_radians(),
+                equal_spacing: even,
+                reverse: params.reverse_direction,
+            },
+        )),
     })
 }
 
 /// The given features / bodies, trimmed and once each, for error legends.
 pub fn given(features: &[String], bodies: &[String]) -> Vec<String> {
-    let list = if features.is_empty() { bodies } else { features };
+    let list = if features.is_empty() {
+        bodies
+    } else {
+        features
+    };
     unique(list).into_iter().map(str::to_string).collect()
 }
 
@@ -365,7 +414,9 @@ pub fn linear_text(params: &LinearPatternParams, reply: &proto::PatternFeaturesR
         reversed(params.reverse_direction),
         number(params.spacing_mm)
     );
-    if let (Some(d2), Some(count2), Some(spacing2)) = (&params.direction2, params.count2, params.spacing2_mm) {
+    if let (Some(d2), Some(count2), Some(spacing2)) =
+        (&params.direction2, params.count2, params.spacing2_mm)
+    {
         text += &format!(
             ", times {count2} along {}{}, {} mm apart ({} in all)",
             named(d2, &reply.direction2),
@@ -378,8 +429,12 @@ pub fn linear_text(params: &LinearPatternParams, reply: &proto::PatternFeaturesR
 }
 
 /// "created CirPattern1: 6 instances of Cut-Extrude1 round Axis1, 60 degrees apart. ..."
-pub fn circular_text(params: &CircularPatternParams, reply: &proto::PatternFeaturesResponse) -> String {
-    let (step, even) = round_spacing(params.count, params.angle_deg, params.spacing_deg).unwrap_or((0.0, true));
+pub fn circular_text(
+    params: &CircularPatternParams,
+    reply: &proto::PatternFeaturesResponse,
+) -> String {
+    let (step, even) =
+        round_spacing(params.count, params.angle_deg, params.spacing_deg).unwrap_or((0.0, true));
     let spread = match params.angle_deg {
         Some(a) if even && a < 360.0 => format!(", spread over {} degrees", number(a)),
         _ => String::new(),
@@ -390,16 +445,25 @@ pub fn circular_text(params: &CircularPatternParams, reply: &proto::PatternFeatu
         params.count,
         reply.patterned,
         named(&params.axis, &reply.direction1),
-        if params.reverse_direction { " (reversed)" } else { "" },
+        if params.reverse_direction {
+            " (reversed)"
+        } else {
+            ""
+        },
         number(step),
         copies_note(reply.body_count)
     )
 }
 
-fn sketch_items(ids: &IdRegistry, entities: &[String]) -> Result<Vec<proto::SketchItemRef>, McpError> {
+fn sketch_items(
+    ids: &IdRegistry,
+    entities: &[String],
+) -> Result<Vec<proto::SketchItemRef>, McpError> {
     let entities = unique(entities);
     if entities.is_empty() || entities.len() > MAX_SKETCH_ENTITIES {
-        return Err(invalid(format!("give between 1 and {MAX_SKETCH_ENTITIES} sketch entities")));
+        return Err(invalid(format!(
+            "give between 1 and {MAX_SKETCH_ENTITIES} sketch entities"
+        )));
     }
     entities
         .iter()
@@ -416,7 +480,10 @@ fn sketch_items(ids: &IdRegistry, entities: &[String]) -> Result<Vec<proto::Sket
 }
 
 fn sketch_name(name: &Option<String>) -> String {
-    name.as_deref().map(str::trim).unwrap_or_default().to_string()
+    name.as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string()
 }
 
 pub fn linear_sketch_request(
@@ -437,7 +504,11 @@ pub fn linear_sketch_request(
     if !angle.is_finite() || !angle2.is_finite() {
         return Err(invalid("angle_deg and angle2_deg must be numbers"));
     }
-    let spacing1 = if params.count > 1 { spacing(params.spacing_mm, "spacing_mm")? } else { 0.0 };
+    let spacing1 = if params.count > 1 {
+        spacing(params.spacing_mm, "spacing_mm")?
+    } else {
+        0.0
+    };
     let spacing2 = if count2 > 1 {
         let between = (angle2 - angle).rem_euclid(180.0);
         if between < 1e-6 || 180.0 - between < 1e-6 {
@@ -448,21 +519,25 @@ pub fn linear_sketch_request(
         }
         spacing(params.spacing2_mm, "spacing2_mm")?
     } else if params.spacing2_mm.is_some() || params.angle2_deg.is_some() {
-        return Err(invalid("spacing2_mm and angle2_deg need count2 of 2 or more"));
+        return Err(invalid(
+            "spacing2_mm and angle2_deg need count2 of 2 or more",
+        ));
     } else {
         0.0
     };
     Ok(proto::PatternSketchEntitiesRequest {
         sketch_name: sketch_name(&params.sketch_name),
         items,
-        pattern: Some(proto::pattern_sketch_entities_request::Pattern::Linear(proto::LinearSketchPattern {
-            count: params.count as i32,
-            spacing: spacing1,
-            angle: angle.to_radians(),
-            count2: count2 as i32,
-            spacing2,
-            angle2: angle2.to_radians(),
-        })),
+        pattern: Some(proto::pattern_sketch_entities_request::Pattern::Linear(
+            proto::LinearSketchPattern {
+                count: params.count as i32,
+                spacing: spacing1,
+                angle: angle.to_radians(),
+                count2: count2 as i32,
+                spacing2,
+                angle2: angle2.to_radians(),
+            },
+        )),
     })
 }
 
@@ -477,15 +552,25 @@ pub fn circular_sketch_request(
     if !x.is_finite() || !y.is_finite() {
         return Err(invalid("center must be two numbers, [x, y] in mm"));
     }
-    let step = if params.reverse_direction { -step } else { step };
+    let step = if params.reverse_direction {
+        -step
+    } else {
+        step
+    };
     Ok(proto::PatternSketchEntitiesRequest {
         sketch_name: sketch_name(&params.sketch_name),
         items,
-        pattern: Some(proto::pattern_sketch_entities_request::Pattern::Circular(proto::CircularSketchPattern {
-            center: Some(proto::Vec3 { x: sketch::m(x), y: sketch::m(y), z: 0.0 }),
-            count,
-            spacing: step.to_radians(),
-        })),
+        pattern: Some(proto::pattern_sketch_entities_request::Pattern::Circular(
+            proto::CircularSketchPattern {
+                center: Some(proto::Vec3 {
+                    x: sketch::m(x),
+                    y: sketch::m(y),
+                    z: 0.0,
+                }),
+                count,
+                spacing: step.to_radians(),
+            },
+        )),
     })
 }
 
@@ -502,8 +587,16 @@ pub fn sketch_text(
     how: &str,
     reply: &proto::PatternSketchEntitiesResponse,
 ) -> String {
-    let new: Vec<String> = reply.items.iter().filter_map(|item| sketch::item_summary(ids, item)).collect();
-    let mut text = format!("patterned {} in {} ({how}).", unique(entities).join(", "), reply.sketch_name);
+    let new: Vec<String> = reply
+        .items
+        .iter()
+        .filter_map(|item| sketch::item_summary(ids, item))
+        .collect();
+    let mut text = format!(
+        "patterned {} in {} ({how}).",
+        unique(entities).join(", "),
+        reply.sketch_name
+    );
     if !new.is_empty() {
         text += &format!(
             " New: {}. Each copy has a patterned relation to its original; the pattern's \
@@ -528,13 +621,20 @@ pub fn sketch_text(
 pub fn linear_sketch_how(params: &LinearSketchPatternParams) -> String {
     let count2 = params.count2.unwrap_or(1);
     let along = |spacing: Option<f64>, angle: f64| {
-        format!("{} mm apart at {} degrees", number(spacing.unwrap_or(0.0)), number(angle))
+        format!(
+            "{} mm apart at {} degrees",
+            number(spacing.unwrap_or(0.0)),
+            number(angle)
+        )
     };
     let first = along(params.spacing_mm, params.angle_deg.unwrap_or(0.0));
     if count2 > 1 {
         let second = along(params.spacing2_mm, params.angle2_deg.unwrap_or(90.0));
         if params.count > 1 {
-            format!("{} x {count2} instances, {first} and {second}", params.count)
+            format!(
+                "{} x {count2} instances, {first} and {second}",
+                params.count
+            )
         } else {
             format!("{count2} instances, {second}")
         }
@@ -545,7 +645,8 @@ pub fn linear_sketch_how(params: &LinearSketchPatternParams) -> String {
 
 /// "6 instances round [0, 0], 60 degrees apart counterclockwise"
 pub fn circular_sketch_how(params: &CircularSketchPatternParams) -> String {
-    let (step, _) = round_spacing(params.count, params.angle_deg, params.spacing_deg).unwrap_or((0.0, true));
+    let (step, _) =
+        round_spacing(params.count, params.angle_deg, params.spacing_deg).unwrap_or((0.0, true));
     let [x, y] = params.center.unwrap_or([0.0, 0.0]);
     format!(
         "{} instances round [{}, {}], {} degrees apart {}",
@@ -553,7 +654,11 @@ pub fn circular_sketch_how(params: &CircularSketchPatternParams) -> String {
         number(x),
         number(y),
         number(step),
-        if params.reverse_direction { "clockwise" } else { "counterclockwise" }
+        if params.reverse_direction {
+            "clockwise"
+        } else {
+            "counterclockwise"
+        }
     )
 }
 
@@ -568,11 +673,22 @@ mod tests {
     }
 
     fn sketch_id(ids: &mut IdRegistry, kind: Kind, id1: i64) -> (String, proto::SketchItemRef) {
-        let r = proto::SketchItemRef { sketch_persist_id: b"sk".to_vec(), point: kind == Kind::SketchPoint, id0: 0, id1, ..Default::default() };
+        let r = proto::SketchItemRef {
+            sketch_persist_id: b"sk".to_vec(),
+            point: kind == Kind::SketchPoint,
+            id0: 0,
+            id1,
+            ..Default::default()
+        };
         (sketch::ref_id(ids, kind, &r).unwrap(), r)
     }
 
-    fn linear(features: &[&str], direction: &str, count: u32, spacing_mm: f64) -> LinearPatternParams {
+    fn linear(
+        features: &[&str],
+        direction: &str,
+        count: u32,
+        spacing_mm: f64,
+    ) -> LinearPatternParams {
         LinearPatternParams {
             features: features.iter().map(|f| f.to_string()).collect(),
             bodies: vec![],
@@ -618,7 +734,11 @@ mod tests {
         let mut ids = registry();
         let edge = ids.id_for(Kind::Edge, b"edge").unwrap();
         let face = ids.id_for(Kind::Face, b"face").unwrap();
-        let r = linear_request(&ids, &linear(&["Cut-Extrude1", " Cut-Extrude1"], &edge, 4, 10.0)).unwrap();
+        let r = linear_request(
+            &ids,
+            &linear(&["Cut-Extrude1", " Cut-Extrude1"], &edge, 4, 10.0),
+        )
+        .unwrap();
         assert_eq!(r.features.len(), 1);
         let l = linear_of(r);
         let d1 = l.direction1.unwrap();
@@ -633,7 +753,9 @@ mod tests {
         let l = linear_of(linear_request(&ids, &p).unwrap());
         let d2 = l.direction2.unwrap();
         assert_eq!((d2.count, d2.spacing, d2.reverse), (2, 0.0075, true));
-        assert!(matches!(d2.direction.unwrap().target, Some(proto::geometry_ref::Target::ModelPersistId(p)) if p == b"face"));
+        assert!(
+            matches!(d2.direction.unwrap().target, Some(proto::geometry_ref::Target::ModelPersistId(p)) if p == b"face")
+        );
     }
 
     #[test]
@@ -649,11 +771,17 @@ mod tests {
         assert!(linear_request(&ids, &linear(&["Cut-Extrude1"], &edge, 3, -1.0)).is_err());
         assert!(linear_request(&ids, &linear(&[&body], &edge, 3, 5.0)).is_err());
         for bad in [&vertex, &circle, "origin", ""] {
-            assert!(linear_request(&ids, &linear(&["Cut-Extrude1"], bad, 3, 5.0)).is_err(), "{bad}");
+            assert!(
+                linear_request(&ids, &linear(&["Cut-Extrude1"], bad, 3, 5.0)).is_err(),
+                "{bad}"
+            );
         }
         let mut p = linear(&["Cut-Extrude1"], &edge, 3, 5.0);
         p.count2 = Some(2);
-        assert!(linear_request(&ids, &p).is_err(), "count2 without direction2");
+        assert!(
+            linear_request(&ids, &p).is_err(),
+            "count2 without direction2"
+        );
         p.direction2 = Some(edge.clone());
         assert!(linear_request(&ids, &p).is_err(), "no spacing2");
         p.spacing2_mm = Some(5.0);
@@ -663,7 +791,10 @@ mod tests {
         assert!(linear_request(&ids, &p).is_err(), "too many instances");
         let mut p = linear(&[], &edge, 3, 5.0);
         p.bodies = vec![body.clone()];
-        assert_eq!(linear_request(&ids, &p).unwrap().bodies, vec![b"body".to_vec()]);
+        assert_eq!(
+            linear_request(&ids, &p).unwrap().bodies,
+            vec![b"body".to_vec()]
+        );
         p.features = vec!["Cut-Extrude1".into()];
         assert!(linear_request(&ids, &p).is_err(), "features and bodies");
     }
@@ -673,7 +804,8 @@ mod tests {
         let mut ids = registry();
         let face = ids.id_for(Kind::Face, b"face").unwrap();
         let (line, _) = sketch_id(&mut ids, Kind::Line, 1);
-        let c = circular_of(circular_request(&ids, &circular(&["Cut-Extrude1"], &face, 6)).unwrap());
+        let c =
+            circular_of(circular_request(&ids, &circular(&["Cut-Extrude1"], &face, 6)).unwrap());
         assert!(c.equal_spacing && (c.angle - std::f64::consts::TAU).abs() < 1e-12 && c.count == 6);
         let mut p = circular(&["Cut-Extrude1"], "Axis1", 4);
         p.angle_deg = Some(90.0);
@@ -692,7 +824,10 @@ mod tests {
         let vertex = ids.id_for(Kind::Vertex, b"vertex").unwrap();
         let (circle, _) = sketch_id(&mut ids, Kind::Circle, 1);
         for bad in ["front", &vertex, &circle, "origin"] {
-            assert!(circular_request(&ids, &circular(&["Cut-Extrude1"], bad, 4)).is_err(), "{bad}");
+            assert!(
+                circular_request(&ids, &circular(&["Cut-Extrude1"], bad, 4)).is_err(),
+                "{bad}"
+            );
         }
         let mut p = circular(&["Cut-Extrude1"], "Axis1", 4);
         p.angle_deg = Some(90.0);
@@ -725,13 +860,30 @@ mod tests {
         };
         let r = linear_sketch_request(&ids, &p).unwrap();
         assert_eq!(r.items, vec![circle_ref.clone(), point_ref]);
-        let Some(proto::pattern_sketch_entities_request::Pattern::Linear(l)) = r.pattern else { panic!() };
-        assert_eq!((l.count, l.spacing, l.count2, l.spacing2), (3, 0.01, 2, 0.005));
+        let Some(proto::pattern_sketch_entities_request::Pattern::Linear(l)) = r.pattern else {
+            panic!()
+        };
+        assert_eq!(
+            (l.count, l.spacing, l.count2, l.spacing2),
+            (3, 0.01, 2, 0.005)
+        );
         assert!(l.angle == 0.0 && (l.angle2 - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
-        assert_eq!(linear_sketch_how(&p), "3 x 2 instances, 10 mm apart at 0 degrees and 5 mm apart at 90 degrees");
+        assert_eq!(
+            linear_sketch_how(&p),
+            "3 x 2 instances, 10 mm apart at 0 degrees and 5 mm apart at 90 degrees"
+        );
 
         let bad = |f: &dyn Fn(&mut LinearSketchPatternParams)| {
-            let mut q = LinearSketchPatternParams { entities: vec![circle.clone()], count: 3, spacing_mm: Some(10.0), angle_deg: None, count2: None, spacing2_mm: None, angle2_deg: None, sketch_name: None };
+            let mut q = LinearSketchPatternParams {
+                entities: vec![circle.clone()],
+                count: 3,
+                spacing_mm: Some(10.0),
+                angle_deg: None,
+                count2: None,
+                spacing2_mm: None,
+                angle2_deg: None,
+                sketch_name: None,
+            };
             f(&mut q);
             linear_sketch_request(&ids, &q).is_err()
         };
@@ -739,9 +891,18 @@ mod tests {
         assert!(bad(&|q| q.count = 1));
         assert!(bad(&|q| q.spacing_mm = None));
         assert!(bad(&|q| q.spacing2_mm = Some(5.0)));
-        assert!(bad(&|q| { q.count2 = Some(2); q.spacing2_mm = Some(5.0); q.angle2_deg = Some(180.0) }));
+        assert!(bad(&|q| {
+            q.count2 = Some(2);
+            q.spacing2_mm = Some(5.0);
+            q.angle2_deg = Some(180.0)
+        }));
         assert!(bad(&|q| q.entities = vec!["Cut-Extrude1".into()]));
-        assert!(!bad(&|q| { q.count = 1; q.spacing_mm = None; q.count2 = Some(3); q.spacing2_mm = Some(5.0) }));
+        assert!(!bad(&|q| {
+            q.count = 1;
+            q.spacing_mm = None;
+            q.count2 = Some(3);
+            q.spacing2_mm = Some(5.0)
+        }));
 
         let c = CircularSketchPatternParams {
             entities: vec![circle.clone()],
@@ -754,10 +915,22 @@ mod tests {
         };
         let r = circular_sketch_request(&ids, &c).unwrap();
         assert_eq!(r.sketch_name, "Sketch2");
-        let Some(proto::pattern_sketch_entities_request::Pattern::Circular(p)) = r.pattern else { panic!() };
-        assert_eq!(p.center, Some(proto::Vec3 { x: 0.01, y: -0.005, z: 0.0 }));
+        let Some(proto::pattern_sketch_entities_request::Pattern::Circular(p)) = r.pattern else {
+            panic!()
+        };
+        assert_eq!(
+            p.center,
+            Some(proto::Vec3 {
+                x: 0.01,
+                y: -0.005,
+                z: 0.0
+            })
+        );
         assert!((p.spacing + 60f64.to_radians()).abs() < 1e-12 && p.count == 6);
-        assert_eq!(circular_sketch_how(&c), "6 instances round [10, -5], 60 degrees apart clockwise");
+        assert_eq!(
+            circular_sketch_how(&c),
+            "6 instances round [10, -5], 60 degrees apart clockwise"
+        );
     }
 
     #[test]
@@ -778,27 +951,50 @@ mod tests {
         p.direction2 = Some("right".into());
         p.count2 = Some(2);
         p.spacing2_mm = Some(2.5);
-        assert!(linear_text(&p, &reply).contains(", times 2 along Right Plane, 2.5 mm apart (8 in all)."));
+        assert!(
+            linear_text(&p, &reply)
+                .contains(", times 2 along Right Plane, 2.5 mm apart (8 in all).")
+        );
 
-        let reply = proto::PatternFeaturesResponse { feature_name: "CirPattern1".into(), direction1: "Axis1".into(), body_count: 2, ..reply };
+        let reply = proto::PatternFeaturesResponse {
+            feature_name: "CirPattern1".into(),
+            direction1: "Axis1".into(),
+            body_count: 2,
+            ..reply
+        };
         let mut p = circular(&["Cut-Extrude1"], "Axis1", 6);
         assert!(circular_text(&p, &reply).starts_with("created CirPattern1: 6 instances of Cut-Extrude1 round Axis1, 60 degrees apart. The part has 2 solid bodies."));
         p.angle_deg = Some(90.0);
         p.count = 4;
-        assert!(circular_text(&p, &reply).contains("round Axis1, 30 degrees apart, spread over 90 degrees."));
+        assert!(
+            circular_text(&p, &reply)
+                .contains("round Axis1, 30 degrees apart, spread over 90 degrees.")
+        );
 
         let (circle, _) = sketch_id(&mut ids, Kind::Circle, 1);
         let (_, new_ref) = sketch_id(&mut ids, Kind::Circle, 2);
         let reply = proto::PatternSketchEntitiesResponse {
             sketch_name: "Sketch1".into(),
-            items: vec![proto::SketchItem { r#ref: Some(new_ref.clone()), r#type: proto::SketchItemType::Circle as i32, ..Default::default() }],
+            items: vec![proto::SketchItem {
+                r#ref: Some(new_ref.clone()),
+                r#type: proto::SketchItemType::Circle as i32,
+                ..Default::default()
+            }],
             contours: Some(proto::SketchContours { closed: 2, open: 0 }),
             state: None,
             new_errors: vec![],
         };
-        let text = sketch_text(&mut ids, &[circle.clone()], "2 instances, 10 mm apart at 0 degrees", &reply);
+        let text = sketch_text(
+            &mut ids,
+            &[circle.clone()],
+            "2 instances, 10 mm apart at 0 degrees",
+            &reply,
+        );
         let new_id = sketch::ref_id(&mut ids, Kind::Circle, &new_ref).unwrap();
         assert!(text.starts_with(&format!("patterned {circle} in Sketch1 (2 instances, 10 mm apart at 0 degrees). New: {new_id}.")), "{text}");
-        assert!(text.contains("Sketch1 now has 2 closed and 0 open contours."), "{text}");
+        assert!(
+            text.contains("Sketch1 now has 2 closed and 0 open contours."),
+            "{text}"
+        );
     }
 }

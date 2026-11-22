@@ -73,12 +73,13 @@ pub fn render_cameras(
     section_normal: Option<render::Vec3>,
 ) -> Result<Vec<render::Camera>, McpError> {
     match (views, section_normal) {
-        (None, None) => Ok(render::View::DEFAULT_GRID.map(render::Camera::standard).to_vec()),
+        (None, None) => Ok(render::View::DEFAULT_GRID
+            .map(render::Camera::standard)
+            .to_vec()),
         (None, Some(normal)) => Ok(render::Camera::section_views(normal).to_vec()),
-        (Some(views), _) if views.is_empty() || views.len() > MAX_VIEWS => Err(McpError::invalid_params(
-            format!("give between 1 and {MAX_VIEWS} views"),
-            None,
-        )),
+        (Some(views), _) if views.is_empty() || views.len() > MAX_VIEWS => Err(
+            McpError::invalid_params(format!("give between 1 and {MAX_VIEWS} views"), None),
+        ),
         (Some(views), _) => views
             .iter()
             .map(|&view| render::Camera::from_spec(view))
@@ -113,7 +114,11 @@ pub fn section_plane(
     model: &render::Model,
 ) -> Result<render::Plane, McpError> {
     let point = section.point_mm.map_or_else(
-        || model.bounding_box().map_or(render::Vec3::ZERO, |b| b.center()),
+        || {
+            model
+                .bounding_box()
+                .map_or(render::Vec3::ZERO, |b| b.center())
+        },
         render::Vec3::from_array,
     );
     let plane = render::Plane { point, normal };
@@ -141,7 +146,12 @@ pub fn describe_picks(names: &PickNames, matched: &render::Matched) -> String {
         text += "\nEverything not highlighted is transparent.";
     }
     let not_visible = "not visible (deleted, hidden, or on a hidden body?)";
-    for ((name, count), (color, _)) in names.highlight.iter().zip(&matched.highlight).zip(render::HIGHLIGHTS) {
+    for ((name, count), (color, _)) in names
+        .highlight
+        .iter()
+        .zip(&matched.highlight)
+        .zip(render::HIGHLIGHTS)
+    {
         text += &match count {
             0 => format!("\n{name}: {not_visible}"),
             _ => format!("\n{name}: {color}"),
@@ -166,7 +176,11 @@ impl SolidWorksTools {
     /// The active document's mesh, from the add-in or, when the add-in says
     /// it hasn't changed, from the last render (unplaced either way).
     pub(crate) async fn mesh(&self) -> Result<proto::GetMeshResponse, McpError> {
-        let lock = || self.mesh.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let lock = || {
+            self.mesh
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+        };
         let mut cached_key = lock().as_ref().map_or(0, |m| m.key);
         loop {
             let reply = self
@@ -189,21 +203,33 @@ impl SolidWorksTools {
                 }
                 // Another render replaced the cache meanwhile: ask for all of it.
                 _ if cached_key != 0 => cached_key = 0,
-                _ => return Err(McpError::internal_error("the add-in sent an empty mesh", None)),
+                _ => {
+                    return Err(McpError::internal_error(
+                        "the add-in sent an empty mesh",
+                        None,
+                    ));
+                }
             }
         }
     }
 
     /// render_views' highlight / hide / transparent / zoom_to lists,
     /// resolved, and their names for the result.
-    pub(crate) fn render_picks(&self, params: &RenderViewsParams) -> Result<(render::Picks, PickNames), McpError> {
+    pub(crate) fn render_picks(
+        &self,
+        params: &RenderViewsParams,
+    ) -> Result<(render::Picks, PickNames), McpError> {
         if params.highlight.len() > render::HIGHLIGHTS.len() {
             return Err(McpError::invalid_params(
                 format!("at most {} highlights", render::HIGHLIGHTS.len()),
                 None,
             ));
         }
-        let trimmed = |list: &[String]| list.iter().map(|h| h.trim().to_string()).collect::<Vec<_>>();
+        let trimmed = |list: &[String]| {
+            list.iter()
+                .map(|h| h.trim().to_string())
+                .collect::<Vec<_>>()
+        };
         let (others, transparent): (Vec<String>, Vec<String>) = trimmed(&params.transparent)
             .into_iter()
             .partition(|t| t.eq_ignore_ascii_case("others"));
@@ -214,7 +240,11 @@ impl SolidWorksTools {
             zoom_to: trimmed(&params.zoom_to),
             others: !others.is_empty(),
         };
-        let targets = |list: &[String]| list.iter().map(|h| self.highlight_target(h)).collect::<Result<Vec<_>, _>>();
+        let targets = |list: &[String]| {
+            list.iter()
+                .map(|h| self.highlight_target(h))
+                .collect::<Result<Vec<_>, _>>()
+        };
         let picks = render::Picks {
             highlight: targets(&names.highlight)?,
             hide: targets(&names.hide)?,
@@ -243,7 +273,9 @@ impl SolidWorksTools {
             "component" => render::Target::Component(persist_id),
             "vertex" => {
                 return Err(McpError::invalid_params(
-                    format!("{highlight} is a vertex; render_views can't highlight those -- highlight an edge at it"),
+                    format!(
+                        "{highlight} is a vertex; render_views can't highlight those -- highlight an edge at it"
+                    ),
                     None,
                 ));
             }

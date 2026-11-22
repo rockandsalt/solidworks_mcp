@@ -56,7 +56,9 @@ const MAX_REVOLUTIONS: f64 = 10_000.0;
 
 fn positive(value: Option<f64>, what: &str) -> Result<Option<f64>, McpError> {
     match value {
-        Some(v) if !(v.is_finite() && v > 0.0) => Err(invalid(format!("{what} must be more than 0, got {v}"))),
+        Some(v) if !(v.is_finite() && v > 0.0) => {
+            Err(invalid(format!("{what} must be more than 0, got {v}")))
+        }
         other => Ok(other),
     }
 }
@@ -67,15 +69,25 @@ pub fn request(params: &HelixParams) -> Result<proto::CreateHelixRequest, McpErr
     let height = positive(params.height_mm, "height_mm")?;
     let revolutions = positive(params.revolutions, "revolutions")?;
     if revolutions.is_some_and(|r| r > MAX_REVOLUTIONS) {
-        return Err(invalid(format!("revolutions must be at most {MAX_REVOLUTIONS}")));
+        return Err(invalid(format!(
+            "revolutions must be at most {MAX_REVOLUTIONS}"
+        )));
     }
     let definition = match (params.spiral, pitch, height, revolutions) {
         (true, Some(_), None, Some(_)) => D::Spiral,
-        (true, ..) => return Err(invalid("a spiral takes pitch_mm and revolutions, and no height_mm")),
+        (true, ..) => {
+            return Err(invalid(
+                "a spiral takes pitch_mm and revolutions, and no height_mm",
+            ));
+        }
         (false, Some(_), None, Some(_)) => D::PitchAndRevolutions,
         (false, None, Some(_), Some(_)) => D::HeightAndRevolutions,
         (false, Some(_), Some(_), None) => D::HeightAndPitch,
-        _ => return Err(invalid("give exactly two of pitch_mm, height_mm and revolutions")),
+        _ => {
+            return Err(invalid(
+                "give exactly two of pitch_mm, height_mm and revolutions",
+            ));
+        }
     };
     let start_angle = params.start_angle_deg.unwrap_or(0.0);
     if !start_angle.is_finite() {
@@ -83,9 +95,13 @@ pub fn request(params: &HelixParams) -> Result<proto::CreateHelixRequest, McpErr
     }
     let taper = match params.taper_deg {
         None => 0.0,
-        Some(_) if params.spiral => return Err(invalid("a spiral can't be tapered -- drop taper_deg")),
+        Some(_) if params.spiral => {
+            return Err(invalid("a spiral can't be tapered -- drop taper_deg"));
+        }
         Some(t) if !(t.is_finite() && t > 0.0 && t < 90.0) => {
-            return Err(invalid(format!("taper_deg must be between 0 and 90, got {t}")));
+            return Err(invalid(format!(
+                "taper_deg must be between 0 and 90, got {t}"
+            )));
         }
         Some(t) => t.to_radians(),
     };
@@ -93,7 +109,12 @@ pub fn request(params: &HelixParams) -> Result<proto::CreateHelixRequest, McpErr
         return Err(invalid("taper_outward needs taper_deg"));
     }
     Ok(proto::CreateHelixRequest {
-        sketch_name: params.sketch_name.as_deref().map(str::trim).unwrap_or_default().to_string(),
+        sketch_name: params
+            .sketch_name
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string(),
         definition: definition.into(),
         height: height.unwrap_or(0.0) / MM_PER_M,
         pitch: pitch.unwrap_or(0.0) / MM_PER_M,
@@ -125,7 +146,11 @@ pub fn reply_text(params: &HelixParams, reply: &proto::CreateHelixResponse) -> S
         text += &format!(", around {} mm", point_mm(center));
     }
     if let (Some(start), Some(end)) = (&reply.start, &reply.end) {
-        text += &format!("; it runs from {} mm to {} mm", point_mm(start), point_mm(end));
+        text += &format!(
+            "; it runs from {} mm to {} mm",
+            point_mm(start),
+            point_mm(end)
+        );
     }
     if reply.length > 0.0 {
         text += &format!(", {} mm long", mm(reply.length));
@@ -144,7 +169,12 @@ mod tests {
     use proto::HelixDefinition as D;
 
     fn params(pitch: Option<f64>, height: Option<f64>, revolutions: Option<f64>) -> HelixParams {
-        HelixParams { pitch_mm: pitch, height_mm: height, revolutions, ..Default::default() }
+        HelixParams {
+            pitch_mm: pitch,
+            height_mm: height,
+            revolutions,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -152,8 +182,18 @@ mod tests {
         let r = request(&params(Some(5.0), None, Some(4.0))).unwrap();
         assert_eq!(r.definition(), D::PitchAndRevolutions);
         assert!((r.pitch - 0.005).abs() < 1e-15 && r.revolutions == 4.0 && r.height == 0.0);
-        assert_eq!(request(&params(None, Some(20.0), Some(4.0))).unwrap().definition(), D::HeightAndRevolutions);
-        assert_eq!(request(&params(Some(5.0), Some(20.0), None)).unwrap().definition(), D::HeightAndPitch);
+        assert_eq!(
+            request(&params(None, Some(20.0), Some(4.0)))
+                .unwrap()
+                .definition(),
+            D::HeightAndRevolutions
+        );
+        assert_eq!(
+            request(&params(Some(5.0), Some(20.0), None))
+                .unwrap()
+                .definition(),
+            D::HeightAndPitch
+        );
     }
 
     #[test]
@@ -171,8 +211,14 @@ mod tests {
     #[test]
     fn sizes_must_be_positive() {
         for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
-            assert!(request(&params(Some(bad), None, Some(4.0))).is_err(), "{bad}");
-            assert!(request(&params(Some(5.0), None, Some(bad))).is_err(), "{bad}");
+            assert!(
+                request(&params(Some(bad), None, Some(4.0))).is_err(),
+                "{bad}"
+            );
+            assert!(
+                request(&params(Some(5.0), None, Some(bad))).is_err(),
+                "{bad}"
+            );
         }
         assert!(request(&params(Some(5.0), None, Some(MAX_REVOLUTIONS + 1.0))).is_err());
     }
@@ -222,8 +268,16 @@ mod tests {
             length: 0.25,
         };
         let text = reply_text(&params(Some(5.0), None, Some(4.0)), &reply);
-        assert!(text.starts_with("created Helix/Spiral1 (helix) from Sketch1: 4 turns, pitch 5 mm, height 20 mm"), "{text}");
-        assert!(text.contains("from [10.0,0.0,0.0] mm to [10.0,0.0,20.0] mm, 250 mm long"), "{text}");
+        assert!(
+            text.starts_with(
+                "created Helix/Spiral1 (helix) from Sketch1: 4 turns, pitch 5 mm, height 20 mm"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("from [10.0,0.0,0.0] mm to [10.0,0.0,20.0] mm, 250 mm long"),
+            "{text}"
+        );
         assert!(text.contains("path=\"Helix/Spiral1\""), "{text}");
     }
 }

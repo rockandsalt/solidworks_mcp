@@ -219,7 +219,9 @@ pub fn model_from_mesh(mesh: &proto::GetMeshResponse, picks: &Picks) -> (Model, 
     let mut faces = Vec::new();
     for f in &mesh.faces {
         let vertices = points(&f.triangles);
-        let Some((highlight, transparent)) = pick(&|t| t.face(f), &vertices) else { continue };
+        let Some((highlight, transparent)) = pick(&|t| t.face(f), &vertices) else {
+            continue;
+        };
         faces.push(Face {
             vertices,
             normals: directions(&f.normals),
@@ -230,7 +232,9 @@ pub fn model_from_mesh(mesh: &proto::GetMeshResponse, picks: &Picks) -> (Model, 
     let mut edges = Vec::new();
     for e in &mesh.edges {
         let points = points(&e.points);
-        let Some((highlight, transparent)) = pick(&|t| t.edge(e), &points) else { continue };
+        let Some((highlight, transparent)) = pick(&|t| t.edge(e), &points) else {
+            continue;
+        };
         edges.push(Edge {
             points,
             highlight,
@@ -238,7 +242,14 @@ pub fn model_from_mesh(mesh: &proto::GetMeshResponse, picks: &Picks) -> (Model, 
         });
     }
     let focus = focus.valid();
-    (Model { faces, edges, focus }, matched)
+    (
+        Model {
+            faces,
+            edges,
+            focus,
+        },
+        matched,
+    )
 }
 
 impl Model {
@@ -324,7 +335,6 @@ impl View {
             View::IsometricBelow => (Vec3::new(1.0, -1.0, 1.0).normalize(), Vec3::Y),
         }
     }
-
 }
 
 /// A view: a standard view's name, or any direction.
@@ -373,7 +383,9 @@ impl Camera {
     pub fn from_spec(spec: ViewSpec) -> Result<Self, String> {
         let (direction, up) = match spec {
             ViewSpec::Named(view) => return Ok(Self::standard(view)),
-            ViewSpec::Direction { direction, up } => (Vec3::from_array(direction), up.map(Vec3::from_array)),
+            ViewSpec::Direction { direction, up } => {
+                (Vec3::from_array(direction), up.map(Vec3::from_array))
+            }
         };
         let toward_eye = direction
             .try_normalize()
@@ -625,14 +637,19 @@ fn render_job(window: &mut Option<Window>, request: &Request) -> Result<Rendered
     let (model, outline, caps) = match &request.section {
         Some(plane) => {
             sectioned = section(&request.model, plane);
-            (&sectioned.model, sectioned.outline.as_slice(), sectioned.caps.as_slice())
+            (
+                &sectioned.model,
+                sectioned.outline.as_slice(),
+                sectioned.caps.as_slice(),
+            )
         }
         None => (&request.model, &[][..], &[][..]),
     };
     // The caller refuses an empty model and a section that keeps nothing
     // (Plane::keeps_any) with a message of its own; this is the backstop.
     let bounds = model.bounding_box().filter(|_| !model.faces.is_empty());
-    let (center, radius) = sphere(bounds.ok_or_else(|| anyhow!("the part has no geometry to draw"))?);
+    let (center, radius) =
+        sphere(bounds.ok_or_else(|| anyhow!("the part has no geometry to draw"))?);
     // Everything is drawn in a normalized space: centered, bounding radius
     // 1. Keeps camera distances and clip planes independent of part size.
     let to_scene = |p: &[f32; 3]| (Vec3::from_array(*p) - center) / radius;
@@ -684,11 +701,18 @@ fn render_job(window: &mut Option<Window>, request: &Request) -> Result<Rendered
             }
             let rgb = group.map_or(PART_COLOR, |i| HIGHLIGHTS[i].1);
             let alpha = if transparent { TRANSPARENT_ALPHA } else { 1.0 };
-            add_mesh(&mut scene, &faces, &to_scene, Color::new(rgb[0], rgb[1], rgb[2], alpha));
+            add_mesh(
+                &mut scene,
+                &faces,
+                &to_scene,
+                Color::new(rgb[0], rgb[1], rgb[2], alpha),
+            );
         }
     }
     for cap in caps {
-        let rgb = cap.highlight.map_or(CUT_COLOR, |i| HIGHLIGHTS[i].1.map(|c| c * 0.7));
+        let rgb = cap
+            .highlight
+            .map_or(CUT_COLOR, |i| HIGHLIGHTS[i].1.map(|c| c * 0.7));
         add_mesh(&mut scene, &[cap], &to_scene, color(rgb));
     }
 
@@ -817,7 +841,11 @@ fn add_mesh<F: std::borrow::Borrow<Face>>(
         let n = face.vertices.len() / 3 * 3;
         coords.extend(face.vertices[..n].iter().map(to_scene));
         if face.normals.len() == face.vertices.len() {
-            normals.extend(face.normals[..n].iter().map(|v| Vec3::from_array(*v).normalize_or_zero()));
+            normals.extend(
+                face.normals[..n]
+                    .iter()
+                    .map(|v| Vec3::from_array(*v).normalize_or_zero()),
+            );
         } else {
             for t in face.vertices[..n].chunks_exact(3) {
                 let [a, b, c] = [0, 1, 2].map(|i| Vec3::from_array(t[i]));
@@ -928,7 +956,10 @@ mod tests {
         );
         // The hidden face still counts for zoom.
         let focus = model.focus.unwrap();
-        assert_eq!((focus.lo, focus.hi), (Vec3::ZERO, Vec3::new(10.0, 20.0, 0.0)));
+        assert_eq!(
+            (focus.lo, focus.hi),
+            (Vec3::ZERO, Vec3::new(10.0, 20.0, 0.0))
+        );
         assert_eq!(model.triangle_count(), 2);
 
         let rest = Picks {
@@ -961,9 +992,18 @@ mod tests {
         };
         // Along an axis, the same as the standard views.
         let axes = |c: Result<Camera, String>| c.unwrap().screen_axes();
-        assert_eq!(axes(from([0.0, 0.0, 2.0], None)), Camera::standard(View::Front).screen_axes());
-        assert_eq!(axes(from([0.0, 1.0, 0.0], None)), Camera::standard(View::Top).screen_axes());
-        assert_eq!(axes(from([0.0, -1.0, 0.0], None)), Camera::standard(View::Bottom).screen_axes());
+        assert_eq!(
+            axes(from([0.0, 0.0, 2.0], None)),
+            Camera::standard(View::Front).screen_axes()
+        );
+        assert_eq!(
+            axes(from([0.0, 1.0, 0.0], None)),
+            Camera::standard(View::Top).screen_axes()
+        );
+        assert_eq!(
+            axes(from([0.0, -1.0, 0.0], None)),
+            Camera::standard(View::Bottom).screen_axes()
+        );
         let tilted = from([1.0, 0.0, 1.0], Some([0.0, 0.0, 1.0])).unwrap();
         assert_eq!(tilted.label, "From (0.71, 0.00, 0.71)");
         assert!(tilted.up.dot(tilted.toward_eye).abs() < 1e-6 && tilted.up.z > 0.0);
@@ -972,8 +1012,15 @@ mod tests {
 
         let named: ViewSpec = serde_json::from_value(serde_json::json!("isometric")).unwrap();
         assert_eq!(named, ViewSpec::Named(View::Isometric));
-        let free: ViewSpec = serde_json::from_value(serde_json::json!({"direction": [1, 2, 3]})).unwrap();
-        assert_eq!(free, ViewSpec::Direction { direction: [1.0, 2.0, 3.0], up: None });
+        let free: ViewSpec =
+            serde_json::from_value(serde_json::json!({"direction": [1, 2, 3]})).unwrap();
+        assert_eq!(
+            free,
+            ViewSpec::Direction {
+                direction: [1.0, 2.0, 3.0],
+                up: None
+            }
+        );
 
         let [straight, oblique] = Camera::section_views(Vec3::X);
         assert_eq!(straight.toward_eye, Vec3::X);
@@ -981,15 +1028,28 @@ mod tests {
     }
 
     /// A closed cylinder along +Y: radius `r` around (x, z), from y0 to y1.
-    pub(super) fn cylinder(x: f32, z: f32, r: f32, y0: f32, y1: f32, highlight: Option<usize>) -> Vec<Face> {
+    pub(super) fn cylinder(
+        x: f32,
+        z: f32,
+        r: f32,
+        y0: f32,
+        y1: f32,
+        highlight: Option<usize>,
+    ) -> Vec<Face> {
         let n = 48;
         let at = |i: usize, y: f32| {
             let t = (i as f32 + 0.5) / n as f32 * std::f32::consts::TAU;
             [x + r * t.cos(), y, z + r * t.sin()]
         };
         let out = |p: [f32; 3]| [(p[0] - x) / r, 0.0, (p[2] - z) / r];
-        let mut side = Face { highlight, ..Default::default() };
-        let mut caps = Face { highlight, ..Default::default() };
+        let mut side = Face {
+            highlight,
+            ..Default::default()
+        };
+        let mut caps = Face {
+            highlight,
+            ..Default::default()
+        };
         for i in 0..n {
             let [a, b, c, d] = [at(i, y0), at(i + 1, y0), at(i + 1, y1), at(i, y1)];
             side.vertices.extend([a, b, c, a, c, d]);
@@ -1107,7 +1167,12 @@ mod tests {
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
-        let standard = |views: &[View]| views.iter().map(|v| Camera::standard(*v)).collect::<Vec<_>>();
+        let standard = |views: &[View]| {
+            views
+                .iter()
+                .map(|v| Camera::standard(*v))
+                .collect::<Vec<_>>()
+        };
         let whole_span = 2.2 * 0.5 * (60f32 * 60. + 30. * 30. + 40. * 40.).sqrt();
         let request = |model, views: Vec<Camera>, columns, tile_px| Request {
             model,
@@ -1142,7 +1207,9 @@ mod tests {
         // A closed boss, as SolidWorks' bodies are, or the cut can't be filled.
         let mut closed = bracket(true);
         closed.faces.truncate(closed.faces.len() - 2);
-        closed.faces.extend(cylinder(40.0, 20.0, 6.0, 10.0, 18.0, Some(0)));
+        closed
+            .faces
+            .extend(cylinder(40.0, 20.0, 6.0, 10.0, 18.0, Some(0)));
         let mut sectioned = request(closed, Camera::section_views(plane.normal).to_vec(), 2, 512);
         sectioned.section = Some(plane);
         let mut zoomed_section = sectioned.clone();
@@ -1168,7 +1235,12 @@ mod tests {
             ("render_section_zoom.png", zoomed_section, None),
             (
                 "render_transparent.png",
-                request(transparent, vec![Camera::standard(View::Isometric), free], 2, 512),
+                request(
+                    transparent,
+                    vec![Camera::standard(View::Isometric), free],
+                    2,
+                    512,
+                ),
                 Some(whole_span),
             ),
             (
@@ -1182,7 +1254,11 @@ mod tests {
             let rendered = rt.block_on(renderer.render(request)).unwrap();
             assert_eq!(rendered.width, tile_px * columns as u32);
             if let Some(span) = span {
-                assert!((rendered.tile_span_mm - span).abs() < 0.01, "{name}: {}", rendered.tile_span_mm);
+                assert!(
+                    (rendered.tile_span_mm - span).abs() < 0.01,
+                    "{name}: {}",
+                    rendered.tile_span_mm
+                );
             }
             std::fs::write(format!("{out_dir}/{name}"), &rendered.png).unwrap();
         }

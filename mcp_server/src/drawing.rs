@@ -19,11 +19,11 @@ use rmcp::{ErrorData as McpError, schemars};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::sketch_tools::DimensionKind;
 use crate::addin::proto;
 use crate::assembly::Placement;
 use crate::inspect::{IdRegistry, Kind, MM_PER_M, curve_name, mm, round};
 use crate::pmi;
+use crate::sketch_tools::DimensionKind;
 
 pub const DEFAULT_ENTITY_LIMIT: usize = 300;
 /// The add-in's limit per add_drawing_dimensions call.
@@ -106,11 +106,20 @@ pub enum Shape {
     /// A full circle seen face-on; radius on the sheet.
     Circle { center: DVec2, radius: f64 },
     /// An arc seen face-on.
-    Arc { center: DVec2, radius: f64, a: DVec2, b: DVec2 },
+    Arc {
+        center: DVec2,
+        radius: f64,
+        a: DVec2,
+        b: DVec2,
+    },
     /// A vertex, or a straight edge seen end-on.
     Point { p: DVec2 },
     /// Anything else (a circle seen at an angle, a spline, ...).
-    Curve { a: DVec2, b: DVec2, center: Option<DVec2> },
+    Curve {
+        a: DVec2,
+        b: DVec2,
+        center: Option<DVec2>,
+    },
 }
 
 impl Shape {
@@ -162,7 +171,10 @@ impl Cache {
             if let Some(b) = &view.outline
                 && let (Some(lo), Some(hi)) = (&b.min, &b.max)
             {
-                self.outlines.insert(view.name.clone(), (DVec2::new(lo.x, lo.y), DVec2::new(hi.x, hi.y)));
+                self.outlines.insert(
+                    view.name.clone(),
+                    (DVec2::new(lo.x, lo.y), DVec2::new(hi.x, hi.y)),
+                );
             }
         }
         if moved {
@@ -190,8 +202,15 @@ impl Cache {
     }
 
     /// The other entities of `view` inspect_drawing gave geometry for.
-    pub fn others_in<'a>(&'a self, view: &'a str, id: &'a str) -> impl Iterator<Item = &'a EntityGeom> + 'a {
-        self.entities.iter().filter(move |(k, g)| g.view == view && k.as_str() != id.trim()).map(|(_, g)| g)
+    pub fn others_in<'a>(
+        &'a self,
+        view: &'a str,
+        id: &'a str,
+    ) -> impl Iterator<Item = &'a EntityGeom> + 'a {
+        self.entities
+            .iter()
+            .filter(move |(k, g)| g.view == view && k.as_str() != id.trim())
+            .map(|(_, g)| g)
     }
 
     /// A view's outline (min, max), sheet meters.
@@ -241,7 +260,9 @@ pub fn decode_ref(ids: &IdRegistry, id: &str) -> Result<proto::DrawingEntityRef,
         }
         None => {
             return Err(McpError::invalid_params(
-                format!("{id:?} isn't an id -- give view entity ids like \"view_edge:3\" from inspect_drawing"),
+                format!(
+                    "{id:?} isn't an id -- give view entity ids like \"view_edge:3\" from inspect_drawing"
+                ),
                 None,
             ));
         }
@@ -250,7 +271,11 @@ pub fn decode_ref(ids: &IdRegistry, id: &str) -> Result<proto::DrawingEntityRef,
         .and_then(|bytes| proto::DrawingEntityRef::decode(bytes.as_slice()).ok())
         .ok_or_else(|| {
             McpError::invalid_params(
-                ids.unknown_id(id, "inspect_drawing", "call inspect_drawing with the view for current ones"),
+                ids.unknown_id(
+                    id,
+                    "inspect_drawing",
+                    "call inspect_drawing with the view for current ones",
+                ),
                 None,
             )
         })
@@ -281,7 +306,8 @@ impl Mapper<'_> {
 
     fn vector(&self, v: &proto::Vec3) -> DVec3 {
         let v = dvec3(v);
-        self.xform.vector(self.placement.map_or(v, |pl| pl.vector(v)))
+        self.xform
+            .vector(self.placement.map_or(v, |pl| pl.vector(v)))
     }
 }
 
@@ -320,7 +346,12 @@ fn edge_shape(m: &Mapper, edge: &proto::EdgeInfo) -> Option<(Shape, Map<String, 
             if full {
                 Shape::Circle { center: c, radius }
             } else {
-                Shape::Arc { center: c, radius, a: start, b: end }
+                Shape::Arc {
+                    center: c,
+                    radius,
+                    a: start,
+                    b: end,
+                }
             }
         } else if along < AXIS_TOLERANCE {
             // Seen edge-on: a straight line across the circle's diameter
@@ -340,7 +371,11 @@ fn edge_shape(m: &Mapper, edge: &proto::EdgeInfo) -> Option<(Shape, Map<String, 
             obj.insert("type".into(), json!(format!("{word}_seen_at_angle")));
             obj.insert("center".into(), sheet_mm(c));
             size(&mut obj);
-            Shape::Curve { a: start, b: end, center: Some(c) }
+            Shape::Curve {
+                a: start,
+                b: end,
+                center: Some(c),
+            }
         };
         return Some((shape, obj));
     }
@@ -363,7 +398,14 @@ fn edge_shape(m: &Mapper, edge: &proto::EdgeInfo) -> Option<(Shape, Map<String, 
     if edge.length > 0.0 {
         obj.insert("length_mm".into(), json!(mm(edge.length)));
     }
-    Some((Shape::Curve { a: start, b: end, center: None }, obj))
+    Some((
+        Shape::Curve {
+            a: start,
+            b: end,
+            center: None,
+        },
+        obj,
+    ))
 }
 
 fn entity_shape(m: &Mapper, e: &proto::ViewEntity) -> Option<(Shape, Map<String, Value>)> {
@@ -425,7 +467,11 @@ pub fn display_mode_name(mode: i32) -> Option<&'static str> {
 /// A number without needless decimals: 2, 1.5, 0.333.
 fn short_number(x: f64) -> String {
     let r = round(x, 3);
-    if r.fract() == 0.0 { format!("{}", r as i64) } else { format!("{r}") }
+    if r.fract() == 0.0 {
+        format!("{}", r as i64)
+    } else {
+        format!("{r}")
+    }
 }
 
 pub fn scale_text(numerator: f64, denominator: f64) -> Option<String> {
@@ -460,9 +506,14 @@ fn axis_along(xform: &ViewXform, sheet_dir: DVec3) -> Option<String> {
 /// isn't axis-aligned, where the model's axes point on the sheet.
 pub fn axes_text(view: &proto::ViewInfo) -> Option<String> {
     let x = ViewXform::of(view)?;
-    let named: Vec<Option<String>> = [DVec3::X, DVec3::Y, DVec3::Z].iter().map(|d| axis_along(&x, *d)).collect();
+    let named: Vec<Option<String>> = [DVec3::X, DVec3::Y, DVec3::Z]
+        .iter()
+        .map(|d| axis_along(&x, *d))
+        .collect();
     if let [Some(right), Some(up), Some(toward)] = named.as_slice() {
-        return Some(format!("{right} points right, {up} up and {toward} toward the viewer"));
+        return Some(format!(
+            "{right} points right, {up} up and {toward} toward the viewer"
+        ));
     }
     let scale = x.scale().max(f64::MIN_POSITIVE);
     let axis = |v: DVec3| format!("[{}, {}]", round(v.x / scale, 3), round(v.y / scale, 3));
@@ -486,7 +537,11 @@ pub fn annotation_counts(types: &[i32]) -> Value {
 
 /// A drawing annotation: what inspect_annotations shows, plus where it is on
 /// the sheet and the view entities it's attached to.
-pub fn annotation_json(ids: &mut IdRegistry, view: Option<&str>, a: &proto::AnnotationInfo) -> Value {
+pub fn annotation_json(
+    ids: &mut IdRegistry,
+    view: Option<&str>,
+    a: &proto::AnnotationInfo,
+) -> Value {
     let mut obj = pmi::annotation_fields(a);
     // Dimensions in a drawing are driven by the model (or are reference
     // dimensions); saying so on each is noise.
@@ -568,7 +623,11 @@ pub struct InspectDrawingParams {
 }
 
 pub fn inspect_request(params: &InspectDrawingParams) -> proto::InspectDrawingRequest {
-    let view = params.view.as_deref().map(str::trim).filter(|v| !v.is_empty());
+    let view = params
+        .view
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
     proto::InspectDrawingRequest {
         entity_views: view.map(|v| vec![v.to_string()]).unwrap_or_default(),
         include_vertices: params.include_vertices,
@@ -592,7 +651,9 @@ fn model_id(ids: &mut IdRegistry, view: &proto::ViewInfo, e: &proto::ViewEntity)
         _ => Kind::Edge,
     };
     let key = crate::files::file_key(&view.model_file);
-    ids.in_document(&key, file_name(&view.model_file), |ids| ids.id_for(kind, &e.model_persist_id))
+    ids.in_document(&key, file_name(&view.model_file), |ids| {
+        ids.id_for(kind, &e.model_persist_id)
+    })
 }
 
 /// One view entity's inspect_drawing JSON (id, sheet geometry, ...); its
@@ -607,7 +668,11 @@ fn entity_json(
     let view_name = view.name.as_str();
     let (shape, mut fields) = entity_shape(mapper, e)?;
     let id = id_for(ids, &entity_ref(view_name, e))?;
-    let label = fields.get("type").and_then(Value::as_str).unwrap_or("").to_string();
+    let label = fields
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     let mut entry = Map::new();
     entry.insert("id".into(), json!(id));
     entry.append(&mut fields);
@@ -621,7 +686,14 @@ fn entity_json(
     if let Some(c) = ids.id_for(Kind::Component, &e.component_persist_id) {
         entry.insert("component".into(), json!(c));
     }
-    cache.entities.insert(id, EntityGeom { shape, label, view: view_name.to_string() });
+    cache.entities.insert(
+        id,
+        EntityGeom {
+            shape,
+            label,
+            view: view_name.to_string(),
+        },
+    );
     Some(Value::Object(entry))
 }
 
@@ -634,7 +706,10 @@ pub fn selected_entity_json(
     e: &proto::ViewEntity,
 ) -> Option<Value> {
     let placements = placements(view);
-    let mapper = Mapper { xform: ViewXform::of(view)?, placement: placements.get(&e.component_persist_id) };
+    let mapper = Mapper {
+        xform: ViewXform::of(view)?,
+        placement: placements.get(&e.component_persist_id),
+    };
     entity_json(ids, cache, view, &mapper, e)
 }
 
@@ -663,7 +738,10 @@ fn view_json(
         obj.insert("breaks".into(), crate::derived_view::breaks_json(view));
     }
     if view.broken {
-        obj.insert("broken_note".into(), json!(crate::derived_view::BROKEN_NOTE));
+        obj.insert(
+            "broken_note".into(),
+            json!(crate::derived_view::BROKEN_NOTE),
+        );
     }
     if !view.model_file.is_empty() {
         obj.insert("model".into(), json!(file_name(&view.model_file)));
@@ -693,7 +771,8 @@ fn view_json(
             ("sheet_up", DVec3::Y),
             ("toward_viewer", DVec3::Z),
         ];
-        let named: Vec<(&str, Option<String>)> = dirs.iter().map(|(k, d)| (*k, axis_along(x, *d))).collect();
+        let named: Vec<(&str, Option<String>)> =
+            dirs.iter().map(|(k, d)| (*k, axis_along(x, *d))).collect();
         if named.iter().all(|(_, v)| v.is_some()) {
             for (k, v) in named {
                 obj.insert(k.into(), json!(v));
@@ -721,14 +800,20 @@ fn view_json(
             json!("the model isn't loaded (lightweight or detached view): its edges can't be listed or dimensioned"),
         );
     }
-    obj.insert("annotation_counts".into(), annotation_counts(&view.annotation_types));
+    obj.insert(
+        "annotation_counts".into(),
+        annotation_counts(&view.annotation_types),
+    );
 
     if view.entities_listed {
         let placements = placements(view);
         let mut entities = Vec::new();
         if let Some(xform) = xform {
             for e in &view.entities {
-                let mapper = Mapper { xform, placement: placements.get(&e.component_persist_id) };
+                let mapper = Mapper {
+                    xform,
+                    placement: placements.get(&e.component_persist_id),
+                };
                 if let Some(entry) = entity_json(ids, cache, view, &mapper, e) {
                     entities.push(entry);
                 }
@@ -795,7 +880,11 @@ pub fn render_inspect(
              dimension values) are the model's true sizes"
         ),
     );
-    let detail = params.view.as_deref().map(str::trim).filter(|v| !v.is_empty());
+    let detail = params
+        .view
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
     let mut sheets = Vec::new();
     let mut view_count = 0;
     for sheet in &reply.sheets {
@@ -815,7 +904,11 @@ pub fn render_inspect(
         }
         obj.insert(
             "projection".into(),
-            json!(if sheet.first_angle { "first_angle" } else { "third_angle" }),
+            json!(if sheet.first_angle {
+                "first_angle"
+            } else {
+                "third_angle"
+            }),
         );
         if !sheet.sheet_format.is_empty() {
             obj.insert("sheet_format".into(), json!(sheet.sheet_format));
@@ -838,7 +931,10 @@ pub fn render_inspect(
         // The sheet's own list holds its sheet format's (title block)
         // annotations too; the add-in counts them apart.
         if !sheet.annotation_types.is_empty() {
-            obj.insert("sheet_annotation_counts".into(), annotation_counts(&sheet.annotation_types));
+            obj.insert(
+                "sheet_annotation_counts".into(),
+                annotation_counts(&sheet.annotation_types),
+            );
         }
         if !sheet.sheet_format_annotation_types.is_empty() {
             obj.insert(
@@ -846,8 +942,11 @@ pub fn render_inspect(
                 annotation_counts(&sheet.sheet_format_annotation_types),
             );
         }
-        let own: Vec<&proto::AnnotationInfo> =
-            sheet.annotations.iter().filter(|a| a.owner() != proto::AnnotationOwner::SheetFormat).collect();
+        let own: Vec<&proto::AnnotationInfo> = sheet
+            .annotations
+            .iter()
+            .filter(|a| a.owner() != proto::AnnotationOwner::SheetFormat)
+            .collect();
         if params.list_annotations && !own.is_empty() {
             let list: Vec<Value> = own.iter().map(|a| annotation_json(ids, None, a)).collect();
             obj.insert("sheet_annotations".into(), Value::Array(list));
@@ -858,7 +957,10 @@ pub fn render_inspect(
 
     let mut notes = Vec::new();
     if view_count == 0 {
-        notes.push("the drawing has no views yet -- add views of a part or assembly in SolidWorks first".to_string());
+        notes.push(
+            "the drawing has no views yet -- add views of a part or assembly in SolidWorks first"
+                .to_string(),
+        );
     } else if detail.is_none() {
         notes.push(
             "pass view=\"<name>\" to list a view's edges (ids for add_drawing_dimensions) and its \
@@ -867,7 +969,10 @@ pub fn render_inspect(
         );
     }
     if reply.truncated {
-        notes.push("the drawing has more entities or annotations than the add-in reports at once".to_string());
+        notes.push(
+            "the drawing has more entities or annotations than the add-in reports at once"
+                .to_string(),
+        );
     }
     if !notes.is_empty() {
         out.insert("note".into(), json!(notes.join("; ")));
@@ -976,7 +1081,10 @@ fn place(
         .flat_map(|s| match s {
             Shape::Line { a, b } => vec![*a, *b],
             Shape::Circle { center, radius } => {
-                vec![*center + DVec2::splat(*radius), *center - DVec2::splat(*radius)]
+                vec![
+                    *center + DVec2::splat(*radius),
+                    *center - DVec2::splat(*radius),
+                ]
             }
             other => vec![other.anchor()],
         })
@@ -1009,25 +1117,33 @@ fn place(
         }
         DimensionKind::Diameter | DimensionKind::Radius => match shapes[0] {
             Shape::Circle { center, radius } | Shape::Arc { center, radius, .. } => {
-                let dir = away(DVec2::new(1.0, 1.0).normalize(), *center + DVec2::new(1e-9, 1e-9));
+                let dir = away(
+                    DVec2::new(1.0, 1.0).normalize(),
+                    *center + DVec2::new(1e-9, 1e-9),
+                );
                 Ok(*center + dir * (radius + TEXT_GAP))
             }
             _ => Err("needs a circle or arc seen face-on".into()),
         },
         DimensionKind::Angle => {
-            let (Shape::Line { a: a1, b: b1 }, Shape::Line { a: a2, b: b2 }) = (shapes[0], shapes[1]) else {
+            let (Shape::Line { a: a1, b: b1 }, Shape::Line { a: a2, b: b2 }) =
+                (shapes[0], shapes[1])
+            else {
                 return Err("needs two straight edges".into());
             };
             let corner = intersection(*a1, *b1, *a2, *b2).ok_or("the edges are parallel")?;
             let (m1, m2) = ((*a1 + *b1) / 2.0, (*a2 + *b2) / 2.0);
-            let bisector = ((m1 - corner).normalize_or_zero() + (m2 - corner).normalize_or_zero()).normalize_or_zero();
+            let bisector = ((m1 - corner).normalize_or_zero() + (m2 - corner).normalize_or_zero())
+                .normalize_or_zero();
             let reach = (m1 - corner).length().min((m2 - corner).length());
             Ok(corner + bisector * (0.6 * reach).max(1.5 * TEXT_GAP))
         }
         DimensionKind::Length | DimensionKind::Distance => {
             let (from, dir) = match shapes {
                 [Shape::Line { a, b }] => ((*a + *b) / 2.0, *b - *a),
-                [_, _] if (anchors[1] - anchors[0]).length() > 1e-9 => (mean, anchors[1] - anchors[0]),
+                [_, _] if (anchors[1] - anchors[0]).length() > 1e-9 => {
+                    (mean, anchors[1] - anchors[0])
+                }
                 // Two entities around the same point (e.g. concentric):
                 // fall back to the first one's direction.
                 [Shape::Line { a, b }, _] => (mean, *b - *a),
@@ -1110,7 +1226,9 @@ pub fn dimensions_request(
 ) -> Result<(proto::AddDrawingDimensionsRequest, Vec<String>), McpError> {
     let n = params.dimensions.len();
     if n == 0 || n > MAX_DIMENSIONS {
-        return Err(invalid(format!("give between 1 and {MAX_DIMENSIONS} dimensions")));
+        return Err(invalid(format!(
+            "give between 1 and {MAX_DIMENSIONS} dimensions"
+        )));
     }
     let mut stacking = Stacking::default();
     let mut dimensions = Vec::with_capacity(n);
@@ -1137,22 +1255,30 @@ pub fn dimensions_request(
         if trimmed.len() == 2 && trimmed[0] == trimmed[1] {
             return Err(at("give two different entities".into()));
         }
-        let geoms: Vec<Option<&EntityGeom>> = trimmed.iter().map(|e| cache.entities.get(*e)).collect();
+        let geoms: Vec<Option<&EntityGeom>> =
+            trimmed.iter().map(|e| cache.entities.get(*e)).collect();
         check_shapes(spec.kind, &geoms).map_err(at)?;
 
         let text = match spec.at_mm {
             Some([x, y]) if x.is_finite() && y.is_finite() => DVec2::new(x, y) / MM_PER_M,
             Some(_) => return Err(at("at_mm must be two finite numbers".into())),
             None => {
-                let shapes: Option<Vec<&Shape>> = geoms.iter().map(|g| g.map(|g| &g.shape)).collect();
+                let shapes: Option<Vec<&Shape>> =
+                    geoms.iter().map(|g| g.map(|g| &g.shape)).collect();
                 let Some(shapes) = shapes else {
                     return Err(at(format!(
                         "no sheet position known for its entities -- call inspect_drawing with \
                          view=\"{view}\" first, or give at_mm"
                     )));
                 };
-                place(spec.kind, &shapes, cache.outlines.get(&view).copied(), &view, &mut stacking)
-                    .map_err(|e| at(format!("can't place a {} dimension: {e}", spec.kind.name())))?
+                place(
+                    spec.kind,
+                    &shapes,
+                    cache.outlines.get(&view).copied(),
+                    &view,
+                    &mut stacking,
+                )
+                .map_err(|e| at(format!("can't place a {} dimension: {e}", spec.kind.name())))?
             }
         };
         dimensions.push(proto::DrawingDimension {
@@ -1168,11 +1294,19 @@ pub fn dimensions_request(
 
 /// "RD1@Drawing View1 = 50 mm" for a dimension annotation.
 fn dimension_value_text(a: &proto::AnnotationInfo) -> String {
-    let name = if a.name.is_empty() { "dimension" } else { a.name.as_str() };
+    let name = if a.name.is_empty() {
+        "dimension"
+    } else {
+        a.name.as_str()
+    };
     let Some(info) = a.dimension.as_ref().and_then(|d| d.dimension.as_ref()) else {
         return name.to_string();
     };
-    let name = if info.name.is_empty() { name } else { info.name.as_str() };
+    let name = if info.name.is_empty() {
+        name
+    } else {
+        info.name.as_str()
+    };
     let angular = info.r#type() == proto::DimensionType::Angular;
     let value = pmi::value_of(info.value, angular);
     let unit = if angular { "deg" } else { "mm" };
@@ -1184,7 +1318,10 @@ fn dimension_value_text(a: &proto::AnnotationInfo) -> String {
     format!("{name} = {symbol}{value} {unit}")
 }
 
-pub fn dimensions_reply_text(reply: &proto::AddDrawingDimensionsResponse, labels: &[String]) -> String {
+pub fn dimensions_reply_text(
+    reply: &proto::AddDrawingDimensionsResponse,
+    labels: &[String],
+) -> String {
     let lines: Vec<String> = reply
         .dimensions
         .iter()
@@ -1193,7 +1330,11 @@ pub fn dimensions_reply_text(reply: &proto::AddDrawingDimensionsResponse, labels
             let a = d.annotation.clone().unwrap_or_default();
             let mut line = format!("{} ({label}) in {}", dimension_value_text(&a), d.view_name);
             if let Some(p) = &a.position {
-                line += &format!(", text at [{}, {}] mm", round(p.x * MM_PER_M, 1), round(p.y * MM_PER_M, 1));
+                line += &format!(
+                    ", text at [{}, {}] mm",
+                    round(p.x * MM_PER_M, 1),
+                    round(p.y * MM_PER_M, 1)
+                );
             }
             line
         })
@@ -1274,7 +1415,10 @@ pub struct InsertModelItemsParams {
 }
 
 pub fn model_items_request(params: &InsertModelItemsParams) -> proto::InsertModelItemsRequest {
-    let items = params.items.clone().unwrap_or_else(|| vec![ModelItem::Dimensions]);
+    let items = params
+        .items
+        .clone()
+        .unwrap_or_else(|| vec![ModelItem::Dimensions]);
     proto::InsertModelItemsRequest {
         view_names: params
             .views
@@ -1339,7 +1483,10 @@ mod tests {
             model_loaded: true,
             scale_numerator: 1.0,
             scale_denominator: 2.0,
-            outline: Some(proto::Box3 { min: v(0.08, 0.08, 0.0), max: v(0.15, 0.13, 0.0) }),
+            outline: Some(proto::Box3 {
+                min: v(0.08, 0.08, 0.0),
+                max: v(0.15, 0.13, 0.0),
+            }),
             model_origin: v(0.1, 0.1, 0.0),
             model_x: v(0.5, 0.0, 0.0),
             model_y: v(0.0, 0.5, 0.0),
@@ -1349,7 +1496,12 @@ mod tests {
         }
     }
 
-    fn edge(pid: &[u8], curve: proto::CurveType, start: [f64; 3], end: [f64; 3]) -> proto::ViewEntity {
+    fn edge(
+        pid: &[u8],
+        curve: proto::CurveType,
+        start: [f64; 3],
+        end: [f64; 3],
+    ) -> proto::ViewEntity {
         proto::ViewEntity {
             kind: proto::ViewEntityKind::Edge as i32,
             persist_id: pid.to_vec(),
@@ -1366,11 +1518,12 @@ mod tests {
     }
 
     fn circle(pid: &[u8], center: [f64; 3], axis: [f64; 3], radius: f64) -> proto::ViewEntity {
-        let mut e = edge(pid, proto::CurveType::Circle, [center[0] + radius, center[1], center[2]], [
-            center[0] + radius,
-            center[1],
-            center[2],
-        ]);
+        let mut e = edge(
+            pid,
+            proto::CurveType::Circle,
+            [center[0] + radius, center[1], center[2]],
+            [center[0] + radius, center[1], center[2]],
+        );
         let info = e.edge.as_mut().unwrap();
         info.center = v(center[0], center[1], center[2]);
         info.axis = v(axis[0], axis[1], axis[2]);
@@ -1384,7 +1537,12 @@ mod tests {
         view.entities = entities;
         view.annotation_types = vec![4, 4, 6];
         proto::InspectDrawingResponse {
-            document: Some(proto::Document { title: "bracket - Sheet1".into(), r#type: 3, path: String::new(), ..Default::default() }),
+            document: Some(proto::Document {
+                title: "bracket - Sheet1".into(),
+                r#type: 3,
+                path: String::new(),
+                ..Default::default()
+            }),
             sheets: vec![proto::SheetInfo {
                 name: "Sheet1".into(),
                 active: true,
@@ -1402,7 +1560,10 @@ mod tests {
     }
 
     fn params(view: Option<&str>) -> InspectDrawingParams {
-        InspectDrawingParams { view: view.map(Into::into), ..Default::default() }
+        InspectDrawingParams {
+            view: view.map(Into::into),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -1410,8 +1571,18 @@ mod tests {
         let mut ids = IdRegistry::default();
         let mut cache = Cache::default();
         let reply = reply_with(vec![
-            edge(b"top", proto::CurveType::Line, [0.0, 0.05, 0.0], [0.1, 0.05, 0.0]),
-            edge(b"depth", proto::CurveType::Line, [0.0, 0.0, 0.0], [0.0, 0.0, 0.02]),
+            edge(
+                b"top",
+                proto::CurveType::Line,
+                [0.0, 0.05, 0.0],
+                [0.1, 0.05, 0.0],
+            ),
+            edge(
+                b"depth",
+                proto::CurveType::Line,
+                [0.0, 0.0, 0.0],
+                [0.0, 0.0, 0.02],
+            ),
             circle(b"hole", [0.05, 0.025, 0.0], [0.0, 0.0, 1.0], 0.005),
             circle(b"side", [0.05, 0.025, 0.0], [1.0, 0.0, 0.0], 0.005),
         ]);
@@ -1426,7 +1597,10 @@ mod tests {
         assert_eq!(view["sheet_right"], "+X");
         assert_eq!(view["sheet_up"], "+Y");
         assert_eq!(view["toward_viewer"], "+Z");
-        assert_eq!(view["annotation_counts"], json!({ "dimension": 2, "note": 1 }));
+        assert_eq!(
+            view["annotation_counts"],
+            json!({ "dimension": 2, "note": 1 })
+        );
         let e = view["entities"].as_array().unwrap();
         assert_eq!(e.len(), 4);
         assert_eq!(e[0]["id"], "view_edge:1");
@@ -1442,11 +1616,16 @@ mod tests {
         assert_eq!(e[3]["type"], "circle_seen_edge_on");
         assert_eq!(e[3]["start"], json!([125.0, 110.0]));
         assert_eq!(e[3]["end"], json!([125.0, 115.0]));
-        assert!(matches!(cache.entities["view_edge:3"].shape, Shape::Circle { radius, .. } if (radius - 0.0025).abs() < 1e-12));
+        assert!(
+            matches!(cache.entities["view_edge:3"].shape, Shape::Circle { radius, .. } if (radius - 0.0025).abs() < 1e-12)
+        );
 
         // Ids are stable and decode back to the view's ref.
         let again = render_inspect(&mut ids, &mut cache, &reply, &params(Some("Drawing View1")));
-        assert_eq!(again["sheets"][0]["views"][0]["entities"][0]["id"], "view_edge:1");
+        assert_eq!(
+            again["sheets"][0]["views"][0]["entities"][0]["id"],
+            "view_edge:1"
+        );
         let r = decode_ref(&ids, "view_edge:3").unwrap();
         assert_eq!(r.view_name, "Drawing View1");
         assert_eq!(r.persist_id, b"hole");
@@ -1493,7 +1672,12 @@ mod tests {
             local_geometry: true,
             ..Default::default()
         }];
-        let mut e = edge(b"e", proto::CurveType::Line, [0.0, 0.0, 0.0], [0.0, 0.01, 0.0]);
+        let mut e = edge(
+            b"e",
+            proto::CurveType::Line,
+            [0.0, 0.0, 0.0],
+            [0.0, 0.01, 0.0],
+        );
         e.component_persist_id = b"comp".to_vec();
         view.entities = vec![e];
         view.entities_listed = true;
@@ -1508,25 +1692,53 @@ mod tests {
         let mut ids = IdRegistry::default();
         let mut cache = Cache::default();
         let reply = reply_with(vec![
-            edge(b"top", proto::CurveType::Line, [0.0, 0.05, 0.0], [0.1, 0.05, 0.0]),
-            edge(b"left", proto::CurveType::Line, [0.0, 0.0, 0.0], [0.0, 0.05, 0.0]),
+            edge(
+                b"top",
+                proto::CurveType::Line,
+                [0.0, 0.05, 0.0],
+                [0.1, 0.05, 0.0],
+            ),
+            edge(
+                b"left",
+                proto::CurveType::Line,
+                [0.0, 0.0, 0.0],
+                [0.0, 0.05, 0.0],
+            ),
             circle(b"hole", [0.05, 0.025, 0.0], [0.0, 0.0, 1.0], 0.005),
             circle(b"side", [0.05, 0.025, 0.0], [1.0, 0.0, 0.0], 0.005),
-            edge(b"bottom", proto::CurveType::Line, [0.0, 0.0, 0.0], [0.1, 0.0, 0.0]),
+            edge(
+                b"bottom",
+                proto::CurveType::Line,
+                [0.0, 0.0, 0.0],
+                [0.1, 0.0, 0.0],
+            ),
         ]);
         render_inspect(&mut ids, &mut cache, &reply, &params(Some("Drawing View1")));
         (ids, cache)
     }
 
-    fn spec(kind: DimensionKind, entities: &[&str], at_mm: Option<[f64; 2]>) -> DrawingDimensionSpec {
-        DrawingDimensionSpec { kind, entities: entities.iter().map(|e| e.to_string()).collect(), at_mm }
+    fn spec(
+        kind: DimensionKind,
+        entities: &[&str],
+        at_mm: Option<[f64; 2]>,
+    ) -> DrawingDimensionSpec {
+        DrawingDimensionSpec {
+            kind,
+            entities: entities.iter().map(|e| e.to_string()).collect(),
+            at_mm,
+        }
     }
 
     #[test]
     fn selected_entities_get_inspect_drawings_ids_and_geometry() {
         // Selected after an inspect_drawing: the same id.
         let (mut ids, mut cache) = inspected();
-        let top = edge(b"top", proto::CurveType::Line, [0.0, 0.05, 0.0], [0.1, 0.05, 0.0]);
+        let top = edge(
+            b"top",
+            proto::CurveType::Line,
+            [0.0, 0.05, 0.0],
+            [0.1, 0.05, 0.0],
+        );
         let v = selected_entity_json(&mut ids, &mut cache, &front_view(), &top).unwrap();
         assert_eq!(v["id"], "view_edge:1", "{v}");
         assert_eq!(v["start"], json!([100.0, 125.0]), "{v}");
@@ -1536,7 +1748,9 @@ mod tests {
         let mut cache = Cache::default();
         let v = selected_entity_json(&mut ids, &mut cache, &front_view(), &top).unwrap();
         let id = v["id"].as_str().unwrap().to_string();
-        let params = AddDrawingDimensionsParams { dimensions: vec![spec(DimensionKind::Horizontal, &[&id], None)] };
+        let params = AddDrawingDimensionsParams {
+            dimensions: vec![spec(DimensionKind::Horizontal, &[&id], None)],
+        };
         let (request, _) = dimensions_request(&ids, &cache, &params).unwrap();
         assert_eq!(request.dimensions[0].refs[0].persist_id, b"top".to_vec());
     }
@@ -1545,16 +1759,27 @@ mod tests {
     fn entities_name_their_model_counterparts() {
         let mut ids = IdRegistry::default();
         ids.set_document("file:c:\\parts\\bracket.slddrw", "bracket.SLDDRW");
-        let mut top = edge(b"top", proto::CurveType::Line, [0.0, 0.05, 0.0], [0.1, 0.05, 0.0]);
+        let mut top = edge(
+            b"top",
+            proto::CurveType::Line,
+            [0.0, 0.05, 0.0],
+            [0.1, 0.05, 0.0],
+        );
         top.model_persist_id = b"model-top".to_vec();
-        top.features = vec![proto::ModelFeatureRef { name: "Boss-Extrude1".into(), persist_id: b"boss".to_vec() }];
+        top.features = vec![proto::ModelFeatureRef {
+            name: "Boss-Extrude1".into(),
+            persist_id: b"boss".to_vec(),
+        }];
         let v = selected_entity_json(&mut ids, &mut Cache::default(), &front_view(), &top).unwrap();
         assert_eq!(v["features"], json!(["Boss-Extrude1"]), "{v}");
         let model_id = v["model_id"].as_str().unwrap().to_string();
         assert!(model_id.starts_with("edge:"), "{v}");
         // The part's id, for when the part is active: it's inspect_model's there.
         assert!(ids.persist_id(&model_id).is_none());
-        ids.set_document(&crate::files::file_key(r"C:\parts\bracket.SLDPRT"), "bracket.SLDPRT");
+        ids.set_document(
+            &crate::files::file_key(r"C:\parts\bracket.SLDPRT"),
+            "bracket.SLDPRT",
+        );
         assert_eq!(ids.persist_id(&model_id), Some(b"model-top".to_vec()));
         assert_eq!(ids.id_for(Kind::Edge, b"model-top"), Some(model_id));
     }
@@ -1565,10 +1790,18 @@ mod tests {
         let params = AddDrawingDimensionsParams {
             dimensions: vec![
                 spec(DimensionKind::Horizontal, &["view_edge:1"], None),
-                spec(DimensionKind::Horizontal, &["view_edge:2", "view_edge:3"], None),
+                spec(
+                    DimensionKind::Horizontal,
+                    &["view_edge:2", "view_edge:3"],
+                    None,
+                ),
                 spec(DimensionKind::Vertical, &["view_edge:2"], None),
                 spec(DimensionKind::Diameter, &["view_edge:3"], None),
-                spec(DimensionKind::Distance, &["view_edge:1", "view_edge:5"], Some([200.0, 50.0])),
+                spec(
+                    DimensionKind::Distance,
+                    &["view_edge:1", "view_edge:5"],
+                    Some([200.0, 50.0]),
+                ),
                 spec(DimensionKind::Angle, &["view_edge:1", "view_edge:2"], None),
             ],
         };
@@ -1592,7 +1825,11 @@ mod tests {
         // Between two parallel edges: beside them, outside the view (right
         // edge 150 mm).
         let params = AddDrawingDimensionsParams {
-            dimensions: vec![spec(DimensionKind::Distance, &["view_edge:1", "view_edge:5"], None)],
+            dimensions: vec![spec(
+                DimensionKind::Distance,
+                &["view_edge:1", "view_edge:5"],
+                None,
+            )],
         };
         let (request, _) = dimensions_request(&ids, &cache, &params).unwrap();
         let d = &request.dimensions[0];
@@ -1609,17 +1846,47 @@ mod tests {
     #[test]
     fn rejects_entities_that_dont_suit_the_kind() {
         let (ids, cache) = inspected();
-        let one = |s| AddDrawingDimensionsParams { dimensions: vec![s] };
-        let err = |s| dimensions_request(&ids, &cache, &one(s)).unwrap_err().message.to_string();
+        let one = |s| AddDrawingDimensionsParams {
+            dimensions: vec![s],
+        };
+        let err = |s| {
+            dimensions_request(&ids, &cache, &one(s))
+                .unwrap_err()
+                .message
+                .to_string()
+        };
         assert!(err(spec(DimensionKind::Diameter, &["view_edge:4"], None)).contains("edge-on"));
-        assert!(err(spec(DimensionKind::Diameter, &["view_edge:1"], None)).contains("circle or arc"));
+        assert!(
+            err(spec(DimensionKind::Diameter, &["view_edge:1"], None)).contains("circle or arc")
+        );
         assert!(err(spec(DimensionKind::Length, &["view_edge:3"], None)).contains("straight"));
         assert!(err(spec(DimensionKind::Distance, &["view_edge:1"], None)).contains("2 entities"));
-        assert!(err(spec(DimensionKind::Distance, &["view_edge:1", "view_edge:1"], None)).contains("different"));
-        assert!(err(spec(DimensionKind::Angle, &["view_edge:1", "view_edge:5"], None)).contains("parallel"));
+        assert!(
+            err(spec(
+                DimensionKind::Distance,
+                &["view_edge:1", "view_edge:1"],
+                None
+            ))
+            .contains("different")
+        );
+        assert!(
+            err(spec(
+                DimensionKind::Angle,
+                &["view_edge:1", "view_edge:5"],
+                None
+            ))
+            .contains("parallel")
+        );
         assert!(err(spec(DimensionKind::Length, &["edge:1"], None)).contains("drawing view"));
         assert!(err(spec(DimensionKind::Length, &["top edge"], None)).contains("isn't an id"));
-        assert!(err(spec(DimensionKind::Length, &["view_edge:1"], Some([f64::NAN, 0.0]))).contains("finite"));
+        assert!(
+            err(spec(
+                DimensionKind::Length,
+                &["view_edge:1"],
+                Some([f64::NAN, 0.0])
+            ))
+            .contains("finite")
+        );
     }
 
     #[test]
@@ -1695,7 +1962,11 @@ mod tests {
             components: vec![],
         };
         let text = dimensions_reply_text(&reply, &["diameter of view_edge:3".into()]);
-        assert!(text.contains("RD1@Drawing View1 = dia 10 mm (diameter of view_edge:3) in Drawing View1"));
+        assert!(
+            text.contains(
+                "RD1@Drawing View1 = dia 10 mm (diameter of view_edge:3) in Drawing View1"
+            )
+        );
         assert!(text.contains("[125, 140]"));
     }
 }

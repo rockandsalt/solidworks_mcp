@@ -90,14 +90,20 @@ fn position_mm(v: &proto::Vec3, is_3d: bool) -> Value {
 pub fn item_json(ids: &mut IdRegistry, item: &proto::SketchItem, is_3d: bool) -> Value {
     use proto::SketchItemType as T;
     let mut obj = Map::new();
-    obj.insert("id".into(), item_id(ids, item).map_or(Value::Null, Value::String));
+    obj.insert(
+        "id".into(),
+        item_id(ids, item).map_or(Value::Null, Value::String),
+    );
     let t = item.r#type();
     obj.insert("type".into(), json!(type_name(t)));
     if item.construction {
         obj.insert("construction".into(), json!(true));
     }
     let status = item.status();
-    if !matches!(status, proto::DefinitionStatus::Fully | proto::DefinitionStatus::Unspecified) {
+    if !matches!(
+        status,
+        proto::DefinitionStatus::Fully | proto::DefinitionStatus::Unspecified
+    ) {
         obj.insert("status".into(), json!(status_name(status)));
     }
     // A point field: its ID under `key`, its position under `{key}_mm`.
@@ -119,20 +125,55 @@ pub fn item_json(ids: &mut IdRegistry, item: &proto::SketchItem, is_3d: bool) ->
             }
         }
         T::Circle => {
-            point(&mut obj, "center", item.center_point.as_ref(), item.center.as_ref());
+            point(
+                &mut obj,
+                "center",
+                item.center_point.as_ref(),
+                item.center.as_ref(),
+            );
             obj.insert("radius_mm".into(), json!(mm(item.radius)));
         }
         T::Arc => {
-            point(&mut obj, "center", item.center_point.as_ref(), item.center.as_ref());
-            point(&mut obj, "start", item.start_point.as_ref(), item.start.as_ref());
+            point(
+                &mut obj,
+                "center",
+                item.center_point.as_ref(),
+                item.center.as_ref(),
+            );
+            point(
+                &mut obj,
+                "start",
+                item.start_point.as_ref(),
+                item.start.as_ref(),
+            );
             point(&mut obj, "end", item.end_point.as_ref(), item.end.as_ref());
             obj.insert("radius_mm".into(), json!(mm(item.radius)));
         }
         T::Ellipse => {
-            point(&mut obj, "center", item.center_point.as_ref(), item.center.as_ref());
-            point(&mut obj, "major", item.major_point.as_ref(), item.major.as_ref());
-            point(&mut obj, "minor", item.minor_point.as_ref(), item.minor.as_ref());
-            point(&mut obj, "start", item.start_point.as_ref(), item.start.as_ref());
+            point(
+                &mut obj,
+                "center",
+                item.center_point.as_ref(),
+                item.center.as_ref(),
+            );
+            point(
+                &mut obj,
+                "major",
+                item.major_point.as_ref(),
+                item.major.as_ref(),
+            );
+            point(
+                &mut obj,
+                "minor",
+                item.minor_point.as_ref(),
+                item.minor.as_ref(),
+            );
+            point(
+                &mut obj,
+                "start",
+                item.start_point.as_ref(),
+                item.start.as_ref(),
+            );
             point(&mut obj, "end", item.end_point.as_ref(), item.end.as_ref());
             if let (Some(c), Some(major), Some(minor)) = (&item.center, &item.major, &item.minor) {
                 let from_center = |p: &proto::Vec3| (p.x - c.x).hypot(p.y - c.y);
@@ -141,7 +182,12 @@ pub fn item_json(ids: &mut IdRegistry, item: &proto::SketchItem, is_3d: bool) ->
             }
         }
         _ => {
-            point(&mut obj, "start", item.start_point.as_ref(), item.start.as_ref());
+            point(
+                &mut obj,
+                "start",
+                item.start_point.as_ref(),
+                item.start.as_ref(),
+            );
             point(&mut obj, "end", item.end_point.as_ref(), item.end.as_ref());
         }
     }
@@ -163,7 +209,9 @@ pub fn item_summary(ids: &mut IdRegistry, item: &proto::SketchItem) -> Option<St
     let end = point_id(ids, item.end_point.as_ref());
     let center = point_id(ids, item.center_point.as_ref());
     Some(match (item.r#type(), start, end, center) {
-        (T::Arc | T::Ellipse, Some(s), Some(e), Some(c)) => format!("{id} ({s} -> {e}, center {c})"),
+        (T::Arc | T::Ellipse, Some(s), Some(e), Some(c)) => {
+            format!("{id} ({s} -> {e}, center {c})")
+        }
         (T::Circle | T::Ellipse, _, _, Some(c)) => format!("{id} (center {c})"),
         (_, Some(s), Some(e), _) => format!("{id} ({s} -> {e})"),
         _ => id,
@@ -172,7 +220,10 @@ pub fn item_summary(ids: &mut IdRegistry, item: &proto::SketchItem) -> Option<St
 
 /// Lists what a drawing tool created, e.g. " Ids: line:1 (point:1 -> point:2), ...".
 pub fn items_text(ids: &mut IdRegistry, items: &[proto::SketchItem]) -> String {
-    let parts: Vec<String> = items.iter().filter_map(|item| item_summary(ids, item)).collect();
+    let parts: Vec<String> = items
+        .iter()
+        .filter_map(|item| item_summary(ids, item))
+        .collect();
     if parts.is_empty() {
         String::new()
     } else {
@@ -255,7 +306,11 @@ pub fn relation_name(constraint_type: i32) -> String {
 /// when it was listed ("line:3"), else mints a generic one.
 pub fn relation_entity_id(ids: &mut IdRegistry, item: &proto::SketchItemRef) -> Option<String> {
     let bytes = item.encode_to_vec();
-    let kind = if item.point { Kind::SketchPoint } else { Kind::Segment };
+    let kind = if item.point {
+        Kind::SketchPoint
+    } else {
+        Kind::Segment
+    };
     ids.existing_id(&bytes).or_else(|| ids.id_for(kind, &bytes))
 }
 
@@ -279,7 +334,8 @@ pub fn render_inspect(ids: &mut IdRegistry, reply: &proto::InspectSketchResponse
         out.insert("is_3d".into(), json!(true));
     }
     if let Some(frame) = &reply.frame
-        && let (Some(o), Some(x), Some(y), Some(n)) = (&frame.origin, &frame.x_axis, &frame.y_axis, &frame.normal)
+        && let (Some(o), Some(x), Some(y), Some(n)) =
+            (&frame.origin, &frame.x_axis, &frame.y_axis, &frame.normal)
     {
         out.insert(
             "sketch_axes".into(),
@@ -292,7 +348,10 @@ pub fn render_inspect(ids: &mut IdRegistry, reply: &proto::InspectSketchResponse
         );
     }
     if let Some(c) = &reply.contours {
-        out.insert("contours".into(), json!({ "closed": c.closed, "open": c.open }));
+        out.insert(
+            "contours".into(),
+            json!({ "closed": c.closed, "open": c.open }),
+        );
     }
     // Segments first, so their IDs are minted with the right kind before
     // relations look them up.
@@ -300,8 +359,14 @@ pub fn render_inspect(ids: &mut IdRegistry, reply: &proto::InspectSketchResponse
         .items
         .iter()
         .partition(|item| item.r#type() == proto::SketchItemType::Point);
-    let segments: Vec<Value> = segments.iter().map(|item| item_json(ids, item, reply.is_3d)).collect();
-    let points: Vec<Value> = points.iter().map(|item| item_json(ids, item, reply.is_3d)).collect();
+    let segments: Vec<Value> = segments
+        .iter()
+        .map(|item| item_json(ids, item, reply.is_3d))
+        .collect();
+    let points: Vec<Value> = points
+        .iter()
+        .map(|item| item_json(ids, item, reply.is_3d))
+        .collect();
     out.insert("segments".into(), Value::Array(segments));
     out.insert("points".into(), Value::Array(points));
     out.insert(
@@ -310,7 +375,13 @@ pub fn render_inspect(ids: &mut IdRegistry, reply: &proto::InspectSketchResponse
     );
     out.insert(
         "relations".into(),
-        Value::Array(reply.relations.iter().map(|r| relation_json(ids, r)).collect()),
+        Value::Array(
+            reply
+                .relations
+                .iter()
+                .map(|r| relation_json(ids, r))
+                .collect(),
+        ),
     );
     if reply.truncated {
         out.insert(
@@ -322,7 +393,11 @@ pub fn render_inspect(ids: &mut IdRegistry, reply: &proto::InspectSketchResponse
 }
 
 /// One sentence on how defined the sketch is now, naming what can still move.
-pub fn state_text(ids: &mut IdRegistry, sketch_name: &str, state: Option<&proto::SketchState>) -> String {
+pub fn state_text(
+    ids: &mut IdRegistry,
+    sketch_name: &str,
+    state: Option<&proto::SketchState>,
+) -> String {
     let Some(state) = state else {
         return String::new();
     };
@@ -384,7 +459,13 @@ mod tests {
     use super::*;
 
     fn r(point: bool, id1: i64) -> proto::SketchItemRef {
-        proto::SketchItemRef { sketch_persist_id: b"sk".to_vec(), point, id0: 0, id1, ..Default::default() }
+        proto::SketchItemRef {
+            sketch_persist_id: b"sk".to_vec(),
+            point,
+            id0: 0,
+            id1,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -395,8 +476,16 @@ mod tests {
             r#type: proto::SketchItemType::Line as i32,
             start_point: Some(r(true, 1)),
             end_point: Some(r(true, 2)),
-            start: Some(proto::Vec3 { x: 0.0, y: 0.0, z: 0.0 }),
-            end: Some(proto::Vec3 { x: 0.05, y: 0.0, z: 0.0 }),
+            start: Some(proto::Vec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            }),
+            end: Some(proto::Vec3 {
+                x: 0.05,
+                y: 0.0,
+                z: 0.0,
+            }),
             length: 0.05,
             status: proto::DefinitionStatus::Under as i32,
             ..Default::default()
@@ -405,7 +494,10 @@ mod tests {
         assert_eq!(json["id"], "line:1");
         assert_eq!(json["start"], "point:1");
         assert_eq!(json["end_mm"], json!([50.0, 0.0]));
-        assert_eq!(item_json(&mut ids, &line, true)["end_mm"], json!([50.0, 0.0, 0.0]));
+        assert_eq!(
+            item_json(&mut ids, &line, true)["end_mm"],
+            json!([50.0, 0.0, 0.0])
+        );
         assert_eq!(json["status"], "under defined");
         assert_eq!(decode_ref(&ids, "line:1").unwrap(), r(false, 7));
         assert_eq!(decode_ref(&ids, "point:2").unwrap(), r(true, 2));
@@ -413,7 +505,10 @@ mod tests {
         assert!(decode_ref(&ids, "line:9").is_none());
         ids.id_for(Kind::Face, b"face-bytes");
         assert!(decode_ref(&ids, "face:1").is_none());
-        assert_eq!(item_summary(&mut ids, &line).unwrap(), "line:1 (point:1 -> point:2)");
+        assert_eq!(
+            item_summary(&mut ids, &line).unwrap(),
+            "line:1 (point:1 -> point:2)"
+        );
     }
 
     #[test]
@@ -442,10 +537,19 @@ mod tests {
         assert!(text.contains("Sketch1 is under defined"), "{text}");
         assert!(text.contains("point:1 and 3 more"), "{text}");
         assert!(text.contains("fully_define_sketch"), "{text}");
-        let state_3d = proto::SketchState { is_3d: true, ..state.clone() };
+        let state_3d = proto::SketchState {
+            is_3d: true,
+            ..state.clone()
+        };
         let text = state_text(&mut ids, "3DSketch1", Some(&state_3d));
         assert!(!text.contains("fully_define_sketch"), "{text}");
-        let fully = proto::SketchState { status: proto::DefinitionStatus::Fully as i32, ..Default::default() };
-        assert_eq!(state_text(&mut ids, "Sketch1", Some(&fully)), " Sketch1 is fully defined.");
+        let fully = proto::SketchState {
+            status: proto::DefinitionStatus::Fully as i32,
+            ..Default::default()
+        };
+        assert_eq!(
+            state_text(&mut ids, "Sketch1", Some(&fully)),
+            " Sketch1 is fully defined."
+        );
     }
 }

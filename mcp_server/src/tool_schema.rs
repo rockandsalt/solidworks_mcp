@@ -46,11 +46,15 @@ fn slim(value: &mut Value) {
 }
 
 fn is_null_type(value: &Value) -> bool {
-    value.as_object().is_some_and(|o| o.len() == 1 && o.get("type").is_some_and(|t| t == "null"))
+    value
+        .as_object()
+        .is_some_and(|o| o.len() == 1 && o.get("type").is_some_and(|t| t == "null"))
 }
 
 fn unwrap_nullable(node: &mut Map<String, Value>) {
-    let Some(Value::Array(alternatives)) = node.get("anyOf") else { return };
+    let Some(Value::Array(alternatives)) = node.get("anyOf") else {
+        return;
+    };
     if alternatives.len() != 2 || !alternatives.iter().any(is_null_type) {
         return;
     }
@@ -68,21 +72,28 @@ fn unwrap_nullable(node: &mut Map<String, Value>) {
 fn is_constant(variant: &Value) -> bool {
     variant.as_object().is_some_and(|v| {
         (v.contains_key("const") || v.get("enum").is_some_and(Value::is_array))
-            && v.keys().all(|k| ["const", "enum", "description", "type"].contains(&k.as_str()))
+            && v.keys()
+                .all(|k| ["const", "enum", "description", "type"].contains(&k.as_str()))
     })
 }
 
 fn constants_to_enum(node: &mut Map<String, Value>) {
-    let Some(Value::Array(variants)) = node.get("oneOf") else { return };
+    let Some(Value::Array(variants)) = node.get("oneOf") else {
+        return;
+    };
     if variants.is_empty() || !variants.iter().all(is_constant) {
         return;
     }
-    let Some(Value::Array(variants)) = node.remove("oneOf") else { return };
+    let Some(Value::Array(variants)) = node.remove("oneOf") else {
+        return;
+    };
     let mut values = Vec::new();
     let mut docs = Vec::new();
     let mut kind = None;
     for variant in variants {
-        let Value::Object(mut variant) = variant else { continue };
+        let Value::Object(mut variant) = variant else {
+            continue;
+        };
         kind = kind.or(variant.remove("type"));
         if let Some(Value::Array(plain)) = variant.remove("enum") {
             values.extend(plain);
@@ -90,12 +101,16 @@ fn constants_to_enum(node: &mut Map<String, Value>) {
         }
         let constant = variant.remove("const").unwrap_or(Value::Null);
         if let Some(Value::String(doc)) = variant.remove("description") {
-            let name = constant.as_str().map(str::to_string).unwrap_or_else(|| constant.to_string());
+            let name = constant
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| constant.to_string());
             docs.push(format!("{name}: {}", doc.trim_end_matches('.')));
         }
         values.push(constant);
     }
-    node.entry("type").or_insert(kind.unwrap_or_else(|| "string".into()));
+    node.entry("type")
+        .or_insert(kind.unwrap_or_else(|| "string".into()));
     node.insert("enum".into(), Value::Array(values));
     if !docs.is_empty() {
         let docs = docs.join("; ") + ".";

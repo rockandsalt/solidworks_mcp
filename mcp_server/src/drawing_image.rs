@@ -63,7 +63,12 @@ impl Rect {
         self.y1 - self.y0
     }
     fn intersect(&self, o: &Rect) -> Option<Rect> {
-        let r = Rect { x0: self.x0.max(o.x0), y0: self.y0.max(o.y0), x1: self.x1.min(o.x1), y1: self.y1.min(o.y1) };
+        let r = Rect {
+            x0: self.x0.max(o.x0),
+            y0: self.y0.max(o.y0),
+            x1: self.x1.min(o.x1),
+            y1: self.y1.min(o.y1),
+        };
         (r.width_m() > 0.0 && r.height_m() > 0.0).then_some(r)
     }
 }
@@ -76,7 +81,9 @@ pub fn max_px(params: &RenderDrawingParams) -> Result<u32, McpError> {
     match params.max_px {
         None => Ok(DEFAULT_MAX_PX),
         Some(px) if (MIN_MAX_PX..=MAX_MAX_PX).contains(&px) => Ok(px),
-        Some(px) => Err(invalid(format!("max_px must be {MIN_MAX_PX}..{MAX_MAX_PX}, got {px}"))),
+        Some(px) => Err(invalid(format!(
+            "max_px must be {MIN_MAX_PX}..{MAX_MAX_PX}, got {px}"
+        ))),
     }
 }
 
@@ -120,7 +127,12 @@ pub fn needs_other_dpi(crop_px: f64, max_px: u32) -> bool {
 fn outline_rect(v: &proto::SheetViewOutline) -> Option<Rect> {
     let o = v.outline.as_ref()?;
     let (min, max) = (o.min.as_ref()?, o.max.as_ref()?);
-    Some(Rect { x0: min.x, y0: min.y, x1: max.x, y1: max.y })
+    Some(Rect {
+        x0: min.x,
+        y0: min.y,
+        x1: max.x,
+        y1: max.y,
+    })
 }
 
 /// What to show of the sheet in `reply`, meters.
@@ -129,7 +141,12 @@ pub fn crop_rect(
     view: Option<&str>,
     region: Option<Rect>,
 ) -> Result<Rect, McpError> {
-    let sheet = Rect { x0: 0.0, y0: 0.0, x1: reply.width, y1: reply.height };
+    let sheet = Rect {
+        x0: 0.0,
+        y0: 0.0,
+        x1: reply.width,
+        y1: reply.height,
+    };
     let wanted = match (view, region) {
         (Some(name), _) => {
             let v = reply.views.iter().find(|v| v.name == name).ok_or_else(|| {
@@ -140,9 +157,15 @@ pub fn crop_rect(
                     names.join(", ")
                 ))
             })?;
-            let o = outline_rect(v).ok_or_else(|| invalid(format!("SolidWorks gave no outline for {name}")))?;
+            let o = outline_rect(v)
+                .ok_or_else(|| invalid(format!("SolidWorks gave no outline for {name}")))?;
             let m = VIEW_MARGIN_MM / MM_PER_M;
-            Rect { x0: o.x0 - m, y0: o.y0 - m, x1: o.x1 + m, y1: o.y1 + m }
+            Rect {
+                x0: o.x0 - m,
+                y0: o.y0 - m,
+                x1: o.x1 + m,
+                y1: o.y1 + m,
+            }
         }
         (None, Some(r)) => r,
         (None, None) => sheet,
@@ -168,16 +191,26 @@ pub struct Picture {
 
 /// Decodes SolidWorks' image of the whole sheet.
 pub fn decode(reply: &proto::RenderDrawingResponse) -> Result<RgbImage, McpError> {
-    let format = if reply.format == "jpg" { ImageFormat::Jpeg } else { ImageFormat::Png };
+    let format = if reply.format == "jpg" {
+        ImageFormat::Jpeg
+    } else {
+        ImageFormat::Png
+    };
     let image = image::load_from_memory_with_format(&reply.image, format).map_err(|err| {
-        McpError::internal_error(format!("couldn't read the {} SolidWorks saved: {err}", reply.format), None)
+        McpError::internal_error(
+            format!("couldn't read the {} SolidWorks saved: {err}", reply.format),
+            None,
+        )
     })?;
     Ok(image.to_rgb8())
 }
 
 /// Pixels of `image` (the whole sheet) per sheet meter, x and y.
 fn sheet_scale(image: &RgbImage, reply: &proto::RenderDrawingResponse) -> (f64, f64) {
-    (f64::from(image.width()) / reply.width, f64::from(image.height()) / reply.height)
+    (
+        f64::from(image.width()) / reply.width,
+        f64::from(image.height()) / reply.height,
+    )
 }
 
 /// How many pixels of the sheet image the crop spans along its longer side.
@@ -210,7 +243,11 @@ pub fn picture(
         ((f64::from(cropped.width()) * scale).round() as u32).max(1),
         ((f64::from(cropped.height()) * scale).round() as u32).max(1),
     );
-    let scaled = if scale < 1.0 { shrink(&cropped, w, h) } else { cropped };
+    let scaled = if scale < 1.0 {
+        shrink(&cropped, w, h)
+    } else {
+        cropped
+    };
 
     // Sheet meters -> picture pixels (before the ruler margin).
     let shown = Rect {
@@ -223,7 +260,9 @@ pub fn picture(
     let mut png = Vec::new();
     canvas
         .write_to(&mut std::io::Cursor::new(&mut png), ImageFormat::Png)
-        .map_err(|err| McpError::internal_error(format!("couldn't encode the picture: {err}"), None))?;
+        .map_err(|err| {
+            McpError::internal_error(format!("couldn't encode the picture: {err}"), None)
+        })?;
     Ok(Picture {
         png,
         width: canvas.width(),
@@ -242,7 +281,8 @@ fn shrink(image: &RgbImage, w: u32, h: u32) -> RgbImage {
     let (sw, sh) = image.dimensions();
     let span = |i: u32, n: u32, src: u32| {
         let lo = (u64::from(i) * u64::from(src) / u64::from(n)) as u32;
-        let hi = ((u64::from(i + 1) * u64::from(src)).div_ceil(u64::from(n)) as u32).clamp(lo + 1, src);
+        let hi =
+            ((u64::from(i + 1) * u64::from(src)).div_ceil(u64::from(n)) as u32).clamp(lo + 1, src);
         lo..hi
     };
     let mut out = average;
@@ -311,7 +351,11 @@ fn draw_number(canvas: &mut RgbImage, n: u32, x: i64, y: i64) {
                     for dx in 0..GLYPH_SCALE {
                         let px = gx + i64::from(col * GLYPH_SCALE + dx);
                         let py = y + (row as i64) * i64::from(GLYPH_SCALE) + i64::from(dy);
-                        if px >= 0 && py >= 0 && (px as u32) < canvas.width() && (py as u32) < canvas.height() {
+                        if px >= 0
+                            && py >= 0
+                            && (px as u32) < canvas.width()
+                            && (py as u32) < canvas.height()
+                        {
                             canvas.put_pixel(px as u32, py as u32, INK);
                         }
                     }
@@ -369,7 +413,12 @@ fn with_rulers(image: &RgbImage, shown: Rect) -> RgbImage {
                     }
                 }
                 let n = t as u32;
-                draw_number(&mut canvas, n, x - i64::from(number_width(n) / 2), i64::from(h) + 12);
+                draw_number(
+                    &mut canvas,
+                    n,
+                    x - i64::from(number_width(n) / 2),
+                    i64::from(h) + 12,
+                );
             }
         }
         t += i64::from(minor);
@@ -393,8 +442,14 @@ fn with_rulers(image: &RgbImage, shown: Rect) -> RgbImage {
                     }
                 }
                 let n = t as u32;
-                let gy = (y - 7 * i64::from(GLYPH_SCALE) / 2).clamp(0, i64::from(h) - 7 * i64::from(GLYPH_SCALE));
-                draw_number(&mut canvas, n, i64::from(RULER_LEFT) - 12 - i64::from(number_width(n)), gy);
+                let gy = (y - 7 * i64::from(GLYPH_SCALE) / 2)
+                    .clamp(0, i64::from(h) - 7 * i64::from(GLYPH_SCALE));
+                draw_number(
+                    &mut canvas,
+                    n,
+                    i64::from(RULER_LEFT) - 12 - i64::from(number_width(n)),
+                    gy,
+                );
             }
         }
         t += i64::from(minor);
@@ -431,7 +486,14 @@ pub fn reply_text(
         text += "\nViews on this sheet (outline, mm):";
         for v in &reply.views {
             if let Some(o) = outline_rect(v) {
-                text += &format!("\n  {}: x {}..{}, y {}..{}", v.name, mm(o.x0), mm(o.x1), mm(o.y0), mm(o.y1));
+                text += &format!(
+                    "\n  {}: x {}..{}, y {}..{}",
+                    v.name,
+                    mm(o.x0),
+                    mm(o.x1),
+                    mm(o.y0),
+                    mm(o.y1)
+                );
             }
         }
     }
@@ -455,8 +517,16 @@ mod tests {
         let view = proto::SheetViewOutline {
             name: "Drawing View1".into(),
             outline: Some(proto::Box3 {
-                min: Some(proto::Vec3 { x: 0.08, y: 0.13, z: 0.0 }),
-                max: Some(proto::Vec3 { x: 0.12, y: 0.17, z: 0.0 }),
+                min: Some(proto::Vec3 {
+                    x: 0.08,
+                    y: 0.13,
+                    z: 0.0,
+                }),
+                max: Some(proto::Vec3 {
+                    x: 0.12,
+                    y: 0.17,
+                    z: 0.0,
+                }),
             }),
         };
         let reply = proto::RenderDrawingResponse {
@@ -476,14 +546,26 @@ mod tests {
     fn crops_views_and_regions_within_the_sheet() {
         let (r, _) = reply(2480, 1754);
         let v = crop_rect(&r, Some("Drawing View1"), None).unwrap();
-        assert!((v.x0 - 0.06).abs() < 1e-12 && (v.y1 - 0.19).abs() < 1e-12, "{v:?}");
+        assert!(
+            (v.x0 - 0.06).abs() < 1e-12 && (v.y1 - 0.19).abs() < 1e-12,
+            "{v:?}"
+        );
         assert!(crop_rect(&r, Some("Drawing View9"), None).is_err());
-        let p = RenderDrawingParams { region_mm: Some([[400.0, 280.0], [500.0, 350.0]]), ..Default::default() };
+        let p = RenderDrawingParams {
+            region_mm: Some([[400.0, 280.0], [500.0, 350.0]]),
+            ..Default::default()
+        };
         let clipped = crop_rect(&r, None, region(&p).unwrap()).unwrap();
         assert!((clipped.x1 - 0.420).abs() < 1e-12 && (clipped.y1 - 0.297).abs() < 1e-12);
-        let off = RenderDrawingParams { region_mm: Some([[500.0, 0.0], [600.0, 10.0]]), ..Default::default() };
+        let off = RenderDrawingParams {
+            region_mm: Some([[500.0, 0.0], [600.0, 10.0]]),
+            ..Default::default()
+        };
         assert!(crop_rect(&r, None, region(&off).unwrap()).is_err());
-        let tiny = RenderDrawingParams { region_mm: Some([[0.0, 0.0], [1.0, 1.0]]), ..Default::default() };
+        let tiny = RenderDrawingParams {
+            region_mm: Some([[0.0, 0.0], [1.0, 1.0]]),
+            ..Default::default()
+        };
         assert!(region(&tiny).is_err());
     }
 
@@ -491,7 +573,12 @@ mod tests {
     fn picture_keeps_sheet_coordinates() {
         let (r, image) = reply(2480, 1754);
         // Region 90..110 x 40..60 mm: the black pixel lands in the middle.
-        let crop = Rect { x0: 0.090, y0: 0.040, x1: 0.110, y1: 0.060 };
+        let crop = Rect {
+            x0: 0.090,
+            y0: 0.040,
+            x1: 0.110,
+            y1: 0.060,
+        };
         let p = picture(&image, &r, crop, 1568).unwrap();
         assert!(!p.distorted);
         let decoded = image::load_from_memory(&p.png).unwrap().to_rgb8();
@@ -503,10 +590,21 @@ mod tests {
             .collect();
         assert_eq!(dark.len(), 1, "{dark:?}");
         let (w, h) = (p.width - RULER_LEFT, p.height - RULER_BOTTOM);
-        let (dx, dy) = (f64::from(dark[0].0) / f64::from(w), f64::from(dark[0].1) / f64::from(h));
-        assert!((dx - 0.5).abs() < 0.05 && (dy - 0.5).abs() < 0.05, "{dark:?} in {w} x {h}");
+        let (dx, dy) = (
+            f64::from(dark[0].0) / f64::from(w),
+            f64::from(dark[0].1) / f64::from(h),
+        );
+        assert!(
+            (dx - 0.5).abs() < 0.05 && (dy - 0.5).abs() < 0.05,
+            "{dark:?} in {w} x {h}"
+        );
         // Whole sheet, scaled down to fit.
-        let whole = Rect { x0: 0.0, y0: 0.0, x1: 0.420, y1: 0.297 };
+        let whole = Rect {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 0.420,
+            y1: 0.297,
+        };
         let p = picture(&image, &r, whole, 1000).unwrap();
         assert_eq!(p.width - RULER_LEFT, 1000);
         assert!((p.px_per_mm - 1000.0 / 420.0).abs() < 0.01);
@@ -535,8 +633,15 @@ mod tests {
         assert_eq!(dpi_for(0.100, 1568), MAX_DPI);
         assert_eq!(dpi_for(1.189, 1568), MIN_DPI);
         assert_eq!(dpi_for(0.010, 1568), MAX_DPI);
-        assert!(!needs_other_dpi(1500.0, 1568) && needs_other_dpi(1000.0, 1568) && needs_other_dpi(2480.0, 1568));
-        let p = RenderDrawingParams { max_px: Some(100), ..Default::default() };
+        assert!(
+            !needs_other_dpi(1500.0, 1568)
+                && needs_other_dpi(1000.0, 1568)
+                && needs_other_dpi(2480.0, 1568)
+        );
+        let p = RenderDrawingParams {
+            max_px: Some(100),
+            ..Default::default()
+        };
         assert!(max_px(&p).is_err());
     }
 }

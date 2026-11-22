@@ -81,15 +81,22 @@ pub fn request(
 ) -> Result<proto::InspectMobilityRequest, McpError> {
     let step_mm = params.step_mm.unwrap_or(DEFAULT_STEP_MM);
     if !(step_mm > 0.0 && step_mm <= MAX_STEP_MM) {
-        return Err(invalid(format!("step_mm must be more than 0 and at most {MAX_STEP_MM}, got {step_mm}")));
+        return Err(invalid(format!(
+            "step_mm must be more than 0 and at most {MAX_STEP_MM}, got {step_mm}"
+        )));
     }
     let step_deg = params.step_deg.unwrap_or(DEFAULT_STEP_DEG);
     if !(step_deg > 0.0 && step_deg <= MAX_STEP_DEG) {
-        return Err(invalid(format!("step_deg must be more than 0 and at most {MAX_STEP_DEG}, got {step_deg}")));
+        return Err(invalid(format!(
+            "step_deg must be more than 0 and at most {MAX_STEP_DEG}, got {step_deg}"
+        )));
     }
     let components = params.components.as_deref().unwrap_or_default();
     if components.len() > MAX_COMPONENTS {
-        return Err(invalid(format!("at most {MAX_COMPONENTS} components per call, got {}", components.len())));
+        return Err(invalid(format!(
+            "at most {MAX_COMPONENTS} components per call, got {}",
+            components.len()
+        )));
     }
     let mut persist_ids = Vec::new();
     for id in components.iter().map(|id| id.trim()) {
@@ -111,18 +118,26 @@ pub fn request(
 // ---- Twists -------------------------------------------------------------
 
 fn vec(v: &Option<proto::Vec3>) -> DVec3 {
-    v.as_ref().map(|v| DVec3::new(v.x, v.y, v.z)).unwrap_or_default()
+    v.as_ref()
+        .map(|v| DVec3::new(v.x, v.y, v.z))
+        .unwrap_or_default()
 }
 
 /// Origin (meters) and rotation (the axes as columns).
 type Frame = (DVec3, DMat3);
 
 fn info_frame(c: &proto::ComponentInfo) -> Frame {
-    (vec(&c.origin), DMat3::from_cols(vec(&c.x_axis), vec(&c.y_axis), vec(&c.z_axis)))
+    (
+        vec(&c.origin),
+        DMat3::from_cols(vec(&c.x_axis), vec(&c.y_axis), vec(&c.z_axis)),
+    )
 }
 
 fn placement_frame(p: &proto::ComponentPlacement) -> Frame {
-    (vec(&p.origin), DMat3::from_cols(vec(&p.x_axis), vec(&p.y_axis), vec(&p.z_axis)))
+    (
+        vec(&p.origin),
+        DMat3::from_cols(vec(&p.x_axis), vec(&p.y_axis), vec(&p.z_axis)),
+    )
 }
 
 /// A small rigid motion: `v` how far the reference point went (mm), `w`
@@ -140,17 +155,30 @@ struct Twist {
 fn twist(from: Frame, to: Frame, center: DVec3) -> Twist {
     let turn = to.1 * from.1.transpose();
     let (axis, angle) = DQuat::from_mat3(&turn).normalize().to_axis_angle();
-    let angle = if angle > std::f64::consts::PI { angle - std::f64::consts::TAU } else { angle };
+    let angle = if angle > std::f64::consts::PI {
+        angle - std::f64::consts::TAU
+    } else {
+        angle
+    };
     let w = axis * angle;
     let moved = (turn * (center - from.0) + to.0 - center) * MM_PER_M;
     if angle.abs() < 1e-9 {
         return Twist { v: moved, w };
     }
     // moved = V v with V = I + (1 - cos a) / a^2 [w]x + (a - sin a) / a^3 [w]x^2.
-    let cross = DMat3::from_cols(DVec3::new(0.0, w.z, -w.y), DVec3::new(-w.z, 0.0, w.x), DVec3::new(w.y, -w.x, 0.0));
+    let cross = DMat3::from_cols(
+        DVec3::new(0.0, w.z, -w.y),
+        DVec3::new(-w.z, 0.0, w.x),
+        DVec3::new(w.y, -w.x, 0.0),
+    );
     let a = angle.abs();
-    let v_of = DMat3::IDENTITY + cross * ((1.0 - a.cos()) / (a * a)) + cross * cross * ((a - a.sin()) / (a * a * a));
-    Twist { v: v_of.inverse() * moved, w }
+    let v_of = DMat3::IDENTITY
+        + cross * ((1.0 - a.cos()) / (a * a))
+        + cross * cross * ((a - a.sin()) / (a * a * a));
+    Twist {
+        v: v_of.inverse() * moved,
+        w,
+    }
 }
 
 fn is_motion(t: &Twist) -> bool {
@@ -163,9 +191,14 @@ fn is_motion(t: &Twist) -> bool {
 /// largest first.
 fn symmetric_eigen(mut a: Vec<Vec<f64>>) -> Vec<(f64, Vec<f64>)> {
     let n = a.len();
-    let mut v: Vec<Vec<f64>> = (0..n).map(|i| (0..n).map(|j| if i == j { 1.0 } else { 0.0 }).collect()).collect();
+    let mut v: Vec<Vec<f64>> = (0..n)
+        .map(|i| (0..n).map(|j| if i == j { 1.0 } else { 0.0 }).collect())
+        .collect();
     for _ in 0..100 {
-        let off: f64 = (0..n).flat_map(|i| (0..n).filter(move |&j| j != i).map(move |j| (i, j))).map(|(i, j)| a[i][j] * a[i][j]).sum();
+        let off: f64 = (0..n)
+            .flat_map(|i| (0..n).filter(move |&j| j != i).map(move |j| (i, j)))
+            .map(|(i, j)| a[i][j] * a[i][j])
+            .sum();
         if off < 1e-24 {
             break;
         }
@@ -197,7 +230,9 @@ fn symmetric_eigen(mut a: Vec<Vec<f64>>) -> Vec<(f64, Vec<f64>)> {
             }
         }
     }
-    let mut out: Vec<(f64, Vec<f64>)> = (0..n).map(|j| (a[j][j], v.iter().map(|row| row[j]).collect())).collect();
+    let mut out: Vec<(f64, Vec<f64>)> = (0..n)
+        .map(|j| (a[j][j], v.iter().map(|row| row[j]).collect()))
+        .collect();
     out.sort_by(|x, y| y.0.total_cmp(&x.0));
     out
 }
@@ -233,7 +268,14 @@ fn freedom(twists: &[Twist], center: DVec3, scale: f64) -> Freedom {
         .iter()
         .filter(|t| is_motion(t))
         .filter_map(|t| {
-            let s = [t.v.x / scale, t.v.y / scale, t.v.z / scale, t.w.x, t.w.y, t.w.z];
+            let s = [
+                t.v.x / scale,
+                t.v.y / scale,
+                t.v.z / scale,
+                t.w.x,
+                t.w.y,
+                t.w.z,
+            ];
             let n = s.iter().map(|x| x * x).sum::<f64>().sqrt();
             (n > 0.0).then(|| s.map(|x| x / n))
         })
@@ -246,8 +288,11 @@ fn freedom(twists: &[Twist], center: DVec3, scale: f64) -> Freedom {
             }
         }
     }
-    let basis: Vec<Vec<f64>> =
-        symmetric_eigen(gram).into_iter().filter(|(l, _)| *l > RANK_EIGEN).map(|(_, v)| v).collect();
+    let basis: Vec<Vec<f64>> = symmetric_eigen(gram)
+        .into_iter()
+        .filter(|(l, _)| *l > RANK_EIGEN)
+        .map(|(_, v)| v)
+        .collect();
     if basis.is_empty() {
         return Freedom::default();
     }
@@ -256,7 +301,9 @@ fn freedom(twists: &[Twist], center: DVec3, scale: f64) -> Freedom {
     let k = basis.len();
     let w = |b: &Vec<f64>| DVec3::new(b[3], b[4], b[5]);
     let v = |b: &Vec<f64>| DVec3::new(b[0], b[1], b[2]);
-    let m: Vec<Vec<f64>> = (0..k).map(|i| (0..k).map(|j| w(&basis[i]).dot(w(&basis[j]))).collect()).collect();
+    let m: Vec<Vec<f64>> = (0..k)
+        .map(|i| (0..k).map(|j| w(&basis[i]).dot(w(&basis[j]))).collect())
+        .collect();
     let combine = |u: &[f64], part: &dyn Fn(&Vec<f64>) -> DVec3| -> DVec3 {
         basis.iter().zip(u).map(|(b, c)| part(b) * *c).sum()
     };
@@ -283,7 +330,11 @@ fn freedom(twists: &[Twist], center: DVec3, scale: f64) -> Freedom {
             let w2 = w.length_squared();
             let pitch = w.dot(v) / w2;
             let v = v - w * pitch;
-            Rotation { axis: w / w2.sqrt(), through: center + w.cross(v) / w2, pitch }
+            Rotation {
+                axis: w / w2.sqrt(),
+                through: center + w.cross(v) / w2,
+                pitch,
+            }
         })
         .collect();
 
@@ -298,7 +349,11 @@ fn freedom(twists: &[Twist], center: DVec3, scale: f64) -> Freedom {
         }
         (a.determinant().abs() > 1e-12).then(|| a.inverse() * b)
     });
-    Freedom { translations, rotations, pivot: pivot.flatten() }
+    Freedom {
+        translations,
+        rotations,
+        pivot: pivot.flatten(),
+    }
 }
 
 fn outer(a: DVec3, b: DVec3) -> DMat3 {
@@ -352,7 +407,12 @@ fn snap_turns(turns: &[(DVec3, DVec3)]) -> Vec<(DVec3, DVec3)> {
                 b[i] = wi.dot(d);
             }
             let a = inverse * b;
-            turns.iter().enumerate().fold((DVec3::ZERO, DVec3::ZERO), |(w, v), (i, t)| (w + t.0 * a[i], v + t.1 * a[i]))
+            turns
+                .iter()
+                .enumerate()
+                .fold((DVec3::ZERO, DVec3::ZERO), |(w, v), (i, t)| {
+                    (w + t.0 * a[i], v + t.1 * a[i])
+                })
         })
         .collect()
 }
@@ -362,7 +422,10 @@ fn snap_turns(turns: &[(DVec3, DVec3)]) -> Vec<(DVec3, DVec3)> {
 /// A direction for people: rounded, and pointing the "positive" way (its
 /// biggest component positive), since a free direction has no sign.
 fn direction(d: DVec3) -> DVec3 {
-    let biggest = [d.x, d.y, d.z].into_iter().max_by(|a, b| a.abs().total_cmp(&b.abs())).unwrap_or(0.0);
+    let biggest = [d.x, d.y, d.z]
+        .into_iter()
+        .max_by(|a, b| a.abs().total_cmp(&b.abs()))
+        .unwrap_or(0.0);
     if biggest < 0.0 { -d } else { d }
 }
 
@@ -389,17 +452,27 @@ fn freedom_text(f: &Freedom) -> String {
     match f.translations.as_slice() {
         [] => {}
         [t] => parts.push(format!("translates along {}", dir_text(*t))),
-        [a, b] => parts.push(format!("translates in the plane normal to {}", dir_text(a.cross(*b)))),
+        [a, b] => parts.push(format!(
+            "translates in the plane normal to {}",
+            dir_text(a.cross(*b))
+        )),
         _ => parts.push("translates in any direction".to_string()),
     }
     if f.rotations.len() == 3 {
         parts.push(match f.pivot {
-            Some(p) => format!("turns about any axis through {} mm (a ball joint)", mm_text(p)),
+            Some(p) => format!(
+                "turns about any axis through {} mm (a ball joint)",
+                mm_text(p)
+            ),
             None => "turns about any axis".to_string(),
         });
     } else {
         for r in &f.rotations {
-            let mut text = format!("turns about {} through {} mm", dir_text(r.axis), mm_text(r.through));
+            let mut text = format!(
+                "turns about {} through {} mm",
+                dir_text(r.axis),
+                mm_text(r.through)
+            );
             if r.pitch.abs() >= PITCH_MM_PER_RAD {
                 text += &format!(
                     ", advancing {} mm per turn (a screw)",
@@ -447,14 +520,22 @@ struct Motions<'a> {
 }
 
 impl<'a> Motions<'a> {
-    fn collect(request: &proto::InspectMobilityRequest, reply: &'a proto::InspectMobilityResponse) -> Self {
+    fn collect(
+        request: &proto::InspectMobilityRequest,
+        reply: &'a proto::InspectMobilityResponse,
+    ) -> Self {
         // Where everything started, and each component's motions: from its own
         // probes and from the ones that dragged it along.
         let start: HashMap<&[u8], (&proto::ComponentInfo, DVec3)> = reply
             .components
             .iter()
             .chain(&reply.others)
-            .filter_map(|m| Some((m.component.as_ref()?.persist_id.as_slice(), (m.component.as_ref()?, vec(&m.center)))))
+            .filter_map(|m| {
+                Some((
+                    m.component.as_ref()?.persist_id.as_slice(),
+                    (m.component.as_ref()?, vec(&m.center)),
+                ))
+            })
             .collect();
         let step_mm = request.step * MM_PER_M;
         let step_rad = request.step_angle;
@@ -464,14 +545,22 @@ impl<'a> Motions<'a> {
             let Some(c) = &m.component else { continue };
             for probe in &m.probes {
                 for moved in &probe.moved {
-                    let (Some((info, center)), Some(p)) = (start.get(moved.persist_id.as_slice()), &moved.placement) else {
+                    let (Some((info, center)), Some(p)) =
+                        (start.get(moved.persist_id.as_slice()), &moved.placement)
+                    else {
                         continue;
                     };
                     let t = twist(info_frame(info), placement_frame(p), *center);
-                    if t.v.length() < MOVED_SHARE * step_mm && t.w.length() < MOVED_SHARE * step_rad {
+                    if t.v.length() < MOVED_SHARE * step_mm && t.w.length() < MOVED_SHARE * step_rad
+                    {
                         continue;
                     }
-                    motions.push((&moved.persist_id, &c.persist_id, (probe.axis, probe.negative), t));
+                    motions.push((
+                        &moved.persist_id,
+                        &c.persist_id,
+                        (probe.axis, probe.negative),
+                        t,
+                    ));
                 }
             }
         }
@@ -488,7 +577,10 @@ impl<'a> Motions<'a> {
                 let size = |t: &Twist| (t.v / scale).length() + t.w.length();
                 let repeated = motions.iter().enumerate().any(|(j, &(m2, _, nudge2, t2))| {
                     j != i && m2 == moved && nudge2 != nudge && {
-                        let d = Twist { v: t.v - t2.v, w: t.w - t2.w };
+                        let d = Twist {
+                            v: t.v - t2.v,
+                            w: t.w - t2.w,
+                        };
                         size(&d) < 0.2 * size(&t)
                     }
                 });
@@ -500,12 +592,21 @@ impl<'a> Motions<'a> {
             }
             twists.entry(moved).or_default().push(t);
         }
-        Motions { start, twists, drags, dragged_by }
+        Motions {
+            start,
+            twists,
+            drags,
+            dragged_by,
+        }
     }
 
     /// "name (component:N)".
     fn label(&self, ids: &mut IdRegistry, pid: &[u8]) -> String {
-        let name = self.start.get(pid).map(|(c, _)| c.name.as_str()).unwrap_or("?");
+        let name = self
+            .start
+            .get(pid)
+            .map(|(c, _)| c.name.as_str())
+            .unwrap_or("?");
         match ids.id_for(Kind::Component, pid) {
             Some(id) => format!("{name} ({id})"),
             None => name.to_string(),
@@ -521,7 +622,11 @@ fn rotations_json(f: &Freedom) -> Vec<Value> {
             let mut o = json!({ "axis": dir_json(r.axis), "through_mm": mm_json(r.through) });
             if r.pitch.abs() >= PITCH_MM_PER_RAD {
                 // Along the axis as dir_json shows it.
-                let sign = if direction(r.axis).dot(r.axis) < 0.0 { -1.0 } else { 1.0 };
+                let sign = if direction(r.axis).dot(r.axis) < 0.0 {
+                    -1.0
+                } else {
+                    1.0
+                };
                 o["pitch_mm_per_turn"] = json!(round(sign * r.pitch * std::f64::consts::TAU, 3));
             }
             o
@@ -531,7 +636,12 @@ fn rotations_json(f: &Freedom) -> Vec<Value> {
 
 /// Where SolidWorks' constrained status and what the probes found
 /// disagree, or the mates conflict.
-fn status_note(label: &str, status: proto::ConstrainedStatus, f: &Freedom, dragged: bool) -> Option<String> {
+fn status_note(
+    label: &str,
+    status: proto::ConstrainedStatus,
+    f: &Freedom,
+    dragged: bool,
+) -> Option<String> {
     Some(match status {
         proto::ConstrainedStatus::Under if f.dof() == 0 => format!(
             "{label}: SolidWorks calls it under defined, but no nudge moved it -- it may only move \
@@ -539,9 +649,15 @@ fn status_note(label: &str, status: proto::ConstrainedStatus, f: &Freedom, dragg
         ),
         proto::ConstrainedStatus::Fully if f.dof() > 0 => format!(
             "{label}: SolidWorks calls it fully defined (against what it's mated to), yet it moves: {}.",
-            if dragged { "together with the components that drag it" } else { "check its mates" }
+            if dragged {
+                "together with the components that drag it"
+            } else {
+                "check its mates"
+            }
         ),
-        proto::ConstrainedStatus::Over | proto::ConstrainedStatus::NoSolution | proto::ConstrainedStatus::InvalidSolution => {
+        proto::ConstrainedStatus::Over
+        | proto::ConstrainedStatus::NoSolution
+        | proto::ConstrainedStatus::InvalidSolution => {
             format!(
                 "{label}: its mates conflict ({}); the result reflects how SolidWorks resolved them -- \
                  diagnose_model shows the failing mates.",
@@ -552,7 +668,11 @@ fn status_note(label: &str, status: proto::ConstrainedStatus, f: &Freedom, dragg
     })
 }
 
-pub fn reply_json(ids: &mut IdRegistry, request: &proto::InspectMobilityRequest, reply: &proto::InspectMobilityResponse) -> Value {
+pub fn reply_json(
+    ids: &mut IdRegistry,
+    request: &proto::InspectMobilityRequest,
+    reply: &proto::InspectMobilityResponse,
+) -> Value {
     let motions = Motions::collect(request, reply);
     let mut components = Vec::new();
     let mut counts = (0, 0, 0); // fixed, can't move, can move
@@ -590,32 +710,73 @@ pub fn reply_json(ids: &mut IdRegistry, request: &proto::InspectMobilityRequest,
             continue;
         }
 
-        let f = freedom(motions.twists.get(pid).map(Vec::as_slice).unwrap_or_default(), vec(&m.center) * MM_PER_M, size_mm(c));
+        let f = freedom(
+            motions
+                .twists
+                .get(pid)
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
+            vec(&m.center) * MM_PER_M,
+            size_mm(c),
+        );
         obj.insert("dof".into(), json!(f.dof()));
         obj.insert("translations".into(), json!(f.translations.len()));
         obj.insert("rotations".into(), json!(f.rotations.len()));
         if f.dof() == 0 {
             counts.1 += 1;
-            let why = if m.constrained() == proto::ConstrainedStatus::Fully { "its mates fully define it" } else { "its mates hold it in place" };
+            let why = if m.constrained() == proto::ConstrainedStatus::Fully {
+                "its mates fully define it"
+            } else {
+                "its mates hold it in place"
+            };
             obj.insert("free".into(), json!(format!("nothing: {why}")));
         } else {
             counts.2 += 1;
             obj.insert("free".into(), json!(freedom_text(&f)));
             if !f.translations.is_empty() {
-                obj.insert("translate_along".into(), json!(f.translations.iter().map(|t| dir_json(*t)).collect::<Vec<_>>()));
+                obj.insert(
+                    "translate_along".into(),
+                    json!(
+                        f.translations
+                            .iter()
+                            .map(|t| dir_json(*t))
+                            .collect::<Vec<_>>()
+                    ),
+                );
             }
             if !f.rotations.is_empty() {
                 obj.insert("rotate_about".into(), json!(rotations_json(&f)));
             }
         }
         if let Some(others) = motions.drags.get(pid) {
-            obj.insert("drags_along".into(), json!(others.iter().map(|o| motions.label(ids, o)).collect::<Vec<_>>()));
+            obj.insert(
+                "drags_along".into(),
+                json!(
+                    others
+                        .iter()
+                        .map(|o| motions.label(ids, o))
+                        .collect::<Vec<_>>()
+                ),
+            );
         }
         if let Some(others) = motions.dragged_by.get(pid) {
-            obj.insert("dragged_by".into(), json!(others.iter().map(|o| motions.label(ids, o)).collect::<Vec<_>>()));
+            obj.insert(
+                "dragged_by".into(),
+                json!(
+                    others
+                        .iter()
+                        .map(|o| motions.label(ids, o))
+                        .collect::<Vec<_>>()
+                ),
+            );
         }
         let label = motions.label(ids, pid);
-        if let Some(note) = status_note(&label, m.constrained(), &f, motions.dragged_by.contains_key(pid)) {
+        if let Some(note) = status_note(
+            &label,
+            m.constrained(),
+            &f,
+            motions.dragged_by.contains_key(pid),
+        ) {
             notes.push(note);
         }
         components.push(Value::Object(obj));
@@ -679,7 +840,14 @@ mod tests {
     /// The finite motion "turn by `angle` about `axis` through `point`, then
     /// translate by `shift`" (mm), applied to a component at `origin` (mm),
     /// seen at `center` (mm).
-    fn motion(origin: DVec3, center: DVec3, axis: DVec3, point: DVec3, angle: f64, shift: DVec3) -> Twist {
+    fn motion(
+        origin: DVec3,
+        center: DVec3,
+        axis: DVec3,
+        point: DVec3,
+        angle: f64,
+        shift: DVec3,
+    ) -> Twist {
         let turn = DMat3::from_axis_angle(axis.normalize(), angle);
         let from = (origin / MM_PER_M, DMat3::IDENTITY);
         let to = ((turn * (origin - point) + point + shift) / MM_PER_M, turn);
@@ -705,8 +873,15 @@ mod tests {
     #[test]
     fn eigen_of_a_symmetric_matrix() {
         let e = symmetric_eigen(vec![vec![2.0, 1.0], vec![1.0, 2.0]]);
-        assert!((e[0].0 - 3.0).abs() < 1e-12 && (e[1].0 - 1.0).abs() < 1e-12, "{e:?}");
-        assert!((e[0].1[0].abs() - 0.5f64.sqrt()).abs() < 1e-12 && (e[0].1[0] - e[0].1[1]).abs() < 1e-12, "{e:?}");
+        assert!(
+            (e[0].0 - 3.0).abs() < 1e-12 && (e[1].0 - 1.0).abs() < 1e-12,
+            "{e:?}"
+        );
+        assert!(
+            (e[0].1[0].abs() - 0.5f64.sqrt()).abs() < 1e-12
+                && (e[0].1[0] - e[0].1[1]).abs() < 1e-12,
+            "{e:?}"
+        );
     }
 
     #[test]
@@ -721,7 +896,10 @@ mod tests {
         }
         let f = freedom(&t, c, 22.0);
         assert_eq!((f.translations.len(), f.rotations.len()), (3, 3), "{f:?}");
-        assert_eq!(freedom_text(&f), "translates in any direction; turns about any axis");
+        assert_eq!(
+            freedom_text(&f),
+            "translates in any direction; turns about any axis"
+        );
     }
 
     #[test]
@@ -738,7 +916,10 @@ mod tests {
         ];
         let f = freedom(&t, c, 22.0);
         assert_eq!((f.translations.len(), f.rotations.len()), (2, 1), "{f:?}");
-        assert!(same_line(f.rotations[0].axis, DVec3::Z) && near(f.rotations[0].through, c, 1e-6), "{f:?}");
+        assert!(
+            same_line(f.rotations[0].axis, DVec3::Z) && near(f.rotations[0].through, c, 1e-6),
+            "{f:?}"
+        );
         assert_eq!(
             freedom_text(&f),
             "translates in the plane normal to [0.0,0.0,1.0]; turns about [0.0,0.0,1.0] through [5.0,-200.0,0.0] mm"
@@ -748,11 +929,23 @@ mod tests {
     #[test]
     fn free_directions_come_out_along_the_assembly_axes() {
         // A skewed basis of all of space, and of the XY plane.
-        let skew = [DVec3::new(1.0, 1.0, 0.0), DVec3::new(0.0, 1.0, 1.0), DVec3::new(1.0, 0.0, 1.0)];
+        let skew = [
+            DVec3::new(1.0, 1.0, 0.0),
+            DVec3::new(0.0, 1.0, 1.0),
+            DVec3::new(1.0, 0.0, 1.0),
+        ];
         let got = snap(&skew);
-        assert!(near(got[0], DVec3::X, 1e-12) && near(got[1], DVec3::Y, 1e-12) && near(got[2], DVec3::Z, 1e-12), "{got:?}");
+        assert!(
+            near(got[0], DVec3::X, 1e-12)
+                && near(got[1], DVec3::Y, 1e-12)
+                && near(got[2], DVec3::Z, 1e-12),
+            "{got:?}"
+        );
         let got = snap(&[DVec3::new(1.0, 1.0, 0.0), DVec3::new(1.0, -2.0, 0.0)]);
-        assert!(near(got[0], DVec3::X, 1e-12) && near(got[1], DVec3::Y, 1e-12), "{got:?}");
+        assert!(
+            near(got[0], DVec3::X, 1e-12) && near(got[1], DVec3::Y, 1e-12),
+            "{got:?}"
+        );
         // A tilted plane: the axes' shadows on it.
         let got = snap(&[DVec3::new(1.0, 0.0, 1.0)]);
         assert_eq!(got.len(), 1);
@@ -762,7 +955,12 @@ mod tests {
         let t: Vec<Twist> = skew.iter().map(|a| turn(c, *a, DVec3::ZERO, DEG)).collect();
         let f = freedom(&t, c, 10.0);
         let axes: Vec<DVec3> = f.rotations.iter().map(|r| r.axis).collect();
-        assert!(same_line(axes[0], DVec3::X) && same_line(axes[1], DVec3::Y) && same_line(axes[2], DVec3::Z), "{f:?}");
+        assert!(
+            same_line(axes[0], DVec3::X)
+                && same_line(axes[1], DVec3::Y)
+                && same_line(axes[2], DVec3::Z),
+            "{f:?}"
+        );
         assert!(near(f.pivot.unwrap(), DVec3::ZERO, 1e-6), "{f:?}");
     }
 
@@ -770,7 +968,10 @@ mod tests {
     fn a_hinge_turns_about_its_own_axis() {
         // The pin through (0, 0, 0) along Z, the component's center 10 mm off it.
         let c = DVec3::new(10.0, 0.0, 0.0);
-        let t = vec![turn(c, DVec3::Z, DVec3::ZERO, DEG), turn(c, DVec3::Z, DVec3::ZERO, -DEG)];
+        let t = vec![
+            turn(c, DVec3::Z, DVec3::ZERO, DEG),
+            turn(c, DVec3::Z, DVec3::ZERO, -DEG),
+        ];
         let f = freedom(&t, c, 15.0);
         assert_eq!((f.translations.len(), f.rotations.len()), (0, 1), "{f:?}");
         let r = &f.rotations[0];
@@ -785,12 +986,18 @@ mod tests {
     fn a_ball_joint_turns_about_its_center() {
         let c = DVec3::new(10.0, 5.0, 0.0);
         let q = DVec3::ZERO;
-        let t: Vec<Twist> = [DVec3::X, DVec3::Y, DVec3::Z].iter().map(|a| turn(c, *a, q, DEG)).collect();
+        let t: Vec<Twist> = [DVec3::X, DVec3::Y, DVec3::Z]
+            .iter()
+            .map(|a| turn(c, *a, q, DEG))
+            .collect();
         let f = freedom(&t, c, 12.0);
         assert_eq!((f.translations.len(), f.rotations.len()), (0, 3), "{f:?}");
         assert!(near(f.pivot.unwrap(), q, 1e-6), "{f:?}");
         let text = freedom_text(&f);
-        assert!(text.contains("turns about any axis through [0.0,0.0,0.0] mm (a ball joint)"), "{text}");
+        assert!(
+            text.contains("turns about any axis through [0.0,0.0,0.0] mm (a ball joint)"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -804,9 +1011,15 @@ mod tests {
         ];
         let f = freedom(&t, c, 5.0);
         assert_eq!((f.translations.len(), f.rotations.len()), (0, 1), "{f:?}");
-        assert!((f.rotations[0].pitch.abs() * std::f64::consts::TAU - 2.0).abs() < 1e-6, "{f:?}");
+        assert!(
+            (f.rotations[0].pitch.abs() * std::f64::consts::TAU - 2.0).abs() < 1e-6,
+            "{f:?}"
+        );
         let text = freedom_text(&f);
-        assert!(text.ends_with("advancing 2 mm per turn (a screw)"), "{text}");
+        assert!(
+            text.ends_with("advancing 2 mm per turn (a screw)"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -824,12 +1037,18 @@ mod tests {
         ];
         let f = freedom(&t, c, 16.0);
         assert_eq!((f.translations.len(), f.rotations.len()), (1, 1), "{f:?}");
-        assert!(same_line(f.translations[0], DVec3::X) && same_line(f.rotations[0].axis, DVec3::X), "{f:?}");
+        assert!(
+            same_line(f.translations[0], DVec3::X) && same_line(f.rotations[0].axis, DVec3::X),
+            "{f:?}"
+        );
         assert_eq!(
             freedom_text(&f),
             "translates along [1.0,0.0,0.0]; turns about [1.0,0.0,0.0] through [115.0,0.0,0.0] mm"
         );
-        assert_eq!(freedom(&[shift(DVec3::new(1e-4, 0.0, 0.0))], c, 16.0).dof(), 0);
+        assert_eq!(
+            freedom(&[shift(DVec3::new(1e-4, 0.0, 0.0))], c, 16.0).dof(),
+            0
+        );
     }
 
     fn v(x: f64, y: f64, z: f64) -> Option<proto::Vec3> {
@@ -862,7 +1081,12 @@ mod tests {
     }
 
     fn probe(axis: i32, negative: bool, moved: Vec<proto::MovedComponent>) -> proto::MobilityProbe {
-        proto::MobilityProbe { axis, negative, refused: false, moved }
+        proto::MobilityProbe {
+            axis,
+            negative,
+            refused: false,
+            moved,
+        }
     }
 
     fn mobility(
@@ -893,7 +1117,11 @@ mod tests {
         assert!(request(&p(Some(vec!["face:1"]), None, None), resolve).is_err());
         assert!(request(&p(None, Some(0.0), None), resolve).is_err());
         assert!(request(&p(None, None, Some(90.0)), resolve).is_err());
-        let r = request(&p(Some(vec![" component:2 "]), Some(0.5), Some(2.0)), resolve).unwrap();
+        let r = request(
+            &p(Some(vec![" component:2 "]), Some(0.5), Some(2.0)),
+            resolve,
+        )
+        .unwrap();
         assert_eq!(r.component_persist_ids, vec![b"component:2".to_vec()]);
         assert!((r.step - 0.0005).abs() < 1e-15);
     }
@@ -902,7 +1130,10 @@ mod tests {
     fn a_follower_gets_the_motion_its_slider_drags_it_through() {
         use proto::ConstrainedStatus as S;
         let mut ids = IdRegistry::default();
-        let request = request(&InspectMobilityParams::default(), |id| Ok(id.as_bytes().to_vec())).unwrap();
+        let request = request(&InspectMobilityParams::default(), |id| {
+            Ok(id.as_bytes().to_vec())
+        })
+        .unwrap();
         // The slider slides along X and drags the follower; the follower on
         // its own only slides along Y (SolidWorks won't push the slider).
         let reply = proto::InspectMobilityResponse {
@@ -912,9 +1143,30 @@ mod tests {
                     info(b"s", "slider-1", false, [0.0, 100.0, 0.0]),
                     S::Under,
                     vec![
-                        probe(0, false, vec![moved(b"s", [1.0, 100.0, 0.0]), moved(b"f", [1.0, 150.0, 0.0])]),
-                        probe(0, true, vec![moved(b"s", [-1.0, 100.0, 0.0]), moved(b"f", [-1.0, 150.0, 0.0])]),
-                        probe(4, false, vec![moved(b"s", [0.0008, 100.0, 0.0]), moved(b"p", [0.02, -450.0, 0.0])]),
+                        probe(
+                            0,
+                            false,
+                            vec![
+                                moved(b"s", [1.0, 100.0, 0.0]),
+                                moved(b"f", [1.0, 150.0, 0.0]),
+                            ],
+                        ),
+                        probe(
+                            0,
+                            true,
+                            vec![
+                                moved(b"s", [-1.0, 100.0, 0.0]),
+                                moved(b"f", [-1.0, 150.0, 0.0]),
+                            ],
+                        ),
+                        probe(
+                            4,
+                            false,
+                            vec![
+                                moved(b"s", [0.0008, 100.0, 0.0]),
+                                moved(b"p", [0.02, -450.0, 0.0]),
+                            ],
+                        ),
                     ],
                 ),
                 mobility(
@@ -935,7 +1187,11 @@ mod tests {
                         probe(1, true, vec![moved(b"p", [0.02, -450.0, 0.0])]),
                     ],
                 ),
-                mobility(info(b"p", "pair-1", false, [0.0, -450.0, 0.0]), S::Fully, vec![]),
+                mobility(
+                    info(b"p", "pair-1", false, [0.0, -450.0, 0.0]),
+                    S::Fully,
+                    vec![],
+                ),
             ],
             others: vec![],
             restored: true,
@@ -945,26 +1201,60 @@ mod tests {
         let json = reply_json(&mut ids, &request, &reply);
         let text = json.to_string();
         let cs = json["components"].as_array().unwrap();
-        assert_eq!(json["summary"], "5 components: 1 fixed, 2 held in place by mates, 2 can still move", "{text}");
-        assert!(cs[3].get("drags_along").is_none() && cs[4].get("dragged_by").is_none(), "{text}");
-        assert_eq!(cs[4]["free"], "nothing: its mates fully define it", "{text}");
-        assert_eq!((cs[0]["dof"].as_u64(), cs[0]["fixed"].as_bool()), (Some(0), Some(true)), "{text}");
+        assert_eq!(
+            json["summary"], "5 components: 1 fixed, 2 held in place by mates, 2 can still move",
+            "{text}"
+        );
+        assert!(
+            cs[3].get("drags_along").is_none() && cs[4].get("dragged_by").is_none(),
+            "{text}"
+        );
+        assert_eq!(
+            cs[4]["free"], "nothing: its mates fully define it",
+            "{text}"
+        );
+        assert_eq!(
+            (cs[0]["dof"].as_u64(), cs[0]["fixed"].as_bool()),
+            (Some(0), Some(true)),
+            "{text}"
+        );
         assert_eq!(cs[1]["dof"], 1, "{text}");
         assert_eq!(cs[1]["free"], "translates along [1.0,0.0,0.0]", "{text}");
-        assert_eq!(cs[1]["drags_along"], json!(["follower-1 (component:3)"]), "{text}");
-        assert_eq!((cs[2]["dof"].as_u64(), cs[2]["translations"].as_u64()), (Some(2), Some(2)), "{text}");
-        assert_eq!(cs[2]["free"], "translates in the plane normal to [0.0,0.0,1.0]", "{text}");
-        assert_eq!(cs[2]["dragged_by"], json!(["slider-1 (component:2)"]), "{text}");
+        assert_eq!(
+            cs[1]["drags_along"],
+            json!(["follower-1 (component:3)"]),
+            "{text}"
+        );
+        assert_eq!(
+            (cs[2]["dof"].as_u64(), cs[2]["translations"].as_u64()),
+            (Some(2), Some(2)),
+            "{text}"
+        );
+        assert_eq!(
+            cs[2]["free"], "translates in the plane normal to [0.0,0.0,1.0]",
+            "{text}"
+        );
+        assert_eq!(
+            cs[2]["dragged_by"],
+            json!(["slider-1 (component:2)"]),
+            "{text}"
+        );
         assert_eq!(cs[3]["dof"], 0, "{text}");
         let note = json["notes"][0].as_str().unwrap();
-        assert!(note.starts_with("full-1 (component:4): SolidWorks calls it under defined"), "{text}");
+        assert!(
+            note.starts_with("full-1 (component:4): SolidWorks calls it under defined"),
+            "{text}"
+        );
     }
 
     #[test]
     fn status_notes_are_single_spaced_sentences() {
         use proto::ConstrainedStatus as C;
         let still = Freedom::default();
-        let moving = Freedom { translations: vec![DVec3::X], ..Freedom::default() };
+        let moving = Freedom {
+            translations: vec![DVec3::X],
+            ..Freedom::default()
+        };
         let notes = [
             status_note("a", C::Under, &still, false),
             status_note("a", C::Fully, &moving, true),
@@ -972,7 +1262,9 @@ mod tests {
             status_note("a", C::Over, &still, false),
         ];
         for note in &notes {
-            let note = note.as_deref().expect("a disagreement or conflict gets a note");
+            let note = note
+                .as_deref()
+                .expect("a disagreement or conflict gets a note");
             assert!(!note.contains("  ") && note.ends_with('.'), "{note:?}");
         }
         assert!(status_note("a", C::Under, &moving, false).is_none());

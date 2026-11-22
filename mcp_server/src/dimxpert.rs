@@ -39,7 +39,9 @@ fn invalid(message: impl Into<String>) -> McpError {
 /// 2026-11-12): the refusal's text, since double dimensioning is what
 /// ISO 129 / ASME Y14.5 rule out.
 pub fn overconstrained(dialogs: &[Closed]) -> Option<String> {
-    let warning = dialogs.iter().find(|d| d.text.to_lowercase().contains("overconstrain"))?;
+    let warning = dialogs
+        .iter()
+        .find(|d| d.text.to_lowercase().contains("overconstrain"))?;
     Some(format!(
         "DimXpert: \"{}\" -- the part already has a dimension that controls this (e.g. the hole located from \
          another face in the same direction), and a feature is dimensioned once; delete the other one first \
@@ -53,8 +55,14 @@ fn dialog_note(dialogs: &[Closed]) -> Option<String> {
     if dialogs.is_empty() {
         return None;
     }
-    let shown: Vec<String> = dialogs.iter().map(|d| format!("\"{}\" ({})", d.text.trim(), d.pressed)).collect();
-    Some(format!("SolidWorks showed dialogs, closed: {}", shown.join(", ")))
+    let shown: Vec<String> = dialogs
+        .iter()
+        .map(|d| format!("\"{}\" ({})", d.text.trim(), d.pressed))
+        .collect();
+    Some(format!(
+        "SolidWorks showed dialogs, closed: {}",
+        shown.join(", ")
+    ))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
@@ -122,7 +130,16 @@ pub struct AddPmiDimensionParams {
 }
 
 fn values_given(v: &ToleranceValues) -> bool {
-    [v.upper_mm, v.lower_mm, v.plus_minus_mm, v.upper_deg, v.lower_deg, v.plus_minus_deg].iter().any(Option::is_some)
+    [
+        v.upper_mm,
+        v.lower_mm,
+        v.plus_minus_mm,
+        v.upper_deg,
+        v.lower_deg,
+        v.plus_minus_deg,
+    ]
+    .iter()
+    .any(Option::is_some)
         || v.hole_fit.is_some()
         || v.shaft_fit.is_some()
         || v.tolerance_decimals.is_some()
@@ -150,7 +167,13 @@ pub fn request(
     ids: &IdRegistry,
     p: &AddPmiDimensionParams,
     standard: GdtStandard,
-) -> Result<(proto::AddPmiDimensionRequest, Option<proto::SetDimensionToleranceRequest>), McpError> {
+) -> Result<
+    (
+        proto::AddPmiDimensionRequest,
+        Option<proto::SetDimensionToleranceRequest>,
+    ),
+    McpError,
+> {
     let count = p.on.len();
     // DimXpert makes no basic dimension of one face (seen 2026-11-12).
     let ok = match p.kind {
@@ -159,11 +182,18 @@ pub fn request(
     };
     if !ok {
         return Err(invalid(match p.kind {
-            PmiDimensionKind::Size => "a size dimension takes one face of the feature in `on`".to_string(),
-            PmiDimensionKind::Basic => "a basic dimension takes two faces in `on`: from, to (for a basic size, add a \
+            PmiDimensionKind::Size => {
+                "a size dimension takes one face of the feature in `on`".to_string()
+            }
+            PmiDimensionKind::Basic => {
+                "a basic dimension takes two faces in `on`: from, to (for a basic size, add a \
                                         size and set_dimension_tolerance it \"basic\")"
-                .to_string(),
-            kind => format!("a {} dimension takes two faces in `on`: from, to", kind.name()),
+                    .to_string()
+            }
+            kind => format!(
+                "a {} dimension takes two faces in `on`: from, to",
+                kind.name()
+            ),
         }));
     }
     let faces = face_ids(ids, &p.on)?;
@@ -172,9 +202,11 @@ pub fn request(
     }
     let position = match p.at_mm.as_deref() {
         None => None,
-        Some([x, y, z]) if x.is_finite() && y.is_finite() && z.is_finite() => {
-            Some(proto::Vec3 { x: x / MM_PER_M, y: y / MM_PER_M, z: z / MM_PER_M })
-        }
+        Some([x, y, z]) if x.is_finite() && y.is_finite() && z.is_finite() => Some(proto::Vec3 {
+            x: x / MM_PER_M,
+            y: y / MM_PER_M,
+            z: z / MM_PER_M,
+        }),
         Some(_) => return Err(invalid("at_mm: give [x, y, z] in model mm")),
     };
     if let Some(d) = p.values.decimals.filter(|d| *d > 8) {
@@ -182,10 +214,14 @@ pub fn request(
     }
     let tolerance = match p.tolerance {
         None if values_given(&p.values) => {
-            return Err(invalid("tolerance values go with `tolerance` (e.g. \"bilateral\", \"fit\")"));
+            return Err(invalid(
+                "tolerance values go with `tolerance` (e.g. \"bilateral\", \"fit\")",
+            ));
         }
         // ASME: the decimals pick the block tolerance (block_tolerance).
-        None if p.values.decimals.is_some() && (standard != GdtStandard::Asme || p.kind == PmiDimensionKind::Basic) => {
+        None if p.values.decimals.is_some()
+            && (standard != GdtStandard::Asme || p.kind == PmiDimensionKind::Basic) =>
+        {
             return Err(invalid(
                 "decimals without a tolerance only pick an ASME block tolerance row; give `tolerance` too",
             ));
@@ -202,12 +238,21 @@ pub fn request(
         // The name is the new dimension's, known once it's there.
         Some(kind) => Some(tolerance::request_for("(new)", kind, &p.values)?),
     };
-    let request = proto::AddPmiDimensionRequest { kind: p.kind.code(), faces, position };
+    let request = proto::AddPmiDimensionRequest {
+        kind: p.kind.code(),
+        faces,
+        position,
+    };
     Ok((request, tolerance))
 }
 
 fn dimension_name(a: &proto::AnnotationInfo) -> Option<&str> {
-    a.dimension.as_ref()?.dimension.as_ref().map(|i| i.name.as_str()).filter(|n| !n.is_empty())
+    a.dimension
+        .as_ref()?
+        .dimension
+        .as_ref()
+        .map(|i| i.name.as_str())
+        .filter(|n| !n.is_empty())
 }
 
 /// Plan tolerances for every dimension, retaining annotation indices so the
@@ -219,11 +264,19 @@ pub fn dimension_tolerances(
     use_block: bool,
     decimals: Option<u8>,
     units: Option<&proto::DocumentUnits>,
-) -> Result<(Vec<(usize, proto::SetDimensionToleranceRequest)>, Vec<String>), McpError> {
+) -> Result<
+    (
+        Vec<(usize, proto::SetDimensionToleranceRequest)>,
+        Vec<String>,
+    ),
+    McpError,
+> {
     let mut requests = Vec::new();
     let mut notes = Vec::new();
     for (index, annotation) in added.iter().enumerate() {
-        let Some(name) = dimension_name(annotation) else { continue };
+        let Some(name) = dimension_name(annotation) else {
+            continue;
+        };
         if let Some(explicit) = explicit {
             let mut request = explicit.clone();
             request.name = name.to_string();
@@ -239,7 +292,10 @@ pub fn dimension_tolerances(
         }
     }
     if explicit.is_some() && requests.is_empty() {
-        return Err(McpError::internal_error("DimXpert's new annotation is no dimension to tolerance", None));
+        return Err(McpError::internal_error(
+            "DimXpert's new annotation is no dimension to tolerance",
+            None,
+        ));
     }
     Ok((requests, notes))
 }
@@ -253,18 +309,24 @@ pub fn cleanup_error(
 ) -> McpError {
     let note = match cleanup {
         Ok(reply) => {
-            let remaining: Vec<&str> = names.iter()
+            let remaining: Vec<&str> = names
+                .iter()
                 .filter(|name| !reply.deleted.iter().any(|a| a.name == **name))
-                .map(String::as_str).collect();
+                .map(String::as_str)
+                .collect();
             if remaining.is_empty() {
                 "the new dimension(s) were deleted again".to_string()
             } else {
-                format!("cleanup did not confirm deletion of {}; inspect_annotations before retrying", remaining.join(", "))
+                format!(
+                    "cleanup did not confirm deletion of {}; inspect_annotations before retrying",
+                    remaining.join(", ")
+                )
             }
         }
         Err(status) => format!(
             "cleanup failed: {}; new annotations may remain: {}; inspect_annotations before retrying",
-            status.message(), names.join(", ")
+            status.message(),
+            names.join(", ")
         ),
     };
     error.message = format!("{} -- {note}", error.message).into();
@@ -318,8 +380,15 @@ pub fn block_table(reply: &proto::DocumentPreferencesResponse) -> Option<BlockTa
         .filter_map(|(d, v)| Some((*reply.integers.get(d)?, *reply.doubles.get(&v)?)))
         .collect();
     let placeholder = rows.len() == 3
-        && rows.iter().zip(TEMPLATE_BLOCK_ROWS).all(|((d, v), (td, tv))| *d == td && (v - tv).abs() < 1e-12);
-    let mut angle = reply.doubles.get(&BLOCK_ANGLE).copied().filter(|a| a.is_finite() && *a > 0.0);
+        && rows
+            .iter()
+            .zip(TEMPLATE_BLOCK_ROWS)
+            .all(|((d, v), (td, tv))| *d == td && (v - tv).abs() < 1e-12);
+    let mut angle = reply
+        .doubles
+        .get(&BLOCK_ANGLE)
+        .copied()
+        .filter(|a| a.is_finite() && *a > 0.0);
     if placeholder {
         rows.clear();
         // A changed angular row is useful even with untouched length rows.
@@ -353,15 +422,32 @@ pub fn block_tolerance(
                     keeps DimXpert's default; give `tolerance`, or set the table"
             .to_string());
     };
-    let Some(d) = added.dimension.as_ref() else { return Err("DimXpert's new annotation is no dimension".to_string()) };
-    let name = d.dimension.as_ref().map(|i| i.name.clone()).unwrap_or_default();
-    let angular = d.dimension.as_ref().is_some_and(|i| i.r#type() == proto::DimensionType::Angular);
+    let Some(d) = added.dimension.as_ref() else {
+        return Err("DimXpert's new annotation is no dimension".to_string());
+    };
+    let name = d
+        .dimension
+        .as_ref()
+        .map(|i| i.name.clone())
+        .unwrap_or_default();
+    let angular = d
+        .dimension
+        .as_ref()
+        .is_some_and(|i| i.r#type() == proto::DimensionType::Angular);
     let shown = decimals.map(i32::from).or(d.decimals);
     let (value, what) = if angular {
         let Some(a) = table.angle else {
-            return Err("ASME: the part's block tolerance has no angle (block_angle_deg)".to_string());
+            return Err(
+                "ASME: the part's block tolerance has no angle (block_angle_deg)".to_string(),
+            );
         };
-        (a, format!("+/-{} deg, the part's block tolerance for angles", round(a.to_degrees(), 4)))
+        (
+            a,
+            format!(
+                "+/-{} deg, the part's block tolerance for angles",
+                round(a.to_degrees(), 4)
+            ),
+        )
     } else {
         let Some(places) = shown else {
             return Err("ASME: SolidWorks didn't say how many decimals the dimension shows; give `decimals`".to_string());
@@ -374,7 +460,13 @@ pub fn block_tolerance(
                 have.join(", ")
             ));
         };
-        (*v, format!("+/-{}, the part's block tolerance for {places} decimals", shown_length(*v, units)))
+        (
+            *v,
+            format!(
+                "+/-{}, the part's block tolerance for {places} decimals",
+                shown_length(*v, units)
+            ),
+        )
     };
     let request = proto::SetDimensionToleranceRequest {
         name,
@@ -405,11 +497,22 @@ pub fn reply(
     dialogs: &[Closed],
 ) -> String {
     let json: Vec<Value> = added.iter().map(|a| pmi::annotation_json(ids, a)).collect();
-    let Some(first) = json.first() else { return "done".to_string() };
-    let field = |key: &str| first.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
+    let Some(first) = json.first() else {
+        return "done".to_string();
+    };
+    let field = |key: &str| {
+        first
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
     let measures = field("measures");
     let mut text = format!("added {} dimension {}", p.kind.name(), field("name"));
-    let value = first.get("value_mm").map(|v| format!("{v} mm")).or_else(|| first.get("value_deg").map(|v| format!("{v} deg")));
+    let value = first
+        .get("value_mm")
+        .map(|v| format!("{v} mm"))
+        .or_else(|| first.get("value_deg").map(|v| format!("{v} deg")));
     if let Some(v) = value {
         text += &format!(" ({measures} {v})");
     }
@@ -437,7 +540,11 @@ pub fn reply(
                 .to_string(),
         );
     }
-    let tol_type = first.get("tolerance").and_then(|t| t.get("type")).and_then(Value::as_str).unwrap_or_default();
+    let tol_type = first
+        .get("tolerance")
+        .and_then(|t| t.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     if !general.is_empty() {
         notes.extend_from_slice(general);
     } else if p.tolerance.is_none() {
@@ -454,13 +561,20 @@ pub fn reply(
         }
     }
     if added.len() > 1 {
-        notes.push(format!("DimXpert added {} annotations for it (all in the JSON)", added.len()));
+        notes.push(format!(
+            "DimXpert added {} annotations for it (all in the JSON)",
+            added.len()
+        ));
     }
     notes.extend(dialog_note(dialogs));
     if !notes.is_empty() {
         text += &format!("\nNote: {}.", notes.join("; "));
     }
-    let json = if json.len() == 1 { json.into_iter().next().unwrap_or_default() } else { json!({ "annotations": json }) };
+    let json = if json.len() == 1 {
+        json.into_iter().next().unwrap_or_default()
+    } else {
+        json!({ "annotations": json })
+    };
     text += &format!("\n{json}");
     text
 }
@@ -585,8 +699,16 @@ pub fn scheme_preferences(
     let values = [
         ("position_mm", p.position_mm, POSITION_VALUE),
         ("profile_mm", p.profile_mm, PROFILE_VALUE),
-        ("composite_position_mm", p.composite_position_mm, COMPOSITE_POSITION_VALUE),
-        ("composite_profile_mm", p.composite_profile_mm, COMPOSITE_PROFILE_VALUE),
+        (
+            "composite_position_mm",
+            p.composite_position_mm,
+            COMPOSITE_POSITION_VALUE,
+        ),
+        (
+            "composite_profile_mm",
+            p.composite_profile_mm,
+            COMPOSITE_PROFILE_VALUE,
+        ),
     ];
     if !matches!(p.tolerancing, Some(SchemeTolerancing::Geometric)) {
         if let Some((name, ..)) = values.iter().find(|v| v.1.is_some()) {
@@ -602,23 +724,35 @@ pub fn scheme_preferences(
         ));
     }
     let mut request = proto::DocumentPreferencesRequest::default();
-    request.set_toggles.insert(COMPOSITE_POSITION, p.composite_position_mm.is_some());
-    request.set_toggles.insert(COMPOSITE_PROFILE, p.composite_profile_mm.is_some());
+    request
+        .set_toggles
+        .insert(COMPOSITE_POSITION, p.composite_position_mm.is_some());
+    request
+        .set_toggles
+        .insert(COMPOSITE_PROFILE, p.composite_profile_mm.is_some());
     for (name, value, id) in values {
         if let Some(v) = value {
             if !(v.is_finite() && v > 0.0) {
-                return Err(invalid(format!("{name} must be a positive number of mm, got {v}")));
+                return Err(invalid(format!(
+                    "{name} must be a positive number of mm, got {v}"
+                )));
             }
             request.set_doubles.insert(id, v / MM_PER_M);
         }
     }
     for (upper, lower, what) in [
-        (p.position_mm, p.composite_position_mm, "composite_position_mm"),
+        (
+            p.position_mm,
+            p.composite_position_mm,
+            "composite_position_mm",
+        ),
         (p.profile_mm, p.composite_profile_mm, "composite_profile_mm"),
     ] {
         if let (Some(u), Some(l)) = (upper, lower) {
             if l >= u {
-                return Err(invalid(format!("{what} ({l}) refines the upper segment: it must be smaller ({u})")));
+                return Err(invalid(format!(
+                    "{what} ({l}) refines the upper segment: it must be smaller ({u})"
+                )));
             }
         }
     }
@@ -628,16 +762,24 @@ pub fn scheme_preferences(
 /// DimXpert prints a frame's tolerance with 2 decimals in the document's
 /// unit (".005 in" as ".01", seen 2026-11-12, whatever the dimension
 /// decimals): a note for the values that don't survive that.
-fn frame_rounding_note(p: &AutoDimensionSchemeParams, units: Option<&proto::DocumentUnits>) -> Option<String> {
-    let lost: Vec<String> = [p.position_mm, p.profile_mm, p.composite_position_mm, p.composite_profile_mm]
-        .into_iter()
-        .flatten()
-        .filter_map(|v| {
-            let shown: f64 = units::length_text(v, units).parse().ok()?;
-            let rounded = (shown * 100.0).round() / 100.0;
-            ((shown - rounded).abs() > 1e-9).then(|| format!("{shown} as {rounded}"))
-        })
-        .collect();
+fn frame_rounding_note(
+    p: &AutoDimensionSchemeParams,
+    units: Option<&proto::DocumentUnits>,
+) -> Option<String> {
+    let lost: Vec<String> = [
+        p.position_mm,
+        p.profile_mm,
+        p.composite_position_mm,
+        p.composite_profile_mm,
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(|v| {
+        let shown: f64 = units::length_text(v, units).parse().ok()?;
+        let rounded = (shown * 100.0).round() / 100.0;
+        ((shown - rounded).abs() > 1e-9).then(|| format!("{shown} as {rounded}"))
+    })
+    .collect();
     (!lost.is_empty()).then(|| {
         format!(
             "DimXpert prints frame tolerances with 2 decimals in the document's unit, so its frames show {} \
@@ -647,7 +789,10 @@ fn frame_rounding_note(p: &AutoDimensionSchemeParams, units: Option<&proto::Docu
     })
 }
 
-pub fn scheme_request(ids: &IdRegistry, p: &AutoDimensionSchemeParams) -> Result<proto::AutoDimensionSchemeRequest, McpError> {
+pub fn scheme_request(
+    ids: &IdRegistry,
+    p: &AutoDimensionSchemeParams,
+) -> Result<proto::AutoDimensionSchemeRequest, McpError> {
     if p.datums.is_empty() || p.datums.len() > 3 {
         return Err(invalid("datums: one to three faces, primary first"));
     }
@@ -658,7 +803,11 @@ pub fn scheme_request(ids: &IdRegistry, p: &AutoDimensionSchemeParams) -> Result
         }
     }
     let filters = match &p.features {
-        Some(list) if list.is_empty() => return Err(invalid("features: name at least one kind, or leave it out for all")),
+        Some(list) if list.is_empty() => {
+            return Err(invalid(
+                "features: name at least one kind, or leave it out for all",
+            ));
+        }
         Some(list) => list.iter().fold(0, |bits, f| bits | f.bit()),
         None => 0,
     };
@@ -681,7 +830,11 @@ pub fn scheme_reply(
     units: Option<&proto::DocumentUnits>,
     dialogs: &[Closed],
 ) -> String {
-    let json: Vec<Value> = reply.annotations.iter().map(|a| pmi::annotation_json(ids, a)).collect();
+    let json: Vec<Value> = reply
+        .annotations
+        .iter()
+        .map(|a| pmi::annotation_json(ids, a))
+        .collect();
     let mut counts: Vec<(String, usize)> = Vec::new();
     for a in &reply.annotations {
         let t = pmi::type_name(a.r#type).to_string();
@@ -701,7 +854,11 @@ pub fn scheme_reply(
         .zip(&json)
         .filter(|(a, _)| !a.datum_label.trim().is_empty())
         .map(|(a, j)| {
-            let on = j.get("attached").and_then(Value::as_array).and_then(|v| v.first()).and_then(Value::as_str);
+            let on = j
+                .get("attached")
+                .and_then(Value::as_array)
+                .and_then(|v| v.first())
+                .and_then(Value::as_str);
             format!("{} on {}", a.datum_label.trim(), on.unwrap_or("?"))
         })
         .collect();
@@ -715,7 +872,10 @@ pub fn scheme_reply(
     }
     text += ". Delete any with delete_drawing_annotations (names below); set_dimension_tolerance changes a dimension's \
              tolerance.";
-    let notes: Vec<String> = frame_rounding_note(p, units).into_iter().chain(dialog_note(dialogs)).collect();
+    let notes: Vec<String> = frame_rounding_note(p, units)
+        .into_iter()
+        .chain(dialog_note(dialogs))
+        .collect();
     if !notes.is_empty() {
         text += &format!("\nNote: {}.", notes.join("; "));
     }
@@ -830,7 +990,11 @@ pub fn general_tolerance_request(
             .chain(DIMENSION_KINDS.iter().map(|k| k.1))
             .chain(block.integers)
             .collect(),
-        doubles: DIMENSION_KINDS.iter().flat_map(|k| [k.2, k.3]).chain(block.doubles).collect(),
+        doubles: DIMENSION_KINDS
+            .iter()
+            .flat_map(|k| [k.2, k.3])
+            .chain(block.doubles)
+            .collect(),
         ..Default::default()
     };
     let mut remarks = Vec::new();
@@ -839,7 +1003,9 @@ pub fn general_tolerance_request(
     }
     if let Some(class) = p.iso2768 {
         request.set_toggles.insert(BLOCK_TOLERANCE_TOGGLE, false);
-        request.set_integers.insert(GENERAL_CLASS, class_code(class));
+        request
+            .set_integers
+            .insert(GENERAL_CLASS, class_code(class));
         for k in DIMENSION_KINDS {
             request.set_integers.insert(k.1, TOL_GENERAL);
         }
@@ -856,7 +1022,9 @@ pub fn general_tolerance_request(
     }
     if let Some(rows) = &p.block {
         if rows.is_empty() || rows.len() > 3 {
-            return Err(invalid("block: one to three rows, e.g. [{\"decimals\": 2, \"plus_minus_mm\": 0.254}]"));
+            return Err(invalid(
+                "block: one to three rows, e.g. [{\"decimals\": 2, \"plus_minus_mm\": 0.254}]",
+            ));
         }
         let mut rows = rows.clone();
         rows.sort_by_key(|r| r.decimals);
@@ -865,10 +1033,16 @@ pub fn general_tolerance_request(
                 return Err(invalid(format!("block: decimals 0..4, got {}", r.decimals)));
             }
             if !(r.plus_minus_mm.is_finite() && r.plus_minus_mm > 0.0) {
-                return Err(invalid(format!("block: plus_minus_mm must be positive, got {}", r.plus_minus_mm)));
+                return Err(invalid(format!(
+                    "block: plus_minus_mm must be positive, got {}",
+                    r.plus_minus_mm
+                )));
             }
             if i > 0 && rows[i - 1].decimals == r.decimals {
-                return Err(invalid(format!("block: two rows for {} decimals", r.decimals)));
+                return Err(invalid(format!(
+                    "block: two rows for {} decimals",
+                    r.decimals
+                )));
             }
         }
         // DimXpert has three rows: fewer repeat the last one (it takes
@@ -877,13 +1051,19 @@ pub fn general_tolerance_request(
         rows.resize(3, last);
         request.set_toggles.insert(BLOCK_TOLERANCE_TOGGLE, true);
         for (i, r) in rows.iter().enumerate() {
-            request.set_integers.insert(BLOCK_DECIMALS[i], i32::from(r.decimals));
-            request.set_doubles.insert(BLOCK_VALUES[i], r.plus_minus_mm / MM_PER_M);
+            request
+                .set_integers
+                .insert(BLOCK_DECIMALS[i], i32::from(r.decimals));
+            request
+                .set_doubles
+                .insert(BLOCK_VALUES[i], r.plus_minus_mm / MM_PER_M);
         }
     }
     if let Some(deg) = p.block_angle_deg {
         if !(deg.is_finite() && deg > 0.0) {
-            return Err(invalid(format!("block_angle_deg must be positive, got {deg}")));
+            return Err(invalid(format!(
+                "block_angle_deg must be positive, got {deg}"
+            )));
         }
         request.set_doubles.insert(BLOCK_ANGLE, deg.to_radians());
     }
@@ -934,7 +1114,10 @@ pub fn general_tolerance_json(
             }
         }
         None => {
-            obj.insert("block_tolerance".into(), json!("not set (the template's placeholder)"));
+            obj.insert(
+                "block_tolerance".into(),
+                json!("not set (the template's placeholder)"),
+            );
         }
     }
     let mut general = Vec::new();
@@ -942,12 +1125,21 @@ pub fn general_tolerance_json(
     for (name, type_id, upper_id, lower_id, angular) in DIMENSION_KINDS {
         let unit = if *angular { "deg" } else { "mm" };
         let value = |id: &i32| {
-            reply.doubles.get(id).map(|v| if *angular { round(v.to_degrees(), 4) } else { mm(*v) })
+            reply.doubles.get(id).map(|v| {
+                if *angular {
+                    round(v.to_degrees(), 4)
+                } else {
+                    mm(*v)
+                }
+            })
         };
         match reply.integers.get(type_id).copied() {
             Some(TOL_GENERAL) => general.push(json!(name)),
             Some(TOL_SYMMETRIC) => {
-                own.insert(name.to_string(), json!({ "type": "symmetric", format!("plus_minus_{unit}"): value(upper_id) }));
+                own.insert(
+                    name.to_string(),
+                    json!({ "type": "symmetric", format!("plus_minus_{unit}"): value(upper_id) }),
+                );
             }
             Some(TOL_BILATERAL) => {
                 own.insert(
@@ -1023,31 +1215,79 @@ mod tests {
         }
     }
 
-    fn general(iso2768: Option<Iso2768Class>, block: Option<Vec<BlockRow>>) -> GeneralToleranceParams {
-        GeneralToleranceParams { iso2768, block, block_angle_deg: None, standard: None }
+    fn general(
+        iso2768: Option<Iso2768Class>,
+        block: Option<Vec<BlockRow>>,
+    ) -> GeneralToleranceParams {
+        GeneralToleranceParams {
+            iso2768,
+            block,
+            block_angle_deg: None,
+            standard: None,
+        }
     }
 
     fn inch() -> proto::DocumentUnits {
-        proto::DocumentUnits { unit_system: 3, length_unit: 3, length_decimals: 3, drafting_standard: 1 }
+        proto::DocumentUnits {
+            unit_system: 3,
+            length_unit: 3,
+            length_decimals: 3,
+            drafting_standard: 1,
+        }
     }
 
     #[test]
     fn face_counts_and_ids() {
         let ids = registry();
         let (r, tol) = request(&ids, &params(PmiDimensionKind::Size, &["face:1"]), ISO).unwrap();
-        assert_eq!((r.kind, r.faces.len(), tol.is_none()), (proto::PmiDimensionKind::Size as i32, 1, true));
-        assert!(request(&ids, &params(PmiDimensionKind::Size, &["face:1", "face:2"]), ISO).is_err());
+        assert_eq!(
+            (r.kind, r.faces.len(), tol.is_none()),
+            (proto::PmiDimensionKind::Size as i32, 1, true)
+        );
+        assert!(
+            request(
+                &ids,
+                &params(PmiDimensionKind::Size, &["face:1", "face:2"]),
+                ISO
+            )
+            .is_err()
+        );
         assert!(request(&ids, &params(PmiDimensionKind::Location, &["face:1"]), ISO).is_err());
-        assert!(request(&ids, &params(PmiDimensionKind::Location, &["face:1", "face:1"]), ISO).is_err());
-        let (r, _) = request(&ids, &params(PmiDimensionKind::Location, &["face:2", "face:1"]), ISO).unwrap();
+        assert!(
+            request(
+                &ids,
+                &params(PmiDimensionKind::Location, &["face:1", "face:1"]),
+                ISO
+            )
+            .is_err()
+        );
+        let (r, _) = request(
+            &ids,
+            &params(PmiDimensionKind::Location, &["face:2", "face:1"]),
+            ISO,
+        )
+        .unwrap();
         assert_eq!(r.faces, vec![b"plane".to_vec(), b"hole".to_vec()]);
         assert!(request(&ids, &params(PmiDimensionKind::Basic, &["face:1"]), ISO).is_err());
-        assert!(request(&ids, &params(PmiDimensionKind::Basic, &["face:2", "face:1"]), ISO).is_ok());
+        assert!(
+            request(
+                &ids,
+                &params(PmiDimensionKind::Basic, &["face:2", "face:1"]),
+                ISO
+            )
+            .is_ok()
+        );
         assert!(request(&ids, &params(PmiDimensionKind::Size, &["edge:1"]), ISO).is_err());
         assert!(request(&ids, &params(PmiDimensionKind::Size, &["face:9"]), ISO).is_err());
-        let at = AddPmiDimensionParams { at_mm: Some(vec![10.0, 20.0, 30.0]), ..params(PmiDimensionKind::Size, &["face:1"]) };
+        let at = AddPmiDimensionParams {
+            at_mm: Some(vec![10.0, 20.0, 30.0]),
+            ..params(PmiDimensionKind::Size, &["face:1"])
+        };
         let (r, _) = request(&ids, &at, ISO).unwrap();
-        assert_eq!(r.position.map(|p| (p.x, p.y, p.z)), Some((0.01, 0.02, 0.03)));
+        assert_eq!(
+            r.position.map(|p| (p.x, p.y, p.z)),
+            Some((0.01, 0.02, 0.03))
+        );
     }
 
     #[test]
@@ -1055,28 +1295,46 @@ mod tests {
         let ids = registry();
         let fit = AddPmiDimensionParams {
             tolerance: Some(ToleranceKind::Fit),
-            values: ToleranceValues { hole_fit: Some("H7".into()), ..ToleranceValues::default() },
+            values: ToleranceValues {
+                hole_fit: Some("H7".into()),
+                ..ToleranceValues::default()
+            },
             ..params(PmiDimensionKind::Size, &["face:1"])
         };
         let (_, tol) = request(&ids, &fit, ISO).unwrap();
-        assert_eq!(tol.map(|t| (t.tolerance_type, t.hole_fit)), Some((7, "H7".to_string())));
+        assert_eq!(
+            tol.map(|t| (t.tolerance_type, t.hole_fit)),
+            Some((7, "H7".to_string()))
+        );
         // Values without a kind, a tolerance on a basic dimension.
         let loose = AddPmiDimensionParams {
-            values: ToleranceValues { plus_minus_mm: Some(0.1), ..ToleranceValues::default() },
+            values: ToleranceValues {
+                plus_minus_mm: Some(0.1),
+                ..ToleranceValues::default()
+            },
             ..params(PmiDimensionKind::Size, &["face:1"])
         };
         assert!(request(&ids, &loose, ASME).is_err());
         let basic = AddPmiDimensionParams {
             tolerance: Some(ToleranceKind::Symmetric),
-            values: ToleranceValues { plus_minus_mm: Some(0.1), ..ToleranceValues::default() },
+            values: ToleranceValues {
+                plus_minus_mm: Some(0.1),
+                ..ToleranceValues::default()
+            },
             ..params(PmiDimensionKind::Basic, &["face:1", "face:2"])
         };
         assert!(request(&ids, &basic, ISO).is_err());
-        let wrong = AddPmiDimensionParams { tolerance: Some(ToleranceKind::Basic), ..params(PmiDimensionKind::Size, &["face:1"]) };
+        let wrong = AddPmiDimensionParams {
+            tolerance: Some(ToleranceKind::Basic),
+            ..params(PmiDimensionKind::Size, &["face:1"])
+        };
         assert!(request(&ids, &wrong, ISO).is_err());
         // Decimals alone pick an ASME block row; in ISO they need a tolerance.
         let decimals = AddPmiDimensionParams {
-            values: ToleranceValues { decimals: Some(3), ..ToleranceValues::default() },
+            values: ToleranceValues {
+                decimals: Some(3),
+                ..ToleranceValues::default()
+            },
             ..params(PmiDimensionKind::Size, &["face:1"])
         };
         assert!(request(&ids, &decimals, ASME).is_ok());
@@ -1091,15 +1349,28 @@ mod tests {
             pressed: "its close box".into(),
         };
         let why = overconstrained(std::slice::from_ref(&warning)).unwrap();
-        assert!(why.contains("overconstrained the part") && !why.contains("deleted"), "{why}");
-        let other = Closed { text: "Something else".into(), ..warning };
+        assert!(
+            why.contains("overconstrained the part") && !why.contains("deleted"),
+            "{why}"
+        );
+        let other = Closed {
+            text: "Something else".into(),
+            ..warning
+        };
         assert!(overconstrained(std::slice::from_ref(&other)).is_none());
-        assert!(dialog_note(&[other]).unwrap().contains("\"Something else\""));
+        assert!(
+            dialog_note(&[other])
+                .unwrap()
+                .contains("\"Something else\"")
+        );
         assert!(dialog_note(&[]).is_none());
     }
 
     fn table_reply(rows: [(i32, f64); 3], angle: f64) -> proto::DocumentPreferencesResponse {
-        let mut reply = proto::DocumentPreferencesResponse { document: "Part1".into(), ..Default::default() };
+        let mut reply = proto::DocumentPreferencesResponse {
+            document: "Part1".into(),
+            ..Default::default()
+        };
         for (i, (d, v)) in rows.into_iter().enumerate() {
             reply.integers.insert(BLOCK_DECIMALS[i], d);
             reply.doubles.insert(BLOCK_VALUES[i], v);
@@ -1112,7 +1383,11 @@ mod tests {
         proto::AnnotationInfo {
             r#type: 4, // swDisplayDimension
             dimension: Some(proto::AnnotationDimension {
-                dimension: Some(proto::DimensionInfo { name: "TXD1@Scheme2@Part1.Part".into(), r#type: kind as i32, ..Default::default() }),
+                dimension: Some(proto::DimensionInfo {
+                    name: "TXD1@Scheme2@Part1.Part".into(),
+                    r#type: kind as i32,
+                    ..Default::default()
+                }),
                 decimals,
                 ..Default::default()
             }),
@@ -1124,35 +1399,114 @@ mod tests {
     fn block_tolerance_by_decimals() {
         // The template's placeholder isn't a table.
         assert!(block_table(&table_reply(TEMPLATE_BLOCK_ROWS, 1.745e-4)).is_none());
-        let table = block_table(&table_reply([(1, 0.00254), (2, 0.000254), (3, 0.000127)], 0.5f64.to_radians())).unwrap();
+        let table = block_table(&table_reply(
+            [(1, 0.00254), (2, 0.000254), (3, 0.000127)],
+            0.5f64.to_radians(),
+        ))
+        .unwrap();
         let units = inch();
         // .XX: +/-.01 in, the tolerance with the dimension's decimals.
-        let (r, what) = block_tolerance(Some(&table), &dimension(proto::DimensionType::Diameter, Some(2)), None, Some(&units)).unwrap();
-        assert_eq!((r.name.as_str(), r.tolerance_type, r.angle), ("TXD1@Scheme2@Part1.Part", 4, false));
+        let (r, what) = block_tolerance(
+            Some(&table),
+            &dimension(proto::DimensionType::Diameter, Some(2)),
+            None,
+            Some(&units),
+        )
+        .unwrap();
+        assert_eq!(
+            (r.name.as_str(), r.tolerance_type, r.angle),
+            ("TXD1@Scheme2@Part1.Part", 4, false)
+        );
         assert!((r.upper - 0.000254).abs() < 1e-12 && (r.lower + 0.000254).abs() < 1e-12);
         assert_eq!((r.value_precision, r.tolerance_precision), (None, Some(2)));
-        assert!(what.contains("0.01 inches") && what.contains("2 decimals"), "{what}");
+        assert!(
+            what.contains("0.01 inches") && what.contains("2 decimals"),
+            "{what}"
+        );
         // `decimals` picks .XXX and is set on the dimension.
-        let (r, _) = block_tolerance(Some(&table), &dimension(proto::DimensionType::Linear, Some(2)), Some(3), Some(&units)).unwrap();
+        let (r, _) = block_tolerance(
+            Some(&table),
+            &dimension(proto::DimensionType::Linear, Some(2)),
+            Some(3),
+            Some(&units),
+        )
+        .unwrap();
         assert!((r.upper - 0.000127).abs() < 1e-12 && r.value_precision == Some(3));
         // Angles take the angular row.
-        let (r, _) = block_tolerance(Some(&table), &dimension(proto::DimensionType::Angular, Some(1)), None, Some(&units)).unwrap();
-        assert!(r.angle && (r.upper - 0.5f64.to_radians()).abs() < 1e-12 && r.tolerance_precision.is_none());
+        let (r, _) = block_tolerance(
+            Some(&table),
+            &dimension(proto::DimensionType::Angular, Some(1)),
+            None,
+            Some(&units),
+        )
+        .unwrap();
+        assert!(
+            r.angle
+                && (r.upper - 0.5f64.to_radians()).abs() < 1e-12
+                && r.tolerance_precision.is_none()
+        );
         // No row for 4 decimals, no table.
-        assert!(block_tolerance(Some(&table), &dimension(proto::DimensionType::Linear, Some(4)), None, None).unwrap_err().contains("no row for 4"));
-        assert!(block_tolerance(None, &dimension(proto::DimensionType::Linear, Some(2)), None, None).unwrap_err().contains("block=["));
+        assert!(
+            block_tolerance(
+                Some(&table),
+                &dimension(proto::DimensionType::Linear, Some(4)),
+                None,
+                None
+            )
+            .unwrap_err()
+            .contains("no row for 4")
+        );
+        assert!(
+            block_tolerance(
+                None,
+                &dimension(proto::DimensionType::Linear, Some(2)),
+                None,
+                None
+            )
+            .unwrap_err()
+            .contains("block=[")
+        );
     }
 
     #[test]
     fn angular_block_tolerance_does_not_enable_placeholder_length_rows() {
         let angle = 0.5f64.to_radians();
         let table = block_table(&table_reply(TEMPLATE_BLOCK_ROWS, angle)).unwrap();
-        assert!(table.rows.is_empty(), "placeholder lengths must stay unset: {table:?}");
-        let (request, _) = block_tolerance(Some(&table), &dimension(proto::DimensionType::Angular, Some(2)), None, None).unwrap();
-        assert!((request.upper - angle).abs() < 1e-12 && request.angle, "{request:?}");
-        assert!(block_tolerance(Some(&table), &dimension(proto::DimensionType::Linear, Some(2)), None, None).is_err());
-        let p = GeneralToleranceParams { block_angle_deg: Some(0.5), ..general(None, None) };
-        let json = general_tolerance_json(&p, &table_reply(TEMPLATE_BLOCK_ROWS, angle), ASME, None, &[]);
+        assert!(
+            table.rows.is_empty(),
+            "placeholder lengths must stay unset: {table:?}"
+        );
+        let (request, _) = block_tolerance(
+            Some(&table),
+            &dimension(proto::DimensionType::Angular, Some(2)),
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(
+            (request.upper - angle).abs() < 1e-12 && request.angle,
+            "{request:?}"
+        );
+        assert!(
+            block_tolerance(
+                Some(&table),
+                &dimension(proto::DimensionType::Linear, Some(2)),
+                None,
+                None
+            )
+            .is_err()
+        );
+        let p = GeneralToleranceParams {
+            block_angle_deg: Some(0.5),
+            ..general(None, None)
+        };
+        let json = general_tolerance_json(
+            &p,
+            &table_reply(TEMPLATE_BLOCK_ROWS, angle),
+            ASME,
+            None,
+            &[],
+        );
         assert_eq!(json["block_angle_deg"], json!(0.5), "{json}");
         assert_eq!(json["block_tolerance"], json!([]), "{json}");
         assert!(block_table(&table_reply(TEMPLATE_BLOCK_ROWS, 0.01f64.to_radians())).is_none());
@@ -1160,19 +1514,43 @@ mod tests {
 
     #[test]
     fn block_tolerances_cover_every_dimension_and_preserve_annotation_indices() {
-        let table = BlockTable { rows: vec![(2, 0.000254), (3, 0.000127)], angle: Some(0.5f64.to_radians()) };
+        let table = BlockTable {
+            rows: vec![(2, 0.000254), (3, 0.000127)],
+            angle: Some(0.5f64.to_radians()),
+        };
         let mut diameter = dimension(proto::DimensionType::Diameter, Some(2));
         diameter.name = "TXD1".into();
-        diameter.dimension.as_mut().unwrap().dimension.as_mut().unwrap().name = "diameter".into();
+        diameter
+            .dimension
+            .as_mut()
+            .unwrap()
+            .dimension
+            .as_mut()
+            .unwrap()
+            .name = "diameter".into();
         let mut depth = dimension(proto::DimensionType::Linear, Some(3));
         depth.name = "TXD2".into();
-        depth.dimension.as_mut().unwrap().dimension.as_mut().unwrap().name = "depth".into();
+        depth
+            .dimension
+            .as_mut()
+            .unwrap()
+            .dimension
+            .as_mut()
+            .unwrap()
+            .name = "depth".into();
         let mut angle = dimension(proto::DimensionType::Angular, Some(2));
         angle.name = "TXD3".into();
         let mut added = vec![proto::AnnotationInfo::default(), diameter, depth, angle];
-        let (requests, notes) = dimension_tolerances(&added, None, Some(&table), true, None, Some(&inch())).unwrap();
-        assert_eq!(requests.iter().map(|(i, _)| *i).collect::<Vec<_>>(), [1, 2, 3]);
-        assert_eq!(requests.iter().map(|(_, r)| r.upper).collect::<Vec<_>>(), [0.000254, 0.000127, 0.5f64.to_radians()]);
+        let (requests, notes) =
+            dimension_tolerances(&added, None, Some(&table), true, None, Some(&inch())).unwrap();
+        assert_eq!(
+            requests.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+        assert_eq!(
+            requests.iter().map(|(_, r)| r.upper).collect::<Vec<_>>(),
+            [0.000254, 0.000127, 0.5f64.to_radians()]
+        );
         assert_eq!(notes.len(), 3, "{notes:?}");
         for (index, request) in requests {
             let d = added[index].dimension.as_mut().unwrap();
@@ -1180,30 +1558,75 @@ mod tests {
             d.tolerance_max = request.upper;
             d.tolerance_min = request.lower;
         }
-        let text = reply(&mut registry(), &params(PmiDimensionKind::Size, &["face:1"]), &added[1..], &notes, &[]);
+        let text = reply(
+            &mut registry(),
+            &params(PmiDimensionKind::Size, &["face:1"]),
+            &added[1..],
+            &notes,
+            &[],
+        );
         let json: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
         let annotations = json["annotations"].as_array().unwrap();
-        assert_eq!(annotations[0]["tolerance"]["plus_minus_mm"], json!(0.254), "{text}");
-        assert_eq!(annotations[1]["tolerance"]["plus_minus_mm"], json!(0.127), "{text}");
-        assert_eq!(annotations[2]["tolerance"]["plus_minus_deg"], json!(0.5), "{text}");
+        assert_eq!(
+            annotations[0]["tolerance"]["plus_minus_mm"],
+            json!(0.254),
+            "{text}"
+        );
+        assert_eq!(
+            annotations[1]["tolerance"]["plus_minus_mm"],
+            json!(0.127),
+            "{text}"
+        );
+        assert_eq!(
+            annotations[2]["tolerance"]["plus_minus_deg"],
+            json!(0.5),
+            "{text}"
+        );
     }
 
     #[test]
     fn cleanup_reports_confirmed_partial_and_failed_deletion() {
         let names = vec!["TXD1".to_string(), "TXD2".to_string()];
         let error = || invalid("tolerance refused");
-        let deleted = |name: &str| proto::AnnotationInfo { name: name.into(), ..Default::default() };
-        let complete = cleanup_error(error(), &names, Ok(proto::DeleteDrawingAnnotationsResponse {
-            deleted: names.iter().map(|n| deleted(n)).collect(),
-        }));
-        assert!(complete.message.contains("were deleted again"), "{complete:?}");
-        let partial = cleanup_error(error(), &names, Ok(proto::DeleteDrawingAnnotationsResponse {
-            deleted: vec![deleted("TXD1")],
-        }));
-        assert!(partial.message.contains("did not confirm deletion of TXD2"), "{partial:?}");
-        assert!(!partial.message.contains("were deleted again"), "{partial:?}");
-        let failed = cleanup_error(error(), &names, Err(tonic::Status::unavailable("lost connection")));
-        assert!(failed.message.contains("lost connection") && failed.message.contains("TXD1, TXD2"), "{failed:?}");
+        let deleted = |name: &str| proto::AnnotationInfo {
+            name: name.into(),
+            ..Default::default()
+        };
+        let complete = cleanup_error(
+            error(),
+            &names,
+            Ok(proto::DeleteDrawingAnnotationsResponse {
+                deleted: names.iter().map(|n| deleted(n)).collect(),
+            }),
+        );
+        assert!(
+            complete.message.contains("were deleted again"),
+            "{complete:?}"
+        );
+        let partial = cleanup_error(
+            error(),
+            &names,
+            Ok(proto::DeleteDrawingAnnotationsResponse {
+                deleted: vec![deleted("TXD1")],
+            }),
+        );
+        assert!(
+            partial.message.contains("did not confirm deletion of TXD2"),
+            "{partial:?}"
+        );
+        assert!(
+            !partial.message.contains("were deleted again"),
+            "{partial:?}"
+        );
+        let failed = cleanup_error(
+            error(),
+            &names,
+            Err(tonic::Status::unavailable("lost connection")),
+        );
+        assert!(
+            failed.message.contains("lost connection") && failed.message.contains("TXD1, TXD2"),
+            "{failed:?}"
+        );
         assert!(!failed.message.contains("were deleted again"), "{failed:?}");
     }
 
@@ -1215,16 +1638,52 @@ mod tests {
             ..scheme(Some(SchemeTolerancing::Geometric))
         };
         let r = scheme_request(&ids, &p).unwrap();
-        assert_eq!((r.primary_datum.as_slice(), r.secondary_datum.as_slice(), r.tertiary_datum.is_empty()), (&b"plane"[..], &b"hole"[..], true));
-        assert_eq!((r.tolerance_type, r.part_type, r.feature_filters), (1, 0, 1 | 128));
-        assert!(scheme_request(&ids, &AutoDimensionSchemeParams { datums: vec![], ..p }).is_err());
+        assert_eq!(
+            (
+                r.primary_datum.as_slice(),
+                r.secondary_datum.as_slice(),
+                r.tertiary_datum.is_empty()
+            ),
+            (&b"plane"[..], &b"hole"[..], true)
+        );
+        assert_eq!(
+            (r.tolerance_type, r.part_type, r.feature_filters),
+            (1, 0, 1 | 128)
+        );
+        assert!(
+            scheme_request(
+                &ids,
+                &AutoDimensionSchemeParams {
+                    datums: vec![],
+                    ..p
+                }
+            )
+            .is_err()
+        );
 
         // Plus / minus: no options, and values refused.
         assert!(scheme_preferences(&scheme(None), ISO).unwrap().is_none());
-        assert!(scheme_preferences(&AutoDimensionSchemeParams { position_mm: Some(0.5), ..scheme(None) }, ISO).is_err());
+        assert!(
+            scheme_preferences(
+                &AutoDimensionSchemeParams {
+                    position_mm: Some(0.5),
+                    ..scheme(None)
+                },
+                ISO
+            )
+            .is_err()
+        );
         // Geometric: composite off unless given; ASME only; under the upper segment.
-        let plain = scheme_preferences(&scheme(Some(SchemeTolerancing::Geometric)), ISO).unwrap().unwrap();
-        assert_eq!((plain.set_toggles.get(&COMPOSITE_POSITION), plain.set_toggles.get(&COMPOSITE_PROFILE)), (Some(&false), Some(&false)));
+        let plain = scheme_preferences(&scheme(Some(SchemeTolerancing::Geometric)), ISO)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (
+                plain.set_toggles.get(&COMPOSITE_POSITION),
+                plain.set_toggles.get(&COMPOSITE_PROFILE)
+            ),
+            (Some(&false), Some(&false))
+        );
         let composite = AutoDimensionSchemeParams {
             position_mm: Some(0.508),
             composite_position_mm: Some(0.127),
@@ -1232,45 +1691,114 @@ mod tests {
         };
         let r = scheme_preferences(&composite, ASME).unwrap().unwrap();
         assert_eq!(r.set_toggles.get(&COMPOSITE_POSITION), Some(&true));
-        assert!((r.set_doubles[&POSITION_VALUE] - 0.000508).abs() < 1e-12 && (r.set_doubles[&COMPOSITE_POSITION_VALUE] - 0.000127).abs() < 1e-12);
-        assert!(scheme_preferences(&composite, ISO).unwrap_err().message.contains("ASME"));
-        let upside_down = AutoDimensionSchemeParams { composite_position_mm: Some(0.6), ..composite };
+        assert!(
+            (r.set_doubles[&POSITION_VALUE] - 0.000508).abs() < 1e-12
+                && (r.set_doubles[&COMPOSITE_POSITION_VALUE] - 0.000127).abs() < 1e-12
+        );
+        assert!(
+            scheme_preferences(&composite, ISO)
+                .unwrap_err()
+                .message
+                .contains("ASME")
+        );
+        let upside_down = AutoDimensionSchemeParams {
+            composite_position_mm: Some(0.6),
+            ..composite
+        };
         assert!(scheme_preferences(&upside_down, ASME).is_err());
         // .005 in prints as .01 with DimXpert's 2 decimals.
-        let fine = AutoDimensionSchemeParams { composite_position_mm: Some(0.127), position_mm: Some(0.508), ..scheme(Some(SchemeTolerancing::Geometric)) };
+        let fine = AutoDimensionSchemeParams {
+            composite_position_mm: Some(0.127),
+            position_mm: Some(0.508),
+            ..scheme(Some(SchemeTolerancing::Geometric))
+        };
         let note = frame_rounding_note(&fine, Some(&inch())).unwrap();
-        assert!(note.contains("0.005 as 0.01") && !note.contains("0.02 as"), "{note}");
-        assert!(frame_rounding_note(&AutoDimensionSchemeParams { position_mm: Some(0.5), ..scheme(None) }, None).is_none());
+        assert!(
+            note.contains("0.005 as 0.01") && !note.contains("0.02 as"),
+            "{note}"
+        );
+        assert!(
+            frame_rounding_note(
+                &AutoDimensionSchemeParams {
+                    position_mm: Some(0.5),
+                    ..scheme(None)
+                },
+                None
+            )
+            .is_none()
+        );
     }
 
     #[test]
     fn general_tolerance_iso_and_asme() {
         let (read, remarks) = general_tolerance_request(&general(None, None), ISO).unwrap();
-        assert!(read.set_integers.is_empty() && !read.rebuild && read.integers.contains(&GENERAL_CLASS) && remarks.is_empty());
+        assert!(
+            read.set_integers.is_empty()
+                && !read.rebuild
+                && read.integers.contains(&GENERAL_CLASS)
+                && remarks.is_empty()
+        );
         assert!(read.integers.contains(&BLOCK_DECIMALS[0]) && read.doubles.contains(&BLOCK_ANGLE));
-        let (set, remarks) = general_tolerance_request(&general(Some(Iso2768Class::Coarse), None), ISO).unwrap();
+        let (set, remarks) =
+            general_tolerance_request(&general(Some(Iso2768Class::Coarse), None), ISO).unwrap();
         assert_eq!(set.set_integers.get(&GENERAL_CLASS), Some(&2));
         assert_eq!(set.set_integers.get(&421), Some(&TOL_GENERAL));
         assert_eq!(set.set_toggles.get(&BLOCK_TOLERANCE_TOGGLE), Some(&false));
         assert!(set.rebuild && remarks.is_empty());
         // ISO 2768 in an ASME part: a remark.
-        assert_eq!(general_tolerance_request(&general(Some(Iso2768Class::Medium), None), ASME).unwrap().1.len(), 1);
+        assert_eq!(
+            general_tolerance_request(&general(Some(Iso2768Class::Medium), None), ASME)
+                .unwrap()
+                .1
+                .len(),
+            1
+        );
         // Block rows: sorted, padded to three, in meters; both kinds refused.
-        let rows = vec![BlockRow { decimals: 3, plus_minus_mm: 0.127 }, BlockRow { decimals: 2, plus_minus_mm: 0.254 }];
-        let p = GeneralToleranceParams { block_angle_deg: Some(0.5), ..general(None, Some(rows.clone())) };
+        let rows = vec![
+            BlockRow {
+                decimals: 3,
+                plus_minus_mm: 0.127,
+            },
+            BlockRow {
+                decimals: 2,
+                plus_minus_mm: 0.254,
+            },
+        ];
+        let p = GeneralToleranceParams {
+            block_angle_deg: Some(0.5),
+            ..general(None, Some(rows.clone()))
+        };
         let (set, remarks) = general_tolerance_request(&p, ASME).unwrap();
         assert!(remarks.is_empty());
-        let decimals: Vec<i32> = BLOCK_DECIMALS.iter().map(|id| set.set_integers[id]).collect();
+        let decimals: Vec<i32> = BLOCK_DECIMALS
+            .iter()
+            .map(|id| set.set_integers[id])
+            .collect();
         assert_eq!(decimals, vec![2, 3, 3]);
         assert_eq!(set.set_toggles.get(&BLOCK_TOLERANCE_TOGGLE), Some(&true));
         assert!((set.set_doubles[&BLOCK_VALUES[0]] - 0.000254).abs() < 1e-12);
         assert!((set.set_doubles[&BLOCK_ANGLE] - 0.5f64.to_radians()).abs() < 1e-12);
         assert_eq!(general_tolerance_request(&p, ISO).unwrap().1.len(), 1);
-        assert!(general_tolerance_request(&general(Some(Iso2768Class::Fine), Some(rows)), ASME).is_err());
-        let twice = vec![BlockRow { decimals: 2, plus_minus_mm: 0.1 }, BlockRow { decimals: 2, plus_minus_mm: 0.2 }];
+        assert!(
+            general_tolerance_request(&general(Some(Iso2768Class::Fine), Some(rows)), ASME)
+                .is_err()
+        );
+        let twice = vec![
+            BlockRow {
+                decimals: 2,
+                plus_minus_mm: 0.1,
+            },
+            BlockRow {
+                decimals: 2,
+                plus_minus_mm: 0.2,
+            },
+        ];
         assert!(general_tolerance_request(&general(None, Some(twice)), ASME).is_err());
 
-        let mut reply = table_reply([(2, 0.000254), (3, 0.000127), (3, 0.000127)], 0.5f64.to_radians());
+        let mut reply = table_reply(
+            [(2, 0.000254), (3, 0.000127), (3, 0.000127)],
+            0.5f64.to_radians(),
+        );
         reply.integers.insert(GENERAL_CLASS, 1);
         reply.integers.insert(421, TOL_GENERAL);
         reply.integers.insert(409, TOL_SYMMETRIC);
@@ -1279,14 +1807,41 @@ mod tests {
         let json = general_tolerance_json(&general(None, None), &reply, ASME, Some(&units), &[]);
         assert_eq!(json["iso2768_class"], "m (medium)");
         assert_eq!(json["general_tolerance"], json!(["diameter"]));
-        assert_eq!(json["own_default"]["location_distance"]["plus_minus_mm"], json!(0.5));
-        assert_eq!(json["block_tolerance"].as_array().map(Vec::len), Some(2), "{json}");
-        assert_eq!(json["block_tolerance"][0]["plus_minus"], "0.01 inches (0.254 mm)");
+        assert_eq!(
+            json["own_default"]["location_distance"]["plus_minus_mm"],
+            json!(0.5)
+        );
+        assert_eq!(
+            json["block_tolerance"].as_array().map(Vec::len),
+            Some(2),
+            "{json}"
+        );
+        assert_eq!(
+            json["block_tolerance"][0]["plus_minus"],
+            "0.01 inches (0.254 mm)"
+        );
         assert_eq!(json["block_angle_deg"], json!(0.5));
-        assert!(json["applies"].as_str().unwrap().contains("block tolerance"));
-        let placeholder = general_tolerance_json(&general(None, None), &table_reply(TEMPLATE_BLOCK_ROWS, 1.745e-4), ISO, None, &[]);
-        assert!(placeholder["block_tolerance"].as_str().unwrap().contains("not set"));
-        let class: GeneralToleranceParams = serde_json::from_value(json!({ "iso2768": "fine" })).unwrap();
+        assert!(
+            json["applies"]
+                .as_str()
+                .unwrap()
+                .contains("block tolerance")
+        );
+        let placeholder = general_tolerance_json(
+            &general(None, None),
+            &table_reply(TEMPLATE_BLOCK_ROWS, 1.745e-4),
+            ISO,
+            None,
+            &[],
+        );
+        assert!(
+            placeholder["block_tolerance"]
+                .as_str()
+                .unwrap()
+                .contains("not set")
+        );
+        let class: GeneralToleranceParams =
+            serde_json::from_value(json!({ "iso2768": "fine" })).unwrap();
         assert_eq!(class.iso2768, Some(Iso2768Class::Fine));
     }
 }

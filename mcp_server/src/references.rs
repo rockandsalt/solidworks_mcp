@@ -76,7 +76,12 @@ fn is_solidworks_file(path: &str) -> bool {
 
 /// The first `NAMES_SHOWN` of `names`, then how many more.
 fn some_names(names: &[&str]) -> String {
-    let mut text = names.iter().take(NAMES_SHOWN).copied().collect::<Vec<_>>().join(", ");
+    let mut text = names
+        .iter()
+        .take(NAMES_SHOWN)
+        .copied()
+        .collect::<Vec<_>>()
+        .join(", ");
     if names.len() > NAMES_SHOWN {
         text += &format!(" and {} more", names.len() - NAMES_SHOWN);
     }
@@ -84,7 +89,10 @@ fn some_names(names: &[&str]) -> String {
 }
 
 fn by_files(files: Vec<String>) -> proto::FileReferencesRequest {
-    proto::FileReferencesRequest { document: String::new(), files }
+    proto::FileReferencesRequest {
+        document: String::new(),
+        files,
+    }
 }
 
 /// The whole tool: the walk down from the document, then where-used if asked.
@@ -94,18 +102,26 @@ pub async fn run(
     addin_error: impl Fn(tonic::Status) -> McpError,
 ) -> Result<Value, McpError> {
     let request = first_request(params)?;
-    let reply = addin.file_references(request.clone()).await.map_err(&addin_error)?;
+    let reply = addin
+        .file_references(request.clone())
+        .await
+        .map_err(&addin_error)?;
     let mut walk = Walk::new(params, &request, &reply);
     let folder = params.where_used_in.as_deref().map(windows_path);
     if folder.is_some() && walk.root_path().is_empty() {
-        return Err(invalid("the document was never saved, so no file can use it -- save_document first"));
+        return Err(invalid(
+            "the document was never saved, so no file can use it -- save_document first",
+        ));
     }
     loop {
         let batch = walk.next_batch();
         if batch.is_empty() {
             break;
         }
-        let reply = addin.file_references(by_files(batch.clone())).await.map_err(&addin_error)?;
+        let reply = addin
+            .file_references(by_files(batch.clone()))
+            .await
+            .map_err(&addin_error)?;
         walk.add_batch(&batch, &reply);
     }
     let where_used = match folder {
@@ -114,31 +130,57 @@ pub async fn run(
             let (candidates, truncated) = folder_files(&folder, walk.root_path());
             let mut uses = Vec::with_capacity(candidates.len());
             for chunk in candidates.chunks(BATCH) {
-                uses.extend(addin.file_references(by_files(chunk.to_vec())).await.map_err(&addin_error)?.uses);
+                uses.extend(
+                    addin
+                        .file_references(by_files(chunk.to_vec()))
+                        .await
+                        .map_err(&addin_error)?
+                        .uses,
+                );
             }
-            Some(where_used(&folder, walk.root_path(), &candidates, &uses, truncated, walk.limit))
+            Some(where_used(
+                &folder,
+                walk.root_path(),
+                &candidates,
+                &uses,
+                truncated,
+                walk.limit,
+            ))
         }
     };
     Ok(walk.render(where_used))
 }
 
 /// The first request: by path (`files`) when `document` is one, else by name.
-pub fn first_request(params: &FileReferencesParams) -> Result<proto::FileReferencesRequest, McpError> {
+pub fn first_request(
+    params: &FileReferencesParams,
+) -> Result<proto::FileReferencesRequest, McpError> {
     if let Some(folder) = params.where_used_in.as_deref().map(str::trim) {
         if !files::is_absolute(folder) {
-            return Err(invalid(format!("where_used_in {folder:?} isn't an absolute folder")));
+            return Err(invalid(format!(
+                "where_used_in {folder:?} isn't an absolute folder"
+            )));
         }
         if !Path::new(folder).is_dir() {
             return Err(invalid(format!("there's no folder {folder}")));
         }
     }
-    let document = params.document.as_deref().map(str::trim).unwrap_or_default();
+    let document = params
+        .document
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default();
     if !files::is_absolute(document) {
-        return Ok(proto::FileReferencesRequest { document: document.to_string(), files: vec![] });
+        return Ok(proto::FileReferencesRequest {
+            document: document.to_string(),
+            files: vec![],
+        });
     }
     let document = windows_path(document);
     if !is_solidworks_file(&document) {
-        return Err(invalid(format!("{document:?} isn't a part, assembly or drawing (.SLDPRT / .SLDASM / .SLDDRW)")));
+        return Err(invalid(format!(
+            "{document:?} isn't a part, assembly or drawing (.SLDPRT / .SLDASM / .SLDDRW)"
+        )));
     }
     if !Path::new(&document).is_file() {
         return Err(invalid(format!("there's no file {document}")));
@@ -192,7 +234,11 @@ impl Walk {
         };
         let uses = reply.uses.first().cloned().unwrap_or_default();
         let mut walk = Walk {
-            root_name: if root_path.is_empty() { root_name } else { file_name(&root_path).to_string() },
+            root_name: if root_path.is_empty() {
+                root_name
+            } else {
+                file_name(&root_path).to_string()
+            },
             root_path,
             root_loaded: uses.loaded,
             root_unsaved: uses.unsaved_changes,
@@ -214,7 +260,11 @@ impl Walk {
 
     /// How the root shows in `used_by`.
     fn root_by(&self) -> String {
-        if self.root_path.is_empty() { self.root_name.clone() } else { self.root_path.clone() }
+        if self.root_path.is_empty() {
+            self.root_name.clone()
+        } else {
+            self.root_path.clone()
+        }
     }
 
     fn add(&mut self, by: &str, level: usize, uses: &proto::FileUses) {
@@ -240,11 +290,13 @@ impl Walk {
             }
             self.used.push(Used {
                 path: r.path.clone(),
-                saved_as: (!r.saved_path.is_empty() && key(&r.saved_path) != k).then(|| r.saved_path.clone()),
+                saved_as: (!r.saved_path.is_empty() && key(&r.saved_path) != k)
+                    .then(|| r.saved_path.clone()),
                 level,
                 used_by: vec![by.to_string()],
                 missing,
-                read_only: !missing && std::fs::metadata(&r.path).is_ok_and(|m| m.permissions().readonly()),
+                read_only: !missing
+                    && std::fs::metadata(&r.path).is_ok_and(|m| m.permissions().readonly()),
                 loaded: false,
                 unsaved_changes: false,
             });
@@ -254,13 +306,18 @@ impl Walk {
     /// The files to read next; empty when the walk is done.
     pub fn next_batch(&mut self) -> Vec<String> {
         let n = self.pending.len().min(BATCH);
-        self.pending.drain(..n).map(|i| self.used[i].path.clone()).collect()
+        self.pending
+            .drain(..n)
+            .map(|i| self.used[i].path.clone())
+            .collect()
     }
 
     /// The reply for `batch` (from next_batch).
     pub fn add_batch(&mut self, batch: &[String], reply: &proto::FileReferencesResponse) {
         for (path, uses) in batch.iter().zip(&reply.uses) {
-            let Some(&i) = self.index.get(&key(path)) else { continue };
+            let Some(&i) = self.index.get(&key(path)) else {
+                continue;
+            };
             self.used[i].loaded = uses.loaded;
             self.used[i].unsaved_changes = uses.unsaved_changes;
             let level = self.used[i].level + 1;
@@ -338,18 +395,31 @@ impl Walk {
             return format!("{root} uses no other files");
         }
         let count = |t: &str| self.used.iter().filter(|u| type_of(&u.path) == t).count();
-        let kinds: Vec<String> = [("assembly", "assemblies"), ("part", "parts"), ("drawing", "drawings"), ("file", "other files")]
-            .iter()
-            .filter_map(|(t, plural)| match count(t) {
-                0 => None,
-                1 => Some(format!("1 {t}")),
-                n => Some(format!("{n} {plural}")),
-            })
-            .collect();
+        let kinds: Vec<String> = [
+            ("assembly", "assemblies"),
+            ("part", "parts"),
+            ("drawing", "drawings"),
+            ("file", "other files"),
+        ]
+        .iter()
+        .filter_map(|(t, plural)| match count(t) {
+            0 => None,
+            1 => Some(format!("1 {t}")),
+            n => Some(format!("{n} {plural}")),
+        })
+        .collect();
         let levels = if self.all_levels { "" } else { " directly" };
-        let mut text = format!("{root} uses {} file(s){levels}: {}", self.used.len(), kinds.join(", "));
+        let mut text = format!(
+            "{root} uses {} file(s){levels}: {}",
+            self.used.len(),
+            kinds.join(", ")
+        );
         let names = |pick: &dyn Fn(&Used) -> bool| -> Vec<&str> {
-            self.used.iter().filter(|u| pick(u)).map(|u| file_name(&u.path)).collect()
+            self.used
+                .iter()
+                .filter(|u| pick(u))
+                .map(|u| file_name(&u.path))
+                .collect()
         };
         let missing = names(&|u| u.missing);
         if !missing.is_empty() {
@@ -361,7 +431,11 @@ impl Walk {
         }
         let moved = names(&|u| !u.missing && u.saved_as.is_some());
         if !moved.is_empty() {
-            text += &format!("; {} found elsewhere than saved (saved_as): {}", moved.len(), some_names(&moved));
+            text += &format!(
+                "; {} found elsewhere than saved (saved_as): {}",
+                moved.len(),
+                some_names(&moved)
+            );
         }
         let unsaved = names(&|u| u.unsaved_changes);
         if !unsaved.is_empty() || self.root_unsaved {
@@ -382,7 +456,9 @@ pub fn folder_files(folder: &str, target: &str) -> (Vec<String>, bool) {
     let mut dirs = vec![Path::new(folder).to_path_buf()];
     let target = key(target);
     while let Some(dir) = dirs.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
         entries.sort();
         for path in entries {
@@ -390,7 +466,10 @@ pub fn folder_files(folder: &str, target: &str) -> (Vec<String>, bool) {
                 dirs.push(path);
                 continue;
             }
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
             let Some(text) = path.to_str() else { continue };
             // ~$ files are SolidWorks' lock files for open documents.
             if name.starts_with("~$") || !is_solidworks_file(text) || key(text) == target {
@@ -417,11 +496,19 @@ pub fn where_used(
     limit: usize,
 ) -> Value {
     let target_key = key(target);
-    let stem = Path::new(target).file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_lowercase();
+    let stem = Path::new(target)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_lowercase();
     let mut users = Vec::new();
     let mut others = Vec::new();
     for (file, u) in files.iter().zip(uses) {
-        if let Some(r) = u.references.iter().find(|r| key(&r.path) == target_key || key(&r.saved_path) == target_key) {
+        if let Some(r) = u
+            .references
+            .iter()
+            .find(|r| key(&r.path) == target_key || key(&r.saved_path) == target_key)
+        {
             let mut entry = json!({ "file": file, "type": type_of(file) });
             if key(&r.path) != target_key {
                 entry["finds_instead"] = json!(r.path);
@@ -429,9 +516,11 @@ pub fn where_used(
                 entry["saved_as"] = json!(r.saved_path);
             }
             users.push(entry);
-        } else if let Some(r) = u.references.iter().find(|r| {
-            r.name.to_lowercase() == stem && type_of(&r.path) == type_of(target)
-        }) {
+        } else if let Some(r) = u
+            .references
+            .iter()
+            .find(|r| r.name.to_lowercase() == stem && type_of(&r.path) == type_of(target))
+        {
             others.push(json!({ "file": file, "type": type_of(file), "uses": r.path }));
         }
     }
@@ -452,7 +541,9 @@ pub fn where_used(
         ));
     }
     if truncated {
-        out["truncated"] = json!(format!("only the first {MAX_FOLDER_FILES} files were searched"));
+        out["truncated"] = json!(format!(
+            "only the first {MAX_FOLDER_FILES} files were searched"
+        ));
     }
     out
 }
@@ -462,11 +553,19 @@ mod tests {
     use super::*;
 
     fn reference(name: &str, path: &str, saved: &str) -> proto::FileReference {
-        proto::FileReference { name: name.into(), path: path.into(), saved_path: saved.into() }
+        proto::FileReference {
+            name: name.into(),
+            path: path.into(),
+            saved_path: saved.into(),
+        }
     }
 
     fn uses(refs: Vec<proto::FileReference>) -> proto::FileUses {
-        proto::FileUses { loaded: false, unsaved_changes: false, references: refs }
+        proto::FileUses {
+            loaded: false,
+            unsaved_changes: false,
+            references: refs,
+        }
     }
 
     #[test]
@@ -477,12 +576,23 @@ mod tests {
         for n in ["sub.SLDASM", "pin.SLDPRT"] {
             std::fs::write(dir.join(n), b"x").unwrap();
         }
-        let (top, sub, pin, block) = (path("top.SLDASM"), path("sub.SLDASM"), path("pin.SLDPRT"), path("block.SLDPRT"));
+        let (top, sub, pin, block) = (
+            path("top.SLDASM"),
+            path("sub.SLDASM"),
+            path("pin.SLDPRT"),
+            path("block.SLDPRT"),
+        );
         let params = FileReferencesParams::default();
-        let request = proto::FileReferencesRequest { document: String::new(), files: vec![top.clone()] };
+        let request = proto::FileReferencesRequest {
+            document: String::new(),
+            files: vec![top.clone()],
+        };
         let reply = proto::FileReferencesResponse {
             document: None,
-            uses: vec![uses(vec![reference("sub", &sub, &sub), reference("pin", &pin, &path("old\\pin.SLDPRT"))])],
+            uses: vec![uses(vec![
+                reference("sub", &sub, &sub),
+                reference("pin", &pin, &path("old\\pin.SLDPRT")),
+            ])],
         };
         let mut walk = Walk::new(&params, &request, &reply);
         let batch = walk.next_batch();
@@ -490,12 +600,21 @@ mod tests {
         let reply = proto::FileReferencesResponse {
             document: None,
             uses: vec![
-                proto::FileUses { loaded: true, ..uses(vec![reference("block", &block, &block), reference("pin", &pin, &pin)]) },
+                proto::FileUses {
+                    loaded: true,
+                    ..uses(vec![
+                        reference("block", &block, &block),
+                        reference("pin", &pin, &pin),
+                    ])
+                },
                 uses(vec![reference("top", &top, &top)]),
             ],
         };
         walk.add_batch(&batch, &reply);
-        assert!(walk.next_batch().is_empty(), "block is missing, so not read");
+        assert!(
+            walk.next_batch().is_empty(),
+            "block is missing, so not read"
+        );
         let json = walk.render(None);
         let used = json["uses"].as_array().unwrap();
         assert_eq!(used.len(), 3, "{json}");
@@ -505,17 +624,34 @@ mod tests {
         assert_eq!(used[2]["missing"], true);
         assert_eq!(used[2]["level"], 2);
         let summary = json["summary"].as_str().unwrap();
-        assert!(summary.contains("3 file(s)") && summary.contains("1 missing") && summary.contains("block.SLDPRT"), "{summary}");
-        assert!(summary.contains("found elsewhere than saved (saved_as): pin.SLDPRT"), "{summary}");
+        assert!(
+            summary.contains("3 file(s)")
+                && summary.contains("1 missing")
+                && summary.contains("block.SLDPRT"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("found elsewhere than saved (saved_as): pin.SLDPRT"),
+            "{summary}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn direct_only_reads_nothing_more() {
-        let params = FileReferencesParams { all_levels: Some(false), ..Default::default() };
-        let request = proto::FileReferencesRequest { document: "Assem1".into(), files: vec![] };
+        let params = FileReferencesParams {
+            all_levels: Some(false),
+            ..Default::default()
+        };
+        let request = proto::FileReferencesRequest {
+            document: "Assem1".into(),
+            files: vec![],
+        };
         let reply = proto::FileReferencesResponse {
-            document: Some(proto::Document { title: "Assem1".into(), ..Default::default() }),
+            document: Some(proto::Document {
+                title: "Assem1".into(),
+                ..Default::default()
+            }),
             uses: vec![proto::FileUses {
                 loaded: true,
                 unsaved_changes: true,
@@ -529,7 +665,10 @@ mod tests {
         assert_eq!(json["loaded"], true);
         assert_eq!(json["uses"][0]["used_by"][0], "Assem1");
         let summary = json["summary"].as_str().unwrap();
-        assert!(summary.starts_with("Assem1 (never saved) uses 1 file(s) directly"), "{summary}");
+        assert!(
+            summary.starts_with("Assem1 (never saved) uses 1 file(s) directly"),
+            "{summary}"
+        );
         assert!(summary.contains("unsaved changes in Assem1"), "{summary}");
     }
 
@@ -540,27 +679,56 @@ mod tests {
         let path = |n: &str| dir.join(n).to_str().unwrap().to_string();
         std::fs::write(dir.join("a.SLDPRT"), b"x").unwrap();
         let (a, gone) = (path("a.SLDPRT"), path("gone.SLDPRT"));
-        let params = FileReferencesParams { all_levels: Some(false), limit: Some(1), ..Default::default() };
+        let params = FileReferencesParams {
+            all_levels: Some(false),
+            limit: Some(1),
+            ..Default::default()
+        };
         let request = by_files(vec![path("top.SLDASM")]);
         let reply = proto::FileReferencesResponse {
             document: None,
-            uses: vec![uses(vec![reference("a", &a, &a), reference("gone", &gone, &gone)])],
+            uses: vec![uses(vec![
+                reference("a", &a, &a),
+                reference("gone", &gone, &gone),
+            ])],
         };
         let mut walk = Walk::new(&params, &request, &reply);
         for n in 1..=6 {
-            walk.add(&format!("C:\\users\\u{n}.SLDASM"), 2, &uses(vec![reference("a", &a, &a)]));
+            walk.add(
+                &format!("C:\\users\\u{n}.SLDASM"),
+                2,
+                &uses(vec![reference("a", &a, &a)]),
+            );
         }
         let json = walk.render(None);
         let used = json["uses"].as_array().unwrap();
         assert_eq!(used.len(), 1, "{json}");
-        assert_eq!(used[0]["file"], gone.as_str(), "the missing one comes first: {json}");
-        assert!(json["listed"].as_str().unwrap().starts_with("1 of 2 files"), "{json}");
+        assert_eq!(
+            used[0]["file"],
+            gone.as_str(),
+            "the missing one comes first: {json}"
+        );
+        assert!(
+            json["listed"].as_str().unwrap().starts_with("1 of 2 files"),
+            "{json}"
+        );
         assert!(json.get("loaded").is_none(), "read from disk: {json}");
-        let all = Walk::new(&FileReferencesParams { limit: None, ..params }, &request, &reply);
+        let all = Walk::new(
+            &FileReferencesParams {
+                limit: None,
+                ..params
+            },
+            &request,
+            &reply,
+        );
         assert!(all.render(None).get("listed").is_none());
         walk.limit = 5;
         let a_entry = &walk.render(None)["uses"][0];
-        assert_eq!(a_entry["used_by"].as_array().unwrap().len(), NAMES_SHOWN, "{a_entry}");
+        assert_eq!(
+            a_entry["used_by"].as_array().unwrap().len(),
+            NAMES_SHOWN,
+            "{a_entry}"
+        );
         assert_eq!(a_entry["used_by_count"], 7, "{a_entry}");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -568,15 +736,22 @@ mod tests {
     #[test]
     fn some_names_says_how_many_more() {
         assert_eq!(some_names(&["a", "b"]), "a, b");
-        assert_eq!(some_names(&["a", "b", "c", "d", "e", "f", "g"]), "a, b, c, d, e and 2 more");
+        assert_eq!(
+            some_names(&["a", "b", "c", "d", "e", "f", "g"]),
+            "a, b, c, d, e and 2 more"
+        );
     }
 
     #[test]
     fn a_path_with_forward_slashes_goes_with_backslashes() {
-        let file = std::env::temp_dir().join(format!("sld_mcp_refs_slash_{}.SLDASM", std::process::id()));
+        let file =
+            std::env::temp_dir().join(format!("sld_mcp_refs_slash_{}.SLDASM", std::process::id()));
         std::fs::write(&file, b"x").unwrap();
         let windows = file.to_str().unwrap().to_string();
-        let params = FileReferencesParams { document: Some(windows.replace('\\', "/")), ..Default::default() };
+        let params = FileReferencesParams {
+            document: Some(windows.replace('\\', "/")),
+            ..Default::default()
+        };
         let request = first_request(&params).unwrap();
         let _ = std::fs::remove_file(&file);
         assert_eq!(request.files, vec![windows]);
@@ -585,11 +760,27 @@ mod tests {
     #[test]
     fn where_used_matches_by_path_then_name() {
         let target = "C:\\p\\pin.SLDPRT";
-        let files = vec!["C:\\p\\a.SLDASM".to_string(), "C:\\p\\b.SLDDRW".to_string(), "C:\\p\\c.SLDASM".to_string()];
+        let files = vec![
+            "C:\\p\\a.SLDASM".to_string(),
+            "C:\\p\\b.SLDDRW".to_string(),
+            "C:\\p\\c.SLDASM".to_string(),
+        ];
         let uses = vec![
-            uses(vec![reference("pin", "c:/p/PIN.sldprt", "C:\\old\\pin.SLDPRT")]),
-            uses(vec![reference("pin", "C:\\other\\pin.SLDPRT", "C:\\other\\pin.SLDPRT")]),
-            uses(vec![reference("block", "C:\\p\\block.SLDPRT", "C:\\p\\block.SLDPRT")]),
+            uses(vec![reference(
+                "pin",
+                "c:/p/PIN.sldprt",
+                "C:\\old\\pin.SLDPRT",
+            )]),
+            uses(vec![reference(
+                "pin",
+                "C:\\other\\pin.SLDPRT",
+                "C:\\other\\pin.SLDPRT",
+            )]),
+            uses(vec![reference(
+                "block",
+                "C:\\p\\block.SLDPRT",
+                "C:\\p\\block.SLDPRT",
+            )]),
         ];
         let json = where_used("C:\\p", target, &files, &uses, false, 100);
         assert_eq!(json["used_by"].as_array().unwrap().len(), 1, "{json}");
@@ -597,7 +788,10 @@ mod tests {
         assert_eq!(json["same_name_elsewhere"][0]["file"], "C:\\p\\b.SLDDRW");
         assert!(json.get("listed").is_none(), "{json}");
         let json = where_used("C:\\p", target, &files, &uses, false, 0);
-        assert_eq!(json["listed"], "0 of 1 users and 0 of 1 same-name; raise limit for more", "{json}");
+        assert_eq!(
+            json["listed"], "0 of 1 users and 0 of 1 same-name; raise limit for more",
+            "{json}"
+        );
     }
 
     #[test]
@@ -607,7 +801,10 @@ mod tests {
             where_used_in: w.map(Into::into),
             ..Default::default()
         };
-        assert_eq!(first_request(&p("ref-top", None)).unwrap().document, "ref-top");
+        assert_eq!(
+            first_request(&p("ref-top", None)).unwrap().document,
+            "ref-top"
+        );
         assert!(first_request(&p("C:\\no\\such.SLDASM", None)).is_err());
         assert!(first_request(&p("C:\\x\\a.step", None)).is_err());
         assert!(first_request(&p("", Some("relative\\dir"))).is_err());

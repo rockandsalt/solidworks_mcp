@@ -80,12 +80,22 @@ pub fn request(params: &DesignTableParams) -> Result<proto::DesignTableRequest, 
         let action = (params.action == DesignTableAction::Delete).then_some(Action::Delete(true));
         return Ok(proto::DesignTableRequest { action });
     }
-    let columns: Vec<String> = params.columns.iter().flatten().map(|c| c.trim().to_string()).collect();
+    let columns: Vec<String> = params
+        .columns
+        .iter()
+        .flatten()
+        .map(|c| c.trim().to_string())
+        .collect();
     if columns.is_empty() {
-        return Err(invalid("give the table's columns (e.g. [\"D1@Boss-Extrude1\", \"$STATE@Fillet1\"])"));
+        return Err(invalid(
+            "give the table's columns (e.g. [\"D1@Boss-Extrude1\", \"$STATE@Fillet1\"])",
+        ));
     }
     if columns.len() > MAX_COLUMNS {
-        return Err(invalid(format!("at most {MAX_COLUMNS} columns, got {}", columns.len())));
+        return Err(invalid(format!(
+            "at most {MAX_COLUMNS} columns, got {}",
+            columns.len()
+        )));
     }
     for (i, column) in columns.iter().enumerate() {
         if column.is_empty() {
@@ -97,10 +107,15 @@ pub fn request(params: &DesignTableParams) -> Result<proto::DesignTableRequest, 
     }
     let given = params.rows.as_deref().unwrap_or_default();
     if given.is_empty() {
-        return Err(invalid("give at least one row (a configuration and its values)"));
+        return Err(invalid(
+            "give at least one row (a configuration and its values)",
+        ));
     }
     if given.len() > MAX_ROWS {
-        return Err(invalid(format!("at most {MAX_ROWS} rows, got {}", given.len())));
+        return Err(invalid(format!(
+            "at most {MAX_ROWS} rows, got {}",
+            given.len()
+        )));
     }
     let mut rows: Vec<proto::DesignTableRow> = Vec::new();
     for row in given {
@@ -108,8 +123,13 @@ pub fn request(params: &DesignTableParams) -> Result<proto::DesignTableRequest, 
         if configuration.is_empty() {
             return Err(invalid("a row has no configuration name"));
         }
-        if rows.iter().any(|r| r.configuration.eq_ignore_ascii_case(configuration)) {
-            return Err(invalid(format!("configuration \"{configuration}\" has two rows")));
+        if rows
+            .iter()
+            .any(|r| r.configuration.eq_ignore_ascii_case(configuration))
+        {
+            return Err(invalid(format!(
+                "configuration \"{configuration}\" has two rows"
+            )));
         }
         if row.values.len() > columns.len() {
             return Err(invalid(format!(
@@ -120,7 +140,10 @@ pub fn request(params: &DesignTableParams) -> Result<proto::DesignTableRequest, 
         }
         let mut values: Vec<String> = row.values.iter().map(Cell::text).collect();
         values.resize(columns.len(), String::new());
-        rows.push(proto::DesignTableRow { configuration: configuration.to_string(), values });
+        rows.push(proto::DesignTableRow {
+            configuration: configuration.to_string(),
+            values,
+        });
     }
     Ok(proto::DesignTableRequest {
         action: Some(Action::Write(proto::DesignTableContent { columns, rows })),
@@ -190,25 +213,41 @@ pub fn table_json(reply: &proto::DesignTableResponse) -> Value {
     Value::Object(out)
 }
 
-pub fn reply_text(params: &DesignTableParams, reply: &proto::DesignTableResponse, dialogs: &[Closed]) -> String {
+pub fn reply_text(
+    params: &DesignTableParams,
+    reply: &proto::DesignTableResponse,
+    dialogs: &[Closed],
+) -> String {
     let mut text = match params.action {
         DesignTableAction::Read if !reply.exists => "the document has no design table.".to_string(),
         DesignTableAction::Read => String::new(),
         DesignTableAction::Delete => {
-            "deleted the design table; the configurations stay, with the values they have.".to_string()
+            "deleted the design table; the configurations stay, with the values they have."
+                .to_string()
         }
         DesignTableAction::Write => {
             let rows = reply.table.as_ref().map_or(0, |t| t.rows.len());
-            let mut t = format!("wrote the design table ({rows} configurations); the model was rebuilt.");
+            let mut t =
+                format!("wrote the design table ({rows} configurations); the model was rebuilt.");
             if !reply.created_configurations.is_empty() {
-                let list: Vec<String> = reply.created_configurations.iter().map(|c| format!("\"{c}\"")).collect();
-                t += &format!(" SolidWorks created the configurations {}.", list.join(", "));
+                let list: Vec<String> = reply
+                    .created_configurations
+                    .iter()
+                    .map(|c| format!("\"{c}\""))
+                    .collect();
+                t += &format!(
+                    " SolidWorks created the configurations {}.",
+                    list.join(", ")
+                );
             }
             t
         }
     };
     if reply.table_error != 0 {
-        text += &format!(" SolidWorks reports a problem with the table: {}.", table_error_name(reply.table_error));
+        text += &format!(
+            " SolidWorks reports a problem with the table: {}.",
+            table_error_name(reply.table_error)
+        );
     }
     if !dialogs.is_empty() {
         // Errors name the column or value; a question (delete the configurations no row
@@ -237,7 +276,10 @@ mod tests {
     use super::*;
 
     fn row(configuration: &str, values: Vec<Cell>) -> DesignTableRowParams {
-        DesignTableRowParams { configuration: configuration.into(), values }
+        DesignTableRowParams {
+            configuration: configuration.into(),
+            values,
+        }
     }
 
     fn write(columns: &[&str], rows: Vec<DesignTableRowParams>) -> DesignTableParams {
@@ -258,25 +300,64 @@ mod tests {
                 row(" Long ", vec![Cell::Number(30.5)]),
             ],
         );
-        let Some(Action::Write(table)) = request(&p).unwrap().action else { panic!() };
-        assert_eq!(table.columns, vec!["D1@Boss-Extrude1", "$STATE@Cut-Extrude1"]);
+        let Some(Action::Write(table)) = request(&p).unwrap().action else {
+            panic!()
+        };
+        assert_eq!(
+            table.columns,
+            vec!["D1@Boss-Extrude1", "$STATE@Cut-Extrude1"]
+        );
         assert_eq!(table.rows[0].values, vec!["10", "U"]);
-        assert_eq!((table.rows[1].configuration.as_str(), table.rows[1].values.clone()), ("Long", vec!["30.5".to_string(), String::new()]));
+        assert_eq!(
+            (
+                table.rows[1].configuration.as_str(),
+                table.rows[1].values.clone()
+            ),
+            ("Long", vec!["30.5".to_string(), String::new()])
+        );
 
         assert!(request(&write(&[], vec![row("A", vec![])])).is_err());
         assert!(request(&write(&["D1@Sketch1"], vec![])).is_err());
-        assert!(request(&write(&["D1@Sketch1", "d1@sketch1"], vec![row("A", vec![])])).is_err());
-        assert!(request(&write(&["D1@Sketch1"], vec![row("A", vec![]), row("a", vec![])])).is_err());
-        assert!(request(&write(&["D1@Sketch1"], vec![row("A", vec![Cell::Number(1.0), Cell::Number(2.0)])])).is_err());
-        let read = DesignTableParams { action: DesignTableAction::Read, columns: None, rows: None };
+        assert!(
+            request(&write(
+                &["D1@Sketch1", "d1@sketch1"],
+                vec![row("A", vec![])]
+            ))
+            .is_err()
+        );
+        assert!(
+            request(&write(
+                &["D1@Sketch1"],
+                vec![row("A", vec![]), row("a", vec![])]
+            ))
+            .is_err()
+        );
+        assert!(
+            request(&write(
+                &["D1@Sketch1"],
+                vec![row("A", vec![Cell::Number(1.0), Cell::Number(2.0)])]
+            ))
+            .is_err()
+        );
+        let read = DesignTableParams {
+            action: DesignTableAction::Read,
+            columns: None,
+            rows: None,
+        };
         assert_eq!(request(&read).unwrap().action, None);
-        let delete = DesignTableParams { action: DesignTableAction::Delete, columns: Some(vec![]), rows: None };
+        let delete = DesignTableParams {
+            action: DesignTableAction::Delete,
+            columns: Some(vec![]),
+            rows: None,
+        };
         assert!(request(&delete).is_err());
     }
 
     #[test]
     fn cells_from_json() {
-        let r: DesignTableRowParams = serde_json::from_value(json!({ "configuration": "A", "values": [30, "S", 2.5] })).unwrap();
+        let r: DesignTableRowParams =
+            serde_json::from_value(json!({ "configuration": "A", "values": [30, "S", 2.5] }))
+                .unwrap();
         let texts: Vec<String> = r.values.iter().map(Cell::text).collect();
         assert_eq!(texts, vec!["30", "S", "2.5"]);
     }
@@ -287,7 +368,10 @@ mod tests {
             exists: true,
             table: Some(proto::DesignTableContent {
                 columns: vec!["D1@Boss-Extrude1".into(), "$DESCRIPTION".into()],
-                rows: vec![proto::DesignTableRow { configuration: "Long".into(), values: vec!["30".into(), String::new()] }],
+                rows: vec![proto::DesignTableRow {
+                    configuration: "Long".into(),
+                    values: vec!["30".into(), String::new()],
+                }],
             }),
             created_configurations: vec!["Long".into()],
             active: "Default".into(),
@@ -310,10 +394,20 @@ mod tests {
             "{text}"
         );
         let json: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
-        assert_eq!(json["rows"][0], json!({ "configuration": "Long", "values": { "D1@Boss-Extrude1": "30" } }));
+        assert_eq!(
+            json["rows"][0],
+            json!({ "configuration": "Long", "values": { "D1@Boss-Extrude1": "30" } })
+        );
 
-        let none = proto::DesignTableResponse { active: "Default".into(), ..Default::default() };
-        let read = DesignTableParams { action: DesignTableAction::Read, columns: None, rows: None };
+        let none = proto::DesignTableResponse {
+            active: "Default".into(),
+            ..Default::default()
+        };
+        let read = DesignTableParams {
+            action: DesignTableAction::Read,
+            columns: None,
+            rows: None,
+        };
         assert!(reply_text(&read, &none, &[]).starts_with("the document has no design table.\n"));
     }
 }

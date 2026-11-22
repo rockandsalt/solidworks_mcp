@@ -52,11 +52,19 @@ fn point(at_mm: [f64; 2], what: &str) -> Result<DVec2, McpError> {
 }
 
 fn vec3(p: DVec2) -> proto::Vec3 {
-    proto::Vec3 { x: p.x, y: p.y, z: 0.0 }
+    proto::Vec3 {
+        x: p.x,
+        y: p.y,
+        z: 0.0,
+    }
 }
 
 fn mm2(p: DVec2) -> String {
-    format!("[{}, {}]", round(p.x * MM_PER_M, 1), round(p.y * MM_PER_M, 1))
+    format!(
+        "[{}, {}]",
+        round(p.x * MM_PER_M, 1),
+        round(p.y * MM_PER_M, 1)
+    )
 }
 
 // ---- Words ------------------------------------------------------------------------
@@ -372,7 +380,11 @@ fn revision_entries(revisions: &[RevisionParams]) -> Result<Vec<proto::RevisionE
                 description: text(r.description.as_deref()),
                 date: text(r.date.as_deref()),
                 approved: text(r.approved.as_deref()),
-                symbols: r.symbols_at_mm.iter().map(|at| point(*at, "symbols_at_mm").map(vec3)).collect::<Result<_, _>>()?,
+                symbols: r
+                    .symbols_at_mm
+                    .iter()
+                    .map(|at| point(*at, "symbols_at_mm").map(vec3))
+                    .collect::<Result<_, _>>()?,
             })
         })
         .collect()
@@ -585,7 +597,12 @@ fn segment_hits_box(a: DVec2, b: DVec2, lo: DVec2, hi: DVec2, gap: f64) -> bool 
     // Liang-Barsky clipping.
     let d = b - a;
     let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
-    for (p, q) in [(-d.x, a.x - lo.x), (d.x, hi.x - a.x), (-d.y, a.y - lo.y), (d.y, hi.y - a.y)] {
+    for (p, q) in [
+        (-d.x, a.x - lo.x),
+        (d.x, hi.x - a.x),
+        (-d.y, a.y - lo.y),
+        (d.y, hi.y - a.y),
+    ] {
         if p == 0.0 {
             if q < 0.0 {
                 return false;
@@ -616,8 +633,17 @@ pub struct Obstacles {
 impl Obstacles {
     /// The sheet's views, tables (but `skip`) and sheet format lines.
     pub fn of(sheet: &proto::SheetInfo, skip: &str) -> Obstacles {
-        let views = sheet.views.iter().filter_map(|v| Some((v.name.clone(), note::outline(v)?))).collect();
-        let boxes = sheet.tables.iter().filter(|t| t.name != skip).filter_map(|t| Some((t.name.clone(), table_box(t)?))).collect();
+        let views = sheet
+            .views
+            .iter()
+            .filter_map(|v| Some((v.name.clone(), note::outline(v)?)))
+            .collect();
+        let boxes = sheet
+            .tables
+            .iter()
+            .filter(|t| t.name != skip)
+            .filter_map(|t| Some((t.name.clone(), table_box(t)?)))
+            .collect();
         let lines = sheet
             .format_lines
             .iter()
@@ -626,7 +652,12 @@ impl Obstacles {
                 Some((DVec2::new(a.x, a.y), DVec2::new(b.x, b.y)))
             })
             .collect();
-        Obstacles { views, boxes, lines, size: DVec2::new(sheet.width, sheet.height) }
+        Obstacles {
+            views,
+            boxes,
+            lines,
+            size: DVec2::new(sheet.width, sheet.height),
+        }
     }
 
     /// The things (lo, hi) runs into: names of boxes, "the sheet format" for lines, "the
@@ -640,13 +671,26 @@ impl Obstacles {
             .views
             .iter()
             .filter(|(_, b)| boxes_overlap((lo, hi), *b, view_gap))
-            .chain(self.boxes.iter().filter(|(_, b)| boxes_overlap((lo, hi), *b, gap)))
+            .chain(
+                self.boxes
+                    .iter()
+                    .filter(|(_, b)| boxes_overlap((lo, hi), *b, gap)),
+            )
             .map(|(name, _)| name.clone())
             .collect();
-        if self.lines.iter().any(|(a, b)| segment_hits_box(*a, *b, lo, hi, gap)) {
+        if self
+            .lines
+            .iter()
+            .any(|(a, b)| segment_hits_box(*a, *b, lo, hi, gap))
+        {
             out.push("the sheet format's lines (border / title block)".into());
         }
-        if self.size.x > 0.0 && (lo.x < -1e-6 || lo.y < -1e-6 || hi.x > self.size.x + 1e-6 || hi.y > self.size.y + 1e-6) {
+        if self.size.x > 0.0
+            && (lo.x < -1e-6
+                || lo.y < -1e-6
+                || hi.x > self.size.x + 1e-6
+                || hi.y > self.size.y + 1e-6)
+        {
             out.push("the sheet's edge".into());
         }
         out
@@ -686,12 +730,18 @@ impl Obstacles {
 /// Where a new table should go when no position was given: (corner,
 /// target) for free_spot. A BOM toward the sheet's top right, a hole table
 /// under its view, a general table toward the top left.
-fn placement_goal(sheet: &proto::SheetInfo, kind: TableKindParam, view: Option<&str>) -> (Anchor, DVec2) {
+fn placement_goal(
+    sheet: &proto::SheetInfo,
+    kind: TableKindParam,
+    view: Option<&str>,
+) -> (Anchor, DVec2) {
     let size = DVec2::new(sheet.width, sheet.height);
     match kind {
         TableKindParam::Bom | TableKindParam::Revision => (Anchor::TopRight, size),
         TableKindParam::Hole => {
-            let outline = view.and_then(|v| sheet.views.iter().find(|x| x.name == v)).and_then(note::outline);
+            let outline = view
+                .and_then(|v| sheet.views.iter().find(|x| x.name == v))
+                .and_then(note::outline);
             match outline {
                 Some((lo, _)) => (Anchor::TopLeft, DVec2::new(lo.x, lo.y)),
                 None => (Anchor::TopLeft, DVec2::new(0.0, size.y)),
@@ -704,7 +754,12 @@ fn placement_goal(sheet: &proto::SheetInfo, kind: TableKindParam, view: Option<&
 /// A free spot for the new `table` on `sheet` if it isn't in one already
 /// (it was placed at the add-in's default corner): the position to move
 /// its anchor corner to.
-pub fn relocation(sheet: &proto::SheetInfo, table: &proto::TableInfo, kind: TableKindParam, view: Option<&str>) -> Option<DVec2> {
+pub fn relocation(
+    sheet: &proto::SheetInfo,
+    table: &proto::TableInfo,
+    kind: TableKindParam,
+    view: Option<&str>,
+) -> Option<DVec2> {
     let (lo, hi) = table_box(table)?;
     let obstacles = Obstacles::of(sheet, &table.name);
     let (corner, target) = placement_goal(sheet, kind, view);
@@ -732,15 +787,26 @@ fn widths(mm: &[f64]) -> Result<Vec<f64>, McpError> {
         .collect()
 }
 
-fn entity(ids: &IdRegistry, id: &str, view: &str, what: &str) -> Result<proto::DrawingEntityRef, McpError> {
+fn entity(
+    ids: &IdRegistry,
+    id: &str,
+    view: &str,
+    what: &str,
+) -> Result<proto::DrawingEntityRef, McpError> {
     let r = drawing::decode_ref(ids, id)?;
     if r.view_name != view {
-        return Err(invalid(format!("{what} {id} is in {}, not {view}", r.view_name)));
+        return Err(invalid(format!(
+            "{what} {id} is in {}, not {view}",
+            r.view_name
+        )));
     }
     Ok(r)
 }
 
-pub fn add_request(ids: &IdRegistry, params: &AddDrawingTableParams) -> Result<proto::SetupDrawingTableRequest, McpError> {
+pub fn add_request(
+    ids: &IdRegistry,
+    params: &AddDrawingTableParams,
+) -> Result<proto::SetupDrawingTableRequest, McpError> {
     let view = text(params.view.as_deref());
     let mut request = proto::SetupDrawingTableRequest {
         kind: params.kind.sw() as i32,
@@ -761,26 +827,53 @@ pub fn add_request(ids: &IdRegistry, params: &AddDrawingTableParams) -> Result<p
         return Err(invalid("say which view the table is of (`view`)"));
     }
     if !needs_view && !view.is_empty() {
-        return Err(invalid("a general or revision table isn't of a view: give `sheet` (or nothing for the active sheet)"));
+        return Err(invalid(
+            "a general or revision table isn't of a view: give `sheet` (or nothing for the active sheet)",
+        ));
     }
     if needs_view && !request.sheet_name.is_empty() {
-        return Err(invalid("a BOM / hole table goes on its view's sheet; leave `sheet` out"));
+        return Err(invalid(
+            "a BOM / hole table goes on its view's sheet; leave `sheet` out",
+        ));
     }
     let only = |ok: bool, what: &str, kind: &str| -> Result<(), McpError> {
-        if ok { Ok(()) } else { Err(invalid(format!("{what} is for {kind} tables"))) }
+        if ok {
+            Ok(())
+        } else {
+            Err(invalid(format!("{what} is for {kind} tables")))
+        }
     };
-    only(params.bom_type.is_none() && params.configuration.is_none() || params.kind == TableKindParam::Bom, "bom_type / configuration", "bom")?;
     only(
-        params.origin.is_none() && params.holes.is_empty() && params.start_tag.is_none() || params.kind == TableKindParam::Hole,
+        params.bom_type.is_none() && params.configuration.is_none()
+            || params.kind == TableKindParam::Bom,
+        "bom_type / configuration",
+        "bom",
+    )?;
+    only(
+        params.origin.is_none() && params.holes.is_empty() && params.start_tag.is_none()
+            || params.kind == TableKindParam::Hole,
         "origin / holes / start_tag",
         "hole",
     )?;
-    only(params.rows.is_empty() && params.columns.is_none() || params.kind == TableKindParam::General, "rows / columns", "general")?;
-    only(params.revisions.is_empty() && params.revision_symbol.is_none() || params.kind == TableKindParam::Revision, "revisions / revision_symbol", "revision")?;
+    only(
+        params.rows.is_empty() && params.columns.is_none()
+            || params.kind == TableKindParam::General,
+        "rows / columns",
+        "general",
+    )?;
+    only(
+        params.revisions.is_empty() && params.revision_symbol.is_none()
+            || params.kind == TableKindParam::Revision,
+        "revisions / revision_symbol",
+        "revision",
+    )?;
     match params.kind {
         TableKindParam::Revision => {
             request.revisions = revision_entries(&params.revisions)?;
-            request.revision_symbol = params.revision_symbol.map(RevisionSymbolShape::sw).unwrap_or(0);
+            request.revision_symbol = params
+                .revision_symbol
+                .map(RevisionSymbolShape::sw)
+                .unwrap_or(0);
         }
         TableKindParam::Bom => {
             request.bom_type = params.bom_type.map(BomType::sw).unwrap_or(0);
@@ -795,24 +888,41 @@ pub fn add_request(ids: &IdRegistry, params: &AddDrawingTableParams) -> Result<p
                 ));
             }
             request.hole_origin = Some(entity(ids, &origin, &view, "origin")?);
-            request.hole_edges =
-                params.holes.iter().map(|h| entity(ids, h, &view, "hole")).collect::<Result<Vec<_>, _>>()?;
+            request.hole_edges = params
+                .holes
+                .iter()
+                .map(|h| entity(ids, h, &view, "hole"))
+                .collect::<Result<Vec<_>, _>>()?;
             request.start_tag = text(params.start_tag.as_deref());
         }
         TableKindParam::General => {
-            let width = params.rows.iter().map(Vec::len).max().unwrap_or(0).max(params.columns.unwrap_or(0));
+            let width = params
+                .rows
+                .iter()
+                .map(Vec::len)
+                .max()
+                .unwrap_or(0)
+                .max(params.columns.unwrap_or(0));
             if params.rows.is_empty() || width == 0 {
-                return Err(invalid("give the table's `rows` (text, row by row; [[\"\"]] for one empty cell)"));
+                return Err(invalid(
+                    "give the table's `rows` (text, row by row; [[\"\"]] for one empty cell)",
+                ));
             }
             if params.rows.len() > MAX_ROWS || width > MAX_COLUMNS {
-                return Err(invalid(format!("at most {MAX_ROWS} rows and {MAX_COLUMNS} columns")));
+                return Err(invalid(format!(
+                    "at most {MAX_ROWS} rows and {MAX_COLUMNS} columns"
+                )));
             }
             request.rows = params.rows.len() as i32;
             request.columns = width as i32;
             for (r, row) in params.rows.iter().enumerate() {
                 for (c, cell) in row.iter().enumerate() {
                     if !cell.is_empty() {
-                        request.cells.push(proto::TableCell { row: r as i32, column: c as i32, text: cell.clone() });
+                        request.cells.push(proto::TableCell {
+                            row: r as i32,
+                            column: c as i32,
+                            text: cell.clone(),
+                        });
                     }
                 }
             }
@@ -821,10 +931,14 @@ pub fn add_request(ids: &IdRegistry, params: &AddDrawingTableParams) -> Result<p
     Ok(request)
 }
 
-pub fn edit_request(params: &EditDrawingTableParams) -> Result<proto::SetupDrawingTableRequest, McpError> {
+pub fn edit_request(
+    params: &EditDrawingTableParams,
+) -> Result<proto::SetupDrawingTableRequest, McpError> {
     let name = params.name.trim();
     if name.is_empty() {
-        return Err(invalid("say which table (`name`, from inspect_drawing_tables)"));
+        return Err(invalid(
+            "say which table (`name`, from inspect_drawing_tables)",
+        ));
     }
     if params.at_mm.is_some() && params.move_by_mm.is_some() {
         return Err(invalid("give at_mm or move_by_mm, not both"));
@@ -835,16 +949,28 @@ pub fn edit_request(params: &EditDrawingTableParams) -> Result<proto::SetupDrawi
         cells: params
             .cells
             .iter()
-            .map(|c| proto::TableCell { row: c.row, column: c.column, text: c.text.clone() })
+            .map(|c| proto::TableCell {
+                row: c.row,
+                column: c.column,
+                text: c.text.clone(),
+            })
             .collect(),
-        add_rows: params.add_rows.iter().map(|r| proto::TableRowText { cells: r.clone() }).collect(),
+        add_rows: params
+            .add_rows
+            .iter()
+            .map(|r| proto::TableRowText { cells: r.clone() })
+            .collect(),
         delete_rows: params.delete_rows.clone(),
         revisions: revision_entries(&params.add_revisions)?,
         column_widths: widths(&params.column_widths_mm)?,
         title: params.title.clone(),
         layer: params.layer.clone(),
         anchor: params.anchor.map(Anchor::sw).unwrap_or(0),
-        position: params.at_mm.map(|at| point(at, "at_mm")).transpose()?.map(vec3),
+        position: params
+            .at_mm
+            .map(|at| point(at, "at_mm"))
+            .transpose()?
+            .map(vec3),
         ..Default::default()
     };
     let changes = !request.cells.is_empty()
@@ -858,29 +984,46 @@ pub fn edit_request(params: &EditDrawingTableParams) -> Result<proto::SetupDrawi
         || request.position.is_some()
         || params.move_by_mm.is_some();
     if !changes {
-        return Err(invalid("nothing to change: give cells, add_rows, delete_rows, add_revisions, column_widths_mm, title, \
-                            layer, at_mm / move_by_mm or anchor"));
+        return Err(invalid(
+            "nothing to change: give cells, add_rows, delete_rows, add_revisions, column_widths_mm, title, \
+                            layer, at_mm / move_by_mm or anchor",
+        ));
     }
     if params.add_rows.len() + params.delete_rows.len() > MAX_ROWS {
-        return Err(invalid(format!("at most {MAX_ROWS} rows added or deleted per call")));
+        return Err(invalid(format!(
+            "at most {MAX_ROWS} rows added or deleted per call"
+        )));
     }
     Ok(request)
 }
 
 /// move_by_mm needs the table's position: the request moving its anchor
 /// corner from `table`'s.
-pub fn apply_move_by(request: &mut proto::SetupDrawingTableRequest, table: &proto::TableInfo, by_mm: [f64; 2]) -> Result<(), McpError> {
+pub fn apply_move_by(
+    request: &mut proto::SetupDrawingTableRequest,
+    table: &proto::TableInfo,
+    by_mm: [f64; 2],
+) -> Result<(), McpError> {
     let by = point(by_mm, "move_by_mm")?;
-    let p = table.position.as_ref().ok_or_else(|| invalid("SolidWorks didn't say where the table is; give at_mm"))?;
+    let p = table
+        .position
+        .as_ref()
+        .ok_or_else(|| invalid("SolidWorks didn't say where the table is; give at_mm"))?;
     request.position = Some(vec3(DVec2::new(p.x, p.y) + by));
     Ok(())
 }
 
 pub fn inspect_request() -> proto::InspectDrawingRequest {
-    proto::InspectDrawingRequest { include_tables: true, ..Default::default() }
+    proto::InspectDrawingRequest {
+        include_tables: true,
+        ..Default::default()
+    }
 }
 
-pub fn balloons_request(ids: &IdRegistry, params: &AddBalloonsParams) -> Result<proto::AddBalloonsRequest, McpError> {
+pub fn balloons_request(
+    ids: &IdRegistry,
+    params: &AddBalloonsParams,
+) -> Result<proto::AddBalloonsRequest, McpError> {
     let view = params.view.trim().to_string();
     if view.is_empty() {
         return Err(invalid("say which view (`view`)"));
@@ -893,22 +1036,33 @@ pub fn balloons_request(ids: &IdRegistry, params: &AddBalloonsParams) -> Result<
         return Err(invalid("give one arrow_at_mm per attach_to entity"));
     }
     if !params.at_mm.is_empty() && params.at_mm.len() != count {
-        return Err(invalid("give one at_mm per balloon (components, then attach_to), or none"));
+        return Err(invalid(
+            "give one at_mm per balloon (components, then attach_to), or none",
+        ));
     }
     if count > 0 && (params.layout.is_some() || params.every_instance) {
-        return Err(invalid("layout / every_instance are for ballooning the whole view (no components / attach_to)"));
+        return Err(invalid(
+            "layout / every_instance are for ballooning the whole view (no components / attach_to)",
+        ));
     }
     if count == 0 && !params.at_mm.is_empty() {
-        return Err(invalid("at_mm places balloons given by components / attach_to; Auto Balloon places its own \
-                            (move them with edit_drawing_annotation)"));
+        return Err(invalid(
+            "at_mm places balloons given by components / attach_to; Auto Balloon places its own \
+                            (move them with edit_drawing_annotation)",
+        ));
     }
     if params.size_chars.is_some_and(|s| s > 5) {
         return Err(invalid("size_chars is 0 (tight) to 5"));
     }
-    let custom = |kind: Option<BalloonText>, given: &Option<String>, what: &str| -> Result<String, McpError> {
+    let custom = |kind: Option<BalloonText>,
+                  given: &Option<String>,
+                  what: &str|
+     -> Result<String, McpError> {
         let t = text(given.as_deref());
         match (kind, t.is_empty()) {
-            (Some(BalloonText::Custom), true) => Err(invalid(format!("{what} custom needs its text"))),
+            (Some(BalloonText::Custom), true) => {
+                Err(invalid(format!("{what} custom needs its text")))
+            }
             (k, false) if k != Some(BalloonText::Custom) => {
                 Err(invalid(format!("{what}: a custom text goes with custom")))
             }
@@ -917,26 +1071,41 @@ pub fn balloons_request(ids: &IdRegistry, params: &AddBalloonsParams) -> Result<
     };
     let mut targets = Vec::new();
     let mut at = params.at_mm.iter();
-    let position = |p: Option<&[f64; 2]>, i: usize| -> Result<Option<proto::DrawingPoint>, McpError> {
-        p.map(|p| {
-            let q = point(*p, &format!("at_mm {}", i + 1))?;
-            Ok(proto::DrawingPoint { x: q.x, y: q.y, view_name: String::new() })
-        })
-        .transpose()
-    };
+    let position =
+        |p: Option<&[f64; 2]>, i: usize| -> Result<Option<proto::DrawingPoint>, McpError> {
+            p.map(|p| {
+                let q = point(*p, &format!("at_mm {}", i + 1))?;
+                Ok(proto::DrawingPoint {
+                    x: q.x,
+                    y: q.y,
+                    view_name: String::new(),
+                })
+            })
+            .transpose()
+        };
     for (i, c) in params.components.iter().enumerate() {
         let c = c.trim();
         if c.is_empty() {
             return Err(invalid("an empty component name"));
         }
-        targets.push(proto::BalloonTarget { component: c.to_string(), position: position(at.next(), i)?, ..Default::default() });
+        targets.push(proto::BalloonTarget {
+            component: c.to_string(),
+            position: position(at.next(), i)?,
+            ..Default::default()
+        });
     }
     for (i, id) in params.attach_to.iter().enumerate() {
         let r = entity(ids, id, &view, "attach_to")?;
         let arrow = params
             .arrow_at_mm
             .get(i)
-            .map(|p| point(*p, "arrow_at_mm").map(|q| proto::DrawingPoint { x: q.x, y: q.y, view_name: String::new() }))
+            .map(|p| {
+                point(*p, "arrow_at_mm").map(|q| proto::DrawingPoint {
+                    x: q.x,
+                    y: q.y,
+                    view_name: String::new(),
+                })
+            })
             .transpose()?;
         let n = params.components.len() + i;
         targets.push(proto::BalloonTarget {
@@ -1006,7 +1175,10 @@ pub fn table_json(t: &proto::TableInfo) -> Value {
     let columns: Vec<Value> = (0..t.column_widths.len())
         .map(|c| {
             let mut col = Map::new();
-            col.insert("width_mm".into(), json!(round(t.column_widths[c] * MM_PER_M, 2)));
+            col.insert(
+                "width_mm".into(),
+                json!(round(t.column_widths[c] * MM_PER_M, 2)),
+            );
             if let Some(kind) = t.column_types.get(c).copied().and_then(column_type_name) {
                 col.insert("type".into(), json!(kind));
             }
@@ -1027,7 +1199,11 @@ pub fn table_json(t: &proto::TableInfo) -> Value {
         .rows
         .iter()
         .map(|r| {
-            let cells: Vec<Value> = r.cells.iter().map(|c| json!(c.replace("\r\n", "\n"))).collect();
+            let cells: Vec<Value> = r
+                .cells
+                .iter()
+                .map(|c| json!(c.replace("\r\n", "\n")))
+                .collect();
             if r.components.is_empty() && !r.hidden {
                 return Value::Array(cells);
             }
@@ -1067,13 +1243,24 @@ pub fn format_lines_json(sheet: &proto::SheetInfo) -> Value {
     Value::Array(lines)
 }
 
-pub fn render_inspect(reply: &proto::InspectDrawingResponse, params: &InspectDrawingTablesParams) -> Result<Value, McpError> {
+pub fn render_inspect(
+    reply: &proto::InspectDrawingResponse,
+    params: &InspectDrawingTablesParams,
+) -> Result<Value, McpError> {
     let sheet_filter = text(params.sheet.as_deref());
     let name = text(params.name.as_deref());
     let kind = text(params.kind.as_deref()).to_lowercase();
-    if !sheet_filter.is_empty() && !reply.sheets.iter().any(|s| s.name.eq_ignore_ascii_case(&sheet_filter)) {
+    if !sheet_filter.is_empty()
+        && !reply
+            .sheets
+            .iter()
+            .any(|s| s.name.eq_ignore_ascii_case(&sheet_filter))
+    {
         let names: Vec<&str> = reply.sheets.iter().map(|s| s.name.as_str()).collect();
-        return Err(invalid(format!("the drawing has no sheet {sheet_filter:?} (its sheets: {})", names.join(", "))));
+        return Err(invalid(format!(
+            "the drawing has no sheet {sheet_filter:?} (its sheets: {})",
+            names.join(", ")
+        )));
     }
     let mut sheets = Vec::new();
     let mut found = false;
@@ -1094,7 +1281,10 @@ pub fn render_inspect(reply: &proto::InspectDrawingResponse, params: &InspectDra
         if s.active {
             obj.insert("active".into(), json!(true));
         }
-        obj.insert("size_mm".into(), json!([round(s.width * MM_PER_M, 2), round(s.height * MM_PER_M, 2)]));
+        obj.insert(
+            "size_mm".into(),
+            json!([round(s.width * MM_PER_M, 2), round(s.height * MM_PER_M, 2)]),
+        );
         obj.insert(
             "views".into(),
             Value::Array(
@@ -1136,12 +1326,17 @@ fn file_name(path: &str) -> &str {
 
 /// What looks wrong about where a table ended up.
 pub fn table_warnings(sheet: &proto::SheetInfo, t: &proto::TableInfo) -> Vec<String> {
-    let Some((lo, hi)) = table_box(t) else { return Vec::new() };
+    let Some((lo, hi)) = table_box(t) else {
+        return Vec::new();
+    };
     let hits = Obstacles::of(sheet, &t.name).hits(lo, hi, 0.0);
     if hits.is_empty() {
         return Vec::new();
     }
-    vec![format!("it overlaps {} -- move it with edit_drawing_table at_mm", hits.join(", "))]
+    vec![format!(
+        "it overlaps {} -- move it with edit_drawing_table at_mm",
+        hits.join(", ")
+    )]
 }
 
 /// The reply to add_drawing_table / edit_drawing_table.
@@ -1151,7 +1346,9 @@ pub fn setup_reply(
     reply: &proto::SetupDrawingTableResponse,
     moved_to: Option<DVec2>,
 ) -> String {
-    let Some(t) = &reply.table else { return "SolidWorks returned no table".into() };
+    let Some(t) = &reply.table else {
+        return "SolidWorks returned no table".into();
+    };
     let kind = table_type_name(t.r#type);
     let mut lines = Vec::new();
     let what = match kind {
@@ -1162,7 +1359,9 @@ pub fn setup_reply(
     };
     let rows = t.rows.len().saturating_sub(t.header_rows.max(0) as usize);
     let size = table_size(t);
-    let place = table_box(t).map(|(lo, hi)| format!(" at {}..{} mm", mm2(lo), mm2(hi))).unwrap_or_default();
+    let place = table_box(t)
+        .map(|(lo, hi)| format!(" at {}..{} mm", mm2(lo), mm2(hi)))
+        .unwrap_or_default();
     lines.push(if reply.created {
         format!(
             "added {what} {} on {}: {} x {} mm{place}, {} column(s), {rows} row(s) under its header.",
@@ -1176,7 +1375,11 @@ pub fn setup_reply(
         format!("changed {what} {}{place}.", t.name)
     });
     if let Some(p) = moved_to {
-        lines.push(format!("Placed it with its {} corner at {} mm, clear of the views and other tables.", Anchor::of(t.anchor).name(), mm2(p)));
+        lines.push(format!(
+            "Placed it with its {} corner at {} mm, clear of the views and other tables.",
+            Anchor::of(t.anchor).name(),
+            mm2(p)
+        ));
     } else if reply.created && request.position.is_none() {
         lines.push("No free spot was found for it on the sheet: it's at the sheet's upper left; move it with \
                     edit_drawing_table at_mm."
@@ -1199,8 +1402,16 @@ pub fn setup_reply(
         ));
     }
     if !reply.hole_tags.is_empty() {
-        let tags: Vec<String> = reply.hole_tags.iter().map(|a| a.text.first().cloned().unwrap_or_default()).collect();
-        lines.push(format!("SolidWorks tagged the holes in {}: {}.", request.view_name, tags.join(", ")));
+        let tags: Vec<String> = reply
+            .hole_tags
+            .iter()
+            .map(|a| a.text.first().cloned().unwrap_or_default())
+            .collect();
+        lines.push(format!(
+            "SolidWorks tagged the holes in {}: {}.",
+            request.view_name,
+            tags.join(", ")
+        ));
     }
     if let Some(sheet) = &reply.sheet {
         for w in table_warnings(sheet, t) {
@@ -1229,9 +1440,17 @@ fn balloon_component(name: &str, components: &[proto::ComponentInfo]) -> String 
     name.to_string()
 }
 
-pub fn balloons_reply(ids: &mut IdRegistry, request: &proto::AddBalloonsRequest, reply: &proto::AddBalloonsResponse) -> String {
+pub fn balloons_reply(
+    ids: &mut IdRegistry,
+    request: &proto::AddBalloonsRequest,
+    reply: &proto::AddBalloonsResponse,
+) -> String {
     let frames = reply.sheet.as_ref().map(note::frames).unwrap_or_default();
-    let mut lines = vec![format!("added {} balloon(s) in {}.", reply.balloons.len(), request.view_name)];
+    let mut lines = vec![format!(
+        "added {} balloon(s) in {}.",
+        reply.balloons.len(),
+        request.view_name
+    )];
     if reply.boms.is_empty() {
         lines.push(format!(
             "Warning: no bill of materials on the drawing lists {}'s assembly, so the item numbers aren't backed by a \
@@ -1248,7 +1467,10 @@ pub fn balloons_reply(ids: &mut IdRegistry, request: &proto::AddBalloonsRequest,
             _ => Map::new(),
         };
         if let Some(info) = &b.balloon {
-            entry.insert("component".into(), json!(balloon_component(&info.component, &reply.components)));
+            entry.insert(
+                "component".into(),
+                json!(balloon_component(&info.component, &reply.components)),
+            );
             if info.upper_text.contains('*') {
                 lines.push(format!(
                     "Warning: {} shows \"{}\": SolidWorks couldn't match it to one BOM item (several BOMs of the \
@@ -1258,17 +1480,27 @@ pub fn balloons_reply(ids: &mut IdRegistry, request: &proto::AddBalloonsRequest,
             }
         }
         if let Some(sheet) = &reply.sheet
-            && let Some(box_) = b.note.as_ref().and_then(|n| n.extent.as_ref()).and_then(|e| {
-                let (lo, hi) = (e.min.as_ref()?, e.max.as_ref()?);
-                Some((DVec2::new(lo.x, lo.y), DVec2::new(hi.x, hi.y)))
-            })
+            && let Some(box_) = b
+                .note
+                .as_ref()
+                .and_then(|n| n.extent.as_ref())
+                .and_then(|e| {
+                    let (lo, hi) = (e.min.as_ref()?, e.max.as_ref()?);
+                    Some((DVec2::new(lo.x, lo.y), DVec2::new(hi.x, hi.y)))
+                })
         {
             let mut obstacles = Obstacles::of(sheet, "");
-            obstacles.views.retain(|(name, _)| *name != request.view_name);
+            obstacles
+                .views
+                .retain(|(name, _)| *name != request.view_name);
             obstacles.lines.clear();
             let hits = obstacles.hits(box_.0, box_.1, 0.0);
             if !hits.is_empty() {
-                lines.push(format!("Warning: {} overlaps {} -- move it with edit_drawing_annotation.", b.name, hits.join(", ")));
+                lines.push(format!(
+                    "Warning: {} overlaps {} -- move it with edit_drawing_annotation.",
+                    b.name,
+                    hits.join(", ")
+                ));
             }
         }
         list.push(Value::Object(entry));
@@ -1297,10 +1529,20 @@ pub fn balloon_json(info: &proto::BalloonInfo, split: bool) -> Value {
 mod tests {
     use super::*;
 
-    fn table(name: &str, at: [f64; 2], anchor: i32, widths: &[f64], heights: &[f64]) -> proto::TableInfo {
+    fn table(
+        name: &str,
+        at: [f64; 2],
+        anchor: i32,
+        widths: &[f64],
+        heights: &[f64],
+    ) -> proto::TableInfo {
         proto::TableInfo {
             name: name.into(),
-            position: Some(proto::Vec3 { x: at[0], y: at[1], z: 0.0 }),
+            position: Some(proto::Vec3 {
+                x: at[0],
+                y: at[1],
+                z: 0.0,
+            }),
             anchor,
             column_widths: widths.to_vec(),
             column_hidden: vec![false; widths.len()],
@@ -1314,10 +1556,16 @@ mod tests {
     fn boxes_follow_the_anchor() {
         let t = table("T", [0.3, 0.1], 1, &[0.02, 0.03], &[0.005, 0.005]);
         let (lo, hi) = table_box(&t).unwrap();
-        assert!((lo - DVec2::new(0.3, 0.09)).length() < 1e-12 && (hi - DVec2::new(0.35, 0.1)).length() < 1e-12);
+        assert!(
+            (lo - DVec2::new(0.3, 0.09)).length() < 1e-12
+                && (hi - DVec2::new(0.35, 0.1)).length() < 1e-12
+        );
         let t = table("T", [0.3, 0.1], 4, &[0.02, 0.03], &[0.005, 0.005]);
         let (lo, hi) = table_box(&t).unwrap();
-        assert!((lo - DVec2::new(0.25, 0.1)).length() < 1e-12 && (hi - DVec2::new(0.3, 0.11)).length() < 1e-12);
+        assert!(
+            (lo - DVec2::new(0.25, 0.1)).length() < 1e-12
+                && (hi - DVec2::new(0.3, 0.11)).length() < 1e-12
+        );
         // Hidden columns take no room.
         let mut t = table("T", [0.0, 0.0], 3, &[0.02, 0.03], &[0.01]);
         t.column_hidden[1] = true;
@@ -1327,39 +1575,102 @@ mod tests {
     #[test]
     fn segments_hit_boxes() {
         let (lo, hi) = (DVec2::new(0.0, 0.0), DVec2::new(1.0, 1.0));
-        assert!(segment_hits_box(DVec2::new(-1.0, 0.5), DVec2::new(2.0, 0.5), lo, hi, 0.0));
-        assert!(!segment_hits_box(DVec2::new(-1.0, 1.5), DVec2::new(2.0, 1.5), lo, hi, 0.0));
-        assert!(segment_hits_box(DVec2::new(-1.0, 1.05), DVec2::new(2.0, 1.05), lo, hi, 0.1));
-        assert!(segment_hits_box(DVec2::new(0.2, 0.2), DVec2::new(0.3, 0.3), lo, hi, 0.0));
+        assert!(segment_hits_box(
+            DVec2::new(-1.0, 0.5),
+            DVec2::new(2.0, 0.5),
+            lo,
+            hi,
+            0.0
+        ));
+        assert!(!segment_hits_box(
+            DVec2::new(-1.0, 1.5),
+            DVec2::new(2.0, 1.5),
+            lo,
+            hi,
+            0.0
+        ));
+        assert!(segment_hits_box(
+            DVec2::new(-1.0, 1.05),
+            DVec2::new(2.0, 1.05),
+            lo,
+            hi,
+            0.1
+        ));
+        assert!(segment_hits_box(
+            DVec2::new(0.2, 0.2),
+            DVec2::new(0.3, 0.3),
+            lo,
+            hi,
+            0.0
+        ));
     }
 
     #[test]
     fn a_bom_goes_top_right_clear_of_views_and_format_lines() {
-        let mut sheet = proto::SheetInfo { name: "Sheet1".into(), width: 0.42, height: 0.297, ..Default::default() };
+        let mut sheet = proto::SheetInfo {
+            name: "Sheet1".into(),
+            width: 0.42,
+            height: 0.297,
+            ..Default::default()
+        };
         sheet.views.push(proto::ViewInfo {
             name: "Drawing View1".into(),
             outline: Some(proto::Box3 {
-                min: Some(proto::Vec3 { x: 0.05, y: 0.13, z: 0.0 }),
-                max: Some(proto::Vec3 { x: 0.39, y: 0.23, z: 0.0 }),
+                min: Some(proto::Vec3 {
+                    x: 0.05,
+                    y: 0.13,
+                    z: 0.0,
+                }),
+                max: Some(proto::Vec3 {
+                    x: 0.39,
+                    y: 0.23,
+                    z: 0.0,
+                }),
             }),
             ..Default::default()
         });
         // A border frame 10 mm in.
-        for (a, b) in [((0.01, 0.01), (0.41, 0.01)), ((0.41, 0.01), (0.41, 0.287)), ((0.41, 0.287), (0.01, 0.287)), ((0.01, 0.287), (0.01, 0.01))] {
+        for (a, b) in [
+            ((0.01, 0.01), (0.41, 0.01)),
+            ((0.41, 0.01), (0.41, 0.287)),
+            ((0.41, 0.287), (0.01, 0.287)),
+            ((0.01, 0.287), (0.01, 0.01)),
+        ] {
             sheet.format_lines.push(proto::FormatLine {
-                start: Some(proto::Vec3 { x: a.0, y: a.1, z: 0.0 }),
-                end: Some(proto::Vec3 { x: b.0, y: b.1, z: 0.0 }),
+                start: Some(proto::Vec3 {
+                    x: a.0,
+                    y: a.1,
+                    z: 0.0,
+                }),
+                end: Some(proto::Vec3 {
+                    x: b.0,
+                    y: b.1,
+                    z: 0.0,
+                }),
                 layer: String::new(),
             });
         }
-        let bom = table("DetailItem7", [0.02, 0.277], 1, &[0.02, 0.05, 0.05, 0.02], &[0.006, 0.006, 0.006]);
+        let bom = table(
+            "DetailItem7",
+            [0.02, 0.277],
+            1,
+            &[0.02, 0.05, 0.05, 0.02],
+            &[0.006, 0.006, 0.006],
+        );
         sheet.tables.push(bom.clone());
         let to = relocation(&sheet, &bom, TableKindParam::Bom, None).unwrap();
         let mut moved = bom.clone();
-        moved.position = Some(proto::Vec3 { x: to.x, y: to.y, z: 0.0 });
+        moved.position = Some(proto::Vec3 {
+            x: to.x,
+            y: to.y,
+            z: 0.0,
+        });
         let (lo, hi) = table_box(&moved).unwrap();
         // Inside the frame, right of nothing but above the view.
-        assert!(hi.x <= 0.41 - GAP + 1e-9 && hi.y <= 0.287 - GAP + 1e-9, "{lo} {hi}");
+        assert!(
+            hi.x <= 0.41 - GAP + 1e-9 && hi.y <= 0.287 - GAP + 1e-9,
+            "{lo} {hi}"
+        );
         assert!(lo.y >= 0.23 + GAP - 1e-9, "{lo} {hi}");
         assert!(hi.x > 0.39, "toward the right: {lo} {hi}");
     }
@@ -1381,7 +1692,10 @@ mod tests {
             origin: None,
             holes: vec![],
             start_tag: None,
-            rows: vec![vec!["TAG".into(), "X".into(), "Y".into()], vec!["P1".into(), "10".into()]],
+            rows: vec![
+                vec!["TAG".into(), "X".into(), "Y".into()],
+                vec!["P1".into(), "10".into()],
+            ],
             columns: None,
             column_widths_mm: vec![],
             title: None,
@@ -1390,13 +1704,19 @@ mod tests {
         let r = add_request(&ids, &general).unwrap();
         assert_eq!((r.rows, r.columns, r.cells.len()), (2, 3, 5));
         assert!((r.position.unwrap().x - 0.02).abs() < 1e-12);
-        let bad = AddDrawingTableParams { bom_type: Some(BomType::Indented), ..general };
+        let bad = AddDrawingTableParams {
+            bom_type: Some(BomType::Indented),
+            ..general
+        };
         assert!(add_request(&ids, &bad).is_err());
     }
 
     #[test]
     fn balloon_components_lose_the_view_root() {
-        let comps = vec![proto::ComponentInfo { name: "block-2".into(), ..Default::default() }];
+        let comps = vec![proto::ComponentInfo {
+            name: "block-2".into(),
+            ..Default::default()
+        }];
         assert_eq!(balloon_component("pair-1/block-2", &comps), "block-2");
         assert_eq!(balloon_component("block-2", &comps), "block-2");
         assert_eq!(balloon_component("other-1", &comps), "other-1");

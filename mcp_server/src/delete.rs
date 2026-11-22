@@ -88,7 +88,9 @@ pub fn feature_targets(
 ) -> Result<Vec<proto::FeatureTarget>, McpError> {
     use proto::feature_target::Target;
     if features.is_empty() || features.len() > MAX_FEATURES {
-        return Err(invalid(format!("give between 1 and {MAX_FEATURES} features")));
+        return Err(invalid(format!(
+            "give between 1 and {MAX_FEATURES} features"
+        )));
     }
     features
         .iter()
@@ -155,16 +157,15 @@ pub fn sketch_items(
             let entity = entity.trim();
             let what = format!("entity {}", i + 1);
             match Kind::of_id(entity) {
-                Some(kind) if SKETCH_KINDS.contains(&kind) => {
-                    sketch::decode_ref(ids, entity).ok_or_else(|| {
+                Some(kind) if SKETCH_KINDS.contains(&kind) => sketch::decode_ref(ids, entity)
+                    .ok_or_else(|| {
                         let why = ids.unknown_id(
                             entity,
                             "inspect_sketch and the sketch tool",
                             "call inspect_sketch for current ones",
                         );
                         invalid(format!("{what}: {why}"))
-                    })
-                }
+                    }),
                 Some(Kind::Feature) => Err(invalid(format!(
                     "{what}: {entity} is a feature -- use delete_features for features, \
                      including whole sketches"
@@ -212,7 +213,10 @@ fn plural(n: usize, singular: &str, plural: &str) -> String {
     }
 }
 
-pub fn features_reply_text(params: &DeleteFeaturesParams, reply: &proto::DeleteFeaturesResponse) -> String {
+pub fn features_reply_text(
+    params: &DeleteFeaturesParams,
+    reply: &proto::DeleteFeaturesResponse,
+) -> String {
     let mut text = format!(
         "deleted {}: {}.",
         plural(reply.deleted.len(), "feature", "features"),
@@ -224,7 +228,11 @@ pub fn features_reply_text(params: &DeleteFeaturesParams, reply: &proto::DeleteF
             feature_list(&reply.not_deleted)
         );
     }
-    let (they, them) = if reply.deleted.len() == 1 { ("it", "it") } else { ("they", "them") };
+    let (they, them) = if reply.deleted.len() == 1 {
+        ("it", "it")
+    } else {
+        ("they", "them")
+    };
     if !reply.kept_absorbed.is_empty() {
         text += &format!(
             " Kept what {they} had absorbed, now standalone in the tree: {} (delete_absorbed=true \
@@ -258,7 +266,11 @@ pub fn sketch_reply_text(
         .kept
         .iter()
         .filter_map(|r| {
-            let kind = if r.point { Kind::SketchPoint } else { Kind::Segment };
+            let kind = if r.point {
+                Kind::SketchPoint
+            } else {
+                Kind::Segment
+            };
             // Prefer the id the model used for it.
             given
                 .iter()
@@ -285,7 +297,11 @@ pub fn sketch_reply_text(
     }
     let mut also = Vec::new();
     if reply.points_removed > 0 {
-        also.push(plural(reply.points_removed as usize, "end/center point", "end/center points"));
+        also.push(plural(
+            reply.points_removed as usize,
+            "end/center point",
+            "end/center points",
+        ));
     }
     if !reply.dimensions_removed.is_empty() {
         also.push(format!(
@@ -295,7 +311,11 @@ pub fn sketch_reply_text(
         ));
     }
     if reply.relations_removed > 0 {
-        also.push(plural(reply.relations_removed as usize, "relation", "relations"));
+        also.push(plural(
+            reply.relations_removed as usize,
+            "relation",
+            "relations",
+        ));
     }
     if !also.is_empty() {
         text += &format!(", along with {}", also.join(", "));
@@ -308,7 +328,11 @@ pub fn sketch_reply_text(
         text += &format!(
             " {} now has {} and {}.",
             reply.sketch_name,
-            plural(c.closed.max(0) as usize, "closed contour", "closed contours"),
+            plural(
+                c.closed.max(0) as usize,
+                "closed contour",
+                "closed contours"
+            ),
             plural(c.open.max(0) as usize, "open contour", "open contours")
         );
     }
@@ -328,7 +352,13 @@ mod tests {
         let line = sketch::ref_id(
             &mut ids,
             Kind::Line,
-            &proto::SketchItemRef { sketch_persist_id: b"sk".to_vec(), point: false, id0: 3, id1: 4, ..Default::default() },
+            &proto::SketchItemRef {
+                sketch_persist_id: b"sk".to_vec(),
+                point: false,
+                id0: 3,
+                id1: 4,
+                ..Default::default()
+            },
         )
         .unwrap();
         (ids, feature, line)
@@ -340,15 +370,28 @@ mod tests {
         let (ids, feature, _) = registry();
         let targets =
             feature_targets(&ids, &[feature.clone(), " Cut-Extrude1 ".to_string()]).unwrap();
-        assert_eq!(targets[0].target, Some(Target::PersistId(b"extrude-bytes".to_vec())));
+        assert_eq!(
+            targets[0].target,
+            Some(Target::PersistId(b"extrude-bytes".to_vec()))
+        );
         assert_eq!(targets[1].target, Some(Target::Name("Cut-Extrude1".into())));
     }
 
     #[test]
     fn feature_targets_reject_other_ids() {
         let (ids, _, line) = registry();
-        for bad in [line.as_str(), "face:1", "component:2", "feature:99", "", "view_edge:1"] {
-            assert!(feature_targets(&ids, &[bad.to_string()]).is_err(), "{bad:?} accepted");
+        for bad in [
+            line.as_str(),
+            "face:1",
+            "component:2",
+            "feature:99",
+            "",
+            "view_edge:1",
+        ] {
+            assert!(
+                feature_targets(&ids, &[bad.to_string()]).is_err(),
+                "{bad:?} accepted"
+            );
         }
         assert!(feature_targets(&ids, &[]).is_err());
     }
@@ -359,7 +402,10 @@ mod tests {
         let items = sketch_items(&ids, &[line]).unwrap();
         assert_eq!((items[0].id0, items[0].id1, items[0].point), (3, 4, false));
         for bad in [feature.as_str(), "origin", "Line3", "point:12", "face:1"] {
-            assert!(sketch_items(&ids, &[bad.to_string()]).is_err(), "{bad:?} accepted");
+            assert!(
+                sketch_items(&ids, &[bad.to_string()]).is_err(),
+                "{bad:?} accepted"
+            );
         }
     }
 
@@ -370,7 +416,10 @@ mod tests {
             children: Children::Keep,
             delete_absorbed: false,
         };
-        let f = |name: &str, type_name: &str| proto::FeatureRef { name: name.into(), type_name: type_name.into() };
+        let f = |name: &str, type_name: &str| proto::FeatureRef {
+            name: name.into(),
+            type_name: type_name.into(),
+        };
         let reply = proto::DeleteFeaturesResponse {
             deleted: vec![f("Boss-Extrude1", "Extrusion")],
             not_deleted: vec![],
@@ -384,16 +433,28 @@ mod tests {
             }],
         };
         let text = features_reply_text(&params, &reply);
-        assert!(text.starts_with("deleted 1 feature: Boss-Extrude1 (boss-extrude)."), "{text}");
+        assert!(
+            text.starts_with("deleted 1 feature: Boss-Extrude1 (boss-extrude)."),
+            "{text}"
+        );
         assert!(text.contains("Sketch1 (sketch)"), "{text}");
         assert!(text.contains("(as asked): Fillet1 (fillet)"), "{text}");
-        assert!(text.contains("Now failing to rebuild: Fillet1 (fillet): the fillet"), "{text}");
+        assert!(
+            text.contains("Now failing to rebuild: Fillet1 (fillet): the fillet"),
+            "{text}"
+        );
     }
 
     #[test]
     fn sketch_text_lists_what_went() {
         let (mut ids, _, line) = registry();
-        let kept_ref = proto::SketchItemRef { sketch_persist_id: b"sk".to_vec(), point: true, id0: 9, id1: 9, ..Default::default() };
+        let kept_ref = proto::SketchItemRef {
+            sketch_persist_id: b"sk".to_vec(),
+            point: true,
+            id0: 9,
+            id1: 9,
+            ..Default::default()
+        };
         let point = sketch::ref_id(&mut ids, Kind::SketchPoint, &kept_ref).unwrap();
         let reply = proto::DeleteSketchEntitiesResponse {
             sketch_name: "Sketch1".into(),
@@ -409,7 +470,10 @@ mod tests {
         let text = sketch_reply_text(&mut ids, &[line.clone(), point.clone()], &reply);
         assert!(text.starts_with(&format!("deleted 1 entity from Sketch1 ({line}), along with 2 end/center points, 1 dimension (D1@Sketch1), 1 relation.")), "{text}");
         assert!(text.contains(&format!("didn't delete {point}")), "{text}");
-        assert!(text.contains("0 closed contours and 1 open contour"), "{text}");
+        assert!(
+            text.contains("0 closed contours and 1 open contour"),
+            "{text}"
+        );
         // The kept ref round-trips through the registry unchanged.
         assert_eq!(kept_ref.encode_to_vec(), ids.persist_id(&point).unwrap());
     }

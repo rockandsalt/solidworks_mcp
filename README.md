@@ -78,6 +78,10 @@ installed. For the installer you also need NSIS.
 SOLIDWORKS locks the add-in DLL, so close it before rebuilding the add-in and
 restart it to load the new build.
 
+The Rust code is kept `cargo fmt`-clean (CI checks it). To have commits
+refused when it isn't, enable the repo's hooks once per clone:
+`git config core.hooksPath .githooks`.
+
 ## License
 
 [AGPL-3.0](LICENSE)

@@ -10,9 +10,9 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::addin::proto;
-use crate::feature_text::{feature_error_name, type_label};
 use crate::edit::{feature_target, raw_end_condition_name};
 use crate::feature_edit::fillet_kind;
+use crate::feature_text::{feature_error_name, type_label};
 use crate::hole::fastener_text;
 use crate::inspect::{IdRegistry, Kind, mm, round};
 use crate::sketch::dimension_json;
@@ -24,8 +24,13 @@ pub struct InspectFeatureParams {
     pub feature: String,
 }
 
-pub fn request(ids: &IdRegistry, p: &InspectFeatureParams) -> Result<proto::InspectFeatureRequest, McpError> {
-    Ok(proto::InspectFeatureRequest { feature: Some(feature_target(ids, &p.feature, "feature")?) })
+pub fn request(
+    ids: &IdRegistry,
+    p: &InspectFeatureParams,
+) -> Result<proto::InspectFeatureRequest, McpError> {
+    Ok(proto::InspectFeatureRequest {
+        feature: Some(feature_target(ids, &p.feature, "feature")?),
+    })
 }
 
 fn deg(radians: f64) -> f64 {
@@ -63,11 +68,15 @@ impl Entities<'_> {
             "edge" => Some(Kind::Edge),
             _ => None,
         };
-        kind.and_then(|k| self.id(k, persist_id)).unwrap_or_else(|| what.to_string())
+        kind.and_then(|k| self.id(k, persist_id))
+            .unwrap_or_else(|| what.to_string())
     }
 
     fn definition_ref(&mut self, r: &Option<proto::DefinitionRef>) -> String {
-        r.as_ref().map_or_else(|| "nothing".into(), |r| self.reference(&r.what, &r.persist_id))
+        r.as_ref().map_or_else(
+            || "nothing".into(),
+            |r| self.reference(&r.what, &r.persist_id),
+        )
     }
 }
 
@@ -112,7 +121,10 @@ fn extrude_json(d: &proto::ExtrudeDefinition) -> Map<String, Value> {
     if !d.sketch_name.is_empty() {
         obj.insert("sketch".into(), json!(d.sketch_name));
     }
-    obj.insert("direction1".into(), direction_json(&d.direction1.clone().unwrap_or_default()));
+    obj.insert(
+        "direction1".into(),
+        direction_json(&d.direction1.clone().unwrap_or_default()),
+    );
     if let Some(d2) = &d.direction2 {
         obj.insert("direction2".into(), direction_json(d2));
     }
@@ -137,7 +149,10 @@ fn revolve_json(e: &mut Entities, d: &proto::RevolveDefinition) -> Map<String, V
         _ => "two directions",
     };
     obj.insert("type".into(), json!(how));
-    obj.insert("angle_deg".into(), json!(if full { 360.0 } else { deg(d.angle) }));
+    obj.insert(
+        "angle_deg".into(),
+        json!(if full { 360.0 } else { deg(d.angle) }),
+    );
     if d.revolve_type == 2 {
         obj.insert("angle2_deg".into(), json!(deg(d.angle2)));
     }
@@ -185,7 +200,10 @@ fn loft_json(d: &proto::LoftDefinition) -> Map<String, Value> {
     obj.insert("profiles".into(), json!(d.profiles));
     insert_list(&mut obj, "guide_curves", d.guide_curves.clone());
     insert_if(&mut obj, "closed", d.closed);
-    obj.insert("start_tangency".into(), json!(tangency_name(d.start_tangency)));
+    obj.insert(
+        "start_tangency".into(),
+        json!(tangency_name(d.start_tangency)),
+    );
     obj.insert("end_tangency".into(), json!(tangency_name(d.end_tangency)));
     obj
 }
@@ -247,7 +265,9 @@ fn shell_json(e: &mut Entities, d: &proto::ShellDefinition) -> Map<String, Value
     let walls: Vec<Value> = d
         .walls
         .iter()
-        .filter_map(|w| Some(json!({"face": e.id(Kind::Face, &w.persist_id)?, "thickness_mm": mm(w.thickness)})))
+        .filter_map(|w| {
+            Some(json!({"face": e.id(Kind::Face, &w.persist_id)?, "thickness_mm": mm(w.thickness)}))
+        })
         .collect();
     if !walls.is_empty() {
         obj.insert("walls".into(), json!(walls));
@@ -268,7 +288,10 @@ fn draft_json(e: &mut Entities, d: &proto::DraftDefinition) -> Map<String, Value
     obj.insert("angle_deg".into(), json!(deg(d.angle)));
     insert_if(&mut obj, "reverse_direction", d.reverse_direction);
     if d.neutral_plane.is_some() {
-        obj.insert("neutral_plane".into(), json!(e.definition_ref(&d.neutral_plane)));
+        obj.insert(
+            "neutral_plane".into(),
+            json!(e.definition_ref(&d.neutral_plane)),
+        );
     }
     obj.insert("faces".into(), json!(e.faces(&d.faces)));
     // swDraftFacePropagationType_e, named as draft_faces takes it.
@@ -324,7 +347,10 @@ fn mirror_json(e: &mut Entities, d: &proto::MirrorDefinition) -> Map<String, Val
 
 fn pattern_side_json(e: &mut Entities, s: &proto::PatternSide, circular: bool) -> Value {
     let mut obj = Map::new();
-    obj.insert(if circular { "axis" } else { "along" }.into(), json!(e.reference(&s.what, &s.persist_id)));
+    obj.insert(
+        if circular { "axis" } else { "along" }.into(),
+        json!(e.reference(&s.what, &s.persist_id)),
+    );
     obj.insert("count".into(), json!(s.count));
     if circular {
         obj.insert("spacing_deg".into(), json!(deg(s.spacing)));
@@ -337,13 +363,19 @@ fn pattern_side_json(e: &mut Entities, s: &proto::PatternSide, circular: bool) -
 
 fn pattern_json(e: &mut Entities, d: &proto::PatternDefinition) -> Map<String, Value> {
     let mut obj = Map::new();
-    obj.insert("kind".into(), json!(if d.circular { "circular" } else { "linear" }));
+    obj.insert(
+        "kind".into(),
+        json!(if d.circular { "circular" } else { "linear" }),
+    );
     insert_list(&mut obj, "features", d.features.clone());
     if d.bodies > 0 {
         obj.insert("bodies".into(), json!(d.bodies));
     }
     let side1 = d.direction1.clone().unwrap_or_default();
-    obj.insert("direction1".into(), pattern_side_json(e, &side1, d.circular));
+    obj.insert(
+        "direction1".into(),
+        pattern_side_json(e, &side1, d.circular),
+    );
     if let Some(s2) = &d.direction2 {
         obj.insert("direction2".into(), pattern_side_json(e, s2, false));
     }
@@ -404,7 +436,10 @@ fn hole_json(d: &proto::HoleSpec) -> Map<String, Value> {
         }
     }
     if d.countersink_angle > 0.0 {
-        obj.insert("countersink_angle_deg".into(), json!(deg(d.countersink_angle)));
+        obj.insert(
+            "countersink_angle_deg".into(),
+            json!(deg(d.countersink_angle)),
+        );
     }
     obj
 }
@@ -417,7 +452,11 @@ pub fn render(ids: &mut IdRegistry, reply: &proto::InspectFeatureResponse) -> Va
     obj.insert("type_name".into(), json!(reply.type_name));
     insert_if(&mut obj, "suppressed", reply.suppressed);
     if reply.error_code != 0 {
-        let key = if reply.error_is_warning { "warning" } else { "error" };
+        let key = if reply.error_is_warning {
+            "warning"
+        } else {
+            "error"
+        };
         obj.insert(key.into(), json!(feature_error_name(reply.error_code)));
     }
 
@@ -427,7 +466,10 @@ pub fn render(ids: &mut IdRegistry, reply: &proto::InspectFeatureResponse) -> Va
         Some(D::Revolve(d)) => (revolve_json(&mut e, d), None),
         Some(D::Sweep(d)) => (sweep_json(d), Some("edit_sweep")),
         Some(D::Loft(d)) => (loft_json(d), None),
-        Some(D::Fillet(d)) => (fillet_json(&mut e, d), (d.fillet_type == 0).then_some("edit_fillet")),
+        Some(D::Fillet(d)) => (
+            fillet_json(&mut e, d),
+            (d.fillet_type == 0).then_some("edit_fillet"),
+        ),
         Some(D::Chamfer(d)) => (chamfer_json(&mut e, d), None),
         Some(D::Shell(d)) => (shell_json(&mut e, d), None),
         Some(D::Draft(d)) => (draft_json(&mut e, d), None),
@@ -451,7 +493,9 @@ pub fn render(ids: &mut IdRegistry, reply: &proto::InspectFeatureResponse) -> Va
     let dimensions: Vec<Value> = own
         .iter()
         .map(|d| match d.r#type() {
-            proto::DimensionType::Other => json!({"name": d.name, "type": "other", "value": round(d.value, 6)}),
+            proto::DimensionType::Other => {
+                json!({"name": d.name, "type": "other", "value": round(d.value, 6)})
+            }
             _ => dimension_json(d),
         })
         .collect();
@@ -459,7 +503,10 @@ pub fn render(ids: &mut IdRegistry, reply: &proto::InspectFeatureResponse) -> Va
 
     let mut notes = Vec::new();
     if reply.definition.is_none() {
-        notes.push("SolidWorks' definition of this kind of feature isn't read; its dimensions are.".to_string());
+        notes.push(
+            "SolidWorks' definition of this kind of feature isn't read; its dimensions are."
+                .to_string(),
+        );
     }
     if !own.is_empty() {
         notes.push("set_dimension changes a dimension.".into());
@@ -490,10 +537,28 @@ mod tests {
         let feature = ids.id_for(Kind::Feature, b"feat").unwrap();
         let face = ids.id_for(Kind::Face, b"face").unwrap();
         use proto::feature_target::Target;
-        let by_name = request(&ids, &InspectFeatureParams { feature: " Revolve1 ".into() }).unwrap();
-        assert_eq!(by_name.feature.unwrap().target, Some(Target::Name("Revolve1".into())));
-        let by_id = request(&ids, &InspectFeatureParams { feature: feature.clone() }).unwrap();
-        assert_eq!(by_id.feature.unwrap().target, Some(Target::PersistId(b"feat".to_vec())));
+        let by_name = request(
+            &ids,
+            &InspectFeatureParams {
+                feature: " Revolve1 ".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            by_name.feature.unwrap().target,
+            Some(Target::Name("Revolve1".into()))
+        );
+        let by_id = request(
+            &ids,
+            &InspectFeatureParams {
+                feature: feature.clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            by_id.feature.unwrap().target,
+            Some(Target::PersistId(b"feat".to_vec()))
+        );
         assert!(request(&ids, &InspectFeatureParams { feature: face }).is_err());
         assert!(request(&ids, &InspectFeatureParams { feature: "".into() }).is_err());
     }
@@ -504,14 +569,19 @@ mod tests {
         let reply = proto::InspectFeatureResponse {
             name: "Revolve1".into(),
             type_name: "Revolution".into(),
-            definition: Some(proto::inspect_feature_response::Definition::Revolve(proto::RevolveDefinition {
-                sketch_name: "Sketch1".into(),
-                axis: Some(proto::DefinitionRef { what: "edge".into(), persist_id: b"edge".to_vec() }),
-                revolve_type: 2,
-                angle: std::f64::consts::FRAC_PI_2,
-                angle2: std::f64::consts::FRAC_PI_4,
-                ..Default::default()
-            })),
+            definition: Some(proto::inspect_feature_response::Definition::Revolve(
+                proto::RevolveDefinition {
+                    sketch_name: "Sketch1".into(),
+                    axis: Some(proto::DefinitionRef {
+                        what: "edge".into(),
+                        persist_id: b"edge".to_vec(),
+                    }),
+                    revolve_type: 2,
+                    angle: std::f64::consts::FRAC_PI_2,
+                    angle2: std::f64::consts::FRAC_PI_4,
+                    ..Default::default()
+                },
+            )),
             dimensions: vec![proto::DimensionInfo {
                 name: "D1@Revolve1".into(),
                 r#type: proto::DimensionType::Angular.into(),
@@ -528,7 +598,12 @@ mod tests {
         assert_eq!(d["angle2_deg"], 45.0);
         assert_eq!(d["axis"], ids.existing_id(b"edge").unwrap());
         assert_eq!(json["dimensions"][0]["value_deg"], 90.0);
-        assert!(json["note"].as_str().unwrap().contains("rollback before=\"Revolve1\""));
+        assert!(
+            json["note"]
+                .as_str()
+                .unwrap()
+                .contains("rollback before=\"Revolve1\"")
+        );
     }
 
     #[test]
@@ -541,7 +616,10 @@ mod tests {
             definition: Some(D::Shell(proto::ShellDefinition {
                 thickness: 0.002,
                 removed_faces: removed,
-                walls: vec![proto::ShellWall { persist_id: b"wall".to_vec(), thickness: 0.004 }],
+                walls: vec![proto::ShellWall {
+                    persist_id: b"wall".to_vec(),
+                    thickness: 0.004,
+                }],
                 ..Default::default()
             })),
             ..Default::default()
@@ -551,7 +629,10 @@ mod tests {
         assert_eq!(closed["definition"]["thickness_mm"], 2.0);
         assert_eq!(closed["definition"]["walls"][0]["thickness_mm"], 4.0);
         let open = render(&mut ids, &shell(vec![b"top".to_vec()]));
-        assert_eq!(open["definition"]["removed_faces"][0], ids.existing_id(b"top").unwrap());
+        assert_eq!(
+            open["definition"]["removed_faces"][0],
+            ids.existing_id(b"top").unwrap()
+        );
         assert!(open["definition"].get("closed").is_none());
 
         let other = render(

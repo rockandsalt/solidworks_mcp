@@ -1,0 +1,38 @@
+# MCP server (Rust): build and unit tests on a GitHub-hosted runner.
+# Needs no SolidWorks: tests that do are #[ignore]d (addin_live_tests.rs).
+# The add-in (C++) isn't built here: it needs SOLIDWORKS type libraries,
+# which can't be in this public repo (typelibs/README.md).
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths: ['mcp_server/**', 'proto/**', '.github/workflows/ci.yml']
+  pull_request:
+    paths: ['mcp_server/**', 'proto/**', '.github/workflows/ci.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mcp-server:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: mcp_server
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mcp_server
+      - run: cargo build --locked --all-targets
+      - run: cargo test --locked

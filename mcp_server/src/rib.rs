@@ -56,16 +56,25 @@ pub struct RibParams {
 
 pub fn request(params: &RibParams) -> Result<proto::RibSketchRequest, McpError> {
     if !(params.thickness_mm.is_finite() && params.thickness_mm > 0.0) {
-        return Err(invalid(format!("thickness_mm must be more than 0, got {}", params.thickness_mm)));
+        return Err(invalid(format!(
+            "thickness_mm must be more than 0, got {}",
+            params.thickness_mm
+        )));
     }
     let draft_deg = params.draft_deg.unwrap_or(0.0);
     if !(draft_deg.is_finite() && (0.0..90.0).contains(&draft_deg)) {
-        return Err(invalid(format!("draft_deg must be from 0 to under 90, got {draft_deg}")));
+        return Err(invalid(format!(
+            "draft_deg must be from 0 to under 90, got {draft_deg}"
+        )));
     }
     if params.draft_outward && draft_deg == 0.0 {
         return Err(invalid("draft_outward needs draft_deg"));
     }
-    let sketch_name = params.sketch_name.as_deref().map(str::trim).unwrap_or_default();
+    let sketch_name = params
+        .sketch_name
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default();
     if Kind::of_id(sketch_name).is_some() {
         return Err(invalid(format!(
             "sketch_name: give the feature-tree name of the sketch (e.g. \"Sketch1\"), not an id like {sketch_name}"
@@ -168,7 +177,12 @@ mod tests {
         p.sketch_name = Some(" Sketch2 ".into());
         assert_eq!(request(&p).unwrap().sketch_name, "Sketch2");
         p.sketch_name = Some("line:3".into());
-        assert!(request(&p).unwrap_err().message.contains("feature-tree name"));
+        assert!(
+            request(&p)
+                .unwrap_err()
+                .message
+                .contains("feature-tree name")
+        );
     }
 
     #[test]
@@ -180,12 +194,21 @@ mod tests {
             ..Default::default()
         };
         let text = reply_text(&params(2.0), &reply);
-        assert!(text.starts_with("created Rib1 from Sketch2: 2 mm thick, adding 400.000 mm^3."), "{text}");
+        assert!(
+            text.starts_with("created Rib1 from Sketch2: 2 mm thick, adding 400.000 mm^3."),
+            "{text}"
+        );
         assert!(!text.contains("reversed"), "{text}");
-        let reply = proto::RibSketchResponse { direction_flipped: true, ..reply };
+        let reply = proto::RibSketchResponse {
+            direction_flipped: true,
+            ..reply
+        };
         let mut p = params(2.0);
         p.side = RibSide::Other;
         let text = reply_text(&p, &reply);
-        assert!(text.contains("on the other side of the sketch") && text.contains("reversed"), "{text}");
+        assert!(
+            text.contains("on the other side of the sketch") && text.contains("reversed"),
+            "{text}"
+        );
     }
 }

@@ -1,0 +1,11 @@
+#!/bin/sh
+# Refuses a commit that touches mcp_server/*.rs while mcp_server isn't
+# rustfmt-clean (CI runs the same check). Changes nothing: run cargo fmt,
+# review, git add, commit again. Checks the working tree, not just what's staged.
+# Enable once per clone: git config core.hooksPath .githooks
+git diff --cached --name-only | grep -q '^mcp_server/.*\.rs$' || exit 0
+cd mcp_server || exit 1
+if ! cargo fmt --check >/dev/null 2>&1; then
+    echo "pre-commit: mcp_server isn't rustfmt-clean. Run 'cargo fmt' in mcp_server, review, git add, commit again." >&2
+    exit 1
+fi

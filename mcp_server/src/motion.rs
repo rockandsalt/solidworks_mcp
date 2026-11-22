@@ -15,8 +15,8 @@ use serde::Deserialize;
 
 use crate::addin::proto;
 use crate::assembly;
-use crate::feature_text;
 use crate::edit;
+use crate::feature_text;
 use crate::inspect::{IdRegistry, Kind, MM_PER_M, mm, mm3, point_mm, round};
 
 /// Default number of steps of a sweep (21 values).
@@ -41,7 +41,13 @@ fn pair_key(i: &proto::Interference) -> Vec<Vec<u8>> {
         .component_persist_ids
         .iter()
         .zip(&i.component_names)
-        .map(|(pid, name)| if pid.is_empty() { [b"name:", name.as_bytes()].concat() } else { pid.clone() })
+        .map(|(pid, name)| {
+            if pid.is_empty() {
+                [b"name:", name.as_bytes()].concat()
+            } else {
+                pid.clone()
+            }
+        })
         .collect();
     key.sort();
     key
@@ -53,7 +59,11 @@ fn pair_names(ids: &mut IdRegistry, i: &proto::Interference) -> String {
         .iter()
         .enumerate()
         .map(|(k, name)| {
-            let pid = i.component_persist_ids.get(k).map(Vec::as_slice).unwrap_or_default();
+            let pid = i
+                .component_persist_ids
+                .get(k)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
             match ids.id_for(Kind::Component, pid) {
                 Some(id) => format!("{name} ({id})"),
                 None => name.clone(),
@@ -66,7 +76,7 @@ fn pair_names(ids: &mut IdRegistry, i: &proto::Interference) -> String {
 /// A pair that overlaps at some step, and where.
 struct Collision {
     names: String,
-    at: Vec<usize>,  // indexes into the steps
+    at: Vec<usize>, // indexes into the steps
     max_volume: f64,
     max_at: usize,
     max_box: Option<proto::Box3>,
@@ -105,7 +115,13 @@ pub fn collisions_text(
             }
             let entry = found.entry(key.clone()).or_insert_with(|| {
                 order.push(key.clone());
-                Collision { names: pair_names(ids, i), at: Vec::new(), max_volume: -1.0, max_at: k, max_box: None }
+                Collision {
+                    names: pair_names(ids, i),
+                    at: Vec::new(),
+                    max_volume: -1.0,
+                    max_at: k,
+                    max_box: None,
+                }
             });
             if entry.at.last() != Some(&k) {
                 entry.at.push(k);
@@ -141,9 +157,16 @@ pub fn collisions_text(
                 .collect();
             let first = c.at[0];
             let contact = if first == 0 {
-                format!("already at the first position checked ({})", label(&steps[0]))
+                format!(
+                    "already at the first position checked ({})",
+                    label(&steps[0])
+                )
             } else {
-                format!("between {} and {}", label(&steps[first - 1]), label(&steps[first]))
+                format!(
+                    "between {} and {}",
+                    label(&steps[first - 1]),
+                    label(&steps[first])
+                )
             };
             text += &format!(
                 "\n- {}: overlap {}; first contact {}; most {} mm³ at {}",
@@ -227,7 +250,10 @@ pub struct SweepMateParams {
     pub restore: Option<bool>,
 }
 
-pub fn sweep_request(ids: &IdRegistry, p: &SweepMateParams) -> Result<proto::SweepMateRequest, McpError> {
+pub fn sweep_request(
+    ids: &IdRegistry,
+    p: &SweepMateParams,
+) -> Result<proto::SweepMateRequest, McpError> {
     let mm_range = p.from_mm.is_some() || p.to_mm.is_some();
     let deg_range = p.from_deg.is_some() || p.to_deg.is_some();
     if mm_range && deg_range {
@@ -250,9 +276,12 @@ pub fn sweep_request(ids: &IdRegistry, p: &SweepMateParams) -> Result<proto::Swe
     }
     let steps = p.steps.unwrap_or(DEFAULT_STEPS);
     if !(1..=MAX_STEPS).contains(&steps) {
-        return Err(invalid(format!("steps must be 1..{MAX_STEPS}, got {steps}")));
+        return Err(invalid(format!(
+            "steps must be 1..{MAX_STEPS}, got {steps}"
+        )));
     }
-    let si = |mm: Option<f64>, deg: Option<f64>| mm.map(|v| v / MM_PER_M).or(deg.map(f64::to_radians));
+    let si =
+        |mm: Option<f64>, deg: Option<f64>| mm.map(|v| v / MM_PER_M).or(deg.map(f64::to_radians));
     Ok(proto::SweepMateRequest {
         mate: Some(edit::feature_target(ids, &p.mate, "mate")?),
         from: si(p.from_mm, p.from_deg),
@@ -274,12 +303,18 @@ fn value_text(angular: bool, v: f64) -> String {
     }
 }
 
-pub fn sweep_reply_text(ids: &mut IdRegistry, request: &proto::SweepMateRequest, reply: &proto::SweepMateResponse) -> String {
+pub fn sweep_reply_text(
+    ids: &mut IdRegistry,
+    request: &proto::SweepMateRequest,
+    reply: &proto::SweepMateResponse,
+) -> String {
     let Some(mate) = &reply.mate else {
         return "SolidWorks didn't report the mate".into();
     };
     let angular = mate.r#type() == proto::MateType::Angle;
-    let mate_id = ids.id_for(Kind::Feature, &mate.persist_id).unwrap_or_default();
+    let mate_id = ids
+        .id_for(Kind::Feature, &mate.persist_id)
+        .unwrap_or_default();
     let v = |x: f64| value_text(angular, x);
     let current = mate.dimension.as_ref().map_or(0.0, |d| d.value);
     let steps = request.steps.max(1) as usize;
@@ -297,7 +332,8 @@ pub fn sweep_reply_text(ids: &mut IdRegistry, request: &proto::SweepMateRequest,
         v(current)
     );
     if reply.refused_step > 0 {
-        let at = reply.from + (reply.to - reply.from) * (reply.refused_step - 1) as f64 / steps as f64;
+        let at =
+            reply.from + (reply.to - reply.from) * (reply.refused_step - 1) as f64 / steps as f64;
         text += &format!("\nStopped at {}: {}.", v(at), reply.failure);
     }
     if reply.out_of_time {
@@ -308,11 +344,20 @@ pub fn sweep_reply_text(ids: &mut IdRegistry, request: &proto::SweepMateRequest,
             steps + 1
         );
     }
-    text += &collisions_text(ids, &reply.start_interferences, &reply.steps, |s| v(s.value), "before the sweep");
+    text += &collisions_text(
+        ids,
+        &reply.start_interferences,
+        &reply.steps,
+        |s| v(s.value),
+        "before the sweep",
+    );
     if reply.backed_off {
         let back = match reply.collision_step {
             1 => format!("where it was ({})", v(current)),
-            k => reply.steps.get(k as usize - 2).map_or_else(|| v(current), |s| v(s.value)),
+            k => reply
+                .steps
+                .get(k as usize - 2)
+                .map_or_else(|| v(current), |s| v(s.value)),
         };
         text += &format!("\nStopped at the first collision and went back to {back}.");
     }
@@ -321,7 +366,14 @@ pub fn sweep_reply_text(ids: &mut IdRegistry, request: &proto::SweepMateRequest,
         .moved
         .iter()
         .filter_map(|m| m.after.as_ref())
-        .map(|c| format!("{} ({})", c.name, ids.id_for(Kind::Component, &c.persist_id).unwrap_or_default()))
+        .map(|c| {
+            format!(
+                "{} ({})",
+                c.name,
+                ids.id_for(Kind::Component, &c.persist_id)
+                    .unwrap_or_default()
+            )
+        })
         .collect();
     if !moved.is_empty() {
         text += &format!("\nMoved by the sweep: {}.", moved.join(", "));
@@ -331,7 +383,11 @@ pub fn sweep_reply_text(ids: &mut IdRegistry, request: &proto::SweepMateRequest,
 
     if request.restore {
         if reply.restored {
-            text += &format!("\nRestored: {} is back at {} and every component where it was.", mate.name, v(current));
+            text += &format!(
+                "\nRestored: {} is back at {} and every component where it was.",
+                mate.name,
+                v(current)
+            );
         } else {
             text += &format!(
                 "\nNot back where they were: {} -- they're where the sweep left them.",
@@ -339,7 +395,11 @@ pub fn sweep_reply_text(ids: &mut IdRegistry, request: &proto::SweepMateRequest,
             );
         }
     } else {
-        let end = reply.steps.iter().rev().find(|s| !reply.backed_off || s.step < reply.collision_step);
+        let end = reply
+            .steps
+            .iter()
+            .rev()
+            .find(|s| !reply.backed_off || s.step < reply.collision_step);
         text += &format!(
             "\n{} is left at {} (restore=true would have put it back).",
             mate.name,
@@ -357,17 +417,32 @@ pub fn sweep_reply_text(ids: &mut IdRegistry, request: &proto::SweepMateRequest,
 /// requested translation / turn.
 pub fn move_step_label(request: &proto::MoveComponentRequest, s: &proto::MotionStep) -> String {
     let f = s.step as f64 / request.steps.max(1) as f64;
-    let t = request.translation.as_ref().map_or(0.0, |t| (t.x * t.x + t.y * t.y + t.z * t.z).sqrt());
+    let t = request
+        .translation
+        .as_ref()
+        .map_or(0.0, |t| (t.x * t.x + t.y * t.y + t.z * t.z).sqrt());
     let mut parts = Vec::new();
     if t > 0.0 {
         parts.push(format!("{} mm", mm(f * t)));
     }
     if request.rotation_angle != 0.0 {
-        parts.push(format!("{} deg", round((f * request.rotation_angle).to_degrees().abs(), 3)));
+        parts.push(format!(
+            "{} deg",
+            round((f * request.rotation_angle).to_degrees().abs(), 3)
+        ));
     }
-    let at = s.placement.as_ref().and_then(|p| p.origin.as_ref()).map(point_mm);
+    let at = s
+        .placement
+        .as_ref()
+        .and_then(|p| p.origin.as_ref())
+        .map(point_mm);
     match at {
-        Some(origin) => format!("{} (step {}, origin at {} mm)", parts.join(" + "), s.step, origin),
+        Some(origin) => format!(
+            "{} (step {}, origin at {} mm)",
+            parts.join(" + "),
+            s.step,
+            origin
+        ),
         None => format!("{} (step {})", parts.join(" + "), s.step),
     }
 }
@@ -389,7 +464,12 @@ mod tests {
     }
 
     fn step(k: i32, value: f64, interferences: Vec<proto::Interference>) -> proto::MotionStep {
-        proto::MotionStep { step: k, value, interferences, ..Default::default() }
+        proto::MotionStep {
+            step: k,
+            value,
+            interferences,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -399,16 +479,35 @@ mod tests {
         let steps = vec![
             step(1, 0.0, vec![overlap(b"pin", b"base", 3.0)]),
             step(2, 10.0, vec![overlap(b"pin", b"base", 3.0)]),
-            step(3, 20.0, vec![overlap(b"base", b"pin", 3.0), overlap(b"lid", b"base", 50.0)]),
+            step(
+                3,
+                20.0,
+                vec![
+                    overlap(b"base", b"pin", 3.0),
+                    overlap(b"lid", b"base", 50.0),
+                ],
+            ),
             step(4, 30.0, vec![overlap(b"base", b"lid", 120.0)]),
             step(5, 40.0, vec![]),
             step(6, 50.0, vec![overlap(b"lid", b"base", 10.0)]),
         ];
-        let text = collisions_text(&mut ids, &start, &steps, |s| format!("{} deg", s.value), "before");
+        let text = collisions_text(
+            &mut ids,
+            &start,
+            &steps,
+            |s| format!("{} deg", s.value),
+            "before",
+        );
         assert!(text.contains("- lid (component:1) and base (component:2): overlap from 20 deg to 30 deg and at 50 deg"), "{text}");
-        assert!(text.contains("first contact between 10 deg and 20 deg"), "{text}");
+        assert!(
+            text.contains("first contact between 10 deg and 20 deg"),
+            "{text}"
+        );
         assert!(text.contains("most 120"), "{text}");
-        assert!(!text.contains("- base (component:2) and pin"), "the pair overlapping before isn't a collision: {text}");
+        assert!(
+            !text.contains("- base (component:2) and pin"),
+            "the pair overlapping before isn't a collision: {text}"
+        );
         assert!(text.contains("Already overlapping before (left out above): base (component:2) and pin (component:3) (3 mm³)"), "{text}");
     }
 
@@ -417,30 +516,85 @@ mod tests {
         let mut ids = IdRegistry::default();
         let steps = vec![step(1, 0.0, vec![]), step(2, 1.0, vec![])];
         let text = collisions_text(&mut ids, &[], &steps, |s| format!("{}", s.value), "before");
-        assert!(text.contains("none") && text.contains("2 positions"), "{text}");
-        let text = collisions_text(&mut ids, &[], &[step(1, 0.0, vec![overlap(b"a", b"b", 1.0)])], |_| "x".into(), "before");
-        assert!(text.contains("already at the first position checked"), "{text}");
+        assert!(
+            text.contains("none") && text.contains("2 positions"),
+            "{text}"
+        );
+        let text = collisions_text(
+            &mut ids,
+            &[],
+            &[step(1, 0.0, vec![overlap(b"a", b"b", 1.0)])],
+            |_| "x".into(),
+            "before",
+        );
+        assert!(
+            text.contains("already at the first position checked"),
+            "{text}"
+        );
     }
 
     #[test]
     fn sweep_request_checks_the_range() {
         let ids = IdRegistry::default();
-        let p = SweepMateParams { mate: "LimitAngle1".into(), ..Default::default() };
+        let p = SweepMateParams {
+            mate: "LimitAngle1".into(),
+            ..Default::default()
+        };
         let r = sweep_request(&ids, &p).unwrap();
-        assert_eq!((r.from, r.to, r.steps, r.restore, r.angular), (None, None, 20, true, false));
-        let p = SweepMateParams { mate: "Distance1".into(), to_mm: Some(40.0), steps: Some(8), restore: Some(false), ..Default::default() };
+        assert_eq!(
+            (r.from, r.to, r.steps, r.restore, r.angular),
+            (None, None, 20, true, false)
+        );
+        let p = SweepMateParams {
+            mate: "Distance1".into(),
+            to_mm: Some(40.0),
+            steps: Some(8),
+            restore: Some(false),
+            ..Default::default()
+        };
         let r = sweep_request(&ids, &p).unwrap();
-        assert_eq!((r.from, r.to, r.steps, r.restore), (None, Some(0.04), 8, false));
-        let p = SweepMateParams { mate: "Angle1".into(), from_deg: Some(10.0), to_deg: Some(90.0), ..Default::default() };
+        assert_eq!(
+            (r.from, r.to, r.steps, r.restore),
+            (None, Some(0.04), 8, false)
+        );
+        let p = SweepMateParams {
+            mate: "Angle1".into(),
+            from_deg: Some(10.0),
+            to_deg: Some(90.0),
+            ..Default::default()
+        };
         let r = sweep_request(&ids, &p).unwrap();
         assert!(r.angular && (r.to.unwrap() - std::f64::consts::FRAC_PI_2).abs() < 1e-15);
         for bad in [
-            SweepMateParams { mate: "x".into(), from_mm: Some(1.0), to_deg: Some(9.0), ..Default::default() },
-            SweepMateParams { mate: "x".into(), to_deg: Some(200.0), ..Default::default() },
-            SweepMateParams { mate: "x".into(), to_mm: Some(-1.0), ..Default::default() },
-            SweepMateParams { mate: "x".into(), steps: Some(0), ..Default::default() },
-            SweepMateParams { mate: "face:3".into(), ..Default::default() },
-            SweepMateParams { mate: " ".into(), ..Default::default() },
+            SweepMateParams {
+                mate: "x".into(),
+                from_mm: Some(1.0),
+                to_deg: Some(9.0),
+                ..Default::default()
+            },
+            SweepMateParams {
+                mate: "x".into(),
+                to_deg: Some(200.0),
+                ..Default::default()
+            },
+            SweepMateParams {
+                mate: "x".into(),
+                to_mm: Some(-1.0),
+                ..Default::default()
+            },
+            SweepMateParams {
+                mate: "x".into(),
+                steps: Some(0),
+                ..Default::default()
+            },
+            SweepMateParams {
+                mate: "face:3".into(),
+                ..Default::default()
+            },
+            SweepMateParams {
+                mate: " ".into(),
+                ..Default::default()
+            },
         ] {
             assert!(sweep_request(&ids, &bad).is_err(), "{bad:?}");
         }
@@ -449,22 +603,44 @@ mod tests {
     #[test]
     fn sweep_text() {
         let mut ids = IdRegistry::default();
-        let request = sweep_request(&ids, &SweepMateParams { mate: "LimitAngle1".into(), steps: Some(2), ..Default::default() }).unwrap();
+        let request = sweep_request(
+            &ids,
+            &SweepMateParams {
+                mate: "LimitAngle1".into(),
+                steps: Some(2),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let reply = proto::SweepMateResponse {
             mate: Some(proto::MateInfo {
                 persist_id: b"m".to_vec(),
                 name: "LimitAngle1".into(),
                 r#type: proto::MateType::Angle.into(),
-                limits: Some(proto::MateLimits { min: 0.0, max: std::f64::consts::FRAC_PI_2 }),
-                dimension: Some(proto::DimensionInfo { value: 0.1, ..Default::default() }),
+                limits: Some(proto::MateLimits {
+                    min: 0.0,
+                    max: std::f64::consts::FRAC_PI_2,
+                }),
+                dimension: Some(proto::DimensionInfo {
+                    value: 0.1,
+                    ..Default::default()
+                }),
                 ..Default::default()
             }),
             from: 0.0,
             to: std::f64::consts::FRAC_PI_2,
             steps: vec![
                 step(1, 0.0, vec![]),
-                step(2, std::f64::consts::FRAC_PI_4, vec![overlap(b"lid", b"box", 7.0)]),
-                step(3, std::f64::consts::FRAC_PI_2, vec![overlap(b"lid", b"box", 9.0)]),
+                step(
+                    2,
+                    std::f64::consts::FRAC_PI_4,
+                    vec![overlap(b"lid", b"box", 7.0)],
+                ),
+                step(
+                    3,
+                    std::f64::consts::FRAC_PI_2,
+                    vec![overlap(b"lid", b"box", 9.0)],
+                ),
             ],
             collision_step: 2,
             restored: true,
@@ -472,7 +648,10 @@ mod tests {
         };
         let text = sweep_reply_text(&mut ids, &request, &reply);
         assert!(text.starts_with("Swept LimitAngle1 (feature:1, angle, limits 0 .. 90 deg) from 0 deg to 90 deg in 2 steps (every 45 deg"), "{text}");
-        assert!(text.contains("first contact between 0 deg and 45 deg"), "{text}");
+        assert!(
+            text.contains("first contact between 0 deg and 45 deg"),
+            "{text}"
+        );
         assert!(text.contains("Restored: LimitAngle1 is back at"), "{text}");
     }
 }

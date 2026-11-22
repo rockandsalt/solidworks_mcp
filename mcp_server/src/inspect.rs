@@ -46,8 +46,14 @@ pub enum Kind {
 }
 
 /// The kinds that name model geometry (vs. sketch entities).
-const MODEL_KINDS: [Kind; 6] =
-    [Kind::Feature, Kind::Body, Kind::Face, Kind::Edge, Kind::Vertex, Kind::Component];
+const MODEL_KINDS: [Kind; 6] = [
+    Kind::Feature,
+    Kind::Body,
+    Kind::Face,
+    Kind::Edge,
+    Kind::Vertex,
+    Kind::Component,
+];
 pub const SKETCH_KINDS: [Kind; 7] = [
     Kind::SketchPoint,
     Kind::Line,
@@ -176,14 +182,21 @@ impl IdRegistry {
     /// The short ID already handed out for these bytes in the active
     /// document, of whatever kind, without minting one.
     pub fn existing_id(&self, persist_id: &[u8]) -> Option<String> {
-        self.by_bytes.get(&(self.document, persist_id.to_vec())).cloned()
+        self.by_bytes
+            .get(&(self.document, persist_id.to_vec()))
+            .cloned()
     }
 
     /// Runs `f` with the document with this key (see `files::document_key`)
     /// as the one IDs are minted for, then makes the active one active
     /// again: IDs for another document's entities, e.g. the model a drawing
     /// view shows, which work once that document is active.
-    pub fn in_document<R>(&mut self, key: &str, name: &str, f: impl FnOnce(&mut IdRegistry) -> R) -> R {
+    pub fn in_document<R>(
+        &mut self,
+        key: &str,
+        name: &str,
+        f: impl FnOnce(&mut IdRegistry) -> R,
+    ) -> R {
         let active = self.document;
         let index = self.document_index(key);
         if self.documents[index].1.is_empty() {
@@ -199,7 +212,10 @@ impl IdRegistry {
     /// or not that document is active.
     pub fn lookup(&self, id: &str) -> Option<(&str, &[u8])> {
         let (doc, bytes) = self.by_id.get(id.trim())?;
-        Some((self.documents.get(*doc).map_or("", |d| d.0.as_str()), bytes.as_slice()))
+        Some((
+            self.documents.get(*doc).map_or("", |d| d.0.as_str()),
+            bytes.as_slice(),
+        ))
     }
 
     /// The persist ID behind a short ID handed out earlier for the active
@@ -281,7 +297,8 @@ impl Filters {
     }
 
     fn keep_edge(&self, edge: &proto::EdgeInfo) -> bool {
-        self.curve_type.is_none_or(|wanted| edge.curve_type() == wanted)
+        self.curve_type
+            .is_none_or(|wanted| edge.curve_type() == wanted)
     }
 }
 
@@ -369,7 +386,11 @@ fn insert_id(obj: &mut Map<String, Value>, key: &str, id: Option<String>) {
 }
 
 /// "component": its id, for entities of an assembly component.
-pub(crate) fn insert_component(ids: &mut IdRegistry, obj: &mut Map<String, Value>, component_persist_id: &[u8]) {
+pub(crate) fn insert_component(
+    ids: &mut IdRegistry,
+    obj: &mut Map<String, Value>,
+    component_persist_id: &[u8],
+) {
     if let Some(id) = ids.id_for(Kind::Component, component_persist_id) {
         obj.insert("component".into(), Value::String(id));
     }
@@ -394,8 +415,15 @@ pub(crate) fn feature_json(ids: &mut IdRegistry, f: &proto::FeatureInfo) -> Valu
         obj.insert("rolled_back".into(), json!(true));
     }
     if f.error_code != 0 {
-        let key = if f.error_is_warning { "warning" } else { "error" };
-        obj.insert(key.into(), json!(crate::feature_text::feature_error_name(f.error_code)));
+        let key = if f.error_is_warning {
+            "warning"
+        } else {
+            "error"
+        };
+        obj.insert(
+            key.into(),
+            json!(crate::feature_text::feature_error_name(f.error_code)),
+        );
     }
     if !f.parents.is_empty() {
         obj.insert("parents".into(), json!(f.parents));
@@ -495,7 +523,11 @@ pub(crate) fn face_json(ids: &mut IdRegistry, f: &proto::FaceInfo) -> Value {
                 obj.insert("axis".into(), direction(a));
             }
             if let Some(o) = &f.origin {
-                let key = if surface == S::Torus { "center_mm" } else { "axis_point_mm" };
+                let key = if surface == S::Torus {
+                    "center_mm"
+                } else {
+                    "axis_point_mm"
+                };
                 obj.insert(key.into(), point_mm(o));
             }
             obj.insert("radius_mm".into(), json!(mm(f.radius)));
@@ -503,7 +535,10 @@ pub(crate) fn face_json(ids: &mut IdRegistry, f: &proto::FaceInfo) -> Value {
                 obj.insert("minor_radius_mm".into(), json!(mm(f.minor_radius)));
             }
             if surface == S::Cone {
-                obj.insert("half_angle_deg".into(), json!(round(f.half_angle.to_degrees(), 4)));
+                obj.insert(
+                    "half_angle_deg".into(),
+                    json!(round(f.half_angle.to_degrees(), 4)),
+                );
             }
             if matches!(surface, S::Cylinder | S::Cone)
                 && let Some(hole) = points_at_axis(f)
@@ -556,7 +591,10 @@ pub(crate) fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
 /// the axis, i.e. the material is around the face (a hole) rather than
 /// inside it (a boss). None without a sample, or if it's degenerate.
 pub(crate) fn points_at_axis(f: &proto::FaceInfo) -> Option<bool> {
-    let (p, n) = (xyz(f.sample_point.as_ref()?), xyz(f.sample_normal.as_ref()?));
+    let (p, n) = (
+        xyz(f.sample_point.as_ref()?),
+        xyz(f.sample_normal.as_ref()?),
+    );
     let (o, a) = (xyz(f.origin.as_ref()?), xyz(f.axis.as_ref()?));
     let a_len = norm(a);
     if a_len == 0.0 {
@@ -577,7 +615,10 @@ pub(crate) fn points_at_axis(f: &proto::FaceInfo) -> Option<bool> {
 /// For a sphere: whether the outward normal points at the center (a
 /// spherical pocket rather than a ball).
 fn points_at_center(f: &proto::FaceInfo) -> Option<bool> {
-    let (p, n) = (xyz(f.sample_point.as_ref()?), xyz(f.sample_normal.as_ref()?));
+    let (p, n) = (
+        xyz(f.sample_point.as_ref()?),
+        xyz(f.sample_normal.as_ref()?),
+    );
     let d = dot(n, sub(p, xyz(f.origin.as_ref()?)));
     if d == 0.0 {
         return None;
@@ -674,9 +715,18 @@ pub fn render_document(reply: &proto::InspectModelResponse) -> Map<String, Value
 /// The rest of the JSON for one InspectModel reply, added to `out`: its
 /// features and geometry. Assembly geometry must already be in assembly
 /// space (crate::assembly::place_inspect_reply).
-pub fn render_contents(ids: &mut IdRegistry, reply: &proto::InspectModelResponse, filters: &Filters, out: &mut Map<String, Value>) {
+pub fn render_contents(
+    ids: &mut IdRegistry,
+    reply: &proto::InspectModelResponse,
+    filters: &Filters,
+    out: &mut Map<String, Value>,
+) {
     if !reply.features.is_empty() {
-        let features = reply.features.iter().map(|f| feature_json(ids, f)).collect();
+        let features = reply
+            .features
+            .iter()
+            .map(|f| feature_json(ids, f))
+            .collect();
         out.insert("features".into(), Value::Array(features));
         let failing = reply.features.iter().filter(|f| f.error_code != 0).count();
         if failing > 0 {
@@ -698,10 +748,24 @@ pub fn render_contents(ids: &mut IdRegistry, reply: &proto::InspectModelResponse
         out.insert("bodies".into(), Value::Array(bodies));
     }
     if !reply.faces.is_empty() {
-        page(out, "faces", &reply.faces, |f| filters.keep_face(f), filters, |f| face_json(ids, f));
+        page(
+            out,
+            "faces",
+            &reply.faces,
+            |f| filters.keep_face(f),
+            filters,
+            |f| face_json(ids, f),
+        );
     }
     if !reply.edges.is_empty() {
-        page(out, "edges", &reply.edges, |e| filters.keep_edge(e), filters, |e| edge_json(ids, e));
+        page(
+            out,
+            "edges",
+            &reply.edges,
+            |e| filters.keep_edge(e),
+            filters,
+            |e| edge_json(ids, e),
+        );
     }
     if reply.truncated {
         out.insert(
@@ -812,7 +876,11 @@ mod tests {
     use super::*;
 
     /// A part's whole reply, as assembly::render_inspect gives it.
-    fn render(ids: &mut IdRegistry, reply: &proto::InspectModelResponse, filters: &Filters) -> Value {
+    fn render(
+        ids: &mut IdRegistry,
+        reply: &proto::InspectModelResponse,
+        filters: &Filters,
+    ) -> Value {
         let mut out = render_document(reply);
         render_contents(ids, reply, filters, &mut out);
         Value::Object(out)
@@ -828,7 +896,10 @@ mod tests {
         let a = ids.id_for(Kind::Face, b"aaa").unwrap();
         let b = ids.id_for(Kind::Face, b"bbb").unwrap();
         let e = ids.id_for(Kind::Edge, b"ccc").unwrap();
-        assert_eq!((a.as_str(), b.as_str(), e.as_str()), ("face:1", "face:2", "edge:1"));
+        assert_eq!(
+            (a.as_str(), b.as_str(), e.as_str()),
+            ("face:1", "face:2", "edge:1")
+        );
         assert_eq!(ids.id_for(Kind::Face, b"aaa").unwrap(), "face:1");
         assert_eq!(ids.persist_id(" face:2 ").unwrap(), b"bbb");
         assert!(ids.persist_id("face:9").is_none());
@@ -848,9 +919,19 @@ mod tests {
         assert_eq!(ids.persist_id(&circle).unwrap(), b"sketch2/8");
         // The first part's line doesn't resolve while Part2 is active...
         assert!(ids.persist_id(&line).is_none());
-        let why = ids.unknown_id(&line, "inspect_sketch", "call inspect_sketch for current ones");
-        assert!(why.starts_with("line:1 is from another document (Part1), not the active one (Part2)"), "{why}");
-        assert!(ids.unknown_id("line:7", "inspect_sketch", "x").starts_with("unknown id \"line:7\""));
+        let why = ids.unknown_id(
+            &line,
+            "inspect_sketch",
+            "call inspect_sketch for current ones",
+        );
+        assert!(
+            why.starts_with("line:1 is from another document (Part1), not the active one (Part2)"),
+            "{why}"
+        );
+        assert!(
+            ids.unknown_id("line:7", "inspect_sketch", "x")
+                .starts_with("unknown id \"line:7\"")
+        );
         // ...and does again once it is.
         ids.set_document("new:s:Part1", "Part1");
         assert_eq!(ids.persist_id(&line).unwrap(), b"sketch2/8");
@@ -897,15 +978,36 @@ mod tests {
             ..Default::default()
         };
         let reply = proto::InspectModelResponse {
-            features: vec![feature("Fillet1", 13, false), feature("Fillet2", 0, false), feature("Fillet3", 12, true)],
+            features: vec![
+                feature("Fillet1", 13, false),
+                feature("Fillet2", 0, false),
+                feature("Fillet3", 12, true),
+            ],
             ..Default::default()
         };
-        let json = render(&mut ids, &reply, &Filters { limit: 100, ..Default::default() });
+        let json = render(
+            &mut ids,
+            &reply,
+            &Filters {
+                limit: 100,
+                ..Default::default()
+            },
+        );
         let features = json["features"].as_array().unwrap();
-        assert!(features[0]["error"].as_str().unwrap().starts_with("the fillet can't be made"));
+        assert!(
+            features[0]["error"]
+                .as_str()
+                .unwrap()
+                .starts_with("the fillet can't be made")
+        );
         assert!(features[1].get("error").is_none() && features[1].get("warning").is_none());
         assert!(features[2]["warning"].is_string());
-        assert!(json["rebuild_note"].as_str().unwrap().starts_with("2 features have rebuild errors"));
+        assert!(
+            json["rebuild_note"]
+                .as_str()
+                .unwrap()
+                .starts_with("2 features have rebuild errors")
+        );
     }
 
     #[test]
@@ -955,7 +1057,11 @@ mod tests {
             ..Default::default()
         };
         let mut ids = IdRegistry::default();
-        let filters = Filters { normal: Some([0.0, 0.0, 2.0]), limit: 1, ..Default::default() };
+        let filters = Filters {
+            normal: Some([0.0, 0.0, 2.0]),
+            limit: 1,
+            ..Default::default()
+        };
         let out = render(&mut ids, &reply, &filters);
         assert_eq!(out["faces_matching"], 2);
         assert_eq!(out["faces"].as_array().unwrap().len(), 1);
@@ -984,13 +1090,29 @@ mod tests {
             ..Default::default()
         };
         // Point above the X axis; normal down (toward it) = hole, up = boss.
-        assert_eq!(points_at_axis(&cyl(v(5.0, 0.0, 2.0), v(0.0, 0.0, -1.0))), Some(true));
-        assert_eq!(points_at_axis(&cyl(v(5.0, 0.0, 2.0), v(0.0, 0.0, 1.0))), Some(false));
+        assert_eq!(
+            points_at_axis(&cyl(v(5.0, 0.0, 2.0), v(0.0, 0.0, -1.0))),
+            Some(true)
+        );
+        assert_eq!(
+            points_at_axis(&cyl(v(5.0, 0.0, 2.0), v(0.0, 0.0, 1.0))),
+            Some(false)
+        );
         // No tessellation sample: unknown, so the flag is left out.
         assert_eq!(points_at_axis(&cyl(None, None)), None);
         let mut ids = IdRegistry::default();
-        let reply = proto::InspectModelResponse { faces: vec![cyl(None, None)], ..Default::default() };
-        let out = render(&mut ids, &reply, &Filters { limit: 10, ..Default::default() });
+        let reply = proto::InspectModelResponse {
+            faces: vec![cyl(None, None)],
+            ..Default::default()
+        };
+        let out = render(
+            &mut ids,
+            &reply,
+            &Filters {
+                limit: 10,
+                ..Default::default()
+            },
+        );
         assert!(out["faces"][0].get("hole").is_none());
 
         let ball = |n| proto::FaceInfo {

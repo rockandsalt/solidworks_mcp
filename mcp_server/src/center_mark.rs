@@ -84,11 +84,16 @@ fn common_view(view: &str, refs: &[(&str, &proto::DrawingEntityRef)]) -> Result<
         if out.is_empty() {
             out = r.view_name.clone();
         } else if out != r.view_name {
-            return Err(invalid(format!("{id} is in {}, not {out}: one view per call", r.view_name)));
+            return Err(invalid(format!(
+                "{id} is in {}, not {out}: one view per call",
+                r.view_name
+            )));
         }
     }
     if out.is_empty() {
-        return Err(invalid("say which view (`view`, or the ids of its entities)"));
+        return Err(invalid(
+            "say which view (`view`, or the ids of its entities)",
+        ));
     }
     Ok(out)
 }
@@ -103,34 +108,54 @@ fn circle_center(shape: &Shape) -> Option<DVec2> {
 /// Whether all `points` lie on one line.
 fn in_a_row(points: &[DVec2]) -> bool {
     let Some(far) = points.iter().copied().max_by(|a, b| {
-        points[0].distance_squared(*a).total_cmp(&points[0].distance_squared(*b))
+        points[0]
+            .distance_squared(*a)
+            .total_cmp(&points[0].distance_squared(*b))
     }) else {
         return true;
     };
     let along = far - points[0];
     let length = along.length();
-    length < 1e-9 || points.iter().all(|p| along.perp_dot(*p - points[0]).abs() <= ALIGNED * length * length)
+    length < 1e-9
+        || points
+            .iter()
+            .all(|p| along.perp_dot(*p - points[0]).abs() <= ALIGNED * length * length)
 }
 
-pub fn marks_request(ids: &IdRegistry, cache: &Cache, params: &AddCenterMarksParams) -> Result<proto::AddCenterMarksRequest, McpError> {
+pub fn marks_request(
+    ids: &IdRegistry,
+    cache: &Cache,
+    params: &AddCenterMarksParams,
+) -> Result<proto::AddCenterMarksRequest, McpError> {
     if params.on.len() > MAX_ENTITIES {
         return Err(invalid(format!("at most {MAX_ENTITIES} circles per call")));
     }
     if !params.on.is_empty() && !params.throughout.is_empty() {
-        return Err(invalid("give on (these circles) or throughout (all of a kind in the view), not both"));
+        return Err(invalid(
+            "give on (these circles) or throughout (all of a kind in the view), not both",
+        ));
     }
     if params.group.is_some() && params.on.is_empty() {
         return Err(invalid("group goes with on: the circles it's over"));
     }
-    let refs = params.on.iter().map(|id| drawing::decode_ref(ids, id)).collect::<Result<Vec<_>, _>>()?;
-    let named: Vec<(&str, &proto::DrawingEntityRef)> = params.on.iter().map(String::as_str).zip(&refs).collect();
+    let refs = params
+        .on
+        .iter()
+        .map(|id| drawing::decode_ref(ids, id))
+        .collect::<Result<Vec<_>, _>>()?;
+    let named: Vec<(&str, &proto::DrawingEntityRef)> =
+        params.on.iter().map(String::as_str).zip(&refs).collect();
     let view_name = common_view(&text(params.view.as_deref()), &named)?;
     let mut centers = Vec::new();
     for id in &params.on {
         if let Some(geometry) = cache.entity(id) {
             match circle_center(&geometry.shape) {
                 Some(c) => centers.push(c),
-                None => return Err(invalid(format!("{id} isn't a circle or arc seen face-on: a center mark goes on one"))),
+                None => {
+                    return Err(invalid(format!(
+                        "{id} isn't a circle or arc seen face-on: a center mark goes on one"
+                    )));
+                }
             }
         }
     }
@@ -140,12 +165,19 @@ pub fn marks_request(ids: &IdRegistry, cache: &Cache, params: &AddCenterMarksPar
         None => 1,
     };
     if !params.on.is_empty() && params.on.len() < least {
-        return Err(invalid(format!("that group needs at least {least} circles")));
+        return Err(invalid(format!(
+            "that group needs at least {least} circles"
+        )));
     }
     // SolidWorks gives single marks instead, with a mark at no center among
     // them (seen 2026-11-01).
-    if params.group == Some(CenterMarkGroup::Circular) && centers.len() == params.on.len() && in_a_row(&centers) {
-        return Err(invalid("those circles are in a row: a circular group goes over circles on a common circle; use group=linear"));
+    if params.group == Some(CenterMarkGroup::Circular)
+        && centers.len() == params.on.len()
+        && in_a_row(&centers)
+    {
+        return Err(invalid(
+            "those circles are in a row: a circular group goes over circles on a common circle; use group=linear",
+        ));
     }
     let style = match params.group {
         Some(CenterMarkGroup::Linear) => 3,
@@ -161,12 +193,23 @@ pub fn marks_request(ids: &IdRegistry, cache: &Cache, params: &AddCenterMarksPar
                 CenterMarkAuto::Slots => 4,
             }
     });
-    Ok(proto::AddCenterMarksRequest { view_name, circles: refs, style, auto_types })
+    Ok(proto::AddCenterMarksRequest {
+        view_name,
+        circles: refs,
+        style,
+        auto_types,
+    })
 }
 
-pub fn lines_request(ids: &IdRegistry, cache: &Cache, params: &AddCenterlinesParams) -> Result<proto::AddCenterlinesRequest, McpError> {
+pub fn lines_request(
+    ids: &IdRegistry,
+    cache: &Cache,
+    params: &AddCenterlinesParams,
+) -> Result<proto::AddCenterlinesRequest, McpError> {
     if params.between.len() > MAX_ENTITIES {
-        return Err(invalid(format!("at most {MAX_ENTITIES} centerlines per call")));
+        return Err(invalid(format!(
+            "at most {MAX_ENTITIES} centerlines per call"
+        )));
     }
     let mut view_name = text(params.view.as_deref());
     let mut pairs = Vec::new();
@@ -174,21 +217,31 @@ pub fn lines_request(ids: &IdRegistry, cache: &Cache, params: &AddCenterlinesPar
         let (ra, rb) = (drawing::decode_ref(ids, a)?, drawing::decode_ref(ids, b)?);
         view_name = common_view(&view_name, &[(a, &ra), (b, &rb)])?;
         if a == b {
-            return Err(invalid(format!("a centerline goes between 2 entities, not {a} twice")));
+            return Err(invalid(format!(
+                "a centerline goes between 2 entities, not {a} twice"
+            )));
         }
         if let (Some(ga), Some(gb)) = (cache.entity(a), cache.entity(b)) {
-            let (Shape::Line { a: a0, b: a1 }, Shape::Line { a: b0, b: b1 }) = (&ga.shape, &gb.shape) else {
-                return Err(invalid(format!("{a} and {b}: a centerline goes between straight edges or silhouettes")));
+            let (Shape::Line { a: a0, b: a1 }, Shape::Line { a: b0, b: b1 }) =
+                (&ga.shape, &gb.shape)
+            else {
+                return Err(invalid(format!(
+                    "{a} and {b}: a centerline goes between straight edges or silhouettes"
+                )));
             };
             let (da, db) = (*a1 - *a0, *b1 - *b0);
             if da.perp_dot(db).abs() > ALIGNED * da.length() * db.length() {
                 return Err(invalid(format!("{a} and {b} aren't parallel on the sheet")));
             }
         }
-        pairs.push(proto::CenterlinePair { entities: vec![ra, rb] });
+        pairs.push(proto::CenterlinePair {
+            entities: vec![ra, rb],
+        });
     }
     if view_name.is_empty() {
-        return Err(invalid("say which view (`view`, or the ids of its entities)"));
+        return Err(invalid(
+            "say which view (`view`, or the ids of its entities)",
+        ));
     }
     Ok(proto::AddCenterlinesRequest { view_name, pairs })
 }
@@ -207,20 +260,42 @@ pub fn reply(
     let mut lines = vec![if names.is_empty() {
         format!("no new {what} in {view}.")
     } else {
-        format!("added {} {what} in {view} on {}: {}.", names.len(), sheet.name, names.join(", "))
+        format!(
+            "added {} {what} in {view} on {}: {}.",
+            names.len(),
+            sheet.name,
+            names.join(", ")
+        )
     }];
     if !reply.already_marked.is_empty() {
-        let already: Vec<&str> =
-            reply.already_marked.iter().filter_map(|i| asked.get(*i as usize)).map(String::as_str).collect();
-        lines.push(format!("Already had one, left as it is: {}.", already.join(", ")));
+        let already: Vec<&str> = reply
+            .already_marked
+            .iter()
+            .filter_map(|i| asked.get(*i as usize))
+            .map(String::as_str)
+            .collect();
+        lines.push(format!(
+            "Already had one, left as it is: {}.",
+            already.join(", ")
+        ));
     }
     if reply.duplicates_removed > 0 {
-        lines.push(format!("{} circle(s) had a mark already and kept it.", reply.duplicates_removed));
+        lines.push(format!(
+            "{} circle(s) had a mark already and kept it.",
+            reply.duplicates_removed
+        ));
     }
     if !reply.replaced.is_empty() {
-        lines.push(format!("The group replaced the circles' own marks: {}.", reply.replaced.join(", ")));
+        lines.push(format!(
+            "The group replaced the circles' own marks: {}.",
+            reply.replaced.join(", ")
+        ));
     }
-    let entries: Vec<Value> = reply.added.iter().map(|a| note::annotation_entry(ids, &frames, a)).collect();
+    let entries: Vec<Value> = reply
+        .added
+        .iter()
+        .map(|a| note::annotation_entry(ids, &frames, a))
+        .collect();
     lines.push(Value::Array(entries).to_string());
     lines.join("\n")
 }

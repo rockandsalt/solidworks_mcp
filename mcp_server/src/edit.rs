@@ -11,8 +11,8 @@ use serde::Deserialize;
 
 use crate::addin::proto;
 use crate::assembly::{self, MateAlign, MateKind};
-use crate::feature_text;
 use crate::diagnose;
+use crate::feature_text;
 use crate::inspect::{IdRegistry, Kind, MM_PER_M, mm, round};
 
 fn invalid(message: impl Into<String>) -> McpError {
@@ -21,7 +21,11 @@ fn invalid(message: impl Into<String>) -> McpError {
 
 /// The wire target for one feature: a "feature:N" id this server handed out,
 /// or else a feature-tree name.
-pub fn feature_target(ids: &IdRegistry, feature: &str, noun: &str) -> Result<proto::FeatureTarget, McpError> {
+pub fn feature_target(
+    ids: &IdRegistry,
+    feature: &str,
+    noun: &str,
+) -> Result<proto::FeatureTarget, McpError> {
     use proto::feature_target::Target;
     let feature = feature.trim();
     if feature.is_empty() {
@@ -43,7 +47,9 @@ pub fn feature_target(ids: &IdRegistry, feature: &str, noun: &str) -> Result<pro
             )));
         }
     };
-    Ok(proto::FeatureTarget { target: Some(target) })
+    Ok(proto::FeatureTarget {
+        target: Some(target),
+    })
 }
 
 // ---- edit_extrude ------------------------------------------------------------
@@ -133,20 +139,25 @@ impl EditExtrudeParams {
 
 fn depth_m(value: Option<f64>, name: &str) -> Result<Option<f64>, McpError> {
     match value {
-        Some(d) if !(d.is_finite() && d > 0.0) => {
-            Err(invalid(format!("{name} must be a positive number of millimeters, got {d}")))
-        }
+        Some(d) if !(d.is_finite() && d > 0.0) => Err(invalid(format!(
+            "{name} must be a positive number of millimeters, got {d}"
+        ))),
         d => Ok(d.map(|d| d / MM_PER_M)),
     }
 }
 
-pub fn extrude_request(ids: &IdRegistry, p: &EditExtrudeParams) -> Result<proto::EditExtrudeRequest, McpError> {
+pub fn extrude_request(
+    ids: &IdRegistry,
+    p: &EditExtrudeParams,
+) -> Result<proto::EditExtrudeRequest, McpError> {
     let feature = feature_target(ids, &p.feature, "extrude")?;
     if let Some(c) = p.end_condition
         && p.depth_mm.is_some()
         && !c.uses_depth()
     {
-        return Err(invalid("depth_mm only goes with end_condition \"blind\" or \"mid_plane\""));
+        return Err(invalid(
+            "depth_mm only goes with end_condition \"blind\" or \"mid_plane\"",
+        ));
     }
     if let Some(c) = p.end_condition2 {
         if matches!(c, EndCondition::MidPlane | EndCondition::ThroughAllBoth) {
@@ -160,24 +171,34 @@ pub fn extrude_request(ids: &IdRegistry, p: &EditExtrudeParams) -> Result<proto:
         }
     }
     if p.both_directions == Some(false) && (p.end_condition2.is_some() || p.depth2_mm.is_some()) {
-        return Err(invalid("end_condition2 / depth2_mm describe the second direction that both_directions=false removes"));
+        return Err(invalid(
+            "end_condition2 / depth2_mm describe the second direction that both_directions=false removes",
+        ));
     }
     let draft = match p.draft_deg {
         Some(d) if !(d.is_finite() && (0.0..90.0).contains(&d)) => {
-            return Err(invalid(format!("draft_deg must be 0 to under 90 degrees, got {d}")));
+            return Err(invalid(format!(
+                "draft_deg must be 0 to under 90 degrees, got {d}"
+            )));
         }
         d => d.map(f64::to_radians),
     };
     Ok(proto::EditExtrudeRequest {
         feature: Some(feature),
-        end_condition: p.end_condition.map_or(proto::EndCondition::Unspecified, Into::into).into(),
+        end_condition: p
+            .end_condition
+            .map_or(proto::EndCondition::Unspecified, Into::into)
+            .into(),
         depth: depth_m(p.depth_mm, "depth_mm")?,
         reverse_direction: p.reverse_direction,
         draft_angle: draft,
         draft_outward: p.draft_outward,
         flip_side_to_cut: p.flip_side_to_cut,
         both_directions: p.both_directions,
-        end_condition2: p.end_condition2.map_or(proto::EndCondition::Unspecified, Into::into).into(),
+        end_condition2: p
+            .end_condition2
+            .map_or(proto::EndCondition::Unspecified, Into::into)
+            .into(),
         depth2: depth_m(p.depth2_mm, "depth2_mm")?,
     })
 }
@@ -205,7 +226,11 @@ fn direction_text(d: &proto::ExtrudeDirection) -> String {
         E::ThroughAllBoth => "through all, both sides".into(),
         E::Other | E::Unspecified => {
             let name = raw_end_condition_name(d.raw_end_condition);
-            if d.raw_end_condition == 5 { format!("{name} {depth}") } else { name }
+            if d.raw_end_condition == 5 {
+                format!("{name} {depth}")
+            } else {
+                name
+            }
         }
     };
     if d.draft_angle > 0.0 {
@@ -244,10 +269,16 @@ pub(crate) fn error_text(code: i32, warning: bool) -> String {
         return String::new();
     }
     let how = if warning { "warns" } else { "fails to rebuild" };
-    format!(" SolidWorks says it {how}: {}.", feature_text::feature_error_name(code))
+    format!(
+        " SolidWorks says it {how}: {}.",
+        feature_text::feature_error_name(code)
+    )
 }
 
-pub fn extrude_reply_text(params: &EditExtrudeParams, reply: &proto::EditExtrudeResponse) -> String {
+pub fn extrude_reply_text(
+    params: &EditExtrudeParams,
+    reply: &proto::EditExtrudeResponse,
+) -> String {
     let Some(before) = &reply.before else {
         return "SolidWorks didn't describe the extrude.".into();
     };
@@ -330,10 +361,17 @@ pub struct EditMateParams {
 /// Checks what doesn't need SolidWorks and returns the new entities' ids,
 /// trimmed (empty: keep the mated ones). The caller resolves them.
 pub fn check_mate(p: &EditMateParams) -> Result<Vec<String>, McpError> {
-    let entities: Vec<String> = p.entities.iter().flatten().map(|e| e.trim().to_string()).collect();
+    let entities: Vec<String> = p
+        .entities
+        .iter()
+        .flatten()
+        .map(|e| e.trim().to_string())
+        .collect();
     if p.entities.is_some() {
         if entities.len() != 2 {
-            return Err(invalid("entities: give exactly two (or leave it out to keep the mated ones)"));
+            return Err(invalid(
+                "entities: give exactly two (or leave it out to keep the mated ones)",
+            ));
         }
         if entities[0] == entities[1] {
             return Err(invalid("the two entities are the same one"));
@@ -370,7 +408,9 @@ pub fn check_mate(p: &EditMateParams) -> Result<Vec<String>, McpError> {
     let mm_limits = p.min_mm.is_some() || p.max_mm.is_some();
     let deg_limits = p.min_deg.is_some() || p.max_deg.is_some();
     if mm_limits && deg_limits {
-        return Err(invalid("give min_mm / max_mm (distance mates) or min_deg / max_deg (angle mates), not both"));
+        return Err(invalid(
+            "give min_mm / max_mm (distance mates) or min_deg / max_deg (angle mates), not both",
+        ));
     }
     for (name, v, top) in [
         ("min_mm", p.min_mm, f64::INFINITY),
@@ -387,7 +427,9 @@ pub fn check_mate(p: &EditMateParams) -> Result<Vec<String>, McpError> {
     if let (Some(lo), Some(hi)) = (p.min_mm.or(p.min_deg), p.max_mm.or(p.max_deg))
         && lo > hi
     {
-        return Err(invalid(format!("the minimum ({lo}) is above the maximum ({hi})")));
+        return Err(invalid(format!(
+            "the minimum ({lo}) is above the maximum ({hi})"
+        )));
     }
     if p.remove_limits && (mm_limits || deg_limits) {
         return Err(invalid("give new limits or remove_limits, not both"));
@@ -435,15 +477,27 @@ pub fn mate_request(
 ) -> Result<proto::EditMateRequest, McpError> {
     Ok(proto::EditMateRequest {
         mate: Some(feature_target(ids, &p.mate, "mate")?),
-        r#type: p.kind.map_or(proto::MateType::Unspecified, Into::into).into(),
+        r#type: p
+            .kind
+            .map_or(proto::MateType::Unspecified, Into::into)
+            .into(),
         entity_persist_ids,
-        alignment: p.alignment.map_or(proto::MateAlignment::Unspecified, Into::into).into(),
+        alignment: p
+            .alignment
+            .map_or(proto::MateAlignment::Unspecified, Into::into)
+            .into(),
         flip: p.flip,
         distance: p.distance_mm.map(|d| d / MM_PER_M),
         angle: p.angle_deg.map(f64::to_radians),
         lock_rotation: p.lock_rotation,
-        min_limit: p.min_mm.map(|d| d / MM_PER_M).or(p.min_deg.map(f64::to_radians)),
-        max_limit: p.max_mm.map(|d| d / MM_PER_M).or(p.max_deg.map(f64::to_radians)),
+        min_limit: p
+            .min_mm
+            .map(|d| d / MM_PER_M)
+            .or(p.min_deg.map(f64::to_radians)),
+        max_limit: p
+            .max_mm
+            .map(|d| d / MM_PER_M)
+            .or(p.max_deg.map(f64::to_radians)),
         remove_limits: p.remove_limits,
     })
 }
@@ -478,7 +532,9 @@ pub fn entity_text(ids: &mut IdRegistry, e: &proto::MateEntityState) -> String {
     if e.missing {
         return "(missing)".into();
     }
-    let what = json["id"].as_str().map_or_else(|| e.kind.clone(), str::to_string);
+    let what = json["id"]
+        .as_str()
+        .map_or_else(|| e.kind.clone(), str::to_string);
     if e.component_name.is_empty() {
         format!("{what} (assembly)")
     } else {
@@ -490,7 +546,9 @@ pub fn mate_reply_text(ids: &mut IdRegistry, reply: &proto::EditMateResponse) ->
     let (Some(before), Some(after)) = (&reply.before, &reply.after) else {
         return "edited the mate.".into();
     };
-    let mate_id = ids.id_for(Kind::Feature, &after.persist_id).unwrap_or_default();
+    let mate_id = ids
+        .id_for(Kind::Feature, &after.persist_id)
+        .unwrap_or_default();
     let mut text = if before.name == after.name {
         format!("edited {} (now {mate_id})", after.name)
     } else {
@@ -506,10 +564,17 @@ pub fn mate_reply_text(ids: &mut IdRegistry, reply: &proto::EditMateResponse) ->
     }
     text.push('.');
     if after.error_code != 0 {
-        text += &format!(" SolidWorks flags it: {}.", assembly::mate_error_name(after.error_code));
+        text += &format!(
+            " SolidWorks flags it: {}.",
+            assembly::mate_error_name(after.error_code)
+        );
     }
     if !reply.components.is_empty() {
-        let places: Vec<String> = reply.components.iter().map(assembly::placement_text).collect();
+        let places: Vec<String> = reply
+            .components
+            .iter()
+            .map(assembly::placement_text)
+            .collect();
         text += &format!(" After solving: {}.", places.join("; "));
         text += " Earlier inspect_model coordinates of moved components are out of date (their ids \
                  still work).";
@@ -542,11 +607,16 @@ mod tests {
         assert_eq!(r.end_condition(), proto::EndCondition::Blind);
         assert_eq!(r.depth, Some(0.025));
         assert!((r.draft_angle.unwrap() - 2f64.to_radians()).abs() < 1e-15);
-        assert_eq!((r.reverse_direction, r.both_directions, r.depth2), (None, None, None));
+        assert_eq!(
+            (r.reverse_direction, r.both_directions, r.depth2),
+            (None, None, None)
+        );
         assert_eq!(r.end_condition2(), proto::EndCondition::Unspecified);
         assert_eq!(
             r.feature.unwrap().target,
-            Some(proto::feature_target::Target::PersistId(b"cut-bytes".to_vec()))
+            Some(proto::feature_target::Target::PersistId(
+                b"cut-bytes".to_vec()
+            ))
         );
     }
 
@@ -554,13 +624,43 @@ mod tests {
     fn extrude_request_rejects_contradictions() {
         let (ids, _) = registry();
         let bad = [
-            EditExtrudeParams { feature: "Cut-Extrude1".into(), end_condition: Some(EndCondition::ThroughAll), depth_mm: Some(5.0), ..Default::default() },
-            EditExtrudeParams { feature: "Cut-Extrude1".into(), depth_mm: Some(0.0), ..Default::default() },
-            EditExtrudeParams { feature: "Cut-Extrude1".into(), end_condition2: Some(EndCondition::MidPlane), ..Default::default() },
-            EditExtrudeParams { feature: "Cut-Extrude1".into(), both_directions: Some(false), depth2_mm: Some(3.0), ..Default::default() },
-            EditExtrudeParams { feature: "Cut-Extrude1".into(), draft_deg: Some(90.0), ..Default::default() },
-            EditExtrudeParams { feature: "face:1".into(), depth_mm: Some(3.0), ..Default::default() },
-            EditExtrudeParams { feature: "feature:99".into(), depth_mm: Some(3.0), ..Default::default() },
+            EditExtrudeParams {
+                feature: "Cut-Extrude1".into(),
+                end_condition: Some(EndCondition::ThroughAll),
+                depth_mm: Some(5.0),
+                ..Default::default()
+            },
+            EditExtrudeParams {
+                feature: "Cut-Extrude1".into(),
+                depth_mm: Some(0.0),
+                ..Default::default()
+            },
+            EditExtrudeParams {
+                feature: "Cut-Extrude1".into(),
+                end_condition2: Some(EndCondition::MidPlane),
+                ..Default::default()
+            },
+            EditExtrudeParams {
+                feature: "Cut-Extrude1".into(),
+                both_directions: Some(false),
+                depth2_mm: Some(3.0),
+                ..Default::default()
+            },
+            EditExtrudeParams {
+                feature: "Cut-Extrude1".into(),
+                draft_deg: Some(90.0),
+                ..Default::default()
+            },
+            EditExtrudeParams {
+                feature: "face:1".into(),
+                depth_mm: Some(3.0),
+                ..Default::default()
+            },
+            EditExtrudeParams {
+                feature: "feature:99".into(),
+                depth_mm: Some(3.0),
+                ..Default::default()
+            },
         ];
         for p in bad {
             assert!(extrude_request(&ids, &p).is_err(), "{p:?} accepted");
@@ -599,19 +699,37 @@ mod tests {
             text.starts_with("changed Cut-Extrude1 (cut-extrude of Sketch2): was blind 3 mm; now through all, reversed."),
             "{text}"
         );
-        let reply = proto::EditExtrudeResponse { before: Some(before), after: None, new_errors: vec![] };
+        let reply = proto::EditExtrudeResponse {
+            before: Some(before),
+            after: None,
+            new_errors: vec![],
+        };
         let text = extrude_reply_text(&EditExtrudeParams::default(), &reply);
-        assert!(text.starts_with("Cut-Extrude1 (cut-extrude of Sketch2): blind 3 mm."), "{text}");
+        assert!(
+            text.starts_with("Cut-Extrude1 (cut-extrude of Sketch2): blind 3 mm."),
+            "{text}"
+        );
         assert!(text.contains("Nothing was changed"), "{text}");
     }
 
     #[test]
     fn mate_checks() {
-        let ok = EditMateParams { mate: "Coincident1".into(), distance_mm: Some(5.0), ..Default::default() };
+        let ok = EditMateParams {
+            mate: "Coincident1".into(),
+            distance_mm: Some(5.0),
+            ..Default::default()
+        };
         assert!(check_mate(&ok).unwrap().is_empty());
-        let nothing = EditMateParams { mate: "Coincident1".into(), ..Default::default() };
+        let nothing = EditMateParams {
+            mate: "Coincident1".into(),
+            ..Default::default()
+        };
         assert!(check_mate(&nothing).is_err());
-        let one = EditMateParams { mate: "x".into(), entities: Some(vec!["face:1".into()]), ..Default::default() };
+        let one = EditMateParams {
+            mate: "x".into(),
+            entities: Some(vec!["face:1".into()]),
+            ..Default::default()
+        };
         assert!(check_mate(&one).is_err());
         let lock = EditMateParams {
             mate: "x".into(),
@@ -620,31 +738,84 @@ mod tests {
             ..Default::default()
         };
         assert!(check_mate(&lock).is_err());
-        let angle = EditMateParams { mate: "x".into(), angle_deg: Some(190.0), ..Default::default() };
+        let angle = EditMateParams {
+            mate: "x".into(),
+            angle_deg: Some(190.0),
+            ..Default::default()
+        };
         assert!(check_mate(&angle).is_err());
     }
 
     #[test]
     fn checks_mate_limits() {
         let ids = IdRegistry::default();
-        let p = EditMateParams { mate: "Distance1".into(), min_mm: Some(5.0), max_mm: Some(40.0), ..Default::default() };
+        let p = EditMateParams {
+            mate: "Distance1".into(),
+            min_mm: Some(5.0),
+            max_mm: Some(40.0),
+            ..Default::default()
+        };
         assert!(check_mate(&p).is_ok());
         let r = mate_request(&ids, &p, vec![]).unwrap();
         assert_eq!((r.min_limit, r.max_limit), (Some(0.005), Some(0.04)));
-        let p = EditMateParams { mate: "LimitAngle1".into(), max_deg: Some(90.0), ..Default::default() };
+        let p = EditMateParams {
+            mate: "LimitAngle1".into(),
+            max_deg: Some(90.0),
+            ..Default::default()
+        };
         let r = mate_request(&ids, &p, vec![]).unwrap();
-        assert!(r.min_limit.is_none() && (r.max_limit.unwrap() - std::f64::consts::FRAC_PI_2).abs() < 1e-15);
-        let p = EditMateParams { mate: "x".into(), remove_limits: true, ..Default::default() };
+        assert!(
+            r.min_limit.is_none()
+                && (r.max_limit.unwrap() - std::f64::consts::FRAC_PI_2).abs() < 1e-15
+        );
+        let p = EditMateParams {
+            mate: "x".into(),
+            remove_limits: true,
+            ..Default::default()
+        };
         assert!(check_mate(&p).is_ok() && mate_request(&ids, &p, vec![]).unwrap().remove_limits);
 
         for bad in [
-            EditMateParams { mate: "x".into(), min_mm: Some(5.0), max_deg: Some(9.0), ..Default::default() },
-            EditMateParams { mate: "x".into(), min_mm: Some(50.0), max_mm: Some(40.0), ..Default::default() },
-            EditMateParams { mate: "x".into(), max_deg: Some(270.0), ..Default::default() },
-            EditMateParams { mate: "x".into(), min_mm: Some(-1.0), ..Default::default() },
-            EditMateParams { mate: "x".into(), min_mm: Some(1.0), remove_limits: true, ..Default::default() },
-            EditMateParams { mate: "x".into(), kind: Some(MateKind::Angle), min_mm: Some(1.0), ..Default::default() },
-            EditMateParams { mate: "x".into(), kind: Some(MateKind::Coincident), min_deg: Some(1.0), ..Default::default() },
+            EditMateParams {
+                mate: "x".into(),
+                min_mm: Some(5.0),
+                max_deg: Some(9.0),
+                ..Default::default()
+            },
+            EditMateParams {
+                mate: "x".into(),
+                min_mm: Some(50.0),
+                max_mm: Some(40.0),
+                ..Default::default()
+            },
+            EditMateParams {
+                mate: "x".into(),
+                max_deg: Some(270.0),
+                ..Default::default()
+            },
+            EditMateParams {
+                mate: "x".into(),
+                min_mm: Some(-1.0),
+                ..Default::default()
+            },
+            EditMateParams {
+                mate: "x".into(),
+                min_mm: Some(1.0),
+                remove_limits: true,
+                ..Default::default()
+            },
+            EditMateParams {
+                mate: "x".into(),
+                kind: Some(MateKind::Angle),
+                min_mm: Some(1.0),
+                ..Default::default()
+            },
+            EditMateParams {
+                mate: "x".into(),
+                kind: Some(MateKind::Coincident),
+                min_deg: Some(1.0),
+                ..Default::default()
+            },
         ] {
             assert!(check_mate(&bad).is_err(), "{bad:?}");
         }
@@ -699,8 +870,15 @@ mod tests {
             r#type: proto::MateType::Coincident.into(),
             ..Default::default()
         };
-        let reply = proto::EditMateResponse { before: Some(m.clone()), after: Some(m), ..Default::default() };
+        let reply = proto::EditMateResponse {
+            before: Some(m.clone()),
+            after: Some(m),
+            ..Default::default()
+        };
         let text = mate_reply_text(&mut ids, &reply);
-        assert!(text.starts_with("edited Coincident2 (now feature:1): was coincident; now coincident."), "{text}");
+        assert!(
+            text.starts_with("edited Coincident2 (now feature:1): was coincident; now coincident."),
+            "{text}"
+        );
     }
 }

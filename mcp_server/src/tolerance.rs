@@ -77,7 +77,10 @@ impl ToleranceKind {
     }
 
     fn uses_fits(self) -> bool {
-        matches!(self, ToleranceKind::Fit | ToleranceKind::FitWithTolerance | ToleranceKind::FitToleranceOnly)
+        matches!(
+            self,
+            ToleranceKind::Fit | ToleranceKind::FitWithTolerance | ToleranceKind::FitToleranceOnly
+        )
     }
 }
 
@@ -153,7 +156,9 @@ fn decimals(value: Option<u8>, which: &str) -> Result<Option<i32>, McpError> {
     }
 }
 
-pub fn request(params: &SetToleranceParams) -> Result<proto::SetDimensionToleranceRequest, McpError> {
+pub fn request(
+    params: &SetToleranceParams,
+) -> Result<proto::SetDimensionToleranceRequest, McpError> {
     request_for(&params.name, params.tolerance, &params.values)
 }
 
@@ -170,10 +175,16 @@ pub fn request_for(
              \"D1@Sketch1\"",
         ));
     }
-    let mm_given = [params.upper_mm, params.lower_mm, params.plus_minus_mm].iter().any(Option::is_some);
-    let deg_given = [params.upper_deg, params.lower_deg, params.plus_minus_deg].iter().any(Option::is_some);
+    let mm_given = [params.upper_mm, params.lower_mm, params.plus_minus_mm]
+        .iter()
+        .any(Option::is_some);
+    let deg_given = [params.upper_deg, params.lower_deg, params.plus_minus_deg]
+        .iter()
+        .any(Option::is_some);
     if mm_given && deg_given {
-        return Err(invalid("give the deviations in mm (lengths) or in degrees (angles), not both"));
+        return Err(invalid(
+            "give the deviations in mm (lengths) or in degrees (angles), not both",
+        ));
     }
     let angle = deg_given;
     let (upper, lower, plus_minus) = if angle {
@@ -229,7 +240,11 @@ pub fn request_for(
             }
             match plus_minus {
                 Some(v) if v > 0.0 => (to_wire(v), -to_wire(v)),
-                Some(v) => return Err(invalid(format!("plus_minus_{unit} must be positive, got {v}"))),
+                Some(v) => {
+                    return Err(invalid(format!(
+                        "plus_minus_{unit} must be positive, got {v}"
+                    )));
+                }
                 None => {
                     return Err(invalid(format!(
                         "a symmetric tolerance needs plus_minus_{unit}, e.g. 0.05 for +/-0.05"
@@ -252,7 +267,9 @@ pub fn request_for(
     let hole_fit = fit_class(&params.hole_fit, "hole_fit")?;
     let shaft_fit = fit_class(&params.shaft_fit, "shaft_fit")?;
     if kind.uses_fits() && hole_fit.is_empty() && shaft_fit.is_empty() {
-        return Err(invalid("a fit tolerance needs hole_fit (e.g. \"H7\") and/or shaft_fit (e.g. \"g6\")"));
+        return Err(invalid(
+            "a fit tolerance needs hole_fit (e.g. \"H7\") and/or shaft_fit (e.g. \"g6\")",
+        ));
     }
 
     Ok(proto::SetDimensionToleranceRequest {
@@ -270,7 +287,10 @@ pub fn request_for(
 
 /// The dimension afterwards, as inspect_drawing shows dimensions, plus what
 /// SolidWorks didn't take as asked.
-pub fn reply_json(request: &proto::SetDimensionToleranceRequest, reply: &proto::SetDimensionToleranceResponse) -> Value {
+pub fn reply_json(
+    request: &proto::SetDimensionToleranceRequest,
+    reply: &proto::SetDimensionToleranceResponse,
+) -> Value {
     let d = reply.dimension.clone().unwrap_or_default();
     let mut obj = pmi::dimension_fields(&d);
     if !reply.view_name.is_empty() {
@@ -283,7 +303,10 @@ pub fn reply_json(request: &proto::SetDimensionToleranceRequest, reply: &proto::
         obj.insert("decimals".into(), json!(reply.value_precision));
     }
     if reply.tolerance_precision >= 0 {
-        obj.insert("tolerance_decimals".into(), json!(reply.tolerance_precision));
+        obj.insert(
+            "tolerance_decimals".into(),
+            json!(reply.tolerance_precision),
+        );
     }
 
     let mut notes = Vec::new();
@@ -298,10 +321,15 @@ pub fn reply_json(request: &proto::SetDimensionToleranceRequest, reply: &proto::
     if matches!(request.tolerance_type, 2..=4)
         && !(close(d.tolerance_max, request.upper) && close(d.tolerance_min, request.lower))
     {
-        notes.push("SolidWorks reports other deviations than the ones given (see tolerance)".to_string());
+        notes.push(
+            "SolidWorks reports other deviations than the ones given (see tolerance)".to_string(),
+        );
     }
     // A drawing's own (reference) dimensions belong to their view.
-    if !reply.view_name.is_empty() && !d.owner_feature.is_empty() && d.owner_feature != reply.view_name {
+    if !reply.view_name.is_empty()
+        && !d.owner_feature.is_empty()
+        && d.owner_feature != reply.view_name
+    {
         notes.push(format!(
             "this is the model's own dimension (of {}), so the model shows the new tolerance too",
             d.owner_feature
@@ -319,50 +347,180 @@ mod tests {
 
     type V = ToleranceValues;
 
-    fn req(kind: ToleranceKind, values: V) -> Result<proto::SetDimensionToleranceRequest, McpError> {
+    fn req(
+        kind: ToleranceKind,
+        values: V,
+    ) -> Result<proto::SetDimensionToleranceRequest, McpError> {
         request_for("RD1@Drawing View1", kind, &values)
     }
 
     #[test]
     fn bilateral_converts_signed_deviations_to_meters() {
-        let r = req(ToleranceKind::Bilateral, V { upper_mm: Some(0.1), lower_mm: Some(-0.05), ..V::default() }).unwrap();
+        let r = req(
+            ToleranceKind::Bilateral,
+            V {
+                upper_mm: Some(0.1),
+                lower_mm: Some(-0.05),
+                ..V::default()
+            },
+        )
+        .unwrap();
         assert_eq!(r.tolerance_type, 2);
-        assert!((r.upper - 1e-4).abs() < 1e-15 && (r.lower + 5e-5).abs() < 1e-15, "{r:?}");
+        assert!(
+            (r.upper - 1e-4).abs() < 1e-15 && (r.lower + 5e-5).abs() < 1e-15,
+            "{r:?}"
+        );
         assert!(!r.angle);
         assert_eq!((r.value_precision, r.tolerance_precision), (None, None));
         // Both needed, in order, no plus_minus.
-        assert!(req(ToleranceKind::Bilateral, V { upper_mm: Some(0.1), ..V::default() }).is_err());
-        assert!(req(ToleranceKind::Limit, V { upper_mm: Some(-0.1), lower_mm: Some(0.1), ..V::default() }).is_err());
-        let pm = V { upper_mm: Some(0.1), lower_mm: Some(0.0), plus_minus_mm: Some(0.1), ..V::default() };
+        assert!(
+            req(
+                ToleranceKind::Bilateral,
+                V {
+                    upper_mm: Some(0.1),
+                    ..V::default()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            req(
+                ToleranceKind::Limit,
+                V {
+                    upper_mm: Some(-0.1),
+                    lower_mm: Some(0.1),
+                    ..V::default()
+                }
+            )
+            .is_err()
+        );
+        let pm = V {
+            upper_mm: Some(0.1),
+            lower_mm: Some(0.0),
+            plus_minus_mm: Some(0.1),
+            ..V::default()
+        };
         assert!(req(ToleranceKind::Bilateral, pm).is_err());
     }
 
     #[test]
     fn symmetric_and_angles() {
-        let r = req(ToleranceKind::Symmetric, V { plus_minus_mm: Some(0.05), ..V::default() }).unwrap();
+        let r = req(
+            ToleranceKind::Symmetric,
+            V {
+                plus_minus_mm: Some(0.05),
+                ..V::default()
+            },
+        )
+        .unwrap();
         assert_eq!(r.tolerance_type, 4);
         assert!((r.upper - 5e-5).abs() < 1e-15 && (r.lower + 5e-5).abs() < 1e-15);
-        let r = req(ToleranceKind::Symmetric, V { plus_minus_deg: Some(0.5), ..V::default() }).unwrap();
+        let r = req(
+            ToleranceKind::Symmetric,
+            V {
+                plus_minus_deg: Some(0.5),
+                ..V::default()
+            },
+        )
+        .unwrap();
         assert!(r.angle && (r.upper - 0.5f64.to_radians()).abs() < 1e-15);
-        assert!(req(ToleranceKind::Symmetric, V { plus_minus_mm: Some(-1.0), ..V::default() }).is_err());
+        assert!(
+            req(
+                ToleranceKind::Symmetric,
+                V {
+                    plus_minus_mm: Some(-1.0),
+                    ..V::default()
+                }
+            )
+            .is_err()
+        );
         assert!(req(ToleranceKind::Symmetric, V::default()).is_err());
-        assert!(req(ToleranceKind::Bilateral, V { upper_mm: Some(0.1), lower_deg: Some(-0.1), ..V::default() }).is_err());
+        assert!(
+            req(
+                ToleranceKind::Bilateral,
+                V {
+                    upper_mm: Some(0.1),
+                    lower_deg: Some(-0.1),
+                    ..V::default()
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn fits_and_value_free_kinds() {
-        let fit = V { hole_fit: Some(" H7 ".into()), shaft_fit: Some("g6".into()), ..V::default() };
+        let fit = V {
+            hole_fit: Some(" H7 ".into()),
+            shaft_fit: Some("g6".into()),
+            ..V::default()
+        };
         let r = req(ToleranceKind::FitWithTolerance, fit).unwrap();
-        assert_eq!((r.tolerance_type, r.hole_fit.as_str(), r.shaft_fit.as_str()), (8, "H7", "g6"));
+        assert_eq!(
+            (r.tolerance_type, r.hole_fit.as_str(), r.shaft_fit.as_str()),
+            (8, "H7", "g6")
+        );
         assert!(req(ToleranceKind::Fit, V::default()).is_err());
-        assert!(req(ToleranceKind::Fit, V { hole_fit: Some("7H".into()), ..V::default() }).is_err());
-        assert!(req(ToleranceKind::Basic, V { hole_fit: Some("H7".into()), ..V::default() }).is_err());
+        assert!(
+            req(
+                ToleranceKind::Fit,
+                V {
+                    hole_fit: Some("7H".into()),
+                    ..V::default()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            req(
+                ToleranceKind::Basic,
+                V {
+                    hole_fit: Some("H7".into()),
+                    ..V::default()
+                }
+            )
+            .is_err()
+        );
 
-        assert_eq!(req(ToleranceKind::None, V::default()).unwrap().tolerance_type, 0);
-        assert!(req(ToleranceKind::Max, V { upper_mm: Some(0.1), ..V::default() }).is_err());
-        let r = req(ToleranceKind::Basic, V { decimals: Some(2), tolerance_decimals: Some(3), ..V::default() }).unwrap();
-        assert_eq!((r.value_precision, r.tolerance_precision), (Some(2), Some(3)));
-        assert!(req(ToleranceKind::Basic, V { decimals: Some(9), ..V::default() }).is_err());
+        assert_eq!(
+            req(ToleranceKind::None, V::default())
+                .unwrap()
+                .tolerance_type,
+            0
+        );
+        assert!(
+            req(
+                ToleranceKind::Max,
+                V {
+                    upper_mm: Some(0.1),
+                    ..V::default()
+                }
+            )
+            .is_err()
+        );
+        let r = req(
+            ToleranceKind::Basic,
+            V {
+                decimals: Some(2),
+                tolerance_decimals: Some(3),
+                ..V::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            (r.value_precision, r.tolerance_precision),
+            (Some(2), Some(3))
+        );
+        assert!(
+            req(
+                ToleranceKind::Basic,
+                V {
+                    decimals: Some(9),
+                    ..V::default()
+                }
+            )
+            .is_err()
+        );
         assert!(request_for(" ", ToleranceKind::Basic, &V::default()).is_err());
     }
 }

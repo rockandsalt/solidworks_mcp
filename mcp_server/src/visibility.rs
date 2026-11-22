@@ -25,14 +25,22 @@ pub struct SetVisibilityParams {
     pub visible: bool,
 }
 
-pub fn request(ids: &IdRegistry, params: &SetVisibilityParams) -> Result<proto::SetVisibilityRequest, McpError> {
+pub fn request(
+    ids: &IdRegistry,
+    params: &SetVisibilityParams,
+) -> Result<proto::SetVisibilityRequest, McpError> {
     use proto::feature_target::Target;
     let items = unique(&params.items);
     if items.is_empty() {
-        return Err(invalid("list what to hide or show (ids from inspect_model, or feature names)"));
+        return Err(invalid(
+            "list what to hide or show (ids from inspect_model, or feature names)",
+        ));
     }
     if items.len() > MAX_ITEMS {
-        return Err(invalid(format!("at most {MAX_ITEMS} per call, got {}", items.len())));
+        return Err(invalid(format!(
+            "at most {MAX_ITEMS} per call, got {}",
+            items.len()
+        )));
     }
     let items = items
         .into_iter()
@@ -56,17 +64,30 @@ pub fn request(ids: &IdRegistry, params: &SetVisibilityParams) -> Result<proto::
             Ok(proto::FeatureTarget { target: Some(target) })
         })
         .collect::<Result<_, McpError>>()?;
-    Ok(proto::SetVisibilityRequest { items, visible: params.visible })
+    Ok(proto::SetVisibilityRequest {
+        items,
+        visible: params.visible,
+    })
 }
 
 fn list(items: &[&proto::VisibilityChange]) -> String {
-    items.iter().map(|i| format!("{} ({})", i.name, i.kind)).collect::<Vec<_>>().join(", ")
+    items
+        .iter()
+        .map(|i| format!("{} ({})", i.name, i.kind))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// "hid Boss-Extrude1 (body). Sketch2 (sketch) was already hidden. ..."
 pub fn reply_text(params: &SetVisibilityParams, reply: &proto::SetVisibilityResponse) -> String {
-    let (verb, state) = if params.visible { ("showed", "shown") } else { ("hid", "hidden") };
-    let filter = |f: &dyn Fn(&proto::VisibilityChange) -> bool| reply.items.iter().filter(|i| f(i)).collect::<Vec<_>>();
+    let (verb, state) = if params.visible {
+        ("showed", "shown")
+    } else {
+        ("hid", "hidden")
+    };
+    let filter = |f: &dyn Fn(&proto::VisibilityChange) -> bool| {
+        reply.items.iter().filter(|i| f(i)).collect::<Vec<_>>()
+    };
     let changed = filter(&|i| i.changed);
     let already = filter(&|i| !i.changed && i.visible == params.visible);
     let refused = filter(&|i| !i.changed && i.visible != params.visible);
@@ -78,7 +99,10 @@ pub fn reply_text(params: &SetVisibilityParams, reply: &proto::SetVisibilityResp
         parts.push(format!("{} already {state}.", list(&already)));
     }
     if !refused.is_empty() {
-        parts.push(format!("SolidWorks didn't change {}: not {state}.", list(&refused)));
+        parts.push(format!(
+            "SolidWorks didn't change {}: not {state}.",
+            list(&refused)
+        ));
     }
     if !params.visible && !changed.is_empty() {
         parts.push(
@@ -95,11 +119,19 @@ mod tests {
     use super::*;
 
     fn params(items: &[&str], visible: bool) -> SetVisibilityParams {
-        SetVisibilityParams { items: items.iter().map(|i| i.to_string()).collect(), visible }
+        SetVisibilityParams {
+            items: items.iter().map(|i| i.to_string()).collect(),
+            visible,
+        }
     }
 
     fn change(name: &str, kind: &str, changed: bool, visible: bool) -> proto::VisibilityChange {
-        proto::VisibilityChange { name: name.into(), kind: kind.into(), changed, visible }
+        proto::VisibilityChange {
+            name: name.into(),
+            kind: kind.into(),
+            changed,
+            visible,
+        }
     }
 
     #[test]
@@ -110,7 +142,20 @@ mod tests {
         let body = ids.id_for(Kind::Body, b"body").unwrap();
         let component = ids.id_for(Kind::Component, b"component").unwrap();
         let feature = ids.id_for(Kind::Feature, b"feature").unwrap();
-        let r = request(&ids, &params(&[&body, &format!(" {body} "), &component, &feature, " Sketch2 "], false)).unwrap();
+        let r = request(
+            &ids,
+            &params(
+                &[
+                    &body,
+                    &format!(" {body} "),
+                    &component,
+                    &feature,
+                    " Sketch2 ",
+                ],
+                false,
+            ),
+        )
+        .unwrap();
         let targets: Vec<_> = r.items.into_iter().map(|i| i.target.unwrap()).collect();
         assert_eq!(targets.len(), 4);
         assert_eq!(targets[0], Target::PersistId(b"body".to_vec()));
@@ -125,7 +170,12 @@ mod tests {
         let face = ids.id_for(Kind::Face, b"face").unwrap();
         assert!(request(&ids, &params(&[], false)).is_err());
         assert!(request(&ids, &params(&[" "], false)).is_err());
-        assert!(request(&ids, &params(&[&face], false)).unwrap_err().message.contains("can't be hidden"));
+        assert!(
+            request(&ids, &params(&[&face], false))
+                .unwrap_err()
+                .message
+                .contains("can't be hidden")
+        );
         assert!(request(&ids, &params(&["body:99"], false)).is_err());
     }
 
@@ -142,7 +192,12 @@ mod tests {
         assert!(text.starts_with("hid Boss-Extrude1 (body). Sketch2 (sketch) already hidden. SolidWorks didn't change Plane1 (reference geometry): not hidden."), "{text}");
         assert!(text.contains("render_views leaves them out"));
 
-        let reply = proto::SetVisibilityResponse { items: vec![change("block-1", "component", true, true)] };
-        assert_eq!(reply_text(&params(&["a"], true), &reply), "showed block-1 (component).");
+        let reply = proto::SetVisibilityResponse {
+            items: vec![change("block-1", "component", true, true)],
+        };
+        assert_eq!(
+            reply_text(&params(&["a"], true), &reply),
+            "showed block-1 (component)."
+        );
     }
 }
