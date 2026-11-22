@@ -181,7 +181,11 @@ impl SketchParams {
         let given: [(&str, bool, &[SketchShape]); 21] = [
             ("points", self.points.is_some(), &[Line, Spline, Point]),
             ("closed", self.closed, &[Line, Spline]),
-            ("center", self.center.is_some(), &[Circle, Arc, Slot, Polygon, Ellipse, Rectangle]),
+            (
+                "center",
+                self.center.is_some(),
+                &[Circle, Arc, Slot, Polygon, Ellipse, Rectangle],
+            ),
             ("start", self.start.is_some(), &[Arc, Slot]),
             ("end", self.end.is_some(), &[Arc, Slot]),
             ("through", self.through.is_some(), &[Arc, Slot]),
@@ -191,18 +195,45 @@ impl SketchParams {
             ("width_mm", self.width_mm.is_some(), &[Slot, Rectangle]),
             ("height_mm", self.height_mm.is_some(), &[Rectangle]),
             ("sides", self.sides.is_some(), &[Polygon]),
-            ("corner_radius_mm", self.corner_radius_mm.is_some(), &[Polygon]),
+            (
+                "corner_radius_mm",
+                self.corner_radius_mm.is_some(),
+                &[Polygon],
+            ),
             ("flat_radius_mm", self.flat_radius_mm.is_some(), &[Polygon]),
             ("angle_deg", self.angle_deg.is_some(), &[Polygon, Ellipse]),
-            ("major_radius_mm", self.major_radius_mm.is_some(), &[Ellipse]),
-            ("minor_radius_mm", self.minor_radius_mm.is_some(), &[Ellipse]),
+            (
+                "major_radius_mm",
+                self.major_radius_mm.is_some(),
+                &[Ellipse],
+            ),
+            (
+                "minor_radius_mm",
+                self.minor_radius_mm.is_some(),
+                &[Ellipse],
+            ),
             ("add_dimensions", self.add_dimensions, &[Slot]),
-            ("construction", self.construction, &[Line, Circle, Arc, Spline, Slot, Polygon, Ellipse]),
+            (
+                "construction",
+                self.construction,
+                &[Line, Circle, Arc, Spline, Slot, Polygon, Ellipse],
+            ),
             // A circle goes to the add-in, which says why a 3D sketch can't take one.
-            ("sketch_3d", self.target.sketch_3d, &[Line, Circle, Arc, Spline, Point]),
-            ("sketch_name", self.target.sketch.sketch_name.is_some(), all_but_rectangle),
+            (
+                "sketch_3d",
+                self.target.sketch_3d,
+                &[Line, Circle, Arc, Spline, Point],
+            ),
+            (
+                "sketch_name",
+                self.target.sketch.sketch_name.is_some(),
+                all_but_rectangle,
+            ),
         ];
-        match given.iter().find(|(_, given, shapes)| *given && !shapes.contains(&self.shape)) {
+        match given
+            .iter()
+            .find(|(_, given, shapes)| *given && !shapes.contains(&self.shape))
+        {
             Some((name, _, _)) => Err(McpError::invalid_params(
                 format!("shape \"{}\" doesn't take {name}", self.shape.name()),
                 None,
@@ -214,12 +245,18 @@ impl SketchParams {
     /// A parameter the shape needs.
     pub fn needs<'a, T>(&self, value: &'a Option<T>, name: &str) -> Result<&'a T, McpError> {
         value.as_ref().ok_or_else(|| {
-            McpError::invalid_params(format!("shape \"{}\" needs {name}", self.shape.name()), None)
+            McpError::invalid_params(
+                format!("shape \"{}\" needs {name}", self.shape.name()),
+                None,
+            )
         })
     }
 
     /// The entities a 2D or 3D shape draws (meters), and what to call them in the reply.
-    pub fn entities(&self, points: &mut PointConverter) -> Result<(Vec<proto::SketchEntity>, String), McpError> {
+    pub fn entities(
+        &self,
+        points: &mut PointConverter,
+    ) -> Result<(Vec<proto::SketchEntity>, String), McpError> {
         match self.shape {
             SketchShape::Line => self.line_entities(points),
             SketchShape::Circle => self.circle_entity(points),
@@ -239,7 +276,10 @@ impl SketchParams {
     }
 
     /// A polyline: one line per pair of points (closed: back to the first).
-    fn line_entities(&self, points: &mut PointConverter) -> Result<(Vec<proto::SketchEntity>, String), McpError> {
+    fn line_entities(
+        &self,
+        points: &mut PointConverter,
+    ) -> Result<(Vec<proto::SketchEntity>, String), McpError> {
         let construction = self.construction;
         let given = self.needs(&self.points, "points")?;
         let n = given.len();
@@ -247,10 +287,16 @@ impl SketchParams {
             return Err(McpError::invalid_params("give at least 2 points", None));
         }
         if self.closed && n < 3 {
-            return Err(McpError::invalid_params("a closed chain needs at least 3 points", None));
+            return Err(McpError::invalid_params(
+                "a closed chain needs at least 3 points",
+                None,
+            ));
         }
         if n > MAX_SKETCH_ITEMS {
-            return Err(McpError::invalid_params(format!("at most {MAX_SKETCH_ITEMS} points per call"), None));
+            return Err(McpError::invalid_params(
+                format!("at most {MAX_SKETCH_ITEMS} points per call"),
+                None,
+            ));
         }
         let mut vertices = points.convert_all(given, "point")?;
         if self.closed {
@@ -273,12 +319,18 @@ impl SketchParams {
     }
 
     /// A circle by radius or diameter.
-    fn circle_entity(&self, points: &mut PointConverter) -> Result<(Vec<proto::SketchEntity>, String), McpError> {
+    fn circle_entity(
+        &self,
+        points: &mut PointConverter,
+    ) -> Result<(Vec<proto::SketchEntity>, String), McpError> {
         let radius_mm = match (self.radius_mm, self.diameter_mm) {
             (Some(r), None) => r,
             (None, Some(d)) => d / 2.0,
             _ => {
-                return Err(McpError::invalid_params("give exactly one of radius_mm or diameter_mm", None));
+                return Err(McpError::invalid_params(
+                    "give exactly one of radius_mm or diameter_mm",
+                    None,
+                ));
             }
         };
         if !(radius_mm.is_finite() && radius_mm > 0.0) {
@@ -292,11 +344,17 @@ impl SketchParams {
             center: Some(center),
             radius: radius_mm / MM_PER_M,
         });
-        Ok((self.one(geometry), format!("a circle of radius {radius_mm} mm")))
+        Ok((
+            self.one(geometry),
+            format!("a circle of radius {radius_mm} mm"),
+        ))
     }
 
     /// An arc by its center or a point it passes through.
-    fn arc_entity(&self, points: &mut PointConverter) -> Result<(Vec<proto::SketchEntity>, String), McpError> {
+    fn arc_entity(
+        &self,
+        points: &mut PointConverter,
+    ) -> Result<(Vec<proto::SketchEntity>, String), McpError> {
         let start = points.convert(self.needs(&self.start, "start")?, "start")?;
         let end = points.convert(self.needs(&self.end, "end")?, "end")?;
         let (center, through) = match (&self.center, &self.through) {
@@ -311,7 +369,12 @@ impl SketchParams {
                 }
                 (None, Some(points.convert(t, "through")?))
             }
-            _ => return Err(McpError::invalid_params("give exactly one of center or through", None)),
+            _ => {
+                return Err(McpError::invalid_params(
+                    "give exactly one of center or through",
+                    None,
+                ));
+            }
         };
         let geometry = proto::sketch_entity::Geometry::Arc(proto::SketchArc {
             start: Some(start),
@@ -324,33 +387,51 @@ impl SketchParams {
     }
 
     /// A spline through the points.
-    fn spline_entity(&self, points: &mut PointConverter) -> Result<(Vec<proto::SketchEntity>, String), McpError> {
+    fn spline_entity(
+        &self,
+        points: &mut PointConverter,
+    ) -> Result<(Vec<proto::SketchEntity>, String), McpError> {
         let given = self.needs(&self.points, "points")?;
         let n = given.len();
         let min = if self.closed { 3 } else { 2 };
         if n < min {
-            return Err(McpError::invalid_params(format!("give at least {min} points"), None));
+            return Err(McpError::invalid_params(
+                format!("give at least {min} points"),
+                None,
+            ));
         }
         if n > MAX_SKETCH_ITEMS {
-            return Err(McpError::invalid_params(format!("at most {MAX_SKETCH_ITEMS} points per spline"), None));
+            return Err(McpError::invalid_params(
+                format!("at most {MAX_SKETCH_ITEMS} points per spline"),
+                None,
+            ));
         }
         let geometry = proto::sketch_entity::Geometry::Spline(proto::SketchSpline {
             points: points.convert_all(given, "point")?,
             closed: self.closed,
         });
-        let what = format!("a {}spline through {n} points", if self.closed { "closed " } else { "" });
+        let what = format!(
+            "a {}spline through {n} points",
+            if self.closed { "closed " } else { "" }
+        );
         Ok((self.one(geometry), what))
     }
 
     /// Sketch points.
-    fn point_entities(&self, points: &mut PointConverter) -> Result<(Vec<proto::SketchEntity>, String), McpError> {
+    fn point_entities(
+        &self,
+        points: &mut PointConverter,
+    ) -> Result<(Vec<proto::SketchEntity>, String), McpError> {
         let given = self.needs(&self.points, "points")?;
         let n = given.len();
         if n == 0 {
             return Err(McpError::invalid_params("give at least 1 point", None));
         }
         if n > MAX_SKETCH_ITEMS {
-            return Err(McpError::invalid_params(format!("at most {MAX_SKETCH_ITEMS} points per call"), None));
+            return Err(McpError::invalid_params(
+                format!("at most {MAX_SKETCH_ITEMS} points per call"),
+                None,
+            ));
         }
         let entities = points
             .convert_all(given, "point")?
@@ -358,7 +439,9 @@ impl SketchParams {
             .map(|position| {
                 sketch_entity(
                     false,
-                    proto::sketch_entity::Geometry::Point(proto::SketchPointEntity { position: Some(position) }),
+                    proto::sketch_entity::Geometry::Point(proto::SketchPointEntity {
+                        position: Some(position),
+                    }),
                 )
             })
             .collect::<Vec<_>>();
@@ -366,13 +449,22 @@ impl SketchParams {
     }
 
     /// A straight slot, or a curved one (center or through).
-    fn slot_entity(&self, points: &mut PointConverter) -> Result<(Vec<proto::SketchEntity>, String), McpError> {
+    fn slot_entity(
+        &self,
+        points: &mut PointConverter,
+    ) -> Result<(Vec<proto::SketchEntity>, String), McpError> {
         let width_mm = *self.needs(&self.width_mm, "width_mm")?;
         if !(width_mm.is_finite() && width_mm > 0.0) {
-            return Err(McpError::invalid_params("width_mm must be a positive number of millimeters", None));
+            return Err(McpError::invalid_params(
+                "width_mm must be a positive number of millimeters",
+                None,
+            ));
         }
         if self.center.is_some() && self.through.is_some() {
-            return Err(McpError::invalid_params("give center or through for a curved slot, not both", None));
+            return Err(McpError::invalid_params(
+                "give center or through for a curved slot, not both",
+                None,
+            ));
         }
         if self.clockwise && self.center.is_none() {
             return Err(McpError::invalid_params(
@@ -383,11 +475,23 @@ impl SketchParams {
         }
         let start = points.convert(self.needs(&self.start, "start")?, "start")?;
         let end = points.convert(self.needs(&self.end, "end")?, "end")?;
-        let center = self.center.as_ref().map(|c| points.convert(c, "center")).transpose()?;
-        let through = self.through.as_ref().map(|t| points.convert(t, "through")).transpose()?;
+        let center = self
+            .center
+            .as_ref()
+            .map(|c| points.convert(c, "center"))
+            .transpose()?;
+        let through = self
+            .through
+            .as_ref()
+            .map(|t| points.convert(t, "through"))
+            .transpose()?;
         let what = format!(
             "a {}slot {width_mm} mm wide",
-            if center.is_some() || through.is_some() { "curved " } else { "" }
+            if center.is_some() || through.is_some() {
+                "curved "
+            } else {
+                ""
+            }
         );
         let geometry = proto::sketch_entity::Geometry::Slot(proto::SketchSlot {
             start: Some(start),
@@ -402,10 +506,17 @@ impl SketchParams {
     }
 
     /// A regular polygon.
-    fn polygon_entity(&self, points: &mut PointConverter) -> Result<(Vec<proto::SketchEntity>, String), McpError> {
+    fn polygon_entity(
+        &self,
+        points: &mut PointConverter,
+    ) -> Result<(Vec<proto::SketchEntity>, String), McpError> {
         let sides = *self.needs(&self.sides, "sides")?;
-        let (corner_radius, angle, inscribed) =
-            polygon_shape(sides, self.corner_radius_mm, self.flat_radius_mm, self.angle_deg.unwrap_or(0.0))?;
+        let (corner_radius, angle, inscribed) = polygon_shape(
+            sides,
+            self.corner_radius_mm,
+            self.flat_radius_mm,
+            self.angle_deg.unwrap_or(0.0),
+        )?;
         let center = points.convert(self.needs(&self.center, "center")?, "center")?;
         let geometry = proto::sketch_entity::Geometry::Polygon(proto::SketchPolygon {
             center: Some(center),
@@ -418,7 +529,10 @@ impl SketchParams {
     }
 
     /// An ellipse, its long axis at angle_deg.
-    fn ellipse_entity(&self, points: &mut PointConverter) -> Result<(Vec<proto::SketchEntity>, String), McpError> {
+    fn ellipse_entity(
+        &self,
+        points: &mut PointConverter,
+    ) -> Result<(Vec<proto::SketchEntity>, String), McpError> {
         let major = *self.needs(&self.major_radius_mm, "major_radius_mm")?;
         let minor = *self.needs(&self.minor_radius_mm, "minor_radius_mm")?;
         if !(major.is_finite() && minor.is_finite() && minor > 0.0 && major > minor) {
@@ -441,7 +555,10 @@ impl SketchParams {
             minor_radius: minor / MM_PER_M,
             angle: angle_deg.to_radians(),
         });
-        Ok((self.one(geometry), format!("an ellipse of {major} x {minor} mm radii")))
+        Ok((
+            self.one(geometry),
+            format!("an ellipse of {major} x {minor} mm radii"),
+        ))
     }
 }
 
@@ -457,7 +574,10 @@ pub fn polygon_shape(
     angle_deg: f64,
 ) -> Result<(f64, f64, bool), McpError> {
     if !(3..=40).contains(&sides) {
-        return Err(McpError::invalid_params(format!("a polygon needs 3 to 40 sides, got {sides}"), None));
+        return Err(McpError::invalid_params(
+            format!("a polygon needs 3 to 40 sides, got {sides}"),
+            None,
+        ));
     }
     if !angle_deg.is_finite() {
         return Err(McpError::invalid_params("angle_deg must be finite", None));
@@ -465,7 +585,11 @@ pub fn polygon_shape(
     let half_side = std::f64::consts::PI / f64::from(sides);
     let (radius, angle, inscribed) = match (corner_radius_mm, flat_radius_mm) {
         (Some(r), None) => (r, angle_deg.to_radians(), false),
-        (None, Some(r)) => (r / half_side.cos(), angle_deg.to_radians() + half_side, true),
+        (None, Some(r)) => (
+            r / half_side.cos(),
+            angle_deg.to_radians() + half_side,
+            true,
+        ),
         _ => {
             return Err(McpError::invalid_params(
                 "give exactly one of corner_radius_mm or flat_radius_mm",
@@ -506,7 +630,10 @@ impl PointConverter {
             }
         };
         if !point.iter().all(|v| v.is_finite()) {
-            return Err(McpError::invalid_params(format!("{what} must be finite"), None));
+            return Err(McpError::invalid_params(
+                format!("{what} must be finite"),
+                None,
+            ));
         }
         match self.model_space {
             Some(previous) if previous != model => {
@@ -524,7 +651,11 @@ impl PointConverter {
         })
     }
 
-    pub fn convert_all(&mut self, points: &[Point], what: &str) -> Result<Vec<proto::Vec3>, McpError> {
+    pub fn convert_all(
+        &mut self,
+        points: &[Point],
+        what: &str,
+    ) -> Result<Vec<proto::Vec3>, McpError> {
         points
             .iter()
             .enumerate()
@@ -549,7 +680,11 @@ pub fn sketch_status_note(sketch_name: &str, status: proto::DefinitionStatus) ->
 /// A dimension's value on the wire (meters, or radians for angles), checking the right unit
 /// was used.
 pub fn dimension_value(spec: &DimensionSpec) -> Result<Option<f64>, McpError> {
-    match (spec.kind == DimensionKind::Angle, spec.value_mm, spec.value_deg) {
+    match (
+        spec.kind == DimensionKind::Angle,
+        spec.value_mm,
+        spec.value_deg,
+    ) {
         (_, Some(_), Some(_)) => Err(McpError::invalid_params(
             "give value_mm or value_deg, not both",
             None,
@@ -930,11 +1065,18 @@ impl SolidWorksTools {
             text += " SolidWorks didn't take a width and a height dimension on it.";
         }
         if !sketch.dimensions.is_empty() {
-            let dims: Vec<String> = sketch.dimensions.iter().map(sketch::dimension_text).collect();
+            let dims: Vec<String> = sketch
+                .dimensions
+                .iter()
+                .map(sketch::dimension_text)
+                .collect();
             text += &format!(" Dimensions: {}.", dims.join(", "));
         }
         {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             text += &sketch::items_text(&mut ids, &sketch.items);
         }
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
@@ -949,13 +1091,20 @@ impl SolidWorksTools {
         entities: Vec<proto::SketchEntity>,
         what: String,
     ) -> Result<CallToolResult, McpError> {
-        let DrawTarget { sketch_3d, sketch: target } = target;
+        let DrawTarget {
+            sketch_3d,
+            sketch: target,
+        } = target;
         let sketch_name = target
             .sketch_name
             .as_deref()
             .map(str::trim)
             .filter(|name| !name.is_empty());
-        let on = target.on.as_deref().map(str::trim).filter(|on| !on.is_empty());
+        let on = target
+            .on
+            .as_deref()
+            .map(str::trim)
+            .filter(|on| !on.is_empty());
         if sketch_name.is_some() && (on.is_some() || target.plane.is_some()) {
             return Err(McpError::invalid_params(
                 "give either sketch_name (to add to an existing sketch) or plane/on (for a new \
@@ -1018,7 +1167,10 @@ impl SolidWorksTools {
         };
         let mut text = format!("drew {what} in {}{place}.", result.sketch_name);
         {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             text += &sketch::items_text(&mut ids, &result.items);
         }
         if let Some(contours) = &result.contours {
@@ -1054,9 +1206,16 @@ impl SolidWorksTools {
     }
 
     /// The wire refs for a dimension's or relation's entities.
-    pub(crate) fn sketch_refs(&self, entities: &[String], max: usize) -> Result<Vec<proto::SketchRef>, McpError> {
+    pub(crate) fn sketch_refs(
+        &self,
+        entities: &[String],
+        max: usize,
+    ) -> Result<Vec<proto::SketchRef>, McpError> {
         if entities.is_empty() || entities.len() > max {
-            return Err(McpError::invalid_params(format!("give 1 to {max} entities"), None));
+            return Err(McpError::invalid_params(
+                format!("give 1 to {max} entities"),
+                None,
+            ));
         }
         entities.iter().map(|e| self.sketch_ref(e)).collect()
     }
@@ -1068,9 +1227,14 @@ impl SolidWorksTools {
             return Ok(RefTarget::Origin.into_proto());
         }
         match Kind::of_id(entity) {
-            Some(Kind::Edge | Kind::Face) => Ok(RefTarget::Model(self.resolve_id(entity)?).into_proto()),
+            Some(Kind::Edge | Kind::Face) => {
+                Ok(RefTarget::Model(self.resolve_id(entity)?).into_proto())
+            }
             Some(kind) if SKETCH_KINDS.contains(&kind) => {
-                let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let ids = self
+                    .ids
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 sketch::decode_ref(&ids, entity)
                     .map(|r| RefTarget::Item(r).into_proto())
                     .ok_or_else(|| {
@@ -1113,19 +1277,35 @@ mod tests {
     #[test]
     fn sketch_shapes_take_only_their_parameters() {
         let ok = |args| sketch_params(args).check_applies().is_ok();
-        assert!(ok(serde_json::json!({"shape": "line", "points": [[0, 0], [1, 0]], "closed": true})));
-        assert!(ok(serde_json::json!({"shape": "rectangle", "width_mm": 10, "on": "face:1", "center": [0, 0, 5]})));
-        assert!(ok(serde_json::json!({"shape": "arc", "start": [0, 0, 0], "end": [1, 0, 0], "through": [0, 1, 0], "sketch_3d": true})));
-        assert!(!ok(serde_json::json!({"shape": "line", "points": [[0, 0], [1, 0]], "radius_mm": 3})));
-        assert!(!ok(serde_json::json!({"shape": "point", "points": [[0, 0]], "construction": true})));
-        assert!(!ok(serde_json::json!({"shape": "rectangle", "width_mm": 10, "sketch_name": "Sketch1"})));
-        assert!(!ok(serde_json::json!({"shape": "slot", "start": [0, 0], "end": [1, 0], "width_mm": 1, "sketch_3d": true})));
+        assert!(ok(
+            serde_json::json!({"shape": "line", "points": [[0, 0], [1, 0]], "closed": true})
+        ));
+        assert!(ok(
+            serde_json::json!({"shape": "rectangle", "width_mm": 10, "on": "face:1", "center": [0, 0, 5]})
+        ));
+        assert!(ok(
+            serde_json::json!({"shape": "arc", "start": [0, 0, 0], "end": [1, 0, 0], "through": [0, 1, 0], "sketch_3d": true})
+        ));
+        assert!(!ok(
+            serde_json::json!({"shape": "line", "points": [[0, 0], [1, 0]], "radius_mm": 3})
+        ));
+        assert!(!ok(
+            serde_json::json!({"shape": "point", "points": [[0, 0]], "construction": true})
+        ));
+        assert!(!ok(
+            serde_json::json!({"shape": "rectangle", "width_mm": 10, "sketch_name": "Sketch1"})
+        ));
+        assert!(!ok(
+            serde_json::json!({"shape": "slot", "start": [0, 0], "end": [1, 0], "width_mm": 1, "sketch_3d": true})
+        ));
 
         // What a shape needs, it asks for by name.
         let p = sketch_params(serde_json::json!({"shape": "polygon", "center": [0, 0]}));
         let error = p.entities(&mut PointConverter::default()).unwrap_err();
         assert!(error.message.contains("needs sides"), "{}", error.message);
-        let p = sketch_params(serde_json::json!({"shape": "line", "points": [[0, 0], [10, 0], [10, 5]], "closed": true}));
+        let p = sketch_params(
+            serde_json::json!({"shape": "line", "points": [[0, 0], [10, 0], [10, 5]], "closed": true}),
+        );
         let (entities, what) = p.entities(&mut PointConverter::default()).unwrap();
         assert_eq!((entities.len(), what.as_str()), (3, "3 lines"));
     }
@@ -1182,9 +1362,17 @@ mod tests {
             value_mm,
             value_deg,
         };
-        assert_eq!(dimension_value(&spec(DimensionKind::Length, Some(50.0), None)).unwrap(), Some(0.05));
-        assert_eq!(dimension_value(&spec(DimensionKind::Length, None, None)).unwrap(), None);
-        let angle = dimension_value(&spec(DimensionKind::Angle, None, Some(90.0))).unwrap().unwrap();
+        assert_eq!(
+            dimension_value(&spec(DimensionKind::Length, Some(50.0), None)).unwrap(),
+            Some(0.05)
+        );
+        assert_eq!(
+            dimension_value(&spec(DimensionKind::Length, None, None)).unwrap(),
+            None
+        );
+        let angle = dimension_value(&spec(DimensionKind::Angle, None, Some(90.0)))
+            .unwrap()
+            .unwrap();
         assert!((angle - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
         // Wrong unit for the kind, both units, or out of range.
         assert!(dimension_value(&spec(DimensionKind::Angle, Some(90.0), None)).is_err());

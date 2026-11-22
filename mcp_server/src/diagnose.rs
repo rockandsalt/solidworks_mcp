@@ -33,7 +33,9 @@ pub struct DiagnoseModelParams {
 
 impl DiagnoseModelParams {
     pub fn request(&self) -> proto::DiagnoseModelRequest {
-        proto::DiagnoseModelRequest { skip_rebuild: self.rebuild == Some(false) }
+        proto::DiagnoseModelRequest {
+            skip_rebuild: self.rebuild == Some(false),
+        }
     }
 }
 
@@ -81,7 +83,10 @@ fn sketch_relation_json(ids: &mut IdRegistry, r: &proto::SketchRelationProblem) 
     } else if is_dimension(r.constraint_type) {
         obj.insert("type".into(), json!("dimension"));
     } else {
-        obj.insert("type".into(), json!(sketch::relation_name(r.constraint_type)));
+        obj.insert(
+            "type".into(),
+            json!(sketch::relation_name(r.constraint_type)),
+        );
     }
     let mut entities: Vec<Value> = r
         .items
@@ -96,7 +101,11 @@ fn sketch_relation_json(ids: &mut IdRegistry, r: &proto::SketchRelationProblem) 
     }
     obj.insert("entities".into(), Value::Array(entities));
     if r.missing_count > 0 && !r.entity_types.is_empty() {
-        let types: Vec<&str> = r.entity_types.iter().map(|t| relation_entity_type_name(*t)).collect();
+        let types: Vec<&str> = r
+            .entity_types
+            .iter()
+            .map(|t| relation_entity_type_name(*t))
+            .collect();
         obj.insert("between".into(), json!(types));
     }
     Value::Object(obj)
@@ -109,7 +118,11 @@ fn sketch_json(ids: &mut IdRegistry, s: &proto::SketchDiagnosis) -> Value {
         obj.insert("plane_missing".into(), json!(true));
     }
     if !s.relations.is_empty() {
-        let relations = s.relations.iter().map(|r| sketch_relation_json(ids, r)).collect();
+        let relations = s
+            .relations
+            .iter()
+            .map(|r| sketch_relation_json(ids, r))
+            .collect();
         obj.insert("relations".into(), Value::Array(relations));
     }
     if !s.dangling_dimensions.is_empty() {
@@ -145,7 +158,11 @@ pub fn mate_entity_json(ids: &mut IdRegistry, e: &proto::MateEntityState) -> Val
 }
 
 fn is_mate(p: &proto::FeatureDiagnosis) -> bool {
-    p.type_name.starts_with("Mate") && !matches!(p.type_name.as_str(), "MateGroup" | "MateReferenceGroupFeature")
+    p.type_name.starts_with("Mate")
+        && !matches!(
+            p.type_name.as_str(),
+            "MateGroup" | "MateReferenceGroupFeature"
+        )
 }
 
 /// An assembly's component: SolidWorks flags it (and What's Wrong lists it)
@@ -161,23 +178,40 @@ fn what_is_wrong(p: &proto::FeatureDiagnosis) -> String {
         if s.plane_missing {
             found.push("its sketch plane/face is gone".to_string());
         }
-        let count = |kind: proto::RelationProblem| s.relations.iter().filter(|r| r.problem() == kind).count();
+        let count = |kind: proto::RelationProblem| {
+            s.relations.iter().filter(|r| r.problem() == kind).count()
+        };
         let dangling = count(proto::RelationProblem::Dangling) + s.dangling_dimensions.len();
         if dangling > 0 {
-            found.push(plural(dangling, "dangling relation/dimension", "dangling relations/dimensions"));
+            found.push(plural(
+                dangling,
+                "dangling relation/dimension",
+                "dangling relations/dimensions",
+            ));
         }
         let broken = count(proto::RelationProblem::Broken);
         if broken > 0 {
-            found.push(plural(broken, "broken external reference", "broken external references"));
+            found.push(plural(
+                broken,
+                "broken external reference",
+                "broken external references",
+            ));
         }
         let over = count(proto::RelationProblem::OverDefining);
         if over > 0 {
-            found.push(plural(over, "over-defining relation/dimension", "over-defining relations/dimensions"));
+            found.push(plural(
+                over,
+                "over-defining relation/dimension",
+                "over-defining relations/dimensions",
+            ));
         }
     }
     let missing = p.mate_entities.iter().filter(|e| e.missing).count();
     if missing > 0 && !matches!(p.error_code, 43 | 48) {
-        found.push(format!("{missing} mated entit{} missing", if missing == 1 { "y is" } else { "ies are" }));
+        found.push(format!(
+            "{missing} mated entit{} missing",
+            if missing == 1 { "y is" } else { "ies are" }
+        ));
     }
 
     let mut parts = Vec::new();
@@ -210,7 +244,9 @@ fn fix_hint(p: &proto::FeatureDiagnosis) -> Option<String> {
                 p.name
             ));
         }
-        if s.relations.iter().any(|r| r.problem() == proto::RelationProblem::Dangling)
+        if s.relations
+            .iter()
+            .any(|r| r.problem() == proto::RelationProblem::Dangling)
             || !s.dangling_dimensions.is_empty()
         {
             return Some(
@@ -220,7 +256,10 @@ fn fix_hint(p: &proto::FeatureDiagnosis) -> Option<String> {
                     .into(),
             );
         }
-        if s.relations.iter().any(|r| r.problem() == proto::RelationProblem::OverDefining) {
+        if s.relations
+            .iter()
+            .any(|r| r.problem() == proto::RelationProblem::OverDefining)
+        {
             return Some(format!(
                 "relations/dimensions conflict: inspect_sketch {} to see them, then remove the \
                  extra ones",
@@ -238,11 +277,14 @@ fn fix_hint(p: &proto::FeatureDiagnosis) -> Option<String> {
     }
     if is_mate(p) {
         return Some(match p.error_code {
-            46 => "it conflicts with other mates: delete_features this mate (or the one it fights)".into(),
+            46 => "it conflicts with other mates: delete_features this mate (or the one it fights)"
+                .into(),
             47 => "the solver can't satisfy it from where the components are: delete_features it \
                    and add_mate again, maybe with another alignment"
                 .into(),
-            _ if p.mate_entities.iter().any(|e| e.missing) || matches!(p.error_code, 43 | 45 | 48) => {
+            _ if p.mate_entities.iter().any(|e| e.missing)
+                || matches!(p.error_code, 43 | 45 | 48) =>
+            {
                 "a mated face/edge/plane is gone: delete_features this mate and add_mate again \
                  with current ids from inspect_model"
                     .into()
@@ -270,8 +312,12 @@ fn fix_hint(p: &proto::FeatureDiagnosis) -> Option<String> {
         51 => "a sketch entity referenced model geometry (converted/offset edge, or a relation to \
                an edge) that's gone"
             .into(),
-        71 => format!("the cut no longer touches the body{parents}: the material it cut is gone or its sketch moved"),
-        73 => format!("items it uses are missing{parents}, e.g. a pattern's seed features or a hole's placement points"),
+        71 => format!(
+            "the cut no longer touches the body{parents}: the material it cut is gone or its sketch moved"
+        ),
+        73 => format!(
+            "items it uses are missing{parents}, e.g. a pattern's seed features or a hole's placement points"
+        ),
         1 => format!("most often a reference to deleted geometry{parents}"),
         _ => return None,
     })
@@ -294,11 +340,7 @@ fn caused_by<'a>(p: &'a proto::FeatureDiagnosis, failing: &HashSet<&str>) -> Vec
         .collect()
 }
 
-fn problem_json(
-    ids: &mut IdRegistry,
-    p: &proto::FeatureDiagnosis,
-    causes: &[&str],
-) -> Value {
+fn problem_json(ids: &mut IdRegistry, p: &proto::FeatureDiagnosis, causes: &[&str]) -> Value {
     let mut obj = Map::new();
     if let Some(id) = ids.id_for(Kind::Feature, &p.persist_id) {
         obj.insert("id".into(), json!(id));
@@ -312,7 +354,11 @@ fn problem_json(
     if let Some(id) = ids.id_for(Kind::Component, &p.component_persist_id) {
         obj.insert("component".into(), json!(id));
     }
-    let key = if p.error_code != 0 && p.warning { "warning" } else { "problem" };
+    let key = if p.error_code != 0 && p.warning {
+        "warning"
+    } else {
+        "problem"
+    };
     obj.insert(key.into(), json!(what_is_wrong(p)));
     if p.error_code != 0 {
         obj.insert("error_code".into(), json!(p.error_code));
@@ -340,14 +386,22 @@ fn problem_json(
         obj.insert("sketch".into(), sketch_json(ids, s));
     }
     if !p.mate_entities.is_empty() && (is_mate(p) || p.mate_entities.iter().any(|e| e.missing)) {
-        let entities = p.mate_entities.iter().map(|e| mate_entity_json(ids, e)).collect();
+        let entities = p
+            .mate_entities
+            .iter()
+            .map(|e| mate_entity_json(ids, e))
+            .collect();
         obj.insert("mated_entities".into(), Value::Array(entities));
     }
     Value::Object(obj)
 }
 
 fn plural(n: usize, singular: &str, plural: &str) -> String {
-    if n == 1 { format!("1 {singular}") } else { format!("{n} {plural}") }
+    if n == 1 {
+        format!("1 {singular}")
+    } else {
+        format!("{n} {plural}")
+    }
 }
 
 pub fn render(ids: &mut IdRegistry, reply: &proto::DiagnoseModelResponse) -> Value {
@@ -357,17 +411,28 @@ pub fn render(ids: &mut IdRegistry, reply: &proto::DiagnoseModelResponse) -> Val
     }
 
     let failing = failing_names(&reply.problems);
-    let causes: Vec<Vec<&str>> = reply.problems.iter().map(|p| caused_by(p, &failing)).collect();
+    let causes: Vec<Vec<&str>> = reply
+        .problems
+        .iter()
+        .map(|p| caused_by(p, &failing))
+        .collect();
     // Root causes first, each group in tree order.
     let mut order: Vec<usize> = (0..reply.problems.len()).collect();
     order.sort_by_key(|&i| !causes[i].is_empty());
-    let roots: Vec<&proto::FeatureDiagnosis> =
-        order.iter().filter(|&&i| causes[i].is_empty()).map(|&i| &reply.problems[i]).collect();
+    let roots: Vec<&proto::FeatureDiagnosis> = order
+        .iter()
+        .filter(|&&i| causes[i].is_empty())
+        .map(|&i| &reply.problems[i])
+        .collect();
     let downstream = reply.problems.len() - roots.len();
 
     let checked = format!(
         "checked {} and {}",
-        plural(reply.checked_features.max(0) as usize, "feature", "features"),
+        plural(
+            reply.checked_features.max(0) as usize,
+            "feature",
+            "features"
+        ),
         plural(reply.checked_sketches.max(0) as usize, "sketch", "sketches")
     );
     let summary = if reply.problems.is_empty() {
@@ -407,7 +472,10 @@ pub fn render(ids: &mut IdRegistry, reply: &proto::DiagnoseModelResponse) -> Val
         );
     }
     if !reply.problems.is_empty() {
-        let problems = order.iter().map(|&i| problem_json(ids, &reply.problems[i], &causes[i])).collect();
+        let problems = order
+            .iter()
+            .map(|&i| problem_json(ids, &reply.problems[i], &causes[i]))
+            .collect();
         out.insert("problems".into(), Value::Array(problems));
     }
     if reply.truncated {
@@ -424,7 +492,10 @@ mod tests {
     use super::*;
 
     fn feature(name: &str, type_name: &str) -> proto::FeatureRef {
-        proto::FeatureRef { name: name.into(), type_name: type_name.into() }
+        proto::FeatureRef {
+            name: name.into(),
+            type_name: type_name.into(),
+        }
     }
 
     fn reply() -> proto::DiagnoseModelResponse {
@@ -461,7 +532,10 @@ mod tests {
             name: "Cut-Extrude1".into(),
             type_name: "ICE".into(),
             error_code: 34,
-            parents: vec![feature("Sketch2", "ProfileFeature"), feature("Boss-Extrude1", "Extrusion")],
+            parents: vec![
+                feature("Sketch2", "ProfileFeature"),
+                feature("Boss-Extrude1", "Extrusion"),
+            ],
             ..Default::default()
         };
         let mate = proto::FeatureDiagnosis {
@@ -486,7 +560,12 @@ mod tests {
             ..Default::default()
         };
         proto::DiagnoseModelResponse {
-            document: Some(proto::Document { title: "Part1".into(), r#type: 0, path: String::new(), ..Default::default() }),
+            document: Some(proto::Document {
+                title: "Part1".into(),
+                r#type: 0,
+                path: String::new(),
+                ..Default::default()
+            }),
             rebuilt: true,
             problems: vec![cut, sketch, mate],
             checked_features: 12,
@@ -507,9 +586,18 @@ mod tests {
         assert_eq!(problems[2]["caused_by"], json!(["Sketch2"]));
         assert!(problems[2].get("fix").is_none());
         let summary = json["summary"].as_str().unwrap();
-        assert!(summary.starts_with("3 problems; root causes: Sketch2 ("), "{summary}");
-        assert!(summary.contains("1 more feature fails only because of those"), "{summary}");
-        assert!(summary.ends_with("(checked 12 features and 3 sketches)"), "{summary}");
+        assert!(
+            summary.starts_with("3 problems; root causes: Sketch2 ("),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("1 more feature fails only because of those"),
+            "{summary}"
+        );
+        assert!(
+            summary.ends_with("(checked 12 features and 3 sketches)"),
+            "{summary}"
+        );
         assert!(json.get("note").is_none());
     }
 
@@ -524,15 +612,26 @@ mod tests {
         assert_eq!(rel["type"], "coincident");
         assert_eq!(rel["entities"], json!(["point:1", "missing"]));
         assert_eq!(rel["between"], json!(["point", "line"]));
-        assert_eq!(sketch["sketch"]["dangling_dimensions"], json!(["D2@Sketch2"]));
+        assert_eq!(
+            sketch["sketch"]["dangling_dimensions"],
+            json!(["D2@Sketch2"])
+        );
         assert_eq!(sketch["problem"], "2 dangling relations/dimensions");
-        assert!(sketch["fix"].as_str().unwrap().contains("Display/Delete Relations"));
+        assert!(
+            sketch["fix"]
+                .as_str()
+                .unwrap()
+                .contains("Display/Delete Relations")
+        );
 
         let mate = &json["problems"][1];
         assert_eq!(mate["problem"], "a mated entity is missing");
         assert_eq!(mate["mated_entities"][0]["id"], "face:1");
         assert_eq!(mate["mated_entities"][0]["component"], "component:1");
-        assert_eq!(mate["mated_entities"][1], json!({"missing": true, "component_name": "bracket-1"}));
+        assert_eq!(
+            mate["mated_entities"][1],
+            json!({"missing": true, "component_name": "bracket-1"})
+        );
         assert!(mate["fix"].as_str().unwrap().contains("add_mate"));
     }
 
@@ -547,14 +646,25 @@ mod tests {
             ..Default::default()
         };
         let mut reply = reply();
-        reply.problems[2].parents = vec![feature("block-1", "Reference"), feature("Mates", "MateGroup")];
+        reply.problems[2].parents = vec![
+            feature("block-1", "Reference"),
+            feature("Mates", "MateGroup"),
+        ];
         reply.problems.insert(0, component);
         let mut ids = IdRegistry::default();
         let json = render(&mut ids, &reply);
         let block = &json["problems"][0];
         assert_eq!(block["problem"], "its part has rebuild errors of its own");
-        assert!(block["fix"].as_str().unwrap().contains("Open Part"), "{block}");
-        let mate = json["problems"].as_array().unwrap().iter().find(|p| p["name"] == "Coincident3").unwrap();
+        assert!(
+            block["fix"].as_str().unwrap().contains("Open Part"),
+            "{block}"
+        );
+        let mate = json["problems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == "Coincident3")
+            .unwrap();
         assert_eq!(mate["root_cause"], true, "{mate}");
         assert!(mate["fix"].as_str().unwrap().contains("add_mate"));
     }
@@ -568,7 +678,10 @@ mod tests {
             ..Default::default()
         };
         let json = render(&mut ids, &reply);
-        assert_eq!(json["summary"], "no rebuild errors, warnings or sketch problems (checked 1 feature and 0 sketches)");
+        assert_eq!(
+            json["summary"],
+            "no rebuild errors, warnings or sketch problems (checked 1 feature and 0 sketches)"
+        );
         assert!(json.get("problems").is_none());
         assert!(json["note"].as_str().unwrap().contains("wasn't rebuilt"));
     }
@@ -576,6 +689,12 @@ mod tests {
     #[test]
     fn rebuild_defaults_on() {
         assert!(!DiagnoseModelParams::default().request().skip_rebuild);
-        assert!(DiagnoseModelParams { rebuild: Some(false) }.request().skip_rebuild);
+        assert!(
+            DiagnoseModelParams {
+                rebuild: Some(false)
+            }
+            .request()
+            .skip_rebuild
+        );
     }
 }

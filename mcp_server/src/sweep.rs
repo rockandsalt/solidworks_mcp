@@ -39,30 +39,44 @@ const MAX_TWIST_DEG: f64 = 36_000.0;
 pub fn request(params: &SweepParams, cut: bool) -> Result<proto::SweepSketchRequest, McpError> {
     let path = params.path.trim();
     if path.is_empty() {
-        return Err(invalid("path is empty -- give the feature-tree name of the path sketch, e.g. \"Sketch1\""));
+        return Err(invalid(
+            "path is empty -- give the feature-tree name of the path sketch, e.g. \"Sketch1\"",
+        ));
     }
     if Kind::of_id(path).is_some() {
         return Err(invalid(format!(
             "path: give the feature-tree name of the path (e.g. \"Sketch1\"), not an id like {path}"
         )));
     }
-    let sketch_name = params.sketch_name.as_deref().map(str::trim).unwrap_or_default();
+    let sketch_name = params
+        .sketch_name
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default();
     let circle_diameter = match params.circle_diameter_mm {
         None => 0.0,
         Some(d) if !(d.is_finite() && d > 0.0) => {
-            return Err(invalid(format!("circle_diameter_mm must be more than 0, got {d}")));
+            return Err(invalid(format!(
+                "circle_diameter_mm must be more than 0, got {d}"
+            )));
         }
         Some(_) if !sketch_name.is_empty() => {
-            return Err(invalid("give sketch_name (a profile sketch) or circle_diameter_mm, not both"));
+            return Err(invalid(
+                "give sketch_name (a profile sketch) or circle_diameter_mm, not both",
+            ));
         }
         Some(d) => d / MM_PER_M,
     };
     let twist_deg = params.twist_deg.unwrap_or(0.0);
     if !(twist_deg.is_finite() && twist_deg.abs() <= MAX_TWIST_DEG) {
-        return Err(invalid(format!("twist_deg must be within +-{MAX_TWIST_DEG}, got {twist_deg}")));
+        return Err(invalid(format!(
+            "twist_deg must be within +-{MAX_TWIST_DEG}, got {twist_deg}"
+        )));
     }
     if twist_deg != 0.0 && circle_diameter > 0.0 {
-        return Err(invalid("a circular profile can't be twisted -- drop twist_deg or sweep a profile sketch"));
+        return Err(invalid(
+            "a circular profile can't be twisted -- drop twist_deg or sweep a profile sketch",
+        ));
     }
     Ok(proto::SweepSketchRequest {
         sketch_name: sketch_name.to_string(),
@@ -96,14 +110,22 @@ mod tests {
     use super::*;
 
     fn params(path: &str) -> SweepParams {
-        SweepParams { path: path.into(), sketch_name: None, circle_diameter_mm: None, twist_deg: None, cut: false }
+        SweepParams {
+            path: path.into(),
+            sketch_name: None,
+            circle_diameter_mm: None,
+            twist_deg: None,
+            cut: false,
+        }
     }
 
     #[test]
     fn profile_sketch_by_default() {
         let r = request(&params(" Sketch1 "), false).unwrap();
         assert_eq!(r.path, "Sketch1");
-        assert!(r.sketch_name.is_empty() && r.circle_diameter == 0.0 && r.twist_angle == 0.0 && !r.cut);
+        assert!(
+            r.sketch_name.is_empty() && r.circle_diameter == 0.0 && r.twist_angle == 0.0 && !r.cut
+        );
     }
 
     #[test]
@@ -151,10 +173,20 @@ mod tests {
         };
         let mut p = params("Sketch1");
         p.twist_deg = Some(90.0);
-        assert_eq!(reply_text(&p, &reply, false), "created Sweep1 by sweeping Sketch2 along Sketch1 with a 90 degree twist.");
-        let reply = proto::SweepSketchResponse { feature_name: "Cut-Sweep1".into(), sketch_name: String::new(), ..reply };
+        assert_eq!(
+            reply_text(&p, &reply, false),
+            "created Sweep1 by sweeping Sketch2 along Sketch1 with a 90 degree twist."
+        );
+        let reply = proto::SweepSketchResponse {
+            feature_name: "Cut-Sweep1".into(),
+            sketch_name: String::new(),
+            ..reply
+        };
         let mut p = params("Sketch1");
         p.circle_diameter_mm = Some(4.0);
-        assert_eq!(reply_text(&p, &reply, true), "created Cut-Sweep1 by cutting with a 4 mm circle along Sketch1.");
+        assert_eq!(
+            reply_text(&p, &reply, true),
+            "created Cut-Sweep1 by cutting with a 4 mm circle along Sketch1."
+        );
     }
 }

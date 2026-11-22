@@ -61,7 +61,11 @@ fn axis_ref(ids: &IdRegistry, axis: &str) -> Result<proto::GeometryRef, McpError
     }
 }
 
-pub fn request(ids: &IdRegistry, params: &RevolveParams, cut: bool) -> Result<proto::RevolveSketchRequest, McpError> {
+pub fn request(
+    ids: &IdRegistry,
+    params: &RevolveParams,
+    cut: bool,
+) -> Result<proto::RevolveSketchRequest, McpError> {
     let angle_deg = params.angle_deg();
     if !(angle_deg.is_finite() && angle_deg > 0.0 && angle_deg <= 360.0) {
         return Err(invalid(format!(
@@ -76,7 +80,12 @@ pub fn request(ids: &IdRegistry, params: &RevolveParams, cut: bool) -> Result<pr
         .map(|a| axis_ref(ids, a))
         .transpose()?;
     Ok(proto::RevolveSketchRequest {
-        sketch_name: params.sketch_name.as_deref().map(str::trim).unwrap_or_default().to_string(),
+        sketch_name: params
+            .sketch_name
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string(),
         axis,
         angle: angle_deg.to_radians(),
         reverse_direction: params.reverse_direction,
@@ -87,7 +96,12 @@ pub fn request(ids: &IdRegistry, params: &RevolveParams, cut: bool) -> Result<pr
 
 /// "created Revolve1 by revolving Sketch1 360 degrees about the centerline of Sketch1
 /// (line:3)."
-pub fn reply_text(ids: &mut IdRegistry, params: &RevolveParams, reply: &proto::RevolveSketchResponse, cut: bool) -> String {
+pub fn reply_text(
+    ids: &mut IdRegistry,
+    params: &RevolveParams,
+    reply: &proto::RevolveSketchResponse,
+    cut: bool,
+) -> String {
     let angle_deg = params.angle_deg();
     let how = if params.mid_plane {
         " (mid-plane)"
@@ -96,7 +110,11 @@ pub fn reply_text(ids: &mut IdRegistry, params: &RevolveParams, reply: &proto::R
     } else {
         ""
     };
-    let axis = match reply.axis_item.as_ref().and_then(|r| sketch::ref_id(ids, Kind::Line, r)) {
+    let axis = match reply
+        .axis_item
+        .as_ref()
+        .and_then(|r| sketch::ref_id(ids, Kind::Line, r))
+    {
         Some(id) => format!("{} ({id})", reply.axis),
         None => reply.axis.clone(),
     };
@@ -135,7 +153,13 @@ mod tests {
     }
 
     fn line_ref() -> proto::SketchItemRef {
-        proto::SketchItemRef { sketch_persist_id: vec![1, 2, 3], point: false, id0: 0, id1: 4, ..Default::default() }
+        proto::SketchItemRef {
+            sketch_persist_id: vec![1, 2, 3],
+            point: false,
+            id0: 0,
+            id1: 4,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -148,7 +172,10 @@ mod tests {
     #[test]
     fn angle_must_be_within_one_turn() {
         for bad in [0.0, -10.0, 360.5, f64::NAN] {
-            assert!(request(&registry(), &params(None, Some(bad)), true).is_err(), "{bad}");
+            assert!(
+                request(&registry(), &params(None, Some(bad)), true).is_err(),
+                "{bad}"
+            );
         }
         let r = request(&registry(), &params(None, Some(90.0)), true).unwrap();
         assert!((r.angle - std::f64::consts::FRAC_PI_2).abs() < 1e-12 && r.cut);
@@ -161,21 +188,40 @@ mod tests {
         let circle = sketch::ref_id(
             &mut ids,
             Kind::Circle,
-            &proto::SketchItemRef { sketch_persist_id: vec![1, 2, 3], point: false, id0: 0, id1: 5, ..Default::default() },
+            &proto::SketchItemRef {
+                sketch_persist_id: vec![1, 2, 3],
+                point: false,
+                id0: 0,
+                id1: 5,
+                ..Default::default()
+            },
         )
         .unwrap();
         let edge = ids.id_for(Kind::Edge, b"edge").unwrap();
         let face = ids.id_for(Kind::Face, b"face").unwrap();
 
         use proto::geometry_ref::Target;
-        let target = |axis: &str| request(&ids, &params(Some(axis), None), false).map(|r| r.axis.unwrap().target.unwrap());
+        let target = |axis: &str| {
+            request(&ids, &params(Some(axis), None), false).map(|r| r.axis.unwrap().target.unwrap())
+        };
         assert_eq!(target(&line).unwrap(), Target::SketchItem(line_ref()));
-        assert_eq!(target(&edge).unwrap(), Target::ModelPersistId(b"edge".to_vec()));
-        assert_eq!(target("Axis1").unwrap(), Target::FeatureName("Axis1".into()));
+        assert_eq!(
+            target(&edge).unwrap(),
+            Target::ModelPersistId(b"edge".to_vec())
+        );
+        assert_eq!(
+            target("Axis1").unwrap(),
+            Target::FeatureName("Axis1".into())
+        );
         for bad in [circle.as_str(), face.as_str(), "front", "origin"] {
             assert!(target(bad).is_err(), "{bad}");
         }
-        assert!(request(&ids, &params(Some("  "), None), false).unwrap().axis.is_none());
+        assert!(
+            request(&ids, &params(Some("  "), None), false)
+                .unwrap()
+                .axis
+                .is_none()
+        );
     }
 
     #[test]

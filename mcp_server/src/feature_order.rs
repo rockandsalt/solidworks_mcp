@@ -5,8 +5,8 @@ use rmcp::{ErrorData as McpError, schemars};
 use serde::Deserialize;
 
 use crate::addin::proto;
-use crate::feature_text::{problems_text, type_label};
 use crate::edit::feature_target;
+use crate::feature_text::{problems_text, type_label};
 use crate::inspect::IdRegistry;
 
 /// Rolled-back features named in a reply; the rest are counted.
@@ -30,12 +30,24 @@ pub struct RollbackParams {
     pub after: Option<String>,
 }
 
-pub fn rollback_request(ids: &IdRegistry, params: &RollbackParams) -> Result<proto::RollbackRequest, McpError> {
+pub fn rollback_request(
+    ids: &IdRegistry,
+    params: &RollbackParams,
+) -> Result<proto::RollbackRequest, McpError> {
     match (&params.before, &params.after) {
         (Some(_), Some(_)) => Err(invalid("give before or after, not both")),
-        (Some(f), None) => Ok(proto::RollbackRequest { feature: Some(feature_target(ids, f, "feature")?), after: false }),
-        (None, Some(f)) => Ok(proto::RollbackRequest { feature: Some(feature_target(ids, f, "feature")?), after: true }),
-        (None, None) => Ok(proto::RollbackRequest { feature: None, after: false }),
+        (Some(f), None) => Ok(proto::RollbackRequest {
+            feature: Some(feature_target(ids, f, "feature")?),
+            after: false,
+        }),
+        (None, Some(f)) => Ok(proto::RollbackRequest {
+            feature: Some(feature_target(ids, f, "feature")?),
+            after: true,
+        }),
+        (None, None) => Ok(proto::RollbackRequest {
+            feature: None,
+            after: false,
+        }),
     }
 }
 
@@ -58,7 +70,8 @@ fn names(features: &[proto::FeatureRef]) -> String {
 pub fn rollback_text(params: &RollbackParams, reply: &proto::RollbackResponse) -> String {
     if reply.rolled_back.is_empty() {
         return if reply.rolled_back_before == 0 {
-            "nothing was rolled back, and nothing is: the rollback bar is at the end of the tree.".to_string()
+            "nothing was rolled back, and nothing is: the rollback bar is at the end of the tree."
+                .to_string()
         } else {
             format!(
                 "rolled forward to the end of the tree: the {} rolled-back features are back in the model.",
@@ -94,23 +107,40 @@ pub struct ReorderParams {
     pub after: Option<String>,
 }
 
-pub fn reorder_request(ids: &IdRegistry, params: &ReorderParams) -> Result<proto::ReorderFeatureRequest, McpError> {
+pub fn reorder_request(
+    ids: &IdRegistry,
+    params: &ReorderParams,
+) -> Result<proto::ReorderFeatureRequest, McpError> {
     let (target, after) = match (&params.before, &params.after) {
         (Some(t), None) => (t, false),
         (None, Some(t)) => (t, true),
-        _ => return Err(invalid("give exactly one of before or after: the feature to put it next to")),
+        _ => {
+            return Err(invalid(
+                "give exactly one of before or after: the feature to put it next to",
+            ));
+        }
     };
     let feature = feature_target(ids, &params.feature, "feature to move")?;
     let target = feature_target(ids, target, "feature to put it next to")?;
     if feature == target {
-        return Err(invalid("the feature and the one to put it next to are the same"));
+        return Err(invalid(
+            "the feature and the one to put it next to are the same",
+        ));
     }
-    Ok(proto::ReorderFeatureRequest { feature: Some(feature), target: Some(target), after })
+    Ok(proto::ReorderFeatureRequest {
+        feature: Some(feature),
+        target: Some(target),
+        after,
+    })
 }
 
 /// "moved Fillet1 (fillet): now between Boss-Extrude1 and Cut-Extrude1."
 pub fn reorder_text(reply: &proto::ReorderFeatureResponse) -> String {
-    let moved = reply.moved.as_ref().map(|f| names(std::slice::from_ref(f))).unwrap_or_default();
+    let moved = reply
+        .moved
+        .as_ref()
+        .map(|f| names(std::slice::from_ref(f)))
+        .unwrap_or_default();
     let place = match (reply.previous.as_str(), reply.next.as_str()) {
         ("", "") => "it's the only feature".to_string(),
         ("", next) => format!("now first, before {next}"),
@@ -132,7 +162,10 @@ mod tests {
     use proto::feature_target::Target;
 
     fn feature(name: &str, type_name: &str) -> proto::FeatureRef {
-        proto::FeatureRef { name: name.into(), type_name: type_name.into() }
+        proto::FeatureRef {
+            name: name.into(),
+            type_name: type_name.into(),
+        }
     }
 
     #[test]
@@ -145,30 +178,54 @@ mod tests {
             after: after.map(str::to_string),
         };
         let r = rollback_request(&ids, &p(Some(&id), None)).unwrap();
-        assert_eq!(r.feature.unwrap().target, Some(Target::PersistId(b"fillet".to_vec())));
+        assert_eq!(
+            r.feature.unwrap().target,
+            Some(Target::PersistId(b"fillet".to_vec()))
+        );
         assert!(!r.after);
         let r = rollback_request(&ids, &p(None, Some(" Cut-Extrude1 "))).unwrap();
-        assert_eq!(r.feature.unwrap().target, Some(Target::Name("Cut-Extrude1".into())));
+        assert_eq!(
+            r.feature.unwrap().target,
+            Some(Target::Name("Cut-Extrude1".into()))
+        );
         assert!(r.after);
-        assert_eq!(rollback_request(&ids, &p(None, None)).unwrap().feature, None);
+        assert_eq!(
+            rollback_request(&ids, &p(None, None)).unwrap().feature,
+            None
+        );
         assert!(rollback_request(&ids, &p(Some("A"), Some("B"))).is_err());
         assert!(rollback_request(&ids, &p(Some("face:1"), None)).is_err());
     }
 
     #[test]
     fn rollback_replies() {
-        let p = RollbackParams { before: Some("Fillet1".into()), after: None };
+        let p = RollbackParams {
+            before: Some("Fillet1".into()),
+            after: None,
+        };
         let reply = proto::RollbackResponse {
             rolled_back: vec![feature("Fillet1", "Fillet"), feature("Cut-Extrude1", "Cut")],
             rolled_back_before: 0,
         };
         let text = rollback_text(&p, &reply);
-        assert!(text.starts_with("moved the rollback bar to before Fillet1."), "{text}");
+        assert!(
+            text.starts_with("moved the rollback bar to before Fillet1."),
+            "{text}"
+        );
         assert!(text.contains("Fillet1 (fillet), Cut-Extrude1"), "{text}");
-        let none = RollbackParams { before: None, after: None };
-        let reply = proto::RollbackResponse { rolled_back: vec![], rolled_back_before: 3 };
+        let none = RollbackParams {
+            before: None,
+            after: None,
+        };
+        let reply = proto::RollbackResponse {
+            rolled_back: vec![],
+            rolled_back_before: 3,
+        };
         assert!(rollback_text(&none, &reply).contains("the 3 rolled-back features are back"));
-        let reply = proto::RollbackResponse { rolled_back: vec![], rolled_back_before: 0 };
+        let reply = proto::RollbackResponse {
+            rolled_back: vec![],
+            rolled_back_before: 0,
+        };
         assert!(rollback_text(&none, &reply).starts_with("nothing was rolled back"));
     }
 
@@ -181,9 +238,16 @@ mod tests {
             after: after.map(str::to_string),
         };
         let r = reorder_request(&ids, &p(None, Some("Boss-Extrude1"))).unwrap();
-        assert_eq!(r.target.unwrap().target, Some(Target::Name("Boss-Extrude1".into())));
+        assert_eq!(
+            r.target.unwrap().target,
+            Some(Target::Name("Boss-Extrude1".into()))
+        );
         assert!(r.after);
-        assert!(!reorder_request(&ids, &p(Some("Cut-Extrude1"), None)).unwrap().after);
+        assert!(
+            !reorder_request(&ids, &p(Some("Cut-Extrude1"), None))
+                .unwrap()
+                .after
+        );
         assert!(reorder_request(&ids, &p(None, None)).is_err());
         assert!(reorder_request(&ids, &p(Some("A"), Some("B"))).is_err());
         assert!(reorder_request(&ids, &p(Some(" Fillet1"), None)).is_err());
@@ -197,7 +261,10 @@ mod tests {
             next: "Cut-Extrude1".into(),
             new_errors: vec![],
         };
-        assert_eq!(reorder_text(&reply), "moved Fillet1 (fillet): now between Boss-Extrude1 and Cut-Extrude1.");
+        assert_eq!(
+            reorder_text(&reply),
+            "moved Fillet1 (fillet): now between Boss-Extrude1 and Cut-Extrude1."
+        );
         let reply = proto::ReorderFeatureResponse {
             moved: Some(feature("Fillet1", "Fillet")),
             previous: "Cut-Extrude1".into(),
@@ -210,7 +277,13 @@ mod tests {
             ..Default::default()
         };
         let text = reorder_text(&reply);
-        assert!(text.starts_with("moved Fillet1 (fillet): now last, after Cut-Extrude1. Now failing"), "{text}");
-        assert!(text.ends_with("Move it back with reorder_feature if that isn't wanted."), "{text}");
+        assert!(
+            text.starts_with("moved Fillet1 (fillet): now last, after Cut-Extrude1. Now failing"),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("Move it back with reorder_feature if that isn't wanted."),
+            "{text}"
+        );
     }
 }

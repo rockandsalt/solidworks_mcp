@@ -4,12 +4,12 @@
 use rmcp::{ErrorData as McpError, schemars};
 use serde::Deserialize;
 
-use crate::sketch_tools::SketchTarget;
 use crate::addin::proto;
 use crate::feature_text::problems_text;
 use crate::inspect::{IdRegistry, Kind, MM_PER_M, SKETCH_KINDS};
 use crate::mirror::{sketch_ref, unique};
 use crate::sketch;
+use crate::sketch_tools::SketchTarget;
 
 /// The add-in's limits.
 const MAX_CORNERS: usize = 200;
@@ -20,7 +20,10 @@ fn invalid(message: impl Into<String>) -> McpError {
 }
 
 fn trimmed_name(name: &Option<String>) -> String {
-    name.as_deref().map(str::trim).unwrap_or_default().to_string()
+    name.as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string()
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -120,19 +123,34 @@ fn item_refs(ids: &IdRegistry, entities: &[&str]) -> Result<Vec<proto::SketchIte
     entities
         .iter()
         .enumerate()
-        .map(|(i, e)| sketch_ref(ids, e, &format!("entity {}", i + 1), "fillet_edges or chamfer_edges"))
+        .map(|(i, e)| {
+            sketch_ref(
+                ids,
+                e,
+                &format!("entity {}", i + 1),
+                "fillet_edges or chamfer_edges",
+            )
+        })
         .collect()
 }
 
-fn corner_refs(ids: &IdRegistry, entities: &[String]) -> Result<Vec<proto::SketchItemRef>, McpError> {
+fn corner_refs(
+    ids: &IdRegistry,
+    entities: &[String],
+) -> Result<Vec<proto::SketchItemRef>, McpError> {
     let entities = unique(entities);
     if entities.is_empty() {
-        return Err(invalid("give the corners: sketch point ids, or two entity ids"));
+        return Err(invalid(
+            "give the corners: sketch point ids, or two entity ids",
+        ));
     }
     if entities.len() > MAX_CORNERS {
         return Err(invalid(format!("at most {MAX_CORNERS} corners per call")));
     }
-    let points = entities.iter().filter(|e| Kind::of_id(e) == Some(Kind::SketchPoint)).count();
+    let points = entities
+        .iter()
+        .filter(|e| Kind::of_id(e) == Some(Kind::SketchPoint))
+        .count();
     if points > 0 && points < entities.len() {
         return Err(invalid("give sketch points or two entities, not both"));
     }
@@ -144,32 +162,52 @@ fn corner_refs(ids: &IdRegistry, entities: &[String]) -> Result<Vec<proto::Sketc
     item_refs(ids, &entities)
 }
 
-pub fn fillet_request(ids: &IdRegistry, params: &SketchFilletParams) -> Result<proto::SketchCornersRequest, McpError> {
+pub fn fillet_request(
+    ids: &IdRegistry,
+    params: &SketchFilletParams,
+) -> Result<proto::SketchCornersRequest, McpError> {
     if !(params.radius_mm.is_finite() && params.radius_mm > 0.0) {
-        return Err(invalid(format!("radius_mm must be more than 0, got {}", params.radius_mm)));
+        return Err(invalid(format!(
+            "radius_mm must be more than 0, got {}",
+            params.radius_mm
+        )));
     }
     Ok(proto::SketchCornersRequest {
         sketch_name: trimmed_name(&params.sketch_name),
         items: corner_refs(ids, &params.entities)?,
-        kind: Some(proto::sketch_corners_request::Kind::FilletRadius(params.radius_mm / MM_PER_M)),
+        kind: Some(proto::sketch_corners_request::Kind::FilletRadius(
+            params.radius_mm / MM_PER_M,
+        )),
     })
 }
 
-pub fn chamfer_request(ids: &IdRegistry, params: &SketchChamferParams) -> Result<proto::SketchCornersRequest, McpError> {
+pub fn chamfer_request(
+    ids: &IdRegistry,
+    params: &SketchChamferParams,
+) -> Result<proto::SketchCornersRequest, McpError> {
     if !(params.distance_mm.is_finite() && params.distance_mm > 0.0) {
-        return Err(invalid(format!("distance_mm must be more than 0, got {}", params.distance_mm)));
+        return Err(invalid(format!(
+            "distance_mm must be more than 0, got {}",
+            params.distance_mm
+        )));
     }
     let (kind, second) = match (params.second_distance_mm, params.angle_deg) {
-        (Some(_), Some(_)) => return Err(invalid("give second_distance_mm or angle_deg, not both")),
+        (Some(_), Some(_)) => {
+            return Err(invalid("give second_distance_mm or angle_deg, not both"));
+        }
         (Some(d), None) => {
             if !(d.is_finite() && d > 0.0) {
-                return Err(invalid(format!("second_distance_mm must be more than 0, got {d}")));
+                return Err(invalid(format!(
+                    "second_distance_mm must be more than 0, got {d}"
+                )));
             }
             (proto::SketchChamferKind::Distances, d / MM_PER_M)
         }
         (None, Some(a)) => {
             if !(a.is_finite() && a > 0.0 && a < 180.0) {
-                return Err(invalid(format!("angle_deg must be between 0 and 180, got {a}")));
+                return Err(invalid(format!(
+                    "angle_deg must be between 0 and 180, got {a}"
+                )));
             }
             (proto::SketchChamferKind::Angle, a.to_radians())
         }
@@ -184,11 +222,13 @@ pub fn chamfer_request(ids: &IdRegistry, params: &SketchChamferParams) -> Result
     Ok(proto::SketchCornersRequest {
         sketch_name: trimmed_name(&params.sketch_name),
         items,
-        kind: Some(proto::sketch_corners_request::Kind::Chamfer(proto::SketchChamfer {
-            kind: kind.into(),
-            distance: params.distance_mm / MM_PER_M,
-            second,
-        })),
+        kind: Some(proto::sketch_corners_request::Kind::Chamfer(
+            proto::SketchChamfer {
+                kind: kind.into(),
+                distance: params.distance_mm / MM_PER_M,
+                second,
+            },
+        )),
     })
 }
 
@@ -213,15 +253,24 @@ fn at_point(at: &[f64]) -> Result<(proto::Vec3, bool), McpError> {
     ))
 }
 
-fn segment_ref(ids: &IdRegistry, entity: &str, what: &str) -> Result<proto::SketchItemRef, McpError> {
+fn segment_ref(
+    ids: &IdRegistry,
+    entity: &str,
+    what: &str,
+) -> Result<proto::SketchItemRef, McpError> {
     let entity = entity.trim();
     if Kind::of_id(entity) == Some(Kind::SketchPoint) {
-        return Err(invalid(format!("{what}: {entity} is a point -- give a line, arc, circle, ellipse or spline")));
+        return Err(invalid(format!(
+            "{what}: {entity} is a point -- give a line, arc, circle, ellipse or spline"
+        )));
     }
     sketch_ref(ids, entity, what, "fillet_edges or chamfer_edges")
 }
 
-pub fn trim_request(ids: &IdRegistry, params: &TrimParams) -> Result<proto::TrimSketchEntityRequest, McpError> {
+pub fn trim_request(
+    ids: &IdRegistry,
+    params: &TrimParams,
+) -> Result<proto::TrimSketchEntityRequest, McpError> {
     let item = Some(segment_ref(ids, &params.entity, "entity")?);
     let sketch_name = trimmed_name(&params.sketch_name);
     match (&params.at, &params.corner_with) {
@@ -238,7 +287,9 @@ pub fn trim_request(ids: &IdRegistry, params: &TrimParams) -> Result<proto::Trim
         }
         (None, Some(other)) => {
             if other.trim() == params.entity.trim() {
-                return Err(invalid("corner_with is the entity itself -- a corner needs two different entities"));
+                return Err(invalid(
+                    "corner_with is the entity itself -- a corner needs two different entities",
+                ));
             }
             Ok(proto::TrimSketchEntityRequest {
                 sketch_name,
@@ -249,11 +300,16 @@ pub fn trim_request(ids: &IdRegistry, params: &TrimParams) -> Result<proto::Trim
                 other: Some(segment_ref(ids, other, "corner_with")?),
             })
         }
-        _ => Err(invalid("give exactly one of at (remove the piece there) or corner_with (meet in a corner)")),
+        _ => Err(invalid(
+            "give exactly one of at (remove the piece there) or corner_with (meet in a corner)",
+        )),
     }
 }
 
-pub fn extend_request(ids: &IdRegistry, params: &ExtendParams) -> Result<proto::TrimSketchEntityRequest, McpError> {
+pub fn extend_request(
+    ids: &IdRegistry,
+    params: &ExtendParams,
+) -> Result<proto::TrimSketchEntityRequest, McpError> {
     let (at, model_space) = at_point(&params.at)?;
     Ok(proto::TrimSketchEntityRequest {
         sketch_name: trimmed_name(&params.sketch_name),
@@ -265,7 +321,10 @@ pub fn extend_request(ids: &IdRegistry, params: &ExtendParams) -> Result<proto::
     })
 }
 
-pub fn convert_request(ids: &IdRegistry, params: &ConvertParams) -> Result<proto::ConvertEntitiesRequest, McpError> {
+pub fn convert_request(
+    ids: &IdRegistry,
+    params: &ConvertParams,
+) -> Result<proto::ConvertEntitiesRequest, McpError> {
     let entities = unique(&params.entities);
     if entities.is_empty() {
         return Err(invalid("give the entities to convert"));
@@ -284,24 +343,38 @@ pub fn convert_request(ids: &IdRegistry, params: &ConvertParams) -> Result<proto
         .into(),
         ..Default::default()
     };
-    if params.loops != ConvertLoops::All && !entities.iter().any(|e| Kind::of_id(e) == Some(Kind::Face)) {
-        return Err(invalid("loops only goes with faces -- give a face id, or leave it out"));
+    if params.loops != ConvertLoops::All
+        && !entities.iter().any(|e| Kind::of_id(e) == Some(Kind::Face))
+    {
+        return Err(invalid(
+            "loops only goes with faces -- give a face id, or leave it out",
+        ));
     }
     for (i, entity) in entities.iter().enumerate() {
         let what = format!("entity {}", i + 1);
         match Kind::of_id(entity) {
             Some(Kind::Edge | Kind::Face) => {
-                wire.model_persist_ids.push(ids.persist_id(entity).ok_or_else(|| {
-                    invalid(format!(
-                        "{what}: {}",
-                        ids.unknown_id(entity, "inspect_model", "call inspect_model for current ones")
-                    ))
-                })?);
+                wire.model_persist_ids
+                    .push(ids.persist_id(entity).ok_or_else(|| {
+                        invalid(format!(
+                            "{what}: {}",
+                            ids.unknown_id(
+                                entity,
+                                "inspect_model",
+                                "call inspect_model for current ones"
+                            )
+                        ))
+                    })?);
             }
             Some(Kind::SketchPoint) => {
-                return Err(invalid(format!("{what}: {entity} is a point -- only segments can be converted")));
+                return Err(invalid(format!(
+                    "{what}: {entity} is a point -- only segments can be converted"
+                )));
             }
-            Some(kind) if SKETCH_KINDS.contains(&kind) => wire.items.push(sketch_ref(ids, entity, &what, "offset_sketch_entities")?),
+            Some(kind) if SKETCH_KINDS.contains(&kind) => {
+                wire.items
+                    .push(sketch_ref(ids, entity, &what, "offset_sketch_entities")?)
+            }
             _ => {
                 return Err(invalid(format!(
                     "{what}: {entity:?} can't be converted -- give model edges and faces (\"edge:4\", \"face:2\") or \
@@ -311,25 +384,39 @@ pub fn convert_request(ids: &IdRegistry, params: &ConvertParams) -> Result<proto
         }
     }
 
-    let on = params.target.on.as_deref().map(str::trim).filter(|on| !on.is_empty());
+    let on = params
+        .target
+        .on
+        .as_deref()
+        .map(str::trim)
+        .filter(|on| !on.is_empty());
     let has_place = on.is_some() || params.target.plane.is_some();
     if !wire.sketch_name.is_empty() {
         if has_place || params.sketch_3d {
-            return Err(invalid("give either sketch_name (an existing sketch) or where to put a new one, not both"));
+            return Err(invalid(
+                "give either sketch_name (an existing sketch) or where to put a new one, not both",
+            ));
         }
         return Ok(wire);
     }
     if params.sketch_3d {
         if has_place {
-            return Err(invalid("a 3D sketch isn't on a plane or face -- drop plane/on or sketch_3d"));
+            return Err(invalid(
+                "a 3D sketch isn't on a plane or face -- drop plane/on or sketch_3d",
+            ));
         }
         return Ok(wire);
     }
     match (on, params.target.plane, entities.as_slice()) {
-        (Some(_), Some(_), _) => return Err(invalid("give plane or on for the new sketch, not both")),
+        (Some(_), Some(_), _) => {
+            return Err(invalid("give plane or on for the new sketch, not both"));
+        }
         (Some(on), None, _) => {
             wire.on_persist_id = ids.persist_id(on).ok_or_else(|| {
-                invalid(format!("on: {}", ids.unknown_id(on, "inspect_model", "call inspect_model for current ones")))
+                invalid(format!(
+                    "on: {}",
+                    ids.unknown_id(on, "inspect_model", "call inspect_model for current ones")
+                ))
             })?;
         }
         (None, Some(plane), _) => wire.plane = proto::Plane::from(plane).into(),
@@ -354,17 +441,28 @@ pub fn given(entities: &[String]) -> Vec<String> {
 /// The ids of what's gone (a sketch entity already handed out has one; others aren't worth one).
 fn deleted_ids(ids: &IdRegistry, deleted: &[proto::SketchItemRef]) -> Vec<String> {
     use prost::Message as _;
-    deleted.iter().filter_map(|r| ids.existing_id(&r.encode_to_vec())).collect()
+    deleted
+        .iter()
+        .filter_map(|r| ids.existing_id(&r.encode_to_vec()))
+        .collect()
 }
 
 /// "New: arc:1 (...). Now: line:1 (...), .... Gone: line:3. D1@Sketch1 = 3 mm. Sketch1 now has ..."
 pub fn edit_text(ids: &mut IdRegistry, reply: &proto::SketchEditResponse) -> String {
     let mut text = String::new();
-    let new: Vec<String> = reply.items.iter().filter_map(|item| sketch::item_summary(ids, item)).collect();
+    let new: Vec<String> = reply
+        .items
+        .iter()
+        .filter_map(|item| sketch::item_summary(ids, item))
+        .collect();
     if !new.is_empty() {
         text += &format!(" New: {}.", new.join(", "));
     }
-    let changed: Vec<String> = reply.changed.iter().filter_map(|item| sketch::item_summary(ids, item)).collect();
+    let changed: Vec<String> = reply
+        .changed
+        .iter()
+        .filter_map(|item| sketch::item_summary(ids, item))
+        .collect();
     if !changed.is_empty() {
         text += &format!(" Changed: {}.", changed.join(", "));
     }
@@ -373,8 +471,15 @@ pub fn edit_text(ids: &mut IdRegistry, reply: &proto::SketchEditResponse) -> Str
         text += &format!(" Gone: {}.", gone.join(", "));
     }
     if !reply.dimensions.is_empty() {
-        let dims: Vec<String> = reply.dimensions.iter().map(sketch::dimension_text).collect();
-        text += &format!(" Dimensions: {} (set_dimension changes them).", dims.join(", "));
+        let dims: Vec<String> = reply
+            .dimensions
+            .iter()
+            .map(sketch::dimension_text)
+            .collect();
+        text += &format!(
+            " Dimensions: {} (set_dimension changes them).",
+            dims.join(", ")
+        );
     }
     if let Some(c) = &reply.contours {
         text += &format!(
@@ -390,15 +495,27 @@ pub fn edit_text(ids: &mut IdRegistry, reply: &proto::SketchEditResponse) -> Str
 }
 
 /// "converted edge:1 into Sketch2 (new sketch). New: line:3 (point:7 -> point:8), ... "
-pub fn convert_text(ids: &mut IdRegistry, params: &ConvertParams, reply: &proto::ConvertEntitiesResponse) -> String {
+pub fn convert_text(
+    ids: &mut IdRegistry,
+    params: &ConvertParams,
+    reply: &proto::ConvertEntitiesResponse,
+) -> String {
     let given = unique(&params.entities);
     let new_sketch = match (reply.created_sketch, reply.is_3d) {
         (true, true) => " (new 3D sketch)",
         (true, false) => " (new sketch)",
         _ => "",
     };
-    let mut text = format!("converted {} into {}{new_sketch}.", given.join(", "), reply.sketch_name);
-    let new: Vec<String> = reply.items.iter().filter_map(|item| sketch::item_summary(ids, item)).collect();
+    let mut text = format!(
+        "converted {} into {}{new_sketch}.",
+        given.join(", "),
+        reply.sketch_name
+    );
+    let new: Vec<String> = reply
+        .items
+        .iter()
+        .filter_map(|item| sketch::item_summary(ids, item))
+        .collect();
     if !new.is_empty() {
         text += &format!(" New: {}.", new.join(", "));
     }
@@ -459,7 +576,11 @@ mod tests {
             entities: entities.iter().map(|e| e.to_string()).collect(),
             loops: ConvertLoops::default(),
             sketch_3d: false,
-            target: SketchTarget { sketch_name: None, plane: None, on: None },
+            target: SketchTarget {
+                sketch_name: None,
+                plane: None,
+                on: None,
+            },
         }
     }
 
@@ -474,8 +595,14 @@ mod tests {
 
         let r = fillet_request(&ids, &fillet(&[&p, &q, &p])).unwrap();
         assert_eq!(r.items, vec![pr, qr]);
-        assert_eq!(r.kind, Some(proto::sketch_corners_request::Kind::FilletRadius(0.003)));
-        assert_eq!(fillet_request(&ids, &fillet(&[&a, &b])).unwrap().items, vec![ar, br]);
+        assert_eq!(
+            r.kind,
+            Some(proto::sketch_corners_request::Kind::FilletRadius(0.003))
+        );
+        assert_eq!(
+            fillet_request(&ids, &fillet(&[&a, &b])).unwrap().items,
+            vec![ar, br]
+        );
 
         assert!(fillet_request(&ids, &fillet(&[])).is_err());
         assert!(fillet_request(&ids, &fillet(&[&a])).is_err());
@@ -539,26 +666,70 @@ mod tests {
         let (b, br) = item(&mut ids, Kind::Circle, 2);
         let (p, _) = item(&mut ids, Kind::SketchPoint, 3);
 
-        let r = trim_request(&ids, &TrimParams { entity: a.clone(), at: Some(vec![1.0, 2.0]), corner_with: None, sketch_name: None }).unwrap();
+        let r = trim_request(
+            &ids,
+            &TrimParams {
+                entity: a.clone(),
+                at: Some(vec![1.0, 2.0]),
+                corner_with: None,
+                sketch_name: None,
+            },
+        )
+        .unwrap();
         assert_eq!(r.kind(), proto::SketchTrimKind::Piece);
         assert_eq!(r.item.as_ref(), Some(&ar));
         assert!(!r.model_space && r.other.is_none());
         assert!((r.at.unwrap().y - 0.002).abs() < 1e-12);
 
-        let r = trim_request(&ids, &TrimParams { entity: a.clone(), at: Some(vec![1.0, 2.0, 3.0]), corner_with: None, sketch_name: None }).unwrap();
+        let r = trim_request(
+            &ids,
+            &TrimParams {
+                entity: a.clone(),
+                at: Some(vec![1.0, 2.0, 3.0]),
+                corner_with: None,
+                sketch_name: None,
+            },
+        )
+        .unwrap();
         assert!(r.model_space && (r.at.unwrap().z - 0.003).abs() < 1e-12);
 
-        let r = trim_request(&ids, &TrimParams { entity: a.clone(), at: None, corner_with: Some(b.clone()), sketch_name: Some(" Sketch1 ".into()) }).unwrap();
+        let r = trim_request(
+            &ids,
+            &TrimParams {
+                entity: a.clone(),
+                at: None,
+                corner_with: Some(b.clone()),
+                sketch_name: Some(" Sketch1 ".into()),
+            },
+        )
+        .unwrap();
         assert_eq!(r.kind(), proto::SketchTrimKind::Corner);
         assert_eq!(r.other, Some(br));
         assert_eq!(r.sketch_name, "Sketch1");
         assert!(r.at.is_none());
 
-        let r = extend_request(&ids, &ExtendParams { entity: a.clone(), at: vec![0.0, 0.0], sketch_name: None }).unwrap();
+        let r = extend_request(
+            &ids,
+            &ExtendParams {
+                entity: a.clone(),
+                at: vec![0.0, 0.0],
+                sketch_name: None,
+            },
+        )
+        .unwrap();
         assert_eq!(r.kind(), proto::SketchTrimKind::Extend);
 
         let t = |entity: &str, at: Option<Vec<f64>>, corner: Option<String>| {
-            trim_request(&ids, &TrimParams { entity: entity.into(), at, corner_with: corner, sketch_name: None }).is_err()
+            trim_request(
+                &ids,
+                &TrimParams {
+                    entity: entity.into(),
+                    at,
+                    corner_with: corner,
+                    sketch_name: None,
+                },
+            )
+            .is_err()
         };
         assert!(t(&a, None, None));
         assert!(t(&a, Some(vec![0.0, 0.0]), Some(b.clone())));
@@ -568,7 +739,17 @@ mod tests {
         assert!(t(&a, None, Some(a.clone())));
         assert!(t(&a, None, Some(p.clone())));
         assert!(t("line:99", Some(vec![0.0, 0.0]), None));
-        assert!(extend_request(&ids, &ExtendParams { entity: p, at: vec![0.0, 0.0], sketch_name: None }).is_err());
+        assert!(
+            extend_request(
+                &ids,
+                &ExtendParams {
+                    entity: p,
+                    at: vec![0.0, 0.0],
+                    sketch_name: None
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -585,7 +766,10 @@ mod tests {
         assert_eq!(r.loops(), proto::ConvertLoops::All);
         let mut p = convert(&[&face]);
         p.loops = ConvertLoops::Inner;
-        assert_eq!(convert_request(&ids, &p).unwrap().loops(), proto::ConvertLoops::Inner);
+        assert_eq!(
+            convert_request(&ids, &p).unwrap().loops(),
+            proto::ConvertLoops::Inner
+        );
         let mut p = convert(&[&edge]);
         p.loops = ConvertLoops::Outer;
         p.target.sketch_name = Some("Sketch2".into());
@@ -628,7 +812,13 @@ mod tests {
         p.target.plane = Some(crate::sketch_tools::SketchPlane::Top);
         assert!(convert_request(&ids, &p).is_err());
 
-        for bad in [point.as_str(), "edge:99", "line:99", "origin", "Boss-Extrude1"] {
+        for bad in [
+            point.as_str(),
+            "edge:99",
+            "line:99",
+            "origin",
+            "Boss-Extrude1",
+        ] {
             let mut p = convert(&[bad]);
             p.target.sketch_name = Some("Sketch2".into());
             assert!(convert_request(&ids, &p).is_err(), "{bad}");
@@ -641,7 +831,11 @@ mod tests {
         let mut ids = registry();
         let (line, line_ref) = item(&mut ids, Kind::Line, 1);
         let (gone, gone_ref) = item(&mut ids, Kind::Line, 2);
-        let arc_ref = proto::SketchItemRef { sketch_persist_id: b"sk".to_vec(), id1: 3, ..Default::default() };
+        let arc_ref = proto::SketchItemRef {
+            sketch_persist_id: b"sk".to_vec(),
+            id1: 3,
+            ..Default::default()
+        };
         let reply = proto::SketchEditResponse {
             sketch_name: "Sketch1".into(),
             items: vec![proto::SketchItem {
@@ -671,7 +865,10 @@ mod tests {
         assert!(text.contains(&format!("Changed: {line}.")), "{text}");
         assert!(text.contains(&format!("Gone: {gone}.")), "{text}");
         assert!(text.contains("D1@Sketch1 = 3 mm"), "{text}");
-        assert!(text.contains("Sketch1 now has 1 closed and 0 open contours."), "{text}");
+        assert!(
+            text.contains("Sketch1 now has 1 closed and 0 open contours."),
+            "{text}"
+        );
 
         let edge = ids.id_for(Kind::Edge, b"edge").unwrap();
         let converted = proto::ConvertEntitiesResponse {
@@ -681,6 +878,9 @@ mod tests {
             ..Default::default()
         };
         let text = convert_text(&mut ids, &convert(&[&edge]), &converted);
-        assert!(text.starts_with(&format!("converted {edge} into 3DSketch1 (new 3D sketch).")), "{text}");
+        assert!(
+            text.starts_with(&format!("converted {edge} into 3DSketch1 (new 3D sketch).")),
+            "{text}"
+        );
     }
 }

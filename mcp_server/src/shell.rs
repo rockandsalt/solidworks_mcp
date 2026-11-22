@@ -63,10 +63,15 @@ fn face_ref(ids: &IdRegistry, what: &str, face: &str) -> Result<proto::GeometryR
             "{what}: {face:?} isn't a face id -- give ids like \"face:3\" from inspect_model (what=\"faces\")"
         )));
     }
-    let persist_id = ids
-        .persist_id(face)
-        .ok_or_else(|| invalid(format!("{what}: {}", ids.unknown_id(face, "inspect_model", "call inspect_model for current ones"))))?;
-    Ok(proto::GeometryRef { target: Some(proto::geometry_ref::Target::ModelPersistId(persist_id)) })
+    let persist_id = ids.persist_id(face).ok_or_else(|| {
+        invalid(format!(
+            "{what}: {}",
+            ids.unknown_id(face, "inspect_model", "call inspect_model for current ones")
+        ))
+    })?;
+    Ok(proto::GeometryRef {
+        target: Some(proto::geometry_ref::Target::ModelPersistId(persist_id)),
+    })
 }
 
 fn positive_mm(value: f64, name: &str) -> Result<f64, McpError> {
@@ -76,7 +81,10 @@ fn positive_mm(value: f64, name: &str) -> Result<f64, McpError> {
     Ok(value / MM_PER_M)
 }
 
-pub fn request(ids: &IdRegistry, params: &ShellParams) -> Result<proto::ShellBodyRequest, McpError> {
+pub fn request(
+    ids: &IdRegistry,
+    params: &ShellParams,
+) -> Result<proto::ShellBodyRequest, McpError> {
     let open = unique(&params.open_faces);
     if open.len() + params.face_thicknesses.len() > MAX_FACES {
         return Err(invalid(format!(
@@ -93,7 +101,9 @@ pub fn request(ids: &IdRegistry, params: &ShellParams) -> Result<proto::ShellBod
             )));
         }
         if walls.contains(&face) {
-            return Err(invalid(format!("{face} is in face_thicknesses more than once")));
+            return Err(invalid(format!(
+                "{face} is in face_thicknesses more than once"
+            )));
         }
         walls.push(face);
     }
@@ -112,13 +122,19 @@ pub fn request(ids: &IdRegistry, params: &ShellParams) -> Result<proto::ShellBod
                 )));
             }
             ids.persist_id(body).ok_or_else(|| {
-                invalid(format!("body: {}", ids.unknown_id(body, "inspect_model", "call inspect_model for current ones")))
+                invalid(format!(
+                    "body: {}",
+                    ids.unknown_id(body, "inspect_model", "call inspect_model for current ones")
+                ))
             })?
         }
     };
     Ok(proto::ShellBodyRequest {
         thickness: positive_mm(params.thickness_mm, "thickness_mm")?,
-        open_faces: open.into_iter().map(|f| face_ref(ids, "open_faces", f)).collect::<Result<_, _>>()?,
+        open_faces: open
+            .into_iter()
+            .map(|f| face_ref(ids, "open_faces", f))
+            .collect::<Result<_, _>>()?,
         face_thicknesses: params
             .face_thicknesses
             .iter()
@@ -145,8 +161,11 @@ pub fn reply_text(params: &ShellParams, reply: &proto::EdgeFeatureResponse) -> S
     let walls = if params.face_thicknesses.is_empty() {
         String::new()
     } else {
-        let list: Vec<String> =
-            params.face_thicknesses.iter().map(|e| format!("{} mm at {}", e.thickness_mm, e.face.trim())).collect();
+        let list: Vec<String> = params
+            .face_thicknesses
+            .iter()
+            .map(|e| format!("{} mm at {}", e.thickness_mm, e.face.trim()))
+            .collect();
         format!(" ({})", list.join(", "))
     };
     format!(
@@ -182,7 +201,10 @@ mod tests {
     }
 
     fn wall(face: &str, thickness_mm: f64) -> FaceThickness {
-        FaceThickness { face: face.to_string(), thickness_mm }
+        FaceThickness {
+            face: face.to_string(),
+            thickness_mm,
+        }
     }
 
     fn persist_id(r: &proto::GeometryRef) -> Vec<u8> {
@@ -196,7 +218,10 @@ mod tests {
     fn open_faces_once_each_in_meters() {
         let (ids, face, other, _) = registry();
         let r = request(&ids, &params(&[&face, &other, &format!(" {face} ")], 2.5)).unwrap();
-        assert_eq!(r.open_faces.iter().map(persist_id).collect::<Vec<_>>(), vec![b"face".to_vec(), b"other".to_vec()]);
+        assert_eq!(
+            r.open_faces.iter().map(persist_id).collect::<Vec<_>>(),
+            vec![b"face".to_vec(), b"other".to_vec()]
+        );
         assert!((r.thickness - 0.0025).abs() < 1e-15 && !r.outward && r.body.is_empty());
     }
 
@@ -213,7 +238,10 @@ mod tests {
         let mut p = params(&[&face], 2.0);
         p.face_thicknesses = vec![wall(&format!(" {other} "), 5.0)];
         let r = request(&ids, &p).unwrap();
-        assert_eq!(persist_id(r.face_thicknesses[0].face.as_ref().unwrap()), b"other".to_vec());
+        assert_eq!(
+            persist_id(r.face_thicknesses[0].face.as_ref().unwrap()),
+            b"other".to_vec()
+        );
         assert!((r.face_thicknesses[0].thickness - 0.005).abs() < 1e-15);
     }
 
@@ -225,14 +253,26 @@ mod tests {
         assert!(request(&ids, &p).unwrap_err().message.contains("both"));
         let mut p = params(&[], 2.0);
         p.face_thicknesses = vec![wall(&other, 5.0), wall(&other, 3.0)];
-        assert!(request(&ids, &p).unwrap_err().message.contains("more than once"));
+        assert!(
+            request(&ids, &p)
+                .unwrap_err()
+                .message
+                .contains("more than once")
+        );
     }
 
     #[test]
     fn only_known_face_ids_and_positive_sizes() {
         let (mut ids, face, other, body) = registry();
         let edge = ids.id_for(Kind::Edge, b"edge").unwrap();
-        for bad in ["", "Boss-Extrude1", "top", edge.as_str(), body.as_str(), "face:999"] {
+        for bad in [
+            "",
+            "Boss-Extrude1",
+            "top",
+            edge.as_str(),
+            body.as_str(),
+            "face:999",
+        ] {
             assert!(request(&ids, &params(&[bad], 1.0)).is_err(), "{bad}");
             let mut p = params(&[], 1.0);
             p.face_thicknesses = vec![wall(bad, 1.0)];
@@ -253,23 +293,43 @@ mod tests {
         p.body = Some(format!(" {body} "));
         assert_eq!(request(&ids, &p).unwrap().body, b"body".to_vec());
         p.body = Some(face.clone());
-        assert!(request(&ids, &p).unwrap_err().message.contains("isn't a body id"));
+        assert!(
+            request(&ids, &p)
+                .unwrap_err()
+                .message
+                .contains("isn't a body id")
+        );
         p.body = Some("body:999".into());
         assert!(request(&ids, &p).is_err());
         let mut p = params(&[&face], 1.0);
         p.body = Some(body.clone());
-        assert!(request(&ids, &p).unwrap_err().message.contains("closed shell"));
+        assert!(
+            request(&ids, &p)
+                .unwrap_err()
+                .message
+                .contains("closed shell")
+        );
         let mut p = params(&[], 1.0);
         p.face_thicknesses = vec![wall(&other, 2.0)];
         p.body = Some(body);
-        assert!(request(&ids, &p).unwrap_err().message.contains("closed shell"));
+        assert!(
+            request(&ids, &p)
+                .unwrap_err()
+                .message
+                .contains("closed shell")
+        );
     }
 
     #[test]
     fn replies() {
-        let reply = proto::EdgeFeatureResponse { feature_name: "Shell1".into() };
+        let reply = proto::EdgeFeatureResponse {
+            feature_name: "Shell1".into(),
+        };
         let text = reply_text(&params(&["face:3", "face:1", "face:3"], 2.0), &reply);
-        assert!(text.starts_with("created Shell1: 2 mm walls inside the body, open at face:3, face:1."), "{text}");
+        assert!(
+            text.starts_with("created Shell1: 2 mm walls inside the body, open at face:3, face:1."),
+            "{text}"
+        );
         let mut p = params(&[], 1.5);
         p.outward = true;
         p.face_thicknesses = vec![wall("face:2", 5.0), wall("face:4", 3.0)];

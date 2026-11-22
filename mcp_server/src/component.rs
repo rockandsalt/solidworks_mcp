@@ -19,8 +19,8 @@ use glam::{DMat3, DQuat, DVec3};
 
 use crate::addin::proto;
 use crate::assembly::{self, placement_text};
-use crate::{edit, feature_text, files, motion};
 use crate::inspect::{IdRegistry, Kind, MM_PER_M, direction as unit_text, mm, point_mm, round};
+use crate::{edit, feature_text, files, motion};
 
 /// More than this in one call is almost certainly a mistake (and slow).
 const MAX_INSTANCES: usize = 100;
@@ -71,7 +71,11 @@ fn invalid(message: impl Into<String>) -> McpError {
 }
 
 fn to_proto(v: DVec3) -> proto::Vec3 {
-    proto::Vec3 { x: v.x, y: v.y, z: v.z }
+    proto::Vec3 {
+        x: v.x,
+        y: v.y,
+        z: v.z,
+    }
 }
 
 fn direction(name: &str, v: Option<[f64; 3]>) -> Result<Option<DVec3>, McpError> {
@@ -80,7 +84,11 @@ fn direction(name: &str, v: Option<[f64; 3]>) -> Result<Option<DVec3>, McpError>
         .try_normalize()
         .filter(|d| d.is_finite())
         .map(Some)
-        .ok_or_else(|| invalid(format!("{name} must be a non-zero direction like [0, 0, 1]")))
+        .ok_or_else(|| {
+            invalid(format!(
+                "{name} must be a non-zero direction like [0, 0, 1]"
+            ))
+        })
 }
 
 /// The component's origin and axes in assembly space (meters, unit,
@@ -90,7 +98,10 @@ fn placement(p: &PlacementParams) -> Result<proto::ComponentPlacement, McpError>
     if !origin.is_finite() {
         return Err(invalid("origin_mm must be three finite numbers"));
     }
-    let (x, z) = match (direction("x_axis", p.x_axis)?, direction("z_axis", p.z_axis)?) {
+    let (x, z) = match (
+        direction("x_axis", p.x_axis)?,
+        direction("z_axis", p.z_axis)?,
+    ) {
         (None, None) => (DVec3::X, DVec3::Z),
         (Some(x), None) => {
             let turn = DQuat::from_rotation_arc(DVec3::X, x);
@@ -126,7 +137,10 @@ pub fn request(
     resolve: impl FnOnce(&str) -> Result<Vec<u8>, McpError>,
 ) -> Result<proto::InsertComponentsRequest, McpError> {
     use proto::insert_components_request::Source;
-    let source = match (params.file.as_deref(), params.copy_of.as_deref().map(str::trim)) {
+    let source = match (
+        params.file.as_deref(),
+        params.copy_of.as_deref().map(str::trim),
+    ) {
         (Some(_), Some(_)) => return Err(invalid("give file or copy_of, not both")),
         (None, None) => {
             return Err(invalid(
@@ -149,7 +163,10 @@ pub fn request(
         None => vec![placement(&PlacementParams::default())?],
         Some(at) if at.is_empty() => return Err(invalid("`at` needs at least one placement")),
         Some(at) if at.len() > MAX_INSTANCES => {
-            return Err(invalid(format!("at most {MAX_INSTANCES} components per call, got {}", at.len())));
+            return Err(invalid(format!(
+                "at most {MAX_INSTANCES} components per call, got {}",
+                at.len()
+            )));
         }
         Some(at) => at
             .iter()
@@ -159,7 +176,12 @@ pub fn request(
     };
     Ok(proto::InsertComponentsRequest {
         source: Some(source),
-        configuration: params.configuration.as_deref().map(str::trim).unwrap_or_default().to_string(),
+        configuration: params
+            .configuration
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string(),
         placements,
         fixed: params.fixed,
     })
@@ -170,7 +192,11 @@ pub fn reply_text(ids: &mut IdRegistry, reply: &proto::InsertComponentsResponse)
         return "inserted nothing.".into();
     };
     let file = first.file.rsplit(['\\', '/']).next().unwrap_or(&first.file);
-    let what = if first.subassembly { "subassembly" } else { "component" };
+    let what = if first.subassembly {
+        "subassembly"
+    } else {
+        "component"
+    };
     let mut text = format!(
         "inserted {} {what}{} of {file}",
         reply.components.len(),
@@ -181,7 +207,9 @@ pub fn reply_text(ids: &mut IdRegistry, reply: &proto::InsertComponentsResponse)
     }
     text += ":";
     for c in &reply.components {
-        let id = ids.id_for(Kind::Component, &c.persist_id).unwrap_or_default();
+        let id = ids
+            .id_for(Kind::Component, &c.persist_id)
+            .unwrap_or_default();
         text += &format!("\n- {id}: {}", placement_text(c));
     }
     text += "\nMate them with add_mate: inspect_model what=\"faces\" or what=\"features\" \
@@ -238,7 +266,12 @@ pub fn replace_request(
         component_persist_ids: persist_ids,
         all_instances: params.all_instances.unwrap_or(false),
         path,
-        configuration: params.configuration.as_deref().map(str::trim).unwrap_or_default().to_string(),
+        configuration: params
+            .configuration
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string(),
     })
 }
 
@@ -262,7 +295,13 @@ pub fn replace_reply_text(
     let new_file = reply
         .replaced
         .iter()
-        .filter_map(|r| r.after.as_ref().filter(|a| r.before.as_ref().is_some_and(|b| !same_file(&a.file, &b.file))))
+        .filter_map(|r| {
+            r.after.as_ref().filter(|a| {
+                r.before
+                    .as_ref()
+                    .is_some_and(|b| !same_file(&a.file, &b.file))
+            })
+        })
         .chain(&reply.unpaired)
         .next()
         .map(|c| (file_name(&c.file).to_string(), c.configuration.clone()))
@@ -276,7 +315,9 @@ pub fn replace_reply_text(
         let old = format!("{} ({})", before.name, file_name(&before.file));
         match &r.after {
             Some(after) if !same_file(&after.file, &before.file) => {
-                let id = ids.id_for(Kind::Component, &after.persist_id).unwrap_or_default();
+                let id = ids
+                    .id_for(Kind::Component, &after.persist_id)
+                    .unwrap_or_default();
                 done.push(format!("- {old} -> {id}: {}", placement_text(after)));
             }
             Some(_) => not_done.push(format!("{old}: SolidWorks left it as it was")),
@@ -297,8 +338,13 @@ pub fn replace_reply_text(
         text += &format!("\n{line}");
     }
     for c in &reply.unpaired {
-        let id = ids.id_for(Kind::Component, &c.persist_id).unwrap_or_default();
-        text += &format!("\n- {id} (new; which old component it replaced is unclear): {}", placement_text(c));
+        let id = ids
+            .id_for(Kind::Component, &c.persist_id)
+            .unwrap_or_default();
+        text += &format!(
+            "\n- {id} (new; which old component it replaced is unclear): {}",
+            placement_text(c)
+        );
     }
     if !not_done.is_empty() {
         text += &format!("\nNot replaced: {}.", not_done.join("; "));
@@ -309,7 +355,11 @@ pub fn replace_reply_text(
     if reply.mates.is_empty() {
         text += "\nNo mates referenced the replaced components.";
     } else {
-        text += &format!("\nMates: {} of {} re-attached", kept.len(), reply.mates.len());
+        text += &format!(
+            "\nMates: {} of {} re-attached",
+            kept.len(),
+            reply.mates.len()
+        );
         if !kept.is_empty() {
             let names: Vec<String> = kept
                 .iter()
@@ -324,25 +374,41 @@ pub fn replace_reply_text(
         text.push('.');
     }
     if !broken.is_empty() {
-        text += "\nUnresolved mates (give them new entities with edit_mate, or delete_features them):";
+        text +=
+            "\nUnresolved mates (give them new entities with edit_mate, or delete_features them):";
         for m in &broken {
             let Some(before) = &m.before else { continue };
             let was_broken = mate_failure(before);
             let Some(after) = &m.after else {
-                text += &format!("\n- {} ({}): gone -- SolidWorks deleted it.", before.name, edit::mate_text(before));
+                text += &format!(
+                    "\n- {} ({}): gone -- SolidWorks deleted it.",
+                    before.name,
+                    edit::mate_text(before)
+                );
                 continue;
             };
-            let id = ids.id_for(Kind::Feature, &after.persist_id).unwrap_or_default();
+            let id = ids
+                .id_for(Kind::Feature, &after.persist_id)
+                .unwrap_or_default();
             text += &format!("\n- {} ({id}, {})", after.name, edit::mate_text(after));
-            let entities: Vec<String> = m.entities.iter().map(|e| edit::entity_text(ids, e)).collect();
+            let entities: Vec<String> = m
+                .entities
+                .iter()
+                .map(|e| edit::entity_text(ids, e))
+                .collect();
             if !entities.is_empty() {
                 text += &format!(" between {}", entities.join(" and "));
             }
             let mut why = Vec::new();
             let missing = m.entities.iter().filter(|e| e.missing).count();
             if missing > 0 {
-                let lost: Vec<&str> =
-                    m.entities.iter().filter(|e| e.missing).map(|e| e.component_name.as_str()).filter(|n| !n.is_empty()).collect();
+                let lost: Vec<&str> = m
+                    .entities
+                    .iter()
+                    .filter(|e| e.missing)
+                    .map(|e| e.component_name.as_str())
+                    .filter(|n| !n.is_empty())
+                    .collect();
                 let mut w = format!(
                     "{missing} reference{} not found in the new file",
                     if missing == 1 { "" } else { "s" }
@@ -419,13 +485,20 @@ pub fn fix_request(
         }
         persist_ids.push(resolve(id)?);
     }
-    Ok(proto::FixComponentsRequest { component_persist_ids: persist_ids, fixed: params.fixed })
+    Ok(proto::FixComponentsRequest {
+        component_persist_ids: persist_ids,
+        fixed: params.fixed,
+    })
 }
 
 /// Whether the rebuild moved the component (more than a micrometer, or
 /// turned it).
 fn moved(before: &proto::ComponentInfo, after: &proto::ComponentInfo) -> bool {
-    let v = |v: &Option<proto::Vec3>| v.as_ref().map(|v| DVec3::new(v.x, v.y, v.z)).unwrap_or_default();
+    let v = |v: &Option<proto::Vec3>| {
+        v.as_ref()
+            .map(|v| DVec3::new(v.x, v.y, v.z))
+            .unwrap_or_default()
+    };
     [
         (&before.origin, &after.origin),
         (&before.x_axis, &after.x_axis),
@@ -436,15 +509,27 @@ fn moved(before: &proto::ComponentInfo, after: &proto::ComponentInfo) -> bool {
     .any(|(a, b)| (v(a) - v(b)).length() > 1e-6)
 }
 
-pub fn fix_reply_text(ids: &mut IdRegistry, params: &FixComponentsParams, reply: &proto::FixComponentsResponse) -> String {
-    let (verb, state) = if params.fixed { ("fixed", "fixed") } else { ("floated", "floating") };
+pub fn fix_reply_text(
+    ids: &mut IdRegistry,
+    params: &FixComponentsParams,
+    reply: &proto::FixComponentsResponse,
+) -> String {
+    let (verb, state) = if params.fixed {
+        ("fixed", "fixed")
+    } else {
+        ("floated", "floating")
+    };
     let mut changed = Vec::new();
     let mut already = Vec::new();
     let mut refused = Vec::new();
     let mut moved_any = false;
     for c in &reply.components {
-        let (Some(before), Some(after)) = (&c.before, &c.after) else { continue };
-        let id = ids.id_for(Kind::Component, &after.persist_id).unwrap_or_default();
+        let (Some(before), Some(after)) = (&c.before, &c.after) else {
+            continue;
+        };
+        let id = ids
+            .id_for(Kind::Component, &after.persist_id)
+            .unwrap_or_default();
         if before.fixed == params.fixed {
             already.push(format!("{} ({id})", after.name));
         } else if after.fixed != params.fixed {
@@ -453,7 +538,10 @@ pub fn fix_reply_text(ids: &mut IdRegistry, params: &FixComponentsParams, reply:
             let mut line = format!("- {id}: {}", placement_text(after));
             if moved(before, after) {
                 let was = before.origin.clone().unwrap_or_default();
-                line += &format!(" (moved by the rebuild; its origin was at {} mm)", point_mm(&was));
+                line += &format!(
+                    " (moved by the rebuild; its origin was at {} mm)",
+                    point_mm(&was)
+                );
                 moved_any = true;
             }
             changed.push(line);
@@ -472,7 +560,10 @@ pub fn fix_reply_text(ids: &mut IdRegistry, params: &FixComponentsParams, reply:
         text += &format!("\nAlready {state}, left alone: {}.", already.join(", "));
     }
     if !refused.is_empty() {
-        text += &format!("\nSolidWorks left these as they were: {}.", refused.join(", "));
+        text += &format!(
+            "\nSolidWorks left these as they were: {}.",
+            refused.join(", ")
+        );
     }
     if moved_any {
         text += "\nThe rebuild moved floated components to satisfy their mates: earlier inspect_model \
@@ -557,23 +648,33 @@ pub fn move_request(
     }
     let angle = params.angle_deg.unwrap_or_default();
     if !angle.is_finite() || angle.abs() > 360.0 {
-        return Err(invalid(format!("angle_deg must be between -360 and 360, got {angle}")));
+        return Err(invalid(format!(
+            "angle_deg must be between -360 and 360, got {angle}"
+        )));
     }
     let axis = direction("axis", params.axis)?;
     let center = params.center_mm.map(DVec3::from_array);
     match (axis, angle != 0.0) {
-        (None, true) => return Err(invalid("angle_deg needs the axis to turn about, e.g. axis=[0, 0, 1]")),
+        (None, true) => {
+            return Err(invalid(
+                "angle_deg needs the axis to turn about, e.g. axis=[0, 0, 1]",
+            ));
+        }
         (Some(_), false) => return Err(invalid("axis needs angle_deg, how far to turn")),
         _ => {}
     }
     if center.is_some() && angle == 0.0 {
-        return Err(invalid("center_mm is the rotation axis' point: give it with axis and angle_deg"));
+        return Err(invalid(
+            "center_mm is the rotation axis' point: give it with axis and angle_deg",
+        ));
     }
     if center.is_some_and(|c| !c.is_finite()) {
         return Err(invalid("center_mm must be three finite numbers"));
     }
     if translation == DVec3::ZERO && angle == 0.0 {
-        return Err(invalid("give translate_mm and / or axis + angle_deg: the motion to try"));
+        return Err(invalid(
+            "give translate_mm and / or axis + angle_deg: the motion to try",
+        ));
     }
     let steps = match params.steps {
         Some(n) if !(1..=MAX_STEPS).contains(&n) => {
@@ -597,11 +698,18 @@ pub fn move_request(
 }
 
 fn vec(v: &Option<proto::Vec3>) -> DVec3 {
-    v.as_ref().map(|v| DVec3::new(v.x, v.y, v.z)).unwrap_or_default()
+    v.as_ref()
+        .map(|v| DVec3::new(v.x, v.y, v.z))
+        .unwrap_or_default()
 }
 
 /// Origin (meters) and rotation (the axes as columns).
-fn frame(origin: &Option<proto::Vec3>, x: &Option<proto::Vec3>, y: &Option<proto::Vec3>, z: &Option<proto::Vec3>) -> (DVec3, DMat3) {
+fn frame(
+    origin: &Option<proto::Vec3>,
+    x: &Option<proto::Vec3>,
+    y: &Option<proto::Vec3>,
+    z: &Option<proto::Vec3>,
+) -> (DVec3, DMat3) {
     (vec(origin), DMat3::from_cols(vec(x), vec(y), vec(z)))
 }
 
@@ -611,7 +719,9 @@ fn info_frame(c: &proto::ComponentInfo) -> (DVec3, DMat3) {
 
 /// The turn taking `from` to `to`: angle in degrees (0..180) and axis.
 fn turn(from: DMat3, to: DMat3) -> (f64, DVec3) {
-    let (axis, angle) = DQuat::from_mat3(&(to * from.transpose())).normalize().to_axis_angle();
+    let (axis, angle) = DQuat::from_mat3(&(to * from.transpose()))
+        .normalize()
+        .to_axis_angle();
     let (axis, angle) = if angle > std::f64::consts::PI {
         (-axis, std::f64::consts::TAU - angle)
     } else {
@@ -632,7 +742,11 @@ fn motion_text(from: (DVec3, DMat3), to: (DVec3, DMat3)) -> String {
     );
     let (deg, axis) = turn(from.1, to.1);
     if deg >= REACHED_DEG {
-        text += &format!(", turned {} deg about {}", round(deg, 2), unit_text(&to_proto(axis)));
+        text += &format!(
+            ", turned {} deg about {}",
+            round(deg, 2),
+            unit_text(&to_proto(axis))
+        );
     }
     text
 }
@@ -643,17 +757,36 @@ fn moves(from: (DVec3, DMat3), to: (DVec3, DMat3)) -> bool {
     (to.0 - from.0).length() * MM_PER_M >= REACHED_MM || turn(from.1, to.1).0 >= REACHED_DEG
 }
 
-pub fn move_reply_text(ids: &mut IdRegistry, params: &MoveComponentParams, request: &proto::MoveComponentRequest, reply: &proto::MoveComponentResponse) -> String {
-    let (Some(before), Some(after)) = reply.component.as_ref().map(|c| (c.before.as_ref(), c.after.as_ref())).unwrap_or_default() else {
+pub fn move_reply_text(
+    ids: &mut IdRegistry,
+    params: &MoveComponentParams,
+    request: &proto::MoveComponentRequest,
+    reply: &proto::MoveComponentResponse,
+) -> String {
+    let (Some(before), Some(after)) = reply
+        .component
+        .as_ref()
+        .map(|c| (c.before.as_ref(), c.after.as_ref()))
+        .unwrap_or_default()
+    else {
         return "SolidWorks didn't report the component".into();
     };
-    let id = ids.id_for(Kind::Component, &after.persist_id).unwrap_or_default();
+    let id = ids
+        .id_for(Kind::Component, &after.persist_id)
+        .unwrap_or_default();
     let start = info_frame(before);
     let reached = info_frame(after);
-    let target = reply.target.as_ref().map(|t| frame(&t.origin, &t.x_axis, &t.y_axis, &t.z_axis)).unwrap_or(start);
+    let target = reply
+        .target
+        .as_ref()
+        .map(|t| frame(&t.origin, &t.x_axis, &t.y_axis, &t.z_axis))
+        .unwrap_or(start);
 
     let mut text = if params.restore {
-        format!("Tried moving {} ({id}), then put everything back.", after.name)
+        format!(
+            "Tried moving {} ({id}), then put everything back.",
+            after.name
+        )
     } else {
         format!("Moved {} ({id}).", after.name)
     };
@@ -702,8 +835,14 @@ pub fn move_reply_text(ids: &mut IdRegistry, params: &MoveComponentParams, reque
     if !others.is_empty() {
         text += "\nAlso moved by their mates:";
         for (b, a) in &others {
-            let other_id = ids.id_for(Kind::Component, &a.persist_id).unwrap_or_default();
-            text += &format!("\n- {} ({other_id}): {}", a.name, motion_text(info_frame(b), info_frame(a)));
+            let other_id = ids
+                .id_for(Kind::Component, &a.persist_id)
+                .unwrap_or_default();
+            text += &format!(
+                "\n- {} ({other_id}): {}",
+                a.name,
+                motion_text(info_frame(b), info_frame(a))
+            );
         }
     }
 
@@ -771,11 +910,17 @@ mod tests {
 
     fn close(v: &Option<proto::Vec3>, want: [f64; 3]) -> bool {
         let v = v.as_ref().unwrap();
-        (v.x - want[0]).abs() < 1e-12 && (v.y - want[1]).abs() < 1e-12 && (v.z - want[2]).abs() < 1e-12
+        (v.x - want[0]).abs() < 1e-12
+            && (v.y - want[1]).abs() < 1e-12
+            && (v.z - want[2]).abs() < 1e-12
     }
 
     fn at(origin: [f64; 3], x: Option<[f64; 3]>, z: Option<[f64; 3]>) -> PlacementParams {
-        PlacementParams { origin_mm: Some(origin), x_axis: x, z_axis: z }
+        PlacementParams {
+            origin_mm: Some(origin),
+            x_axis: x,
+            z_axis: z,
+        }
     }
 
     #[test]
@@ -803,7 +948,11 @@ mod tests {
         // Z upside down: some half turn, still right-handed.
         let p = placement(&at([0.0; 3], None, Some([0.0, 0.0, -1.0]))).unwrap();
         let (x, y, z) = (p.x_axis.unwrap(), p.y_axis.unwrap(), p.z_axis.unwrap());
-        let (x, y, z) = (DVec3::new(x.x, x.y, x.z), DVec3::new(y.x, y.y, y.z), DVec3::new(z.x, z.y, z.z));
+        let (x, y, z) = (
+            DVec3::new(x.x, x.y, x.z),
+            DVec3::new(y.x, y.y, y.z),
+            DVec3::new(z.x, z.y, z.z),
+        );
         assert!((z - DVec3::NEG_Z).length() < 1e-12);
         assert!((x.cross(y) - z).length() < 1e-12 && x.dot(z).abs() < 1e-12);
     }
@@ -835,10 +984,15 @@ mod tests {
         assert!(request(&params(Some("C:\\a\\b.SLDDRW"), None), none).is_err());
         assert!(request(&params(Some("b.SLDPRT"), None), none).is_err());
         assert!(request(&params(None, Some("face:3")), none).is_err());
-        let r = request(&params(None, Some("component:3")), |id| Ok(id.as_bytes().to_vec())).unwrap();
+        let r = request(&params(None, Some("component:3")), |id| {
+            Ok(id.as_bytes().to_vec())
+        })
+        .unwrap();
         assert_eq!(
             r.source,
-            Some(proto::insert_components_request::Source::CopyOfPersistId(b"component:3".to_vec()))
+            Some(proto::insert_components_request::Source::CopyOfPersistId(
+                b"component:3".to_vec()
+            ))
         );
         assert_eq!(r.placements.len(), 1);
         assert_eq!(r.fixed, None);
@@ -847,7 +1001,10 @@ mod tests {
     #[test]
     fn several_placements_several_components() {
         let mut p = params(None, Some("component:3"));
-        p.at = Some(vec![at([0.0; 3], None, None), at([30.0, 0.0, 0.0], None, None)]);
+        p.at = Some(vec![
+            at([0.0; 3], None, None),
+            at([30.0, 0.0, 0.0], None, None),
+        ]);
         p.fixed = Some(false);
         let r = request(&p, |_| Ok(vec![1])).unwrap();
         assert_eq!(r.placements.len(), 2);
@@ -871,24 +1028,40 @@ mod tests {
 
     #[test]
     fn replace_takes_component_ids_and_a_file() {
-        let file = std::env::current_exe().unwrap().with_file_name("replace-test.SLDPRT");
+        let file = std::env::current_exe()
+            .unwrap()
+            .with_file_name("replace-test.SLDPRT");
         std::fs::write(&file, b"").unwrap();
         let file = file.to_str().unwrap();
         let resolve = |id: &str| -> Result<Vec<u8>, McpError> { Ok(id.as_bytes().to_vec()) };
         assert!(replace_request(&replace_params(&[], file), resolve).is_err());
         assert!(replace_request(&replace_params(&["face:1"], file), resolve).is_err());
-        assert!(replace_request(&replace_params(&["component:1"], "C:\\nope\\x.SLDPRT"), resolve).is_err());
+        assert!(
+            replace_request(
+                &replace_params(&["component:1"], "C:\\nope\\x.SLDPRT"),
+                resolve
+            )
+            .is_err()
+        );
         assert!(replace_request(&replace_params(&["component:1"], "x.SLDPRT"), resolve).is_err());
         let mut p = replace_params(&["component:1", " component:2 "], file);
         p.configuration = Some(" Long ".into());
         let r = replace_request(&p, resolve).unwrap();
-        assert_eq!(r.component_persist_ids, vec![b"component:1".to_vec(), b"component:2".to_vec()]);
+        assert_eq!(
+            r.component_persist_ids,
+            vec![b"component:1".to_vec(), b"component:2".to_vec()]
+        );
         assert_eq!((r.all_instances, r.configuration.as_str()), (false, "Long"));
         std::fs::remove_file(file).ok();
     }
 
     fn component(pid: &[u8], name: &str, file: &str) -> proto::ComponentInfo {
-        proto::ComponentInfo { persist_id: pid.to_vec(), name: name.into(), file: file.into(), ..Default::default() }
+        proto::ComponentInfo {
+            persist_id: pid.to_vec(),
+            name: name.into(),
+            file: file.into(),
+            ..Default::default()
+        }
     }
 
     fn mate(pid: &[u8], name: &str, error: i32) -> proto::MateInfo {
@@ -927,7 +1100,11 @@ mod tests {
                     before: Some(mate(b"m2", "Coincident2", 0)),
                     after: Some(mate(b"m2", "Coincident2", 48)),
                     entities: vec![
-                        proto::MateEntityState { missing: true, component_name: "plate-1".into(), ..Default::default() },
+                        proto::MateEntityState {
+                            missing: true,
+                            component_name: "plate-1".into(),
+                            ..Default::default()
+                        },
                         proto::MateEntityState {
                             kind: "face".into(),
                             persist_id: b"f".to_vec(),
@@ -937,26 +1114,70 @@ mod tests {
                     ],
                     broken: true,
                 },
-                proto::ReplacedMate { before: Some(mate(b"m3", "Coincident3", 0)), after: None, entities: vec![], broken: true },
+                proto::ReplacedMate {
+                    before: Some(mate(b"m3", "Coincident3", 0)),
+                    after: None,
+                    entities: vec![],
+                    broken: true,
+                },
             ],
             new_errors: vec![
-                proto::FeatureProblem { name: "Mates".into(), type_name: "MateGroup".into(), error_code: 1, warning: true },
-                proto::FeatureProblem { name: "LPattern1".into(), type_name: "LPattern".into(), error_code: 73, warning: false },
+                proto::FeatureProblem {
+                    name: "Mates".into(),
+                    type_name: "MateGroup".into(),
+                    error_code: 1,
+                    warning: true,
+                },
+                proto::FeatureProblem {
+                    name: "LPattern1".into(),
+                    type_name: "LPattern".into(),
+                    error_code: 73,
+                    warning: false,
+                },
             ],
         };
         let params = replace_params(&["component:1", "component:2"], "C:\\d\\plate.SLDPRT");
         let text = replace_reply_text(&mut ids, &params, &reply);
-        assert!(text.starts_with("replaced 1 component with plate.SLDPRT:"), "{text}");
-        assert!(text.contains("- block-1 (block.SLDPRT) -> component:"), "{text}");
-        assert!(text.contains("Not replaced: block-2 (block.SLDPRT): SolidWorks left it as it was."), "{text}");
-        assert!(text.contains("Mates: 1 of 3 re-attached: Coincident1 (feature:"), "{text}");
+        assert!(
+            text.starts_with("replaced 1 component with plate.SLDPRT:"),
+            "{text}"
+        );
+        assert!(
+            text.contains("- block-1 (block.SLDPRT) -> component:"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Not replaced: block-2 (block.SLDPRT): SolidWorks left it as it was."),
+            "{text}"
+        );
+        assert!(
+            text.contains("Mates: 1 of 3 re-attached: Coincident1 (feature:"),
+            "{text}"
+        );
         assert!(text.contains("- Coincident2 (feature:"), "{text}");
-        assert!(text.contains("between (missing) and face:1 on base-1"), "{text}");
-        assert!(text.contains("1 reference not found in the new file (on plate-1); a mated entity is missing"), "{text}");
-        assert!(text.contains("- Coincident3 (coincident): gone -- SolidWorks deleted it.\n"), "{text}");
+        assert!(
+            text.contains("between (missing) and face:1 on base-1"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "1 reference not found in the new file (on plate-1); a mated entity is missing"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("- Coincident3 (coincident): gone -- SolidWorks deleted it.\n"),
+            "{text}"
+        );
         assert!(text.contains("a mated entity is missing.\n"), "{text}");
-        assert!(text.contains("\nNow failing to rebuild: LPattern1"), "{text}");
-        assert!(!text.contains("Mates (") && !text.contains("warnings"), "{text}");
+        assert!(
+            text.contains("\nNow failing to rebuild: LPattern1"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("Mates (") && !text.contains("warnings"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -969,7 +1190,10 @@ mod tests {
         assert!(fix_request(&p(&[], true), resolve).is_err());
         assert!(fix_request(&p(&["face:1"], true), resolve).is_err());
         let r = fix_request(&p(&[" component:1 ", "component:2"], false), resolve).unwrap();
-        assert_eq!(r.component_persist_ids, vec![b"component:1".to_vec(), b"component:2".to_vec()]);
+        assert_eq!(
+            r.component_persist_ids,
+            vec![b"component:1".to_vec(), b"component:2".to_vec()]
+        );
         assert!(!r.fixed);
     }
 
@@ -978,7 +1202,11 @@ mod tests {
             persist_id: pid.to_vec(),
             name: name.into(),
             fixed,
-            origin: Some(proto::Vec3 { x: origin[0], y: origin[1], z: origin[2] }),
+            origin: Some(proto::Vec3 {
+                x: origin[0],
+                y: origin[1],
+                z: origin[2],
+            }),
             ..Default::default()
         }
     }
@@ -986,27 +1214,57 @@ mod tests {
     #[test]
     fn fix_text_reports_changed_moved_and_untouched() {
         let mut ids = IdRegistry::default();
-        let state = |before, after| proto::ComponentFixState { before: Some(before), after: Some(after) };
+        let state = |before, after| proto::ComponentFixState {
+            before: Some(before),
+            after: Some(after),
+        };
         let reply = proto::FixComponentsResponse {
             components: vec![
-                state(placed(b"a", "block-1", true, [0.0; 3]), placed(b"a", "block-1", false, [0.0; 3])),
-                state(placed(b"b", "block-2", true, [0.0; 3]), placed(b"b", "block-2", false, [0.01, 0.0, 0.0])),
-                state(placed(b"c", "block-3", false, [0.0; 3]), placed(b"c", "block-3", false, [0.0; 3])),
-                state(placed(b"d", "block-4", true, [0.0; 3]), placed(b"d", "block-4", true, [0.0; 3])),
+                state(
+                    placed(b"a", "block-1", true, [0.0; 3]),
+                    placed(b"a", "block-1", false, [0.0; 3]),
+                ),
+                state(
+                    placed(b"b", "block-2", true, [0.0; 3]),
+                    placed(b"b", "block-2", false, [0.01, 0.0, 0.0]),
+                ),
+                state(
+                    placed(b"c", "block-3", false, [0.0; 3]),
+                    placed(b"c", "block-3", false, [0.0; 3]),
+                ),
+                state(
+                    placed(b"d", "block-4", true, [0.0; 3]),
+                    placed(b"d", "block-4", true, [0.0; 3]),
+                ),
             ],
             new_errors: vec![],
         };
-        let params = FixComponentsParams { components: vec![], fixed: false };
+        let params = FixComponentsParams {
+            components: vec![],
+            fixed: false,
+        };
         let text = fix_reply_text(&mut ids, &params, &reply);
-        assert!(text.starts_with("floated 2 components:\n- component:1: block-1 has its origin"), "{text}");
+        assert!(
+            text.starts_with("floated 2 components:\n- component:1: block-1 has its origin"),
+            "{text}"
+        );
         assert!(!text.lines().nth(1).unwrap().contains("moved"), "{text}");
         assert!(text.contains("block-2 has its origin at [10.0,0.0,0.0] mm (moved by the rebuild; its origin was at [0.0,0.0,0.0] mm)"), "{text}");
-        assert!(text.contains("\nAlready floating, left alone: block-3 (component:3)."), "{text}");
-        assert!(text.contains("\nSolidWorks left these as they were: block-4 (component:4)."), "{text}");
+        assert!(
+            text.contains("\nAlready floating, left alone: block-3 (component:3)."),
+            "{text}"
+        );
+        assert!(
+            text.contains("\nSolidWorks left these as they were: block-4 (component:4)."),
+            "{text}"
+        );
         assert!(text.contains("out of date"), "{text}");
 
         let reply = proto::FixComponentsResponse {
-            components: vec![state(placed(b"a", "block-1", false, [0.0; 3]), placed(b"a", "block-1", true, [0.0; 3]))],
+            components: vec![state(
+                placed(b"a", "block-1", false, [0.0; 3]),
+                placed(b"a", "block-1", true, [0.0; 3]),
+            )],
             new_errors: vec![proto::FeatureProblem {
                 name: "Distance1".into(),
                 type_name: "MateDistanceDim".into(),
@@ -1014,14 +1272,24 @@ mod tests {
                 warning: false,
             }],
         };
-        let params = FixComponentsParams { components: vec![], fixed: true };
+        let params = FixComponentsParams {
+            components: vec![],
+            fixed: true,
+        };
         let text = fix_reply_text(&mut ids, &params, &reply);
-        assert!(text.starts_with("fixed 1 component:\n- component:1: block-1 (fixed)"), "{text}");
+        assert!(
+            text.starts_with("fixed 1 component:\n- component:1: block-1 (fixed)"),
+            "{text}"
+        );
         assert!(text.contains("Now failing to rebuild: Distance1"), "{text}");
         assert!(text.contains("float it again"), "{text}");
     }
 
-    fn move_params(translate: Option<[f64; 3]>, axis: Option<[f64; 3]>, angle: Option<f64>) -> MoveComponentParams {
+    fn move_params(
+        translate: Option<[f64; 3]>,
+        axis: Option<[f64; 3]>,
+        angle: Option<f64>,
+    ) -> MoveComponentParams {
         MoveComponentParams {
             component: "component:1".into(),
             translate_mm: translate,
@@ -1043,10 +1311,19 @@ mod tests {
         assert!(move_request(&move_params(None, None, Some(30.0)), resolve).is_err());
         assert!(move_request(&move_params(None, Some([0.0, 0.0, 1.0]), None), resolve).is_err());
         assert!(move_request(&move_params(None, Some([0.0; 3]), Some(30.0)), resolve).is_err());
-        assert!(move_request(&move_params(None, Some([0.0, 0.0, 1.0]), Some(400.0)), resolve).is_err());
+        assert!(
+            move_request(
+                &move_params(None, Some([0.0, 0.0, 1.0]), Some(400.0)),
+                resolve
+            )
+            .is_err()
+        );
         let mut p = move_params(Some([10.0, 0.0, 0.0]), None, None);
         p.center_mm = Some([0.0; 3]);
-        assert!(move_request(&p, resolve).is_err(), "center without a rotation");
+        assert!(
+            move_request(&p, resolve).is_err(),
+            "center without a rotation"
+        );
         p.center_mm = None;
         p.component = "face:1".into();
         assert!(move_request(&p, resolve).is_err());
@@ -1056,7 +1333,10 @@ mod tests {
 
         let r = move_request(&move_params(Some([10.0, 0.0, 0.0]), None, None), resolve).unwrap();
         assert_eq!(r.translation.unwrap().x, 0.01);
-        assert_eq!((r.rotation_angle, r.steps, r.rotation_center), (0.0, 1, None));
+        assert_eq!(
+            (r.rotation_angle, r.steps, r.rotation_center),
+            (0.0, 1, None)
+        );
         let mut p = move_params(None, Some([0.0, 0.0, 2.0]), Some(-100.0));
         p.center_mm = Some([5.0, 0.0, 0.0]);
         let r = move_request(&p, resolve).unwrap();
@@ -1080,9 +1360,15 @@ mod tests {
         }
     }
 
-    fn move_reply(after: proto::ComponentInfo, target: &proto::ComponentInfo) -> proto::MoveComponentResponse {
+    fn move_reply(
+        after: proto::ComponentInfo,
+        target: &proto::ComponentInfo,
+    ) -> proto::MoveComponentResponse {
         proto::MoveComponentResponse {
-            component: Some(proto::ComponentMove { before: Some(pose(b"s", "slider-1", [0.0, 0.06, 0.0], 0.0)), after: Some(after) }),
+            component: Some(proto::ComponentMove {
+                before: Some(pose(b"s", "slider-1", [0.0, 0.06, 0.0], 0.0)),
+                after: Some(after),
+            }),
             target: Some(proto::ComponentPlacement {
                 origin: target.origin.clone(),
                 x_axis: target.x_axis.clone(),
@@ -1108,15 +1394,41 @@ mod tests {
             after: Some(pose(b"f", "follower-1", [0.01, 0.12, 0.0], 0.0)),
         });
         let text = move_reply_text(&mut ids, &params, &request, &reply);
-        assert!(text.starts_with("Moved slider-1 (component:1).\nAsked: origin [0.0,60.0,0.0] -> [10.0,65.0,3.0] mm"), "{text}");
-        assert!(text.contains("\nGot:   origin [0.0,60.0,0.0] -> [10.0,60.0,0.0] mm (by [10.0,0.0,0.0] mm, 10 mm)"), "{text}");
-        assert!(text.contains("held it back: it ended 5.831 mm and 0 deg from"), "{text}");
-        assert!(text.contains("\n- follower-1 (component:2): origin [0.0,120.0,0.0] -> [10.0,120.0,0.0] mm"), "{text}");
+        assert!(
+            text.starts_with(
+                "Moved slider-1 (component:1).\nAsked: origin [0.0,60.0,0.0] -> [10.0,65.0,3.0] mm"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "\nGot:   origin [0.0,60.0,0.0] -> [10.0,60.0,0.0] mm (by [10.0,0.0,0.0] mm, 10 mm)"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("held it back: it ended 5.831 mm and 0 deg from"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "\n- follower-1 (component:2): origin [0.0,120.0,0.0] -> [10.0,120.0,0.0] mm"
+            ),
+            "{text}"
+        );
         assert!(text.contains("out of date"), "{text}");
 
         // Reached.
-        let text = move_reply_text(&mut ids, &params, &request, &move_reply(target.clone(), &target));
-        assert!(text.contains("Solver: reached the requested pose"), "{text}");
+        let text = move_reply_text(
+            &mut ids,
+            &params,
+            &request,
+            &move_reply(target.clone(), &target),
+        );
+        assert!(
+            text.contains("Solver: reached the requested pose"),
+            "{text}"
+        );
 
         // Didn't move, with restore.
         let mut params = params;
@@ -1128,19 +1440,41 @@ mod tests {
             after: Some(pose(b"f", "follower-1", [1e-9, 0.12, 0.0], 1e-6)),
         });
         let text = move_reply_text(&mut ids, &params, &request, &reply);
-        assert!(text.starts_with("Tried moving slider-1 (component:1), then put everything back."), "{text}");
+        assert!(
+            text.starts_with("Tried moving slider-1 (component:1), then put everything back."),
+            "{text}"
+        );
         assert!(text.contains("Solver: it didn't move"), "{text}");
-        assert!(text.contains("Restored: every component is back") && !text.contains("out of date"), "{text}");
-        assert!(!text.contains("Also moved"), "solver noise isn't a move: {text}");
+        assert!(
+            text.contains("Restored: every component is back") && !text.contains("out of date"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("Also moved"),
+            "solver noise isn't a move: {text}"
+        );
 
         // A turn: reported in degrees about the axis.
         let params = move_params(None, Some([0.0, 0.0, 1.0]), Some(30.0));
         let request = move_request(&params, resolve).unwrap();
         let turned = pose(b"s", "slider-1", [0.0, 0.06, 0.0], 30.0);
         let mut reply = move_reply(turned.clone(), &turned);
-        reply.new_errors.push(proto::FeatureProblem { name: "Angle1".into(), type_name: "MateAngleDim".into(), error_code: 46, warning: false });
+        reply.new_errors.push(proto::FeatureProblem {
+            name: "Angle1".into(),
+            type_name: "MateAngleDim".into(),
+            error_code: 46,
+            warning: false,
+        });
         let text = move_reply_text(&mut ids, &params, &request, &reply);
-        assert!(text.contains("turned 30 deg about [0.0,0.0,1.0] (axis through [0.0,0.0,0.0] mm, in 2 steps)"), "{text}");
-        assert!(text.contains("Now failing to rebuild: Angle1") && text.contains("Move it back"), "{text}");
+        assert!(
+            text.contains(
+                "turned 30 deg about [0.0,0.0,1.0] (axis through [0.0,0.0,0.0] mm, in 2 steps)"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("Now failing to rebuild: Angle1") && text.contains("Move it back"),
+            "{text}"
+        );
     }
 }

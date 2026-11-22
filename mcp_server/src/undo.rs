@@ -26,11 +26,16 @@ pub struct UndoParams {
 pub fn request(params: &UndoParams) -> Result<proto::UndoRequest, McpError> {
     if !(1..=MAX_STEPS).contains(&params.steps) {
         return Err(McpError::invalid_params(
-            format!("steps must be between 1 and {MAX_STEPS}, got {}", params.steps),
+            format!(
+                "steps must be between 1 and {MAX_STEPS}, got {}",
+                params.steps
+            ),
             None,
         ));
     }
-    Ok(proto::UndoRequest { steps: params.steps })
+    Ok(proto::UndoRequest {
+        steps: params.steps,
+    })
 }
 
 fn feature_list(features: &[proto::FeatureRef]) -> String {
@@ -51,11 +56,20 @@ pub fn reply_text(reply: &proto::UndoResponse) -> String {
     if !reply.restored.is_empty() {
         changes.push(format!("restored {}", feature_list(&reply.restored)));
     }
-    let (before, after) = (reply.volume_before * MM_PER_M.powi(3), reply.volume_after * MM_PER_M.powi(3));
+    let (before, after) = (
+        reply.volume_before * MM_PER_M.powi(3),
+        reply.volume_after * MM_PER_M.powi(3),
+    );
     if (before - after).abs() >= 0.001 {
-        changes.push(format!("the solid volume went from {before:.3} to {after:.3} mm^3"));
+        changes.push(format!(
+            "the solid volume went from {before:.3} to {after:.3} mm^3"
+        ));
     }
-    let steps = if reply.steps_taken == 1 { "1 step".to_string() } else { format!("{} steps", reply.steps_taken) };
+    let steps = if reply.steps_taken == 1 {
+        "1 step".to_string()
+    } else {
+        format!("{} steps", reply.steps_taken)
+    };
     if changes.is_empty() {
         return format!(
             "undid {steps} in {}, but the feature tree and solid volume are as they were: that was a change \
@@ -76,7 +90,10 @@ mod tests {
     use super::*;
 
     fn feature(name: &str, type_name: &str) -> proto::FeatureRef {
-        proto::FeatureRef { name: name.into(), type_name: type_name.into() }
+        proto::FeatureRef {
+            name: name.into(),
+            type_name: type_name.into(),
+        }
     }
 
     #[test]
@@ -107,9 +124,15 @@ mod tests {
             steps_taken: 2,
             ..Default::default()
         };
-        assert!(reply_text(&reply).starts_with("undid 2 steps in Part1: restored Fillet1 (fillet)."));
+        assert!(
+            reply_text(&reply).starts_with("undid 2 steps in Part1: restored Fillet1 (fillet).")
+        );
 
-        let reply = proto::UndoResponse { document: "Part1".into(), steps_taken: 1, ..Default::default() };
+        let reply = proto::UndoResponse {
+            document: "Part1".into(),
+            steps_taken: 1,
+            ..Default::default()
+        };
         assert!(reply_text(&reply).contains("are as they were"));
     }
 }

@@ -81,7 +81,11 @@ pub fn section(model: &Model, plane: &Plane) -> Section {
             faces.push(kept);
         }
     }
-    let edges = model.edges.iter().flat_map(|e| clip_edge(e, plane)).collect();
+    let edges = model
+        .edges
+        .iter()
+        .flat_map(|e| clip_edge(e, plane))
+        .collect();
     let caps = boundaries
         .into_iter()
         .map(|(highlight, boundary)| {
@@ -123,7 +127,11 @@ fn clip_face(face: &Face, plane: &Plane) -> (Face, Vec<[Vec3; 2]>) {
     let mut cuts = Vec::new();
     for (i, tri) in face.vertices.chunks_exact(3).enumerate() {
         let corners: [Corner; 3] = std::array::from_fn(|k| {
-            let normal = if smooth { Vec3::from_array(face.normals[3 * i + k]) } else { Vec3::ZERO };
+            let normal = if smooth {
+                Vec3::from_array(face.normals[3 * i + k])
+            } else {
+                Vec3::ZERO
+            };
             (Vec3::from_array(tri[k]), normal)
         });
         let (polygon, cut) = clip_triangle(&corners, plane);
@@ -174,7 +182,11 @@ fn oriented(a: Vec3, b: Vec3, corners: &[Corner; 3], smooth: bool, plane: &Plane
         let [p, q, r] = corners.map(|c| c.0);
         (q - p).cross(r - p)
     };
-    if (b - a).dot(plane.normal.cross(outward)) >= 0.0 { [a, b] } else { [b, a] }
+    if (b - a).dot(plane.normal.cross(outward)) >= 0.0 {
+        [a, b]
+    } else {
+        [b, a]
+    }
 }
 
 /// The runs of `edge` that `plane` keeps.
@@ -198,7 +210,10 @@ fn clip_edge(edge: &Edge, plane: &Plane) -> Vec<Edge> {
     runs.push(run);
     runs.into_iter()
         .filter(|points| points.len() >= 2)
-        .map(|points| Edge { points, ..edge.clone() })
+        .map(|points| Edge {
+            points,
+            ..edge.clone()
+        })
         .collect()
 }
 
@@ -234,7 +249,8 @@ fn fill(boundary: &[[Vec3; 2]], plane: &Plane) -> Vec<[f32; 3]> {
     let mut heights: Vec<f32> = segments.iter().flat_map(|s| [s.0.y, s.1.y]).collect();
     heights.sort_by(f32::total_cmp);
     heights.dedup();
-    let x_at = |s: &(Vec2, Vec2, i32), y: f32| s.0.x + (s.1.x - s.0.x) * (y - s.0.y) / (s.1.y - s.0.y);
+    let x_at =
+        |s: &(Vec2, Vec2, i32), y: f32| s.0.x + (s.1.x - s.0.x) * (y - s.0.y) / (s.1.y - s.0.y);
 
     let mut triangles = Vec::new();
     let mut active: Vec<usize> = Vec::new();
@@ -247,7 +263,10 @@ fn fill(boundary: &[[Vec3; 2]], plane: &Plane) -> Vec<[f32; 3]> {
         }
         active.retain(|&i| segments[i].1.y > y0);
         let middle = (y0 + y1) / 2.0;
-        let mut crossing: Vec<(f32, usize)> = active.iter().map(|&i| (x_at(&segments[i], middle), i)).collect();
+        let mut crossing: Vec<(f32, usize)> = active
+            .iter()
+            .map(|&i| (x_at(&segments[i], middle), i))
+            .collect();
         crossing.sort_by(|a, b| a.0.total_cmp(&b.0));
         let mut winding = 0;
         for pair in crossing.windows(2) {
@@ -318,8 +337,16 @@ mod tests {
             point: Vec3::new(0.0, 0.0, 20.0),
             normal: Vec3::Z,
         };
-        let Section { model: cut, outline, .. } = section(&model, &plane);
-        let points = cut.faces.iter().flat_map(|f| &f.vertices).chain(cut.edges.iter().flat_map(|e| &e.points));
+        let Section {
+            model: cut,
+            outline,
+            ..
+        } = section(&model, &plane);
+        let points = cut
+            .faces
+            .iter()
+            .flat_map(|f| &f.vertices)
+            .chain(cut.edges.iter().flat_map(|e| &e.points));
         for p in points {
             assert!(p[2] <= 20.0 + 1e-4, "{p:?} is on the cut-away side");
         }
@@ -340,7 +367,10 @@ mod tests {
         let closed = |line: &Vec<[f32; 3]>| {
             Vec3::from_array(line[0]).distance(Vec3::from_array(*line.last().unwrap())) < 1e-3
         };
-        assert!(outline.iter().any(|l| closed(l) && l.len() >= 7), "the L isn't one closed loop: {outline:?}");
+        assert!(
+            outline.iter().any(|l| closed(l) && l.len() >= 7),
+            "the L isn't one closed loop: {outline:?}"
+        );
 
         // Cutting nothing away keeps everything.
         let beyond = Plane {
@@ -356,7 +386,10 @@ mod tests {
     #[test]
     fn keeps_any_needs_material_strictly_on_the_kept_side() {
         let model = bracket(false); // z 0..40
-        let at = |z: f32| Plane { point: Vec3::new(0.0, 0.0, z), normal: Vec3::Z };
+        let at = |z: f32| Plane {
+            point: Vec3::new(0.0, 0.0, z),
+            normal: Vec3::Z,
+        };
         assert!(at(20.0).keeps_any(&model));
         // Cut at its back face: only that face's plane would be left.
         assert!(!at(0.0).keeps_any(&model));
@@ -379,7 +412,9 @@ mod tests {
         // (radius 6, 8 high) that's highlighted.
         let mut model = bracket(false);
         model.faces.truncate(model.faces.len() - 2); // the bracket's open boss
-        model.faces.extend(cylinder(100.0, 20.0, 6.0, 0.0, 8.0, Some(0)));
+        model
+            .faces
+            .extend(cylinder(100.0, 20.0, 6.0, 0.0, 8.0, Some(0)));
         let cut = |normal: Vec3, point: Vec3| {
             section(&model, &Plane { point, normal })
                 .caps
@@ -397,15 +432,38 @@ mod tests {
         // Across the foot: 10 x 40.
         assert_eq!(cut(Vec3::X, Vec3::new(30.0, 0.0, 0.0)), [(None, 400.0)]);
         // Across the wall and the cylinder, tilted: still whole areas.
-        let tilted = section(&model, &Plane { point: Vec3::new(0.0, 4.0, 20.0), normal: Vec3::new(0.0, 1.0, 0.3).normalize() });
+        let tilted = section(
+            &model,
+            &Plane {
+                point: Vec3::new(0.0, 4.0, 20.0),
+                normal: Vec3::new(0.0, 1.0, 0.3).normalize(),
+            },
+        );
         assert_eq!(tilted.caps.len(), 2);
-        let cap = &section(&model, &Plane { point: z, normal: Vec3::Z }).caps[0];
+        let cap = &section(
+            &model,
+            &Plane {
+                point: z,
+                normal: Vec3::Z,
+            },
+        )
+        .caps[0];
         assert!(cap.vertices.iter().all(|p| (p[2] - 20.0).abs() < 1e-4));
         assert!(cap.normals.iter().all(|n| *n == [0.0, 0.0, 1.0]));
         // Transparent faces get no cap.
         let mut glass = model.clone();
         glass.faces.iter_mut().for_each(|f| f.transparent = true);
-        assert!(section(&glass, &Plane { point: z, normal: Vec3::Z }).caps.is_empty());
+        assert!(
+            section(
+                &glass,
+                &Plane {
+                    point: z,
+                    normal: Vec3::Z
+                }
+            )
+            .caps
+            .is_empty()
+        );
     }
 
     #[test]

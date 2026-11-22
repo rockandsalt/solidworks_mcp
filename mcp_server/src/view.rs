@@ -140,9 +140,15 @@ fn model_arg(value: Option<&str>) -> Result<String, McpError> {
     }
     let path = Path::new(&value);
     if !path.is_absolute() {
-        return Err(invalid(format!("model {value:?}: give an absolute path, or the name of an open part or assembly")));
+        return Err(invalid(format!(
+            "model {value:?}: give an absolute path, or the name of an open part or assembly"
+        )));
     }
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
     if ext != "sldprt" && ext != "sldasm" {
         return Err(invalid(format!(
             "model {value:?}: a drawing view shows a part (.SLDPRT) or an assembly (.SLDASM)"
@@ -158,24 +164,43 @@ fn model_arg(value: Option<&str>) -> Result<String, McpError> {
 fn orientation_arg(value: Option<&str>) -> String {
     let value = text(value);
     let standard = [
-        "front", "back", "left", "right", "top", "bottom", "isometric", "dimetric", "trimetric",
+        "front",
+        "back",
+        "left",
+        "right",
+        "top",
+        "bottom",
+        "isometric",
+        "dimetric",
+        "trimetric",
     ];
-    let bare = value.strip_prefix('*').unwrap_or(&value).to_ascii_lowercase();
+    let bare = value
+        .strip_prefix('*')
+        .unwrap_or(&value)
+        .to_ascii_lowercase();
     match standard.iter().find(|s| **s == bare) {
         Some(s) => format!("*{}{}", s[..1].to_ascii_uppercase(), &s[1..]),
         None => value,
     }
 }
 
-fn set_scale(request: &mut proto::SetupDrawingViewRequest, scale: Option<&str>) -> Result<(), McpError> {
+fn set_scale(
+    request: &mut proto::SetupDrawingViewRequest,
+    scale: Option<&str>,
+) -> Result<(), McpError> {
     use proto::setup_drawing_view_request::Scale;
-    let Some(scale) = scale.map(str::trim) else { return Ok(()) };
+    let Some(scale) = scale.map(str::trim) else {
+        return Ok(());
+    };
     request.scale = Some(match scale.to_ascii_lowercase().as_str() {
         "sheet" => Scale::FollowSheet(true),
         "parent" => Scale::FollowParent(true),
         _ => {
             let (numerator, denominator) = parse_scale(scale)?;
-            Scale::Ratio(proto::ViewScale { numerator, denominator })
+            Scale::Ratio(proto::ViewScale {
+                numerator,
+                denominator,
+            })
         }
     });
     Ok(())
@@ -191,20 +216,32 @@ fn set_display(request: &mut proto::SetupDrawingViewRequest, display: Option<Dis
 
 fn position(at_mm: Option<[f64; 2]>) -> Result<Option<proto::Vec3>, McpError> {
     match at_mm {
-        Some([x, y]) if x.is_finite() && y.is_finite() => {
-            Ok(Some(proto::Vec3 { x: x / MM_PER_M, y: y / MM_PER_M, z: 0.0 }))
-        }
+        Some([x, y]) if x.is_finite() && y.is_finite() => Ok(Some(proto::Vec3 {
+            x: x / MM_PER_M,
+            y: y / MM_PER_M,
+            z: 0.0,
+        })),
         Some(_) => Err(invalid("at_mm: give [x, y] in sheet mm")),
         None => Ok(None),
     }
 }
 
-pub fn create_request(params: &CreateDrawingViewParams) -> Result<proto::SetupDrawingViewRequest, McpError> {
+pub fn create_request(
+    params: &CreateDrawingViewParams,
+) -> Result<proto::SetupDrawingViewRequest, McpError> {
     if params.display == Some(Display::Parent) {
-        return Err(invalid("display \"parent\" is for projected views; a new view is made from the model"));
+        return Err(invalid(
+            "display \"parent\" is for projected views; a new view is made from the model",
+        ));
     }
-    if params.scale.as_deref().is_some_and(|s| s.trim().eq_ignore_ascii_case("parent")) {
-        return Err(invalid("scale \"parent\" is for projected views; a new view is made from the model"));
+    if params
+        .scale
+        .as_deref()
+        .is_some_and(|s| s.trim().eq_ignore_ascii_case("parent"))
+    {
+        return Err(invalid(
+            "scale \"parent\" is for projected views; a new view is made from the model",
+        ));
     }
     let mut request = proto::SetupDrawingViewRequest {
         create: true,
@@ -221,10 +258,14 @@ pub fn create_request(params: &CreateDrawingViewParams) -> Result<proto::SetupDr
     Ok(request)
 }
 
-pub fn edit_request(params: &EditDrawingViewParams) -> Result<proto::SetupDrawingViewRequest, McpError> {
+pub fn edit_request(
+    params: &EditDrawingViewParams,
+) -> Result<proto::SetupDrawingViewRequest, McpError> {
     let view = text(Some(&params.view));
     if view.is_empty() {
-        return Err(invalid("view: name the view to change, e.g. \"Drawing View1\""));
+        return Err(invalid(
+            "view: name the view to change, e.g. \"Drawing View1\"",
+        ));
     }
     if params.rename.as_ref().is_some_and(|r| r.trim().is_empty()) {
         return Err(invalid("rename: give the view's new name"));
@@ -279,7 +320,10 @@ impl Rect {
     pub fn of(view: &proto::ViewInfo) -> Option<Rect> {
         let b = view.outline.as_ref()?;
         let (lo, hi) = (b.min.as_ref()?, b.max.as_ref()?);
-        Some(Rect { lo: DVec2::new(lo.x, lo.y), hi: DVec2::new(hi.x, hi.y) })
+        Some(Rect {
+            lo: DVec2::new(lo.x, lo.y),
+            hi: DVec2::new(hi.x, hi.y),
+        })
     }
 
     pub fn overlaps(&self, other: &Rect, gap: f64) -> bool {
@@ -300,17 +344,25 @@ impl Rect {
     /// Moved so that its center is at `center`.
     pub fn centered_at(&self, center: DVec2) -> Rect {
         let half = self.size() / 2.0;
-        Rect { lo: center - half, hi: center + half }
+        Rect {
+            lo: center - half,
+            hi: center + half,
+        }
     }
 }
 
-pub(crate) fn find_view<'a>(sheet: &'a proto::SheetInfo, name: &str) -> Option<&'a proto::ViewInfo> {
+pub(crate) fn find_view<'a>(
+    sheet: &'a proto::SheetInfo,
+    name: &str,
+) -> Option<&'a proto::ViewInfo> {
     sheet.views.iter().find(|v| v.name == name)
 }
 
 /// The views on `sheet` whose outlines `name`'s overlaps.
 fn overlapping(sheet: &proto::SheetInfo, name: &str) -> Vec<String> {
-    let Some(rect) = find_view(sheet, name).and_then(Rect::of) else { return Vec::new() };
+    let Some(rect) = find_view(sheet, name).and_then(Rect::of) else {
+        return Vec::new();
+    };
     sheet
         .views
         .iter()
@@ -325,7 +377,12 @@ fn overlapping(sheet: &proto::SheetInfo, name: &str) -> Vec<String> {
 /// middle as possible. None if it already does, or nothing fits.
 pub fn free_spot(sheet: &proto::SheetInfo, name: &str) -> Option<DVec2> {
     let rect = find_view(sheet, name).and_then(Rect::of)?;
-    let others: Vec<Rect> = sheet.views.iter().filter(|v| v.name != name).filter_map(Rect::of).collect();
+    let others: Vec<Rect> = sheet
+        .views
+        .iter()
+        .filter(|v| v.name != name)
+        .filter_map(Rect::of)
+        .collect();
     let fits = |r: &Rect| {
         r.lo.x >= EDGE_MARGIN
             && r.lo.y >= EDGE_MARGIN
@@ -342,11 +399,17 @@ pub fn free_spot(sheet: &proto::SheetInfo, name: &str) -> Option<DVec2> {
     let half = rect.size() / 2.0;
     let middle = DVec2::new(sheet.width, sheet.height) / 2.0;
     let mut best: Option<(f64, DVec2)> = None;
-    let (nx, ny) = ((sheet.width / SPOT_STEP) as i64, (sheet.height / SPOT_STEP) as i64);
+    let (nx, ny) = (
+        (sheet.width / SPOT_STEP) as i64,
+        (sheet.height / SPOT_STEP) as i64,
+    );
     for i in 0..=nx {
         for j in 0..=ny {
             let c = DVec2::new(i as f64 * SPOT_STEP, j as f64 * SPOT_STEP);
-            let r = Rect { lo: c - half, hi: c + half };
+            let r = Rect {
+                lo: c - half,
+                hi: c + half,
+            };
             let d = c.distance_squared(middle);
             if fits(&r) && best.is_none_or(|(bd, _)| d < bd) {
                 best = Some((d, c));
@@ -361,11 +424,21 @@ pub fn free_spot(sheet: &proto::SheetInfo, name: &str) -> Option<DVec2> {
 /// nearest such place on the far side of `parent` from where it starts, or
 /// failing that the nearest that clears `parent` alone. The view's position
 /// for that, sheet meters; None if it's already fine or nothing works.
-pub fn slide_clear(sheet: &proto::SheetInfo, name: &str, parent: &str, direction: DVec2) -> Option<DVec2> {
+pub fn slide_clear(
+    sheet: &proto::SheetInfo,
+    name: &str,
+    parent: &str,
+    direction: DVec2,
+) -> Option<DVec2> {
     let view = find_view(sheet, name)?;
     let rect = Rect::of(view)?;
     let parent_rect = find_view(sheet, parent).and_then(Rect::of)?;
-    let others: Vec<Rect> = sheet.views.iter().filter(|v| v.name != name).filter_map(Rect::of).collect();
+    let others: Vec<Rect> = sheet
+        .views
+        .iter()
+        .filter(|v| v.name != name)
+        .filter_map(Rect::of)
+        .collect();
     let fits = |r: &Rect| {
         r.lo.x >= EDGE_MARGIN
             && r.lo.y >= EDGE_MARGIN
@@ -384,7 +457,10 @@ pub fn slide_clear(sheet: &proto::SheetInfo, name: &str, parent: &str, direction
         places
             .clone()
             .filter(|c| side(*c) && test(&rect.centered_at(*c)))
-            .min_by(|a, b| a.distance_squared(parent_rect.center()).total_cmp(&b.distance_squared(parent_rect.center())))
+            .min_by(|a, b| {
+                a.distance_squared(parent_rect.center())
+                    .total_cmp(&b.distance_squared(parent_rect.center()))
+            })
     };
     let center = nearest(&fits).or_else(|| nearest(&|r| !r.overlaps(&parent_rect, VIEW_GAP)))?;
     // The position may sit off the outline's middle (a detail view, a crop).
@@ -398,7 +474,11 @@ fn view_position(view: &proto::ViewInfo) -> Option<DVec2> {
 // ---- Reply --------------------------------------------------------------------
 
 fn mm2(p: DVec2) -> String {
-    format!("[{}, {}]", round(p.x * MM_PER_M, 1), round(p.y * MM_PER_M, 1))
+    format!(
+        "[{}, {}]",
+        round(p.x * MM_PER_M, 1),
+        round(p.y * MM_PER_M, 1)
+    )
 }
 
 fn file_name(path: &str) -> &str {
@@ -442,12 +522,19 @@ fn view_text(sheet: &proto::SheetInfo, view: &proto::ViewInfo) -> String {
         parts.push(format!("scale {scale}{from}"));
     }
     if let Some(mode) = display_mode_name(view.display_mode) {
-        let from = if view.uses_parent_display { format!(" (from {})", view.base_view) } else { String::new() };
+        let from = if view.uses_parent_display {
+            format!(" (from {})", view.base_view)
+        } else {
+            String::new()
+        };
         parts.push(format!("{}{from}", mode.replace('_', " ")));
     }
     // A detail view's position isn't its middle, and a crop or break moves
     // the middle off it: the outline says where those are.
-    if let (Some(p), false) = (view_position(view), view.r#type == 3 || view.cropped || view.broken) {
+    if let (Some(p), false) = (
+        view_position(view),
+        view.r#type == 3 || view.cropped || view.broken,
+    ) {
         parts.push(format!("centered at {} mm", mm2(p)));
     }
     if view.cropped {
@@ -489,7 +576,9 @@ fn dependents(sheet: &proto::SheetInfo, name: &str) -> Vec<String> {
 
 /// The view and those made from it: what an edit redraws.
 pub fn redrawn_views(reply: &proto::SetupDrawingViewResponse) -> Vec<String> {
-    let Some(sheet) = &reply.sheet else { return vec![reply.view_name.clone()] };
+    let Some(sheet) = &reply.sheet else {
+        return vec![reply.view_name.clone()];
+    };
     let mut names = vec![reply.view_name.clone()];
     names.extend(dependents(sheet, &reply.view_name));
     names
@@ -504,11 +593,17 @@ pub fn reply_text(
     asked_at: Option<DVec2>,
     moved_to: Option<DVec2>,
 ) -> String {
-    let Some(sheet) = &reply.sheet else { return format!("done: {}", reply.view_name) };
+    let Some(sheet) = &reply.sheet else {
+        return format!("done: {}", reply.view_name);
+    };
     let Some(view) = find_view(sheet, &reply.view_name) else {
         return format!("done; {} has no view {} now", sheet.name, reply.view_name);
     };
-    let mut text = format!("{} {}", if reply.created { "created" } else { "changed" }, view_text(sheet, view));
+    let mut text = format!(
+        "{} {}",
+        if reply.created { "created" } else { "changed" },
+        view_text(sheet, view)
+    );
     if sheet.name != reply.active_sheet {
         text += &format!(" ({} stays the active sheet)", reply.active_sheet);
     }
@@ -517,7 +612,8 @@ pub fn reply_text(
     let mut notes = Vec::new();
     let differs = |a: f64, b: f64| (a - b).abs() > 1e-9 * a.abs().max(b.abs());
     if let Some(before) = &reply.sheet_scale_before
-        && (differs(before.numerator, sheet.scale_numerator) || differs(before.denominator, sheet.scale_denominator))
+        && (differs(before.numerator, sheet.scale_numerator)
+            || differs(before.denominator, sheet.scale_denominator))
     {
         notes.push(format!(
             "SolidWorks set the sheet's scale from {} to {} to fit its first view (views using the \
@@ -534,14 +630,25 @@ pub fn reply_text(
         } else {
             format!(" (it stays aligned with {})", view.base_view)
         };
-        notes.push(format!("it's centered at {} mm, not {} mm{why}", mm2(at), mm2(asked)));
+        notes.push(format!(
+            "it's centered at {} mm, not {} mm{why}",
+            mm2(at),
+            mm2(asked)
+        ));
     }
     if moved_to.is_some() {
-        notes.push("it was put clear of the sheet's other views; pass at_mm to place it yourself".to_string());
+        notes.push(
+            "it was put clear of the sheet's other views; pass at_mm to place it yourself"
+                .to_string(),
+        );
     }
     if let Some(r) = Rect::of(view) {
         let slack = 1e-4;
-        if r.lo.x < -slack || r.lo.y < -slack || r.hi.x > sheet.width + slack || r.hi.y > sheet.height + slack {
+        if r.lo.x < -slack
+            || r.lo.y < -slack
+            || r.hi.x > sheet.width + slack
+            || r.hi.y > sheet.height + slack
+        {
             notes.push(format!(
                 "it reaches past the sheet's edges ({:.0} x {:.0} mm) -- give a smaller scale, move it, \
                  or a bigger paper size (edit_sheet)",
@@ -552,11 +659,19 @@ pub fn reply_text(
     }
     let overlaps = overlapping(sheet, &view.name);
     if !overlaps.is_empty() {
-        notes.push(format!("its outline overlaps {} -- move one with at_mm", overlaps.join(", ")));
+        notes.push(format!(
+            "its outline overlaps {} -- move one with at_mm",
+            overlaps.join(", ")
+        ));
     }
     let followers = dependents(sheet, &view.name);
-    if !reply.created && !followers.is_empty() && (!request.orientation.is_empty() || request.scale.is_some()
-        || request.display_mode.is_some() || !request.model.is_empty() || !request.configuration.is_empty())
+    if !reply.created
+        && !followers.is_empty()
+        && (!request.orientation.is_empty()
+            || request.scale.is_some()
+            || request.display_mode.is_some()
+            || !request.model.is_empty()
+            || !request.configuration.is_empty())
     {
         notes.push(format!("{} (made from it) follow it", followers.join(", ")));
     }
@@ -584,24 +699,70 @@ mod tests {
         let r = create_request(&params).unwrap();
         assert!(r.create);
         assert_eq!(
-            (r.orientation.as_str(), r.sheet_name.as_str(), r.configuration.as_str(), r.model.as_str()),
+            (
+                r.orientation.as_str(),
+                r.sheet_name.as_str(),
+                r.configuration.as_str(),
+                r.model.as_str()
+            ),
             ("*Top", "Sheet2", "Long", "bracket")
         );
-        assert_eq!(r.position, Some(proto::Vec3 { x: 0.1, y: 0.05, z: 0.0 }));
-        assert_eq!(r.scale, Some(Scale::Ratio(proto::ViewScale { numerator: 1.0, denominator: 2.0 })));
+        assert_eq!(
+            r.position,
+            Some(proto::Vec3 {
+                x: 0.1,
+                y: 0.05,
+                z: 0.0
+            })
+        );
+        assert_eq!(
+            r.scale,
+            Some(Scale::Ratio(proto::ViewScale {
+                numerator: 1.0,
+                denominator: 2.0
+            }))
+        );
         assert_eq!(r.display_mode, Some(7));
         // Defaults: everything left to the add-in.
         let r = create_request(&CreateDrawingViewParams::default()).unwrap();
-        assert_eq!(r, proto::SetupDrawingViewRequest { create: true, ..Default::default() });
-        let r = create_request(&CreateDrawingViewParams { scale: Some("Sheet".into()), ..Default::default() }).unwrap();
+        assert_eq!(
+            r,
+            proto::SetupDrawingViewRequest {
+                create: true,
+                ..Default::default()
+            }
+        );
+        let r = create_request(&CreateDrawingViewParams {
+            scale: Some("Sheet".into()),
+            ..Default::default()
+        })
+        .unwrap();
         assert_eq!(r.scale, Some(Scale::FollowSheet(true)));
         for bad in [
-            CreateDrawingViewParams { display: Some(Display::Parent), ..Default::default() },
-            CreateDrawingViewParams { scale: Some("parent".into()), ..Default::default() },
-            CreateDrawingViewParams { scale: Some("1/2".into()), ..Default::default() },
-            CreateDrawingViewParams { model: Some("parts\\a.SLDPRT".into()), ..Default::default() },
-            CreateDrawingViewParams { model: Some("C:\\x\\a.SLDDRW".into()), ..Default::default() },
-            CreateDrawingViewParams { model: Some("C:\\no\\such.SLDPRT".into()), ..Default::default() },
+            CreateDrawingViewParams {
+                display: Some(Display::Parent),
+                ..Default::default()
+            },
+            CreateDrawingViewParams {
+                scale: Some("parent".into()),
+                ..Default::default()
+            },
+            CreateDrawingViewParams {
+                scale: Some("1/2".into()),
+                ..Default::default()
+            },
+            CreateDrawingViewParams {
+                model: Some("parts\\a.SLDPRT".into()),
+                ..Default::default()
+            },
+            CreateDrawingViewParams {
+                model: Some("C:\\x\\a.SLDDRW".into()),
+                ..Default::default()
+            },
+            CreateDrawingViewParams {
+                model: Some("C:\\no\\such.SLDPRT".into()),
+                ..Default::default()
+            },
         ] {
             assert!(create_request(&bad).is_err(), "{bad:?}");
         }
@@ -622,20 +783,39 @@ mod tests {
         assert!(edit(serde_json::json!({"view": "Drawing View1"})).is_err());
         assert!(edit(serde_json::json!({"view": " ", "scale": "1:1"})).is_err());
         assert!(edit(serde_json::json!({"view": "Drawing View1", "rename": " "})).is_err());
-        let r = edit(serde_json::json!({"view": "Drawing View2", "scale": "parent", "display": "parent"})).unwrap();
+        let r = edit(
+            serde_json::json!({"view": "Drawing View2", "scale": "parent", "display": "parent"}),
+        )
+        .unwrap();
         assert_eq!((r.view_name.as_str(), r.create), ("Drawing View2", false));
-        assert_eq!((r.scale, r.parent_display, r.display_mode), (Some(Scale::FollowParent(true)), true, None));
-        assert!(!redraws(&proto::SetupDrawingViewRequest { parent_display: true, ..Default::default() }));
+        assert_eq!(
+            (r.scale, r.parent_display, r.display_mode),
+            (Some(Scale::FollowParent(true)), true, None)
+        );
+        assert!(!redraws(&proto::SetupDrawingViewRequest {
+            parent_display: true,
+            ..Default::default()
+        }));
         let r = edit(serde_json::json!({"view": "Drawing View1", "rename": "Main"})).unwrap();
         assert!(r.new_name == "Main" && redraws(&r));
     }
 
     fn view(name: &str, base: &str, lo: [f64; 2], hi: [f64; 2]) -> proto::ViewInfo {
-        let v = |p: [f64; 2]| Some(proto::Vec3 { x: p[0], y: p[1], z: 0.0 });
+        let v = |p: [f64; 2]| {
+            Some(proto::Vec3 {
+                x: p[0],
+                y: p[1],
+                z: 0.0,
+            })
+        };
         proto::ViewInfo {
             name: name.into(),
             r#type: if base.is_empty() { 7 } else { 4 },
-            orientation: if base.is_empty() { "*Front".into() } else { String::new() },
+            orientation: if base.is_empty() {
+                "*Front".into()
+            } else {
+                String::new()
+            },
             model_file: r"C:\parts\block.SLDPRT".into(),
             configuration: "Default".into(),
             base_view: base.into(),
@@ -644,7 +824,10 @@ mod tests {
             uses_sheet_scale: base.is_empty(),
             uses_parent_scale: !base.is_empty(),
             display_mode: 2,
-            outline: Some(proto::Box3 { min: v(lo), max: v(hi) }),
+            outline: Some(proto::Box3 {
+                min: v(lo),
+                max: v(hi),
+            }),
             position: v([(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0]),
             ..Default::default()
         }
@@ -670,10 +853,16 @@ mod tests {
             view("Drawing View2", "", [0.16, 0.12], [0.26, 0.18]),
         ]);
         let c = free_spot(&sheet, "Drawing View2").unwrap();
-        let moved = Rect { lo: c - DVec2::new(0.05, 0.03), hi: c + DVec2::new(0.05, 0.03) };
+        let moved = Rect {
+            lo: c - DVec2::new(0.05, 0.03),
+            hi: c + DVec2::new(0.05, 0.03),
+        };
         let first = Rect::of(&sheet.views[0]).unwrap();
         assert!(!moved.overlaps(&first, VIEW_GAP - 1e-9), "{c}");
-        assert!(moved.lo.x >= EDGE_MARGIN && moved.hi.x <= 0.42 - EDGE_MARGIN, "{c}");
+        assert!(
+            moved.lo.x >= EDGE_MARGIN && moved.hi.x <= 0.42 - EDGE_MARGIN,
+            "{c}"
+        );
         // The nearest such spot to the middle: below the first view (83.5 mm
         // from the middle; above would be 86.5, beside 105).
         assert!((c - DVec2::new(0.21, 0.065)).length() < 1e-9, "{c}");
@@ -693,12 +882,18 @@ mod tests {
 
     #[test]
     fn reply_describes_the_view_and_flags_what_went_differently() {
-        let request = proto::SetupDrawingViewRequest { create: true, ..Default::default() };
+        let request = proto::SetupDrawingViewRequest {
+            create: true,
+            ..Default::default()
+        };
         let reply = proto::SetupDrawingViewResponse {
             sheet: Some(a3(vec![view("Drawing View1", "", [0.1, 0.1], [0.2, 0.2])])),
             view_name: "Drawing View1".into(),
             created: true,
-            sheet_scale_before: Some(proto::ViewScale { numerator: 1.0, denominator: 1.0 }),
+            sheet_scale_before: Some(proto::ViewScale {
+                numerator: 1.0,
+                denominator: 1.0,
+            }),
             active_sheet: "Sheet1".into(),
         };
         let text = reply_text(&request, &reply, None, None);
@@ -710,12 +905,18 @@ mod tests {
             ),
             "{text}"
         );
-        assert!(text.contains("set the sheet's scale from 1:1 to 1:2"), "{text}");
+        assert!(
+            text.contains("set the sheet's scale from 1:1 to 1:2"),
+            "{text}"
+        );
 
         // A projected view moved off its alignment, changed in the background.
         let mut reply = reply;
         reply.created = false;
-        reply.sheet_scale_before = Some(proto::ViewScale { numerator: 1.0, denominator: 2.0 });
+        reply.sheet_scale_before = Some(proto::ViewScale {
+            numerator: 1.0,
+            denominator: 2.0,
+        });
         reply.active_sheet = "Sheet2".into();
         reply.view_name = "Drawing View2".into();
         reply.sheet = Some(a3(vec![
@@ -725,14 +926,35 @@ mod tests {
         ]));
         let request = proto::SetupDrawingViewRequest {
             view_name: "Drawing View2".into(),
-            position: Some(proto::Vec3 { x: 0.275, y: 0.2, z: 0.0 }),
+            position: Some(proto::Vec3 {
+                x: 0.275,
+                y: 0.2,
+                z: 0.0,
+            }),
             ..Default::default()
         };
         let text = reply_text(&request, &reply, Some(DVec2::new(0.275, 0.2)), None);
-        assert!(text.starts_with("changed Drawing View2 on Sheet1: block.SLDPRT projected from Drawing View1"), "{text}");
-        assert!(text.contains("scale 1:2 (from Drawing View1)") && text.contains("(Sheet2 stays the active sheet)"), "{text}");
-        assert!(text.contains("centered at [275, 150] mm, not [275, 200] mm (it stays aligned with Drawing View1)"), "{text}");
-        assert!(!text.contains("sheet's scale from") && !text.contains("follow it"), "{text}");
+        assert!(
+            text.starts_with(
+                "changed Drawing View2 on Sheet1: block.SLDPRT projected from Drawing View1"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("scale 1:2 (from Drawing View1)")
+                && text.contains("(Sheet2 stays the active sheet)"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "centered at [275, 150] mm, not [275, 200] mm (it stays aligned with Drawing View1)"
+            ),
+            "{text}"
+        );
+        assert!(
+            !text.contains("sheet's scale from") && !text.contains("follow it"),
+            "{text}"
+        );
         assert!(text.contains("stale"), "{text}");
         assert_eq!(redrawn_views(&reply), ["Drawing View2", "Drawing View3"]);
     }

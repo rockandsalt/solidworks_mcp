@@ -41,7 +41,9 @@ fn check_name(name: &str) -> Result<(), McpError> {
         return Err(invalid("an empty property name"));
     }
     if name.starts_with("SW-") {
-        return Err(invalid(format!("{name} is SolidWorks' own and can't be set")));
+        return Err(invalid(format!(
+            "{name} is SolidWorks' own and can't be set"
+        )));
     }
     Ok(())
 }
@@ -78,7 +80,9 @@ pub struct CustomPropertiesParams {
     pub replace_links: bool,
 }
 
-pub fn properties_request(params: &CustomPropertiesParams) -> Result<proto::CustomPropertiesRequest, McpError> {
+pub fn properties_request(
+    params: &CustomPropertiesParams,
+) -> Result<proto::CustomPropertiesRequest, McpError> {
     let document = text(params.document.as_deref());
     let sheet = text(params.sheet.as_deref());
     if !document.is_empty() && !sheet.is_empty() {
@@ -93,7 +97,11 @@ pub fn properties_request(params: &CustomPropertiesParams) -> Result<proto::Cust
         set: params
             .set
             .iter()
-            .map(|(k, v)| proto::CustomProperty { name: k.trim().to_string(), value: v.clone(), ..Default::default() })
+            .map(|(k, v)| proto::CustomProperty {
+                name: k.trim().to_string(),
+                value: v.clone(),
+                ..Default::default()
+            })
             .collect(),
         remove: params.remove.iter().map(|r| r.trim().to_string()).collect(),
         document,
@@ -103,12 +111,19 @@ pub fn properties_request(params: &CustomPropertiesParams) -> Result<proto::Cust
 }
 
 fn stem(title: &str) -> &str {
-    Path::new(title).file_stem().and_then(|s| s.to_str()).unwrap_or(title)
+    Path::new(title)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(title)
 }
 
 /// What a BOM lists as the configuration's part number, and why.
 fn bom_json(reply: &proto::CustomPropertiesResponse) -> Value {
-    let title = reply.document.as_ref().map(|d| d.title.as_str()).unwrap_or_default();
+    let title = reply
+        .document
+        .as_ref()
+        .map(|d| d.title.as_str())
+        .unwrap_or_default();
     let (shows, source) = match reply.bom_part_number_source {
         1 => (json!(stem(title)), "document name"),
         2 => (json!(reply.bom_configuration), "configuration name"),
@@ -200,7 +215,12 @@ enum Known {
 }
 
 impl Known {
-    const ALL: [Known; 4] = [Known::PartNumber, Known::Revision, Known::Description, Known::Material];
+    const ALL: [Known; 4] = [
+        Known::PartNumber,
+        Known::Revision,
+        Known::Description,
+        Known::Material,
+    ];
 
     fn param(self) -> &'static str {
         match self {
@@ -242,7 +262,10 @@ impl Known {
 }
 
 fn spelling(name: &str) -> String {
-    name.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect()
+    name.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 /// A property drawing_properties sets, and why there.
@@ -276,7 +299,11 @@ impl DrawingPlan {
     }
 
     pub fn needs_model(&self) -> bool {
-        !self.bom_part_number.is_empty() || self.routed.iter().any(|r| r.property.of == PropertyOf::Model)
+        !self.bom_part_number.is_empty()
+            || self
+                .routed
+                .iter()
+                .any(|r| r.property.of == PropertyOf::Model)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -292,14 +319,19 @@ pub fn has_known(params: &DrawingPropertiesParams) -> bool {
 pub fn plan(params: &DrawingPropertiesParams, fields: &[Field]) -> Result<DrawingPlan, McpError> {
     let mut out = DrawingPlan::default();
     for known in Known::ALL {
-        let Some(value) = known.value(params) else { continue };
+        let Some(value) = known.value(params) else {
+            continue;
+        };
         let value = value.trim();
         let mut targets: Vec<(String, PropertyOf, Vec<String>)> = Vec::new();
         for f in fields.iter().filter(|f| !f.property.starts_with("SW-")) {
             if !known.spellings().contains(&spelling(&f.property).as_str()) {
                 continue;
             }
-            match targets.iter_mut().find(|t| t.0.eq_ignore_ascii_case(&f.property) && t.1 == f.of) {
+            match targets
+                .iter_mut()
+                .find(|t| t.0.eq_ignore_ascii_case(&f.property) && t.1 == f.of)
+            {
                 Some(t) if !t.2.contains(&f.note) => t.2.push(f.note.clone()),
                 Some(_) => {}
                 None => targets.push((f.property.clone(), f.of, vec![f.note.clone()])),
@@ -311,19 +343,28 @@ pub fn plan(params: &DrawingPropertiesParams, fields: &[Field]) -> Result<Drawin
         }
         for (name, of, notes) in targets {
             out.routed.push(Routed {
-                property: PropertyValue { name, of, value: value.to_string() },
+                property: PropertyValue {
+                    name,
+                    of,
+                    value: value.to_string(),
+                },
                 from: known.param(),
                 notes,
             });
         }
         if known == Known::PartNumber && params.bom.unwrap_or(true) {
             if value.is_empty() {
-                return Err(invalid("an empty part_number can't be a BOM part number (bom: false sets only the property)"));
+                return Err(invalid(
+                    "an empty part_number can't be a BOM part number (bom: false sets only the property)",
+                ));
             }
             out.bom_part_number = value.to_string();
         }
     }
-    for (map, of, from) in [(&params.drawing, PropertyOf::Drawing, "drawing"), (&params.model, PropertyOf::Model, "model")] {
+    for (map, of, from) in [
+        (&params.drawing, PropertyOf::Drawing, "drawing"),
+        (&params.model, PropertyOf::Model, "model"),
+    ] {
         for (name, value) in map {
             let name = name.trim();
             check_name(name)?;
@@ -333,7 +374,11 @@ pub fn plan(params: &DrawingPropertiesParams, fields: &[Field]) -> Result<Drawin
                 .map(|f| f.note.clone())
                 .collect();
             out.routed.push(Routed {
-                property: PropertyValue { name: name.to_string(), of, value: value.clone() },
+                property: PropertyValue {
+                    name: name.to_string(),
+                    of,
+                    value: value.clone(),
+                },
                 from,
                 notes,
             });
@@ -341,15 +386,18 @@ pub fn plan(params: &DrawingPropertiesParams, fields: &[Field]) -> Result<Drawin
     }
     // The same property from two parameters (e.g. revision and drawing.Revision).
     for (i, a) in out.routed.iter().enumerate() {
-        if let Some(b) = out.routed[..i]
-            .iter()
-            .find(|b| b.property.of == a.property.of && b.property.name.eq_ignore_ascii_case(&a.property.name))
-        {
+        if let Some(b) = out.routed[..i].iter().find(|b| {
+            b.property.of == a.property.of && b.property.name.eq_ignore_ascii_case(&a.property.name)
+        }) {
             return Err(invalid(format!(
                 "{} and {} both set the {}'s {:?}; give it once",
                 b.from,
                 a.from,
-                if a.property.of == PropertyOf::Model { "model" } else { "drawing" },
+                if a.property.of == PropertyOf::Model {
+                    "model"
+                } else {
+                    "drawing"
+                },
                 a.property.name
             )));
         }
@@ -357,19 +405,36 @@ pub fn plan(params: &DrawingPropertiesParams, fields: &[Field]) -> Result<Drawin
     Ok(out)
 }
 
-pub fn plan_request(plan: &DrawingPlan, of: PropertyOf, sheet: &str, replace_links: bool) -> proto::CustomPropertiesRequest {
+pub fn plan_request(
+    plan: &DrawingPlan,
+    of: PropertyOf,
+    sheet: &str,
+    replace_links: bool,
+) -> proto::CustomPropertiesRequest {
     let model = of == PropertyOf::Model;
     proto::CustomPropertiesRequest {
-        sheet_name: if model { sheet.to_string() } else { String::new() },
+        sheet_name: if model {
+            sheet.to_string()
+        } else {
+            String::new()
+        },
         set: plan.of(of),
         replace_links,
-        bom_part_number: if model { plan.bom_part_number.clone() } else { String::new() },
+        bom_part_number: if model {
+            plan.bom_part_number.clone()
+        } else {
+            String::new()
+        },
         ..Default::default()
     }
 }
 
 fn title(reply: &proto::CustomPropertiesResponse) -> String {
-    reply.document.as_ref().map(|d| d.title.clone()).unwrap_or_default()
+    reply
+        .document
+        .as_ref()
+        .map(|d| d.title.clone())
+        .unwrap_or_default()
 }
 
 pub fn drawing_properties_reply(
@@ -395,13 +460,20 @@ pub fn drawing_properties_reply(
     };
     let on_drawing = set_line(PropertyOf::Drawing);
     if !on_drawing.is_empty() {
-        lines.push(format!("Set on the drawing {}: {}.", title(drawing), on_drawing.join(", ")));
+        lines.push(format!(
+            "Set on the drawing {}: {}.",
+            title(drawing),
+            on_drawing.join(", ")
+        ));
     }
     if let Some(model) = model {
         let on_model = set_line(PropertyOf::Model);
         let name = title(model);
         if !on_model.is_empty() {
-            lines.push(format!("Set on {sheet}'s model {name}: {}.", on_model.join(", ")));
+            lines.push(format!(
+                "Set on {sheet}'s model {name}: {}.",
+                on_model.join(", ")
+            ));
         }
         if !plan.bom_part_number.is_empty() {
             lines.push(format!(
@@ -545,7 +617,12 @@ pub fn parse_database(database: &str, xml: &str) -> Vec<Material> {
             class = attribute(tag, "name").unwrap_or_default();
         } else if tag.starts_with("material ") {
             if let Some(name) = attribute(tag, "name") {
-                out.push(Material { name, class: class.clone(), database: database.to_string(), density: None });
+                out.push(Material {
+                    name,
+                    class: class.clone(),
+                    database: database.to_string(),
+                    density: None,
+                });
             }
         } else if tag.starts_with("DENS ") {
             if let Some(m) = out.last_mut().filter(|m| m.density.is_none()) {
@@ -562,7 +639,13 @@ fn decode(bytes: &[u8]) -> String {
     let utf16 = |be: bool| {
         let units: Vec<u16> = bytes[2..]
             .chunks_exact(2)
-            .map(|c| if be { u16::from_be_bytes([c[0], c[1]]) } else { u16::from_le_bytes([c[0], c[1]]) })
+            .map(|c| {
+                if be {
+                    u16::from_be_bytes([c[0], c[1]])
+                } else {
+                    u16::from_le_bytes([c[0], c[1]])
+                }
+            })
             .collect();
         String::from_utf16_lossy(&units)
     };
@@ -579,15 +662,24 @@ pub fn load_databases(folders: &[String]) -> Vec<Material> {
     let mut out = Vec::new();
     let mut seen = Vec::new();
     for folder in folders {
-        let Ok(entries) = std::fs::read_dir(folder) else { continue };
+        let Ok(entries) = std::fs::read_dir(folder) else {
+            continue;
+        };
         let mut files: Vec<_> = entries
             .flatten()
             .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("sldmat")))
+            .filter(|p| {
+                p.extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("sldmat"))
+            })
             .collect();
         files.sort();
         for path in files {
-            let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string();
+            let name = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_string();
             if seen.iter().any(|s: &String| s.eq_ignore_ascii_case(&name)) {
                 continue;
             }
@@ -601,7 +693,10 @@ pub fn load_databases(folders: &[String]) -> Vec<Material> {
 }
 
 fn words(s: &str) -> Vec<String> {
-    s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase).collect()
+    s.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect()
 }
 
 /// Materials whose name or class contains every word of `query`.
@@ -620,12 +715,21 @@ pub fn search<'a>(materials: &'a [Material], query: &str) -> Vec<&'a Material> {
 /// start of one of theirs ("aisi 102" → "AISI 1020", ...). One-letter words
 /// match too much ("Unobtainium 9" → every name with a 9...) to count.
 pub fn suggestions<'a>(materials: &'a [Material], name: &str) -> Vec<&'a Material> {
-    let wanted: Vec<String> = words(name).into_iter().filter(|w| w.chars().count() > 1).collect();
+    let wanted: Vec<String> = words(name)
+        .into_iter()
+        .filter(|w| w.chars().count() > 1)
+        .collect();
     let mut scored: Vec<(usize, &Material)> = materials
         .iter()
         .map(|m| {
             let have = words(&m.name);
-            (wanted.iter().filter(|w| have.iter().any(|h| h.starts_with(w.as_str()))).count(), m)
+            (
+                wanted
+                    .iter()
+                    .filter(|w| have.iter().any(|h| h.starts_with(w.as_str())))
+                    .count(),
+                m,
+            )
         })
         .filter(|(score, _)| *score > 0)
         .collect();
@@ -636,12 +740,19 @@ pub fn suggestions<'a>(materials: &'a [Material], name: &str) -> Vec<&'a Materia
 }
 
 fn names(list: &[&Material]) -> String {
-    list.iter().map(|m| format!("{:?} ({})", m.name, m.database)).collect::<Vec<_>>().join(", ")
+    list.iter()
+        .map(|m| format!("{:?} ({})", m.name, m.database))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The database entry `name` (any case) means; `database` picks among
 /// several. With no databases read, the name goes to SolidWorks as given.
-pub fn resolve<'a>(materials: &'a [Material], name: &str, database: &str) -> Result<Option<&'a Material>, McpError> {
+pub fn resolve<'a>(
+    materials: &'a [Material],
+    name: &str,
+    database: &str,
+) -> Result<Option<&'a Material>, McpError> {
     if materials.is_empty() {
         return Ok(None);
     }
@@ -657,7 +768,8 @@ pub fn resolve<'a>(materials: &'a [Material], name: &str, database: &str) -> Res
             message += &format!(" in database {database:?}");
         }
         if near.is_empty() {
-            message += " in SolidWorks' material databases (search lists names, e.g. search: \"steel\")";
+            message +=
+                " in SolidWorks' material databases (search lists names, e.g. search: \"steel\")";
         } else {
             message += &format!("; close: {} (search lists more)", names(&near));
         }
@@ -666,15 +778,23 @@ pub fn resolve<'a>(materials: &'a [Material], name: &str, database: &str) -> Res
     let exact: Vec<&Material> = found.iter().copied().filter(|m| m.name == name).collect();
     let pick = if exact.len() == 1 { exact } else { found };
     if pick.len() > 1 {
-        if let Some(m) = pick.iter().find(|m| m.database.eq_ignore_ascii_case("solidworks materials")) {
+        if let Some(m) = pick
+            .iter()
+            .find(|m| m.database.eq_ignore_ascii_case("solidworks materials"))
+        {
             return Ok(Some(m));
         }
-        return Err(invalid(format!("{name:?} is in several databases: {}; give database", names(&pick))));
+        return Err(invalid(format!(
+            "{name:?} is in several databases: {}; give database",
+            names(&pick)
+        )));
     }
     Ok(Some(pick[0]))
 }
 
-pub fn material_request(params: &PartMaterialParams) -> Result<proto::PartMaterialRequest, McpError> {
+pub fn material_request(
+    params: &PartMaterialParams,
+) -> Result<proto::PartMaterialRequest, McpError> {
     let document = text(params.document.as_deref());
     let sheet = text(params.sheet.as_deref());
     if !document.is_empty() && !sheet.is_empty() {
@@ -688,7 +808,9 @@ pub fn material_request(params: &PartMaterialParams) -> Result<proto::PartMateri
         return Err(invalid("link_property needs a material, not remove"));
     }
     if params.search.is_some() && (!material.is_empty() || params.remove) {
-        return Err(invalid("search only lists materials; assign one in another call"));
+        return Err(invalid(
+            "search only lists materials; assign one in another call",
+        ));
     }
     Ok(proto::PartMaterialRequest {
         document,
@@ -705,14 +827,34 @@ pub fn material_link(part: &str) -> String {
 }
 
 fn mass_text(kg: f64) -> String {
-    if kg < 1.0 { format!("{} g", round(kg * 1000.0, 3)) } else { format!("{} kg", round(kg, 4)) }
+    if kg < 1.0 {
+        format!("{} g", round(kg * 1000.0, 3))
+    } else {
+        format!("{} kg", round(kg, 4))
+    }
 }
 
 pub fn material_json(reply: &proto::PartMaterialResponse, entry: Option<&Material>) -> Value {
     let mut out = Map::new();
-    out.insert("part".into(), json!(reply.document.as_ref().map(|d| d.title.clone()).unwrap_or_default()));
+    out.insert(
+        "part".into(),
+        json!(
+            reply
+                .document
+                .as_ref()
+                .map(|d| d.title.clone())
+                .unwrap_or_default()
+        ),
+    );
     out.insert("configuration".into(), json!(reply.configuration));
-    out.insert("material".into(), if reply.material.is_empty() { Value::Null } else { json!(reply.material) });
+    out.insert(
+        "material".into(),
+        if reply.material.is_empty() {
+            Value::Null
+        } else {
+            json!(reply.material)
+        },
+    );
     if !reply.database.is_empty() {
         out.insert("database".into(), json!(reply.database));
     }
@@ -723,10 +865,13 @@ pub fn material_json(reply: &proto::PartMaterialResponse, entry: Option<&Materia
         out.insert("density_kg_m3".into(), json!(round(reply.density, 3)));
         out.insert("mass_kg".into(), json!(round(reply.mass, 6)));
     }
-    for (key, p) in [("material_property", &reply.material_property), (
-        "configuration_material_property",
-        &reply.configuration_material_property,
-    )] {
+    for (key, p) in [
+        ("material_property", &reply.material_property),
+        (
+            "configuration_material_property",
+            &reply.configuration_material_property,
+        ),
+    ] {
         if let Some(p) = p {
             let mut e = Map::new();
             e.insert("value".into(), json!(p.value));
@@ -740,8 +885,15 @@ pub fn material_json(reply: &proto::PartMaterialResponse, entry: Option<&Materia
 
 /// What the part's "Material" custom property says about the physical one.
 fn property_line(reply: &proto::PartMaterialResponse) -> String {
-    let part = reply.document.as_ref().map(|d| d.title.as_str()).unwrap_or_default();
-    let p = reply.configuration_material_property.as_ref().or(reply.material_property.as_ref());
+    let part = reply
+        .document
+        .as_ref()
+        .map(|d| d.title.as_str())
+        .unwrap_or_default();
+    let p = reply
+        .configuration_material_property
+        .as_ref()
+        .or(reply.material_property.as_ref());
     match p {
         Some(p) if p.value.contains("SW-Material") => format!(
             "Its \"Material\" property links the physical material, so title blocks and BOMs reading \
@@ -769,7 +921,11 @@ pub fn material_reply(
     changed: bool,
     linked: bool,
 ) -> String {
-    let part = after.document.as_ref().map(|d| d.title.clone()).unwrap_or_default();
+    let part = after
+        .document
+        .as_ref()
+        .map(|d| d.title.clone())
+        .unwrap_or_default();
     let describe = |r: &proto::PartMaterialResponse| {
         let mut s = if r.material.is_empty() {
             "no material".to_string()
@@ -777,7 +933,11 @@ pub fn material_reply(
             format!("{} ({})", r.material, r.database)
         };
         if r.has_mass {
-            s += &format!(", density {} kg/m^3, mass {}", round(r.density, 1), mass_text(r.mass));
+            s += &format!(
+                ", density {} kg/m^3, mass {}",
+                round(r.density, 1),
+                mass_text(r.mass)
+            );
         }
         s
     };
@@ -796,7 +956,10 @@ pub fn material_reply(
         ));
     }
     if linked {
-        lines.push(format!("Its \"Material\" property now links it ({}).", material_link(&part)));
+        lines.push(format!(
+            "Its \"Material\" property now links it ({}).",
+            material_link(&part)
+        ));
     } else {
         lines.push(property_line(after));
     }
@@ -807,24 +970,37 @@ pub fn material_reply(
     lines.join("\n")
 }
 
-pub fn search_reply(reply: &proto::PartMaterialResponse, materials: &[Material], query: &str) -> String {
+pub fn search_reply(
+    reply: &proto::PartMaterialResponse,
+    materials: &[Material],
+    query: &str,
+) -> String {
     const LIMIT: usize = 60;
     if materials.is_empty() {
         return format!(
             "no material databases (*.sldmat) found in {}",
-            if reply.database_folders.is_empty() { "SolidWorks' settings".to_string() } else { reply.database_folders.join("; ") }
+            if reply.database_folders.is_empty() {
+                "SolidWorks' settings".to_string()
+            } else {
+                reply.database_folders.join("; ")
+            }
         );
     }
     if query.trim() == "*" {
         let mut classes: Vec<(String, String, usize)> = Vec::new();
         for m in materials {
-            match classes.iter_mut().find(|c| c.0 == m.database && c.1 == m.class) {
+            match classes
+                .iter_mut()
+                .find(|c| c.0 == m.database && c.1 == m.class)
+            {
                 Some(c) => c.2 += 1,
                 None => classes.push((m.database.clone(), m.class.clone(), 1)),
             }
         }
-        let list: Vec<Value> =
-            classes.iter().map(|(db, class, n)| json!({ "database": db, "class": class, "materials": n })).collect();
+        let list: Vec<Value> = classes
+            .iter()
+            .map(|(db, class, n)| json!({ "database": db, "class": class, "materials": n }))
+            .collect();
         return format!(
             "{} materials in {} classes; search with words of a class or name to list them.\n{}",
             materials.len(),
@@ -854,10 +1030,18 @@ pub fn search_reply(reply: &proto::PartMaterialResponse, materials: &[Material],
     if found.is_empty() {
         head += "; \"*\" lists the classes";
     }
-    let current = if reply.material.is_empty() { "none".to_string() } else { reply.material.clone() };
+    let current = if reply.material.is_empty() {
+        "none".to_string()
+    } else {
+        reply.material.clone()
+    };
     format!(
         "{head}. {}'s material: {current}.\n{}",
-        reply.document.as_ref().map(|d| d.title.as_str()).unwrap_or_default(),
+        reply
+            .document
+            .as_ref()
+            .map(|d| d.title.as_str())
+            .unwrap_or_default(),
         Value::Array(list)
     )
 }
@@ -867,7 +1051,13 @@ mod tests {
     use super::*;
 
     fn field(property: &str, of: PropertyOf, note: &str) -> Field {
-        Field { property: property.into(), of, note: note.into(), shows: String::new(), at: None }
+        Field {
+            property: property.into(),
+            of,
+            note: note.into(),
+            shows: String::new(),
+            at: None,
+        }
     }
 
     #[test]
@@ -885,8 +1075,11 @@ mod tests {
             ..Default::default()
         };
         let plan = plan(&params, &fields).unwrap();
-        let got: Vec<(&str, PropertyOf, &str)> =
-            plan.routed.iter().map(|r| (r.property.name.as_str(), r.property.of, r.from)).collect();
+        let got: Vec<(&str, PropertyOf, &str)> = plan
+            .routed
+            .iter()
+            .map(|r| (r.property.name.as_str(), r.property.of, r.from))
+            .collect();
         assert_eq!(
             got,
             vec![
@@ -913,10 +1106,18 @@ mod tests {
             ..Default::default()
         };
         let plan = plan(&params, &[]).unwrap();
-        let got: Vec<(&str, PropertyOf)> = plan.routed.iter().map(|r| (r.property.name.as_str(), r.property.of)).collect();
+        let got: Vec<(&str, PropertyOf)> = plan
+            .routed
+            .iter()
+            .map(|r| (r.property.name.as_str(), r.property.of))
+            .collect();
         assert_eq!(
             got,
-            vec![("PartNo", PropertyOf::Model), ("Revision", PropertyOf::Drawing), ("Description", PropertyOf::Model)]
+            vec![
+                ("PartNo", PropertyOf::Model),
+                ("Revision", PropertyOf::Drawing),
+                ("Description", PropertyOf::Model)
+            ]
         );
         assert!(plan.bom_part_number.is_empty());
     }
@@ -929,7 +1130,10 @@ mod tests {
             ..Default::default()
         };
         assert!(plan(&params, &[]).is_err());
-        let params = DrawingPropertiesParams { model: [("SW-Mass".to_string(), "1".to_string())].into(), ..Default::default() };
+        let params = DrawingPropertiesParams {
+            model: [("SW-Mass".to_string(), "1".to_string())].into(),
+            ..Default::default()
+        };
         assert!(plan(&params, &[]).is_err());
     }
 
@@ -953,42 +1157,80 @@ mod tests {
     fn a_database_is_parsed() {
         let m = parse_database("solidworks materials", XML);
         assert_eq!(m.len(), 3);
-        assert_eq!(m[0], Material { name: "AISI 1020".into(), class: "Steel".into(), database: "solidworks materials".into(), density: Some(7900.0) });
+        assert_eq!(
+            m[0],
+            Material {
+                name: "AISI 1020".into(),
+                class: "Steel".into(),
+                database: "solidworks materials".into(),
+                density: Some(7900.0)
+            }
+        );
         assert_eq!(m[2].name, "6061 Alloy & more");
         assert_eq!(m[2].class, "Aluminium Alloys");
         assert_eq!(m[2].density, Some(2700.0));
-        let utf16: Vec<u8> = [0xFF, 0xFE].into_iter().chain(XML.encode_utf16().flat_map(u16::to_le_bytes)).collect();
+        let utf16: Vec<u8> = [0xFF, 0xFE]
+            .into_iter()
+            .chain(XML.encode_utf16().flat_map(u16::to_le_bytes))
+            .collect();
         assert_eq!(parse_database("x", &decode(&utf16)).len(), 3);
     }
 
     #[test]
     fn names_resolve_in_any_case_with_suggestions() {
         let mut m = parse_database("solidworks materials", XML);
-        assert_eq!(resolve(&m, "aisi 1020", "").unwrap().unwrap().name, "AISI 1020");
+        assert_eq!(
+            resolve(&m, "aisi 1020", "").unwrap().unwrap().name,
+            "AISI 1020"
+        );
         let err = resolve(&m, "AISI 102", "").unwrap_err();
         assert!(err.message.contains("\"AISI 1020\""), "{}", err.message);
-        let near: Vec<&str> = suggestions(&m, "aisi 102").iter().map(|m| m.name.as_str()).collect();
+        let near: Vec<&str> = suggestions(&m, "aisi 102")
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect();
         assert_eq!(near, vec!["AISI 1020", "AISI 1020 Steel, Cold Rolled"]);
         assert!(suggestions(&m, "Unobtainium 9").is_empty());
         assert_eq!(search(&m, "steel cold").len(), 1);
         assert_eq!(search(&m, "alumin").len(), 1);
         // In two databases: SolidWorks' main one wins unless database says.
-        m.push(Material { name: "AISI 1020".into(), class: "Steel".into(), database: "custom".into(), density: None });
-        assert_eq!(resolve(&m, "AISI 1020", "").unwrap().unwrap().database, "solidworks materials");
-        assert_eq!(resolve(&m, "AISI 1020", "Custom").unwrap().unwrap().database, "custom");
+        m.push(Material {
+            name: "AISI 1020".into(),
+            class: "Steel".into(),
+            database: "custom".into(),
+            density: None,
+        });
+        assert_eq!(
+            resolve(&m, "AISI 1020", "").unwrap().unwrap().database,
+            "solidworks materials"
+        );
+        assert_eq!(
+            resolve(&m, "AISI 1020", "Custom")
+                .unwrap()
+                .unwrap()
+                .database,
+            "custom"
+        );
         assert!(resolve(&[], "anything", "").unwrap().is_none());
     }
 
     #[test]
     fn the_bom_part_number_says_where_it_comes_from() {
         let reply = proto::CustomPropertiesResponse {
-            document: Some(proto::Document { title: "plate.SLDPRT".into(), ..Default::default() }),
+            document: Some(proto::Document {
+                title: "plate.SLDPRT".into(),
+                ..Default::default()
+            }),
             bom_configuration: "Default".into(),
             bom_part_number_source: 1,
             ..Default::default()
         };
         assert_eq!(bom_json(&reply)["part_number"], "plate");
-        let reply = proto::CustomPropertiesResponse { bom_part_number_source: 8, bom_part_number: "P-100".into(), ..reply };
+        let reply = proto::CustomPropertiesResponse {
+            bom_part_number_source: 8,
+            bom_part_number: "P-100".into(),
+            ..reply
+        };
         assert_eq!(bom_json(&reply)["part_number"], "P-100");
         assert_eq!(bom_json(&reply)["source"], "user specified");
     }

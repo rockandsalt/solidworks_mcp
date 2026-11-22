@@ -42,7 +42,10 @@ pub struct AddinClient {
 pub struct RequestInterceptor(Option<AsciiMetadataValue>);
 
 impl Interceptor for RequestInterceptor {
-    fn call(&mut self, mut request: tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> {
+    fn call(
+        &mut self,
+        mut request: tonic::Request<()>,
+    ) -> Result<tonic::Request<()>, tonic::Status> {
         if let Some(token) = &self.0 {
             request.metadata_mut().insert(TOKEN_HEADER, token.clone());
         }
@@ -64,7 +67,10 @@ impl AddinClient {
     /// opened on the first call to a port and then reused by every call
     /// after it, concurrent ones included.
     fn client(&self) -> Result<Client, tonic::Status> {
-        let mut connection = self.connection.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut connection = self
+            .connection
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let target = match discovery::find() {
             Ok(target) => target,
             Err(message) => {
@@ -84,14 +90,23 @@ impl AddinClient {
                 channel
             }
         };
-        let token = target.token.as_deref().and_then(|token| MetadataValue::try_from(token).ok());
-        Ok(SolidWorksClient::with_interceptor(channel, RequestInterceptor(token)))
+        let token = target
+            .token
+            .as_deref()
+            .and_then(|token| MetadataValue::try_from(token).ok());
+        Ok(SolidWorksClient::with_interceptor(
+            channel,
+            RequestInterceptor(token),
+        ))
     }
 
     /// Where the add-in last called is listening, for error messages; None
     /// when none was found.
     pub fn endpoint(&self) -> Option<String> {
-        let connection = self.connection.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let connection = self
+            .connection
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         connection.as_ref().map(|(target, _)| match target.pid {
             Some(pid) => format!("127.0.0.1:{} (SolidWorks pid {pid})", target.port),
             None => format!("127.0.0.1:{}", target.port),
@@ -114,15 +129,25 @@ impl AddinClient {
         Ok(client.get_active_document(request).await?.into_inner())
     }
 
-    pub async fn new_part(&self, units: proto::UnitsChange) -> Result<Option<proto::Document>, tonic::Status> {
+    pub async fn new_part(
+        &self,
+        units: proto::UnitsChange,
+    ) -> Result<Option<proto::Document>, tonic::Status> {
         let mut client = self.client()?;
-        let response = client.new_part(proto::NewPartRequest { units: Some(units) }).await?;
+        let response = client
+            .new_part(proto::NewPartRequest { units: Some(units) })
+            .await?;
         Ok(response.into_inner().document)
     }
 
-    pub async fn new_assembly(&self, units: proto::UnitsChange) -> Result<Option<proto::Document>, tonic::Status> {
+    pub async fn new_assembly(
+        &self,
+        units: proto::UnitsChange,
+    ) -> Result<Option<proto::Document>, tonic::Status> {
         let mut client = self.client()?;
-        let response = client.new_assembly(proto::NewAssemblyRequest { units: Some(units) }).await?;
+        let response = client
+            .new_assembly(proto::NewAssemblyRequest { units: Some(units) })
+            .await?;
         Ok(response.into_inner().document)
     }
 
@@ -132,15 +157,15 @@ impl AddinClient {
         request: proto::GetMeshRequest,
     ) -> Result<proto::GetMeshResponse, tonic::Status> {
         // A detailed part's mesh is far past tonic's default 4 MB cap.
-        let mut client = self
-            .client()?
-            .max_decoding_message_size(MAX_MESH_MESSAGE);
+        let mut client = self.client()?.max_decoding_message_size(MAX_MESH_MESSAGE);
         let response = client.get_mesh(request).await?;
         Ok(response.into_inner())
     }
 
     /// The active document's 3D annotations (PMI); meters / radians.
-    pub async fn inspect_annotations(&self) -> Result<proto::InspectAnnotationsResponse, tonic::Status> {
+    pub async fn inspect_annotations(
+        &self,
+    ) -> Result<proto::InspectAnnotationsResponse, tonic::Status> {
         let mut client = self.client()?;
         Ok(client
             .inspect_annotations(proto::InspectAnnotationsRequest {})
@@ -155,9 +180,7 @@ impl AddinClient {
         request: proto::InspectDrawingRequest,
     ) -> Result<proto::InspectDrawingResponse, tonic::Status> {
         // A detailed view lists thousands of edges.
-        let mut client = self
-            .client()?
-            .max_decoding_message_size(MAX_MESH_MESSAGE);
+        let mut client = self.client()?.max_decoding_message_size(MAX_MESH_MESSAGE);
         Ok(client.inspect_drawing(request).await?.into_inner())
     }
 

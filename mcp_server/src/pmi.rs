@@ -237,7 +237,11 @@ fn attached_json(ids: &mut IdRegistry, a: &proto::AnnotationInfo, obj: &mut Map<
 
 /// A value in mm (or degrees for angles), rounded.
 pub fn value_of(value: f64, angular: bool) -> f64 {
-    if angular { round(value.to_degrees(), 4) } else { mm(value) }
+    if angular {
+        round(value.to_degrees(), 4)
+    } else {
+        mm(value)
+    }
 }
 
 /// A dimension's fields as inspect_annotations / inspect_drawing show them
@@ -269,7 +273,10 @@ fn dimension_json(d: &proto::AnnotationDimension, obj: &mut Map<String, Value>) 
         obj.insert("measures".into(), json!(measures));
         angular = info.r#type() == T::Angular;
         nominal = Some(info.value);
-        obj.insert(format!("value_{}", unit(angular)), json!(value_of(info.value, angular)));
+        obj.insert(
+            format!("value_{}", unit(angular)),
+            json!(value_of(info.value, angular)),
+        );
         if info.driven {
             obj.insert("driven".into(), json!(true));
         }
@@ -337,7 +344,10 @@ fn dimension_json(d: &proto::AnnotationDimension, obj: &mut Map<String, Value>) 
                         tol.insert(format!("plus_minus_{u}"), json!(value_of(hi - n, angular)));
                     }
                 }
-                tol.insert(format!("limits_{u}"), json!([value_of(lo, angular), value_of(hi, angular)]));
+                tol.insert(
+                    format!("limits_{u}"),
+                    json!([value_of(lo, angular), value_of(hi, angular)]),
+                );
             }
         }
         _ => {}
@@ -428,18 +438,30 @@ fn frame_json(f: &proto::GtolFrame) -> Value {
         }
         obj.insert(key.into(), Value::Object(t));
     };
-    add_tolerance("tolerance", &f.tolerance1, f.tolerance1_diameter, f.tolerance1_condition);
-    add_tolerance("tolerance2", &f.tolerance2, f.tolerance2_diameter, f.tolerance2_condition);
+    add_tolerance(
+        "tolerance",
+        &f.tolerance1,
+        f.tolerance1_diameter,
+        f.tolerance1_condition,
+    );
+    add_tolerance(
+        "tolerance2",
+        &f.tolerance2,
+        f.tolerance2_diameter,
+        f.tolerance2_condition,
+    );
     let datums: Vec<Value> = f
         .datums
         .iter()
         .enumerate()
         .map(|(i, d)| (i, datum_text(d)))
         .filter(|(_, d)| !d.is_empty())
-        .map(|(i, d)| match f.datum_conditions.get(i).and_then(|c| condition_name(*c)) {
-            Some(m) => json!({ "datum": d, "modifier": m }),
-            None => json!(d),
-        })
+        .map(
+            |(i, d)| match f.datum_conditions.get(i).and_then(|c| condition_name(*c)) {
+                Some(m) => json!({ "datum": d, "modifier": m }),
+                None => json!(d),
+            },
+        )
         .collect();
     if !datums.is_empty() {
         obj.insert("datums".into(), Value::Array(datums));
@@ -449,7 +471,10 @@ fn frame_json(f: &proto::GtolFrame) -> Value {
 
 fn gtol_json(g: &proto::AnnotationGtol, obj: &mut Map<String, Value>) {
     if !g.frames.is_empty() {
-        obj.insert("frames".into(), Value::Array(g.frames.iter().map(frame_json).collect()));
+        obj.insert(
+            "frames".into(),
+            Value::Array(g.frames.iter().map(frame_json).collect()),
+        );
     }
     if !g.datum_label.trim().is_empty() {
         obj.insert("datum_label".into(), json!(g.datum_label.trim()));
@@ -461,7 +486,10 @@ fn gtol_json(g: &proto::AnnotationGtol, obj: &mut Map<String, Value>) {
         obj.insert("all_around".into(), json!(true));
     }
     if !g.projected_zone_height.trim().is_empty() {
-        obj.insert("projected_zone_height".into(), json!(g.projected_zone_height.trim()));
+        obj.insert(
+            "projected_zone_height".into(),
+            json!(g.projected_zone_height.trim()),
+        );
     }
 }
 
@@ -561,11 +589,18 @@ pub fn render(
         }
     }
 
-    let (feature_dims, annotations): (Vec<_>, Vec<_>) =
-        reply.annotations.iter().partition(|a| is_feature_dimension(a));
+    let (feature_dims, annotations): (Vec<_>, Vec<_>) = reply
+        .annotations
+        .iter()
+        .partition(|a| is_feature_dimension(a));
     let listed: Vec<&proto::AnnotationInfo> = annotations
         .into_iter()
-        .chain(feature_dims.iter().copied().filter(|_| params.include_feature_dimensions))
+        .chain(
+            feature_dims
+                .iter()
+                .copied()
+                .filter(|_| params.include_feature_dimensions),
+        )
         .collect();
 
     // What there is, before the kind/on filters, so the model knows what to
@@ -718,13 +753,19 @@ mod tests {
         };
         assert_eq!(frame_callout(&frame), "position | dia 0.1 (M) | A | B (M)");
         // SolidWorks folds a datum's condition into its text.
-        let folded = proto::GtolFrame { datums: vec!["A".into(), "B<MOD-MMC>".into(), "".into()], ..frame.clone() };
+        let folded = proto::GtolFrame {
+            datums: vec!["A".into(), "B<MOD-MMC>".into(), "".into()],
+            ..frame.clone()
+        };
         assert_eq!(frame_callout(&folded), "position | dia 0.1 (M) | A | B (M)");
         let v = frame_json(&frame);
         assert_eq!(v["characteristic"], "position");
         assert_eq!(v["tolerance"]["diameter_zone"], true);
         assert_eq!(v["tolerance"]["modifier"], "MMC");
-        assert_eq!(v["datums"], json!(["A", { "datum": "B", "modifier": "MMC" }]));
+        assert_eq!(
+            v["datums"],
+            json!(["A", { "datum": "B", "modifier": "MMC" }])
+        );
 
         let flatness = proto::GtolFrame {
             symbol: 15,
@@ -771,19 +812,33 @@ mod tests {
         let params = InspectAnnotationsParams::default();
         let out = render(&mut ids, &reply, &params, None);
         assert_eq!(out["annotations"].as_array().unwrap().len(), 2);
-        assert_eq!(out["summary"], json!({ "dimension": 1, "datum": 1, "from_dimxpert": 1 }));
-        assert!(out["note"].as_str().unwrap().contains("include_feature_dimensions"));
+        assert_eq!(
+            out["summary"],
+            json!({ "dimension": 1, "datum": 1, "from_dimxpert": 1 })
+        );
+        assert!(
+            out["note"]
+                .as_str()
+                .unwrap()
+                .contains("include_feature_dimensions")
+        );
         assert_eq!(out["annotations"][1]["label"], "A");
         assert_eq!(out["annotations"][1]["visibility"], "hidden");
         // No tolerance type: no tolerance object.
         assert!(out["annotations"][0].get("tolerance").is_none());
 
-        let params = InspectAnnotationsParams { include_feature_dimensions: true, ..Default::default() };
+        let params = InspectAnnotationsParams {
+            include_feature_dimensions: true,
+            ..Default::default()
+        };
         let out = render(&mut ids, &reply, &params, None);
         assert_eq!(out["annotations"].as_array().unwrap().len(), 3);
         assert!(out.get("note").is_none());
 
-        let params = InspectAnnotationsParams { kind: Some(AnnotationKind::Datum), ..Default::default() };
+        let params = InspectAnnotationsParams {
+            kind: Some(AnnotationKind::Datum),
+            ..Default::default()
+        };
         let out = render(&mut ids, &reply, &params, None);
         assert_eq!(out["matching"], 1);
         assert_eq!(out["annotations"][0]["type"], "datum");

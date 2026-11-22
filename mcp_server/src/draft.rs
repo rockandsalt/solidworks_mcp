@@ -65,20 +65,31 @@ pub struct DraftParams {
     pub propagation: DraftPropagation,
 }
 
-pub fn request(ids: &IdRegistry, params: &DraftParams) -> Result<proto::DraftFacesRequest, McpError> {
+pub fn request(
+    ids: &IdRegistry,
+    params: &DraftParams,
+) -> Result<proto::DraftFacesRequest, McpError> {
     if !(params.angle_deg.is_finite() && params.angle_deg > 0.0 && params.angle_deg < 90.0) {
-        return Err(invalid(format!("angle_deg must be more than 0 and under 90, got {}", params.angle_deg)));
+        return Err(invalid(format!(
+            "angle_deg must be more than 0 and under 90, got {}",
+            params.angle_deg
+        )));
     }
     let faces = unique(&params.faces);
     if faces.is_empty() {
         return Err(invalid("give at least one face to draft"));
     }
     if faces.len() > MAX_FACES {
-        return Err(invalid(format!("at most {MAX_FACES} faces per call, got {}", faces.len())));
+        return Err(invalid(format!(
+            "at most {MAX_FACES} faces per call, got {}",
+            faces.len()
+        )));
     }
     let neutral = params.neutral_plane.trim();
     if faces.contains(&neutral) {
-        return Err(invalid(format!("{neutral} is both a face to draft and the neutral plane")));
+        return Err(invalid(format!(
+            "{neutral} is both a face to draft and the neutral plane"
+        )));
     }
     let (neutral_plane, shape) = refgeom::geometry_ref(ids, neutral, "neutral_plane")?;
     if !matches!(shape, Shape::Surface | Shape::Feature) {
@@ -116,7 +127,11 @@ pub fn reply_text(params: &DraftParams, reply: &proto::DraftFacesResponse) -> St
     let effect = if change.abs() < 0.001 {
         "the body's volume stayed the same".to_string()
     } else {
-        format!("the body got {:.3} mm^3 {}", change.abs(), if change < 0.0 { "smaller" } else { "bigger" })
+        format!(
+            "the body got {:.3} mm^3 {}",
+            change.abs(),
+            if change < 0.0 { "smaller" } else { "bigger" }
+        )
     };
     format!(
         "created {}: {} degrees on {} about {}; {effect} (flip leans the faces the other way). \
@@ -155,7 +170,9 @@ mod tests {
         let (ids, face, other) = registry();
         let r = request(&ids, &params(&[&face, &format!(" {face} ")], &other, 45.0)).unwrap();
         assert_eq!(r.faces.len(), 1);
-        assert!((r.angle - std::f64::consts::FRAC_PI_4).abs() < 1e-12 && !r.flip && r.propagation == 0);
+        assert!(
+            (r.angle - std::f64::consts::FRAC_PI_4).abs() < 1e-12 && !r.flip && r.propagation == 0
+        );
         assert!(request(&ids, &params(&[&face], "top", 3.0)).is_ok());
     }
 
@@ -172,24 +189,61 @@ mod tests {
         let (mut ids, face, other) = registry();
         let edge = ids.id_for(Kind::Edge, b"edge").unwrap();
         for bad in [0.0, -1.0, 90.0, f64::NAN] {
-            assert!(request(&ids, &params(&[&face], "top", bad)).is_err(), "{bad}");
+            assert!(
+                request(&ids, &params(&[&face], "top", bad)).is_err(),
+                "{bad}"
+            );
         }
         assert!(request(&ids, &params(&[], "top", 3.0)).is_err());
-        assert!(request(&ids, &params(&[edge.as_str()], "top", 3.0)).unwrap_err().message.contains("a face id"));
-        assert!(request(&ids, &params(&["top"], "front", 3.0)).unwrap_err().message.contains("a face id"));
+        assert!(
+            request(&ids, &params(&[edge.as_str()], "top", 3.0))
+                .unwrap_err()
+                .message
+                .contains("a face id")
+        );
+        assert!(
+            request(&ids, &params(&["top"], "front", 3.0))
+                .unwrap_err()
+                .message
+                .contains("a face id")
+        );
         assert!(request(&ids, &params(&["face:999"], "top", 3.0)).is_err());
-        assert!(request(&ids, &params(&[&face, &other], &face, 3.0)).unwrap_err().message.contains("both"));
-        assert!(request(&ids, &params(&[&face], &edge, 3.0)).unwrap_err().message.contains("isn't a plane"));
+        assert!(
+            request(&ids, &params(&[&face, &other], &face, 3.0))
+                .unwrap_err()
+                .message
+                .contains("both")
+        );
+        assert!(
+            request(&ids, &params(&[&face], &edge, 3.0))
+                .unwrap_err()
+                .message
+                .contains("isn't a plane")
+        );
     }
 
     #[test]
     fn replies() {
-        let reply = proto::DraftFacesResponse { feature_name: "Draft1".into(), volume_change: -8.75e-8 };
-        let text = reply_text(&params(&["face:3", "face:3", "face:4"], " top ", 5.0), &reply);
+        let reply = proto::DraftFacesResponse {
+            feature_name: "Draft1".into(),
+            volume_change: -8.75e-8,
+        };
+        let text = reply_text(
+            &params(&["face:3", "face:3", "face:4"], " top ", 5.0),
+            &reply,
+        );
         assert!(text.starts_with("created Draft1: 5 degrees on face:3, face:4 about top; the body got 87.500 mm^3 smaller"), "{text}");
-        let reply = proto::DraftFacesResponse { volume_change: 1e-9, ..reply };
+        let reply = proto::DraftFacesResponse {
+            volume_change: 1e-9,
+            ..reply
+        };
         assert!(reply_text(&params(&["face:3"], "top", 5.0), &reply).contains("1.000 mm^3 bigger"));
-        let reply = proto::DraftFacesResponse { volume_change: 0.0, ..reply };
-        assert!(reply_text(&params(&["face:3"], "top", 5.0), &reply).contains("volume stayed the same"));
+        let reply = proto::DraftFacesResponse {
+            volume_change: 0.0,
+            ..reply
+        };
+        assert!(
+            reply_text(&params(&["face:3"], "top", 5.0), &reply).contains("volume stayed the same")
+        );
     }
 }

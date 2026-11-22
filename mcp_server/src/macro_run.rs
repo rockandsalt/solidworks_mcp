@@ -86,7 +86,13 @@ fn vba_string(text: &str) -> String {
     parts
         .iter()
         .filter(|part| !part.is_empty())
-        .map(|part| if part.starts_with("ChrW(") { part.clone() } else { format!("\"{part}\"") })
+        .map(|part| {
+            if part.starts_with("ChrW(") {
+                part.clone()
+            } else {
+                format!("\"{part}\"")
+            }
+        })
         .collect::<Vec<_>>()
         .join(" & ")
 }
@@ -144,7 +150,9 @@ fn macro_source(code: &str, files: &MacroFiles) -> Result<String, String> {
         }
     }
     if mains != 1 {
-        return Err(format!("the code must define one `Sub main()` with no parameters, it has {mains}"));
+        return Err(format!(
+            "the code must define one `Sub main()` with no parameters, it has {mains}"
+        ));
     }
     let output_file = vba_string(&files.output.to_string_lossy());
     let error_file = vba_string(&files.error.to_string_lossy());
@@ -191,14 +199,20 @@ fn read_text(file: &Path) -> String {
     let Ok(bytes) = std::fs::read(file) else {
         return String::new();
     };
-    let units: Vec<u16> = bytes.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect();
+    let units: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect();
     let text = String::from_utf16_lossy(units.strip_prefix(&[0xFEFF]).unwrap_or(&units));
     text.replace("\r\n", "\n").trim_end().to_string()
 }
 
 fn capped(output: String) -> String {
     match output.char_indices().nth(MAX_OUTPUT_CHARS) {
-        Some((at, _)) => format!("{}\n... (output cut off at {MAX_OUTPUT_CHARS} characters)", &output[..at]),
+        Some((at, _)) => format!(
+            "{}\n... (output cut off at {MAX_OUTPUT_CHARS} characters)",
+            &output[..at]
+        ),
         None => output,
     }
 }
@@ -212,7 +226,10 @@ fn reply_text(headline: &str, output: String, dialogs: &[dialogs::Closed]) -> St
     if !dialogs.is_empty() {
         text += "\n\nIt opened dialogs nobody can answer, so they were closed:";
         for dialog in dialogs {
-            text += &format!("\n- \"{}\": {} (pressed {})", dialog.title, dialog.text, dialog.pressed);
+            text += &format!(
+                "\n- \"{}\": {} (pressed {})",
+                dialog.title, dialog.text, dialog.pressed
+            );
         }
     }
     text
@@ -402,7 +419,9 @@ mod dialogs {
     #[cfg_attr(not(windows), allow(dead_code))]
     fn button_rank(label: &str) -> Option<usize> {
         let label = label.replace('&', "");
-        BUTTONS.iter().position(|button| button.eq_ignore_ascii_case(&label))
+        BUTTONS
+            .iter()
+            .position(|button| button.eq_ignore_ascii_case(&label))
     }
 
     pub struct Watcher {
@@ -418,7 +437,11 @@ mod dialogs {
         /// Dialogs open now aren't the macro's: they stay.
         pub fn new(pid: Option<u32>) -> Self {
             let known = pid.map(win::dialogs_of).unwrap_or_default();
-            Self { pid, known, closed: Vec::new() }
+            Self {
+                pid,
+                known,
+                closed: Vec::new(),
+            }
         }
 
         pub fn close_new(&mut self) {
@@ -435,7 +458,11 @@ mod dialogs {
     #[cfg(not(windows))]
     impl Watcher {
         pub fn new(pid: Option<u32>) -> Self {
-            Self { pid, known: Vec::new(), closed: Vec::new() }
+            Self {
+                pid,
+                known: Vec::new(),
+                closed: Vec::new(),
+            }
         }
 
         pub fn close_new(&mut self) {}
@@ -445,8 +472,8 @@ mod dialogs {
     mod win {
         use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            BM_CLICK, EnumChildWindows, EnumWindows, GetClassNameW, GetWindowTextW, GetWindowThreadProcessId,
-            IsWindowVisible, PostMessageW, WM_CLOSE,
+            BM_CLICK, EnumChildWindows, EnumWindows, GetClassNameW, GetWindowTextW,
+            GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE,
         };
 
         use super::{Closed, button_rank};
@@ -483,7 +510,9 @@ mod dialogs {
                 let mut owner = 0u32;
                 // SAFETY: plain queries; a window that's gone by now just answers 0.
                 unsafe { GetWindowThreadProcessId(window, &mut owner) };
-                owner == pid && unsafe { IsWindowVisible(window) } != 0 && class_of(window) == DIALOG_CLASS
+                owner == pid
+                    && unsafe { IsWindowVisible(window) } != 0
+                    && class_of(window) == DIALOG_CLASS
             });
             windows
         }
@@ -492,17 +521,24 @@ mod dialogs {
         /// (their automation ids; seen 2026-11-12); empty if it can't say.
         fn task_dialog_texts(window: HWND) -> Vec<String> {
             use windows::Win32::Foundation::HWND as Hwnd;
-            use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx};
-            use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation, TreeScope_Descendants};
+            use windows::Win32::System::Com::{
+                CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+            };
+            use windows::Win32::UI::Accessibility::{
+                CUIAutomation, IUIAutomation, TreeScope_Descendants,
+            };
 
             let read = || -> windows::core::Result<Vec<String>> {
                 // SAFETY: plain COM calls on interfaces the calls hand back;
                 // initializing COM again on this thread is harmless.
                 unsafe {
                     let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-                    let automation: IUIAutomation = CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)?;
-                    let element = automation.ElementFromHandle(Hwnd(window as *mut core::ffi::c_void))?;
-                    let all = element.FindAll(TreeScope_Descendants, &automation.CreateTrueCondition()?)?;
+                    let automation: IUIAutomation =
+                        CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER)?;
+                    let element =
+                        automation.ElementFromHandle(Hwnd(window as *mut core::ffi::c_void))?;
+                    let all = element
+                        .FindAll(TreeScope_Descendants, &automation.CreateTrueCondition()?)?;
                     let mut texts = Vec::new();
                     for i in 0..all.Length()? {
                         let e = all.GetElement(i)?;
@@ -525,7 +561,13 @@ mod dialogs {
             let window = window as HWND;
             let mut children: Vec<isize> = Vec::new();
             // SAFETY: `collect` only pushes onto `children`, which outlives the call.
-            unsafe { EnumChildWindows(window, Some(collect), &mut children as *mut Vec<isize> as LPARAM) };
+            unsafe {
+                EnumChildWindows(
+                    window,
+                    Some(collect),
+                    &mut children as *mut Vec<isize> as LPARAM,
+                )
+            };
             let mut texts = Vec::new();
             let mut best: Option<(usize, isize, String)> = None;
             for child in children {
@@ -557,7 +599,11 @@ mod dialogs {
                     "its close box".to_string()
                 }
             };
-            Closed { title: text_of(window), text: texts.join(" "), pressed }
+            Closed {
+                title: text_of(window),
+                text: texts.join(" "),
+                pressed,
+            }
         }
     }
 
@@ -602,20 +648,35 @@ mod tests {
 
     #[test]
     fn users_main_is_renamed_and_ours_calls_it() {
-        for code in ["Sub main()\nEnd Sub", "  private  SUB  Main ( ) ' start\nEnd Sub"] {
+        for code in [
+            "Sub main()\nEnd Sub",
+            "  private  SUB  Main ( ) ' start\nEnd Sub",
+        ] {
             let text = source(code).unwrap();
             assert!(text.contains("McpUserMain()"), "{text}");
             assert_eq!(text.matches("Sub main()").count(), 1, "{text}");
             assert!(text.contains("\r\n"), "{text}");
         }
         let text = source("Option Explicit\r\nPublic Sub main() ' go\r\nEnd Sub").unwrap();
-        assert!(text.starts_with("Option Explicit\r\nPublic Sub McpUserMain() ' go\r\n"), "{text}");
+        assert!(
+            text.starts_with("Option Explicit\r\nPublic Sub McpUserMain() ' go\r\n"),
+            "{text}"
+        );
     }
 
     #[test]
     fn needs_exactly_one_main() {
-        for code in ["Sub other()\nEnd Sub", "Sub main()\nEnd Sub\nSub main()\nEnd Sub", "Sub main(x)\nEnd Sub", "' Sub main()", "Function main()\nEnd Function"] {
-            assert!(source(code).unwrap_err().contains("one `Sub main()`"), "{code}");
+        for code in [
+            "Sub other()\nEnd Sub",
+            "Sub main()\nEnd Sub\nSub main()\nEnd Sub",
+            "Sub main(x)\nEnd Sub",
+            "' Sub main()",
+            "Function main()\nEnd Function",
+        ] {
+            assert!(
+                source(code).unwrap_err().contains("one `Sub main()`"),
+                "{code}"
+            );
         }
         // Not its name.
         assert!(source("Sub mainly()\nEnd Sub").is_err());
@@ -623,10 +684,18 @@ mod tests {
 
     #[test]
     fn refuses_what_would_hang_or_garble() {
-        for code in ["Sub main()\nStop\nEnd Sub", "Sub main()\n  x = 1: stop\nEnd Sub", "Sub main()\nDebug.Assert False\nEnd Sub"] {
+        for code in [
+            "Sub main()\nStop\nEnd Sub",
+            "Sub main()\n  x = 1: stop\nEnd Sub",
+            "Sub main()\nDebug.Assert False\nEnd Sub",
+        ] {
             assert!(source(code).unwrap_err().contains("debugger"), "{code}");
         }
-        assert!(source("Sub main()\nx = \"\u{4e2d}\"\nEnd Sub").unwrap_err().contains("ChrW(20013)"));
+        assert!(
+            source("Sub main()\nx = \"\u{4e2d}\"\nEnd Sub")
+                .unwrap_err()
+                .contains("ChrW(20013)")
+        );
         // A method, a name, a string and a comment are fine.
         let code = "Sub main()\nmotion.Stop\nstopper = 1\nx = \"Stop\" ' Stop\nEnd Sub";
         assert!(source(code).is_ok());
@@ -643,21 +712,32 @@ mod tests {
     #[test]
     fn replies() {
         assert_eq!(reply_text("Done.", String::new(), &[]), "Done.");
-        let dialog = dialogs::Closed { title: "SOLIDWORKS".into(), text: "hello".into(), pressed: "OK".into() };
+        let dialog = dialogs::Closed {
+            title: "SOLIDWORKS".into(),
+            text: "hello".into(),
+            pressed: "OK".into(),
+        };
         let text = reply_text("Done.", "x=1".into(), &[dialog]);
         assert_eq!(
             text,
             "Done.\n\nOutput:\nx=1\n\nIt opened dialogs nobody can answer, so they were closed:\n- \"SOLIDWORKS\": hello (pressed OK)"
         );
         let long = capped("a".repeat(MAX_OUTPUT_CHARS + 1));
-        assert!(long.ends_with("(output cut off at 50000 characters)"), "{long}");
+        assert!(
+            long.ends_with("(output cut off at 50000 characters)"),
+            "{long}"
+        );
     }
 
     #[test]
     fn reads_what_vba_writes() {
         let folder = new_folder().unwrap();
         let file = folder.join("output.txt");
-        let bytes: Vec<u8> = [0xFEFFu16].into_iter().chain("x\u{4e2d}\r\ny\r\n".encode_utf16()).flat_map(u16::to_le_bytes).collect();
+        let bytes: Vec<u8> = [0xFEFFu16]
+            .into_iter()
+            .chain("x\u{4e2d}\r\ny\r\n".encode_utf16())
+            .flat_map(u16::to_le_bytes)
+            .collect();
         std::fs::write(&file, bytes).unwrap();
         assert_eq!(read_text(&file), "x\u{4e2d}\ny");
         assert_eq!(read_text(&folder.join("none.txt")), "");

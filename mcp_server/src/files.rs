@@ -187,18 +187,90 @@ const MODELS: &[DocumentType] = &[DocumentType::Part, DocumentType::Assembly];
 const DRAWINGS: &[DocumentType] = &[DocumentType::Drawing];
 
 const FORMATS: &[Format] = &[
-    Format { extensions: &["sldprt"], name: "part", native: true, import: false, types: &[DocumentType::Part] },
-    Format { extensions: &["sldasm"], name: "assembly", native: true, import: false, types: &[DocumentType::Assembly] },
-    Format { extensions: &["slddrw"], name: "drawing", native: true, import: false, types: DRAWINGS },
-    Format { extensions: &["step", "stp"], name: "STEP", native: false, import: true, types: MODELS },
-    Format { extensions: &["igs", "iges"], name: "IGES", native: false, import: true, types: MODELS },
-    Format { extensions: &["x_t", "x_b"], name: "Parasolid", native: false, import: true, types: MODELS },
-    Format { extensions: &["sat"], name: "ACIS", native: false, import: false, types: MODELS },
-    Format { extensions: &["stl"], name: "STL", native: false, import: false, types: MODELS },
-    Format { extensions: &["3mf"], name: "3MF", native: false, import: false, types: MODELS },
-    Format { extensions: &["pdf"], name: "PDF", native: false, import: false, types: DRAWINGS },
-    Format { extensions: &["dxf"], name: "DXF", native: false, import: false, types: DRAWINGS },
-    Format { extensions: &["dwg"], name: "DWG", native: false, import: false, types: DRAWINGS },
+    Format {
+        extensions: &["sldprt"],
+        name: "part",
+        native: true,
+        import: false,
+        types: &[DocumentType::Part],
+    },
+    Format {
+        extensions: &["sldasm"],
+        name: "assembly",
+        native: true,
+        import: false,
+        types: &[DocumentType::Assembly],
+    },
+    Format {
+        extensions: &["slddrw"],
+        name: "drawing",
+        native: true,
+        import: false,
+        types: DRAWINGS,
+    },
+    Format {
+        extensions: &["step", "stp"],
+        name: "STEP",
+        native: false,
+        import: true,
+        types: MODELS,
+    },
+    Format {
+        extensions: &["igs", "iges"],
+        name: "IGES",
+        native: false,
+        import: true,
+        types: MODELS,
+    },
+    Format {
+        extensions: &["x_t", "x_b"],
+        name: "Parasolid",
+        native: false,
+        import: true,
+        types: MODELS,
+    },
+    Format {
+        extensions: &["sat"],
+        name: "ACIS",
+        native: false,
+        import: false,
+        types: MODELS,
+    },
+    Format {
+        extensions: &["stl"],
+        name: "STL",
+        native: false,
+        import: false,
+        types: MODELS,
+    },
+    Format {
+        extensions: &["3mf"],
+        name: "3MF",
+        native: false,
+        import: false,
+        types: MODELS,
+    },
+    Format {
+        extensions: &["pdf"],
+        name: "PDF",
+        native: false,
+        import: false,
+        types: DRAWINGS,
+    },
+    Format {
+        extensions: &["dxf"],
+        name: "DXF",
+        native: false,
+        import: false,
+        types: DRAWINGS,
+    },
+    Format {
+        extensions: &["dwg"],
+        name: "DWG",
+        native: false,
+        import: false,
+        types: DRAWINGS,
+    },
 ];
 
 fn invalid(message: String) -> McpError {
@@ -207,7 +279,9 @@ fn invalid(message: String) -> McpError {
 
 fn format_of(path: &str) -> Option<&'static Format> {
     let extension = Path::new(path).extension()?.to_str()?.to_ascii_lowercase();
-    FORMATS.iter().find(|f| f.extensions.contains(&extension.as_str()))
+    FORMATS
+        .iter()
+        .find(|f| f.extensions.contains(&extension.as_str()))
 }
 
 /// "part", "assembly" or "drawing" for a SolidWorks file, by its extension.
@@ -219,7 +293,11 @@ fn extension_list(native: bool) -> String {
     FORMATS
         .iter()
         .filter(|f| native || !f.native)
-        .flat_map(|f| f.extensions.iter().map(|e| format!(".{}", e.to_ascii_uppercase())))
+        .flat_map(|f| {
+            f.extensions
+                .iter()
+                .map(|e| format!(".{}", e.to_ascii_uppercase()))
+        })
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -241,7 +319,10 @@ fn checked_path(path: &str) -> Result<&str, McpError> {
         return Err(invalid(format!(
             "{path:?} isn't an absolute path -- give the whole path, e.g. \
              \"C:\\Users\\me\\Documents\\{}\"",
-            Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or("part.SLDPRT")
+            Path::new(path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("part.SLDPRT")
         )));
     }
     Ok(path)
@@ -250,12 +331,22 @@ fn checked_path(path: &str) -> Result<&str, McpError> {
 /// The SaveDocument request for `params`, after checking the path, its
 /// format and its folder, and that it won't overwrite a file unasked.
 pub fn save_request(params: &SaveDocumentParams) -> Result<proto::SaveDocumentRequest, McpError> {
-    let document = params.document.as_deref().map(str::trim).unwrap_or_default().to_string();
+    let document = params
+        .document
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string();
     let Some(path) = params.path.as_deref() else {
         if params.pdf_sheets.is_some() || params.pdf_color.is_some() {
-            return Err(invalid("pdf_sheets / pdf_color are for exporting a PDF: give a .pdf path".into()));
+            return Err(invalid(
+                "pdf_sheets / pdf_color are for exporting a PDF: give a .pdf path".into(),
+            ));
         }
-        return Ok(proto::SaveDocumentRequest { document, ..Default::default() });
+        return Ok(proto::SaveDocumentRequest {
+            document,
+            ..Default::default()
+        });
     };
     let path = checked_path(path)?;
     let format = format_of(path).ok_or_else(|| {
@@ -290,7 +381,10 @@ pub fn save_request(params: &SaveDocumentParams) -> Result<proto::SaveDocumentRe
 }
 
 /// The PDF options, for a .pdf path; pdf_* for any other format is an error.
-fn pdf_export(params: &SaveDocumentParams, format: &Format) -> Result<Option<proto::PdfExport>, McpError> {
+fn pdf_export(
+    params: &SaveDocumentParams,
+    format: &Format,
+) -> Result<Option<proto::PdfExport>, McpError> {
     if format.name != "PDF" {
         if params.pdf_sheets.is_some() || params.pdf_color.is_some() {
             return Err(invalid(format!(
@@ -310,24 +404,37 @@ fn pdf_export(params: &SaveDocumentParams, format: &Format) -> Result<Option<pro
         }
     }
     if params.pdf_sheets.is_some() && sheets.is_empty() {
-        return Err(invalid("pdf_sheets is empty -- name at least one sheet, or leave it out for all".into()));
+        return Err(invalid(
+            "pdf_sheets is empty -- name at least one sheet, or leave it out for all".into(),
+        ));
     }
-    Ok(Some(proto::PdfExport { sheets, color: params.pdf_color }))
+    Ok(Some(proto::PdfExport {
+        sheets,
+        color: params.pdf_color,
+    }))
 }
 
 /// The OpenDocument request for `params`: the type comes from the extension,
 /// and a STEP / IGES / Parasolid file is imported.
 pub fn open_request(params: &OpenDocumentParams) -> Result<proto::OpenDocumentRequest, McpError> {
     let path = checked_path(&params.path)?;
-    let format = format_of(path).filter(|f| f.native || f.import).ok_or_else(|| {
-        let opens = FORMATS
-            .iter()
-            .filter(|f| f.native || f.import)
-            .flat_map(|f| f.extensions.iter().map(|e| format!(".{}", e.to_ascii_uppercase())))
-            .collect::<Vec<_>>()
-            .join(", ");
-        invalid(format!("open_document opens {opens} files; {path:?} isn't one"))
-    })?;
+    let format = format_of(path)
+        .filter(|f| f.native || f.import)
+        .ok_or_else(|| {
+            let opens = FORMATS
+                .iter()
+                .filter(|f| f.native || f.import)
+                .flat_map(|f| {
+                    f.extensions
+                        .iter()
+                        .map(|e| format!(".{}", e.to_ascii_uppercase()))
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            invalid(format!(
+                "open_document opens {opens} files; {path:?} isn't one"
+            ))
+        })?;
     if format.import && params.read_only {
         return Err(invalid(format!(
             "read_only is for SolidWorks files: a {} file is imported into a new document, never saved",
@@ -339,19 +446,34 @@ pub fn open_request(params: &OpenDocumentParams) -> Result<proto::OpenDocumentRe
     }
     Ok(proto::OpenDocumentRequest {
         path: path.to_string(),
-        r#type: if format.import { DocumentType::Unspecified as i32 } else { format.types[0] as i32 },
+        r#type: if format.import {
+            DocumentType::Unspecified as i32
+        } else {
+            format.types[0] as i32
+        },
         read_only: params.read_only,
         import: format.import,
     })
 }
 
 /// The CloseDocument request for `params`.
-pub fn close_request(params: &CloseDocumentParams) -> Result<proto::CloseDocumentRequest, McpError> {
-    let document = params.document.as_deref().map(str::trim).unwrap_or_default();
+pub fn close_request(
+    params: &CloseDocumentParams,
+) -> Result<proto::CloseDocumentRequest, McpError> {
+    let document = params
+        .document
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default();
     if params.document.is_some() && document.is_empty() {
-        return Err(invalid("document is empty -- leave it out to close the active document".into()));
+        return Err(invalid(
+            "document is empty -- leave it out to close the active document".into(),
+        ));
     }
-    Ok(proto::CloseDocumentRequest { document: document.to_string(), discard_changes: params.discard_changes })
+    Ok(proto::CloseDocumentRequest {
+        document: document.to_string(),
+        discard_changes: params.discard_changes,
+    })
 }
 
 /// "closed block.SLDPRT (...); its unsaved changes are lost. Part2 (...) is the
@@ -365,7 +487,11 @@ pub fn close_reply_text(reply: &proto::CloseDocumentResponse) -> String {
             text += ", with its unsaved changes";
         }
     } else if reply.had_unsaved_changes {
-        text += if closed.path.is_empty() { "; it was never saved, so it's gone" } else { "; its unsaved changes are lost" };
+        text += if closed.path.is_empty() {
+            "; it was never saved, so it's gone"
+        } else {
+            "; its unsaved changes are lost"
+        };
     }
     text += ". ";
     match &reply.active {
@@ -398,7 +524,11 @@ pub fn type_name(t: DocumentType) -> &'static str {
 
 /// "block.SLDPRT (part, C:\dir\block.SLDPRT)" or "Part1 (part, never saved)".
 pub fn describe(doc: &proto::Document) -> String {
-    let file = if doc.path.is_empty() { "never saved" } else { doc.path.as_str() };
+    let file = if doc.path.is_empty() {
+        "never saved"
+    } else {
+        doc.path.as_str()
+    };
     format!("{} ({}, {file})", doc.title, type_name(doc.r#type()))
 }
 
@@ -411,7 +541,10 @@ pub fn document_key(reply: &proto::GetActiveDocumentResponse) -> (String, String
     match &reply.document {
         None => (String::new(), String::new()),
         Some(doc) if !doc.path.is_empty() => (file_key(&doc.path), doc.title.clone()),
-        Some(doc) => (format!("new:{}:{}", reply.session, doc.title), doc.title.clone()),
+        Some(doc) => (
+            format!("new:{}:{}", reply.session, doc.title),
+            doc.title.clone(),
+        ),
     }
 }
 
@@ -440,9 +573,15 @@ const SAVE_ERRORS: &[(i32, &str)] = &[
     (2, "the document or file is read-only"),
     (4, "the file name is empty"),
     (8, "the file name contains '@'"),
-    (16, "the file is locked (open in another program or by another user?)"),
+    (
+        16,
+        "the file is locked (open in another program or by another user?)",
+    ),
     (32, "that format isn't available for this document"),
-    (64, "the model has rebuild errors (diagnose_model shows them)"),
+    (
+        64,
+        "the model has rebuild errors (diagnose_model shows them)",
+    ),
     (128, "SolidWorks wouldn't overwrite the file"),
     (256, "SolidWorks doesn't accept that file extension"),
     (512, "the export needs a selection"),
@@ -451,12 +590,18 @@ const SAVE_ERRORS: &[(i32, &str)] = &[
     (4096, "SolidWorks can't save this document in that format"),
     (8192, "documents it references need saving first"),
     (16384, "detached drawings aren't supported"),
-    (32768, "the file would need upgrading to this SolidWorks version"),
+    (
+        32768,
+        "the file would need upgrading to this SolidWorks version",
+    ),
     (65536, "the document has items that format can't hold"),
 ];
 
 const SAVE_WARNINGS: &[(i32, &str)] = &[
-    (1, "the model has rebuild errors (diagnose_model shows them)"),
+    (
+        1,
+        "the model has rebuild errors (diagnose_model shows them)",
+    ),
     (2, "the model needs a rebuild"),
     (4, "drawing views need updating"),
     (8, "animator needs to solve"),
@@ -487,7 +632,10 @@ const LOAD_ERRORS: &[(i32, &str)] = &[
     (8192, "it was saved by a newer SolidWorks version"),
     (16384, "a view's referenced configuration is missing"),
     (32768, "surface finish symbols need converting"),
-    (65536, "another document with the same name is already open -- close it first"),
+    (
+        65536,
+        "another document with the same name is already open -- close it first",
+    ),
     (131072, "it's protected (Liquid Machines)"),
     (262144, "not enough memory or resources"),
     (524288, "it has no display data"),
@@ -500,7 +648,10 @@ const LOAD_ERRORS: &[(i32, &str)] = &[
 
 const LOAD_WARNINGS: &[(i32, &str)] = &[
     (1, "a referenced file doesn't match (id mismatch)"),
-    (2, "it's opened read-only (the file is read-only or in use elsewhere)"),
+    (
+        2,
+        "it's opened read-only (the file is read-only or in use elsewhere)",
+    ),
     (4, "the file is in use by another program or user"),
     (8, "the drawing's standard was updated"),
     (16, "sheet scale was updated"),
@@ -519,7 +670,10 @@ const LOAD_WARNINGS: &[(i32, &str)] = &[
     (131072, "the design table is missing"),
     (262144, "SolidWorks repaired the file"),
     (524288, "SolidWorks repaired the file's critical data"),
-    (1048576, "external references are missing (components or models it uses weren't found)"),
+    (
+        1048576,
+        "external references are missing (components or models it uses weren't found)",
+    ),
 ];
 
 /// The reply to a save, or the error when nothing was saved.
@@ -529,7 +683,11 @@ pub fn save_reply_text(
 ) -> Result<String, McpError> {
     let errors = bit_names(reply.errors, SAVE_ERRORS);
     if !reply.saved {
-        let reason = if errors.is_empty() { "SolidWorks gave no reason".to_string() } else { errors.join("; ") };
+        let reason = if errors.is_empty() {
+            "SolidWorks gave no reason".to_string()
+        } else {
+            errors.join("; ")
+        };
         return Err(McpError::internal_error(
             format!("SolidWorks didn't save {}: {reason}", reply.saved_path),
             None,
@@ -540,7 +698,12 @@ pub fn save_reply_text(
     let mut text = if request.path.is_empty() {
         format!("saved {}", describe(&doc))
     } else if format.is_some_and(|f| !f.native) {
-        let mut text = format!("exported {} as {} to {}", doc.title, format.map_or("", |f| f.name), reply.saved_path);
+        let mut text = format!(
+            "exported {} as {} to {}",
+            doc.title,
+            format.map_or("", |f| f.name),
+            reply.saved_path
+        );
         if let Some(pdf) = &request.pdf {
             let pages = reply.pdf_sheets.len();
             text += &format!(
@@ -550,14 +713,26 @@ pub fn save_reply_text(
                 reply.pdf_sheets.join(", ")
             );
             if let Some(color) = pdf.color {
-                text += if color { "; in color" } else { "; black and white" };
+                text += if color {
+                    "; in color"
+                } else {
+                    "; black and white"
+                };
             }
         }
         text
     } else if request.copy {
-        format!("saved a copy of {} to {}; still working on {}", doc.title, reply.saved_path, describe(&doc))
+        format!(
+            "saved a copy of {} to {}; still working on {}",
+            doc.title,
+            reply.saved_path,
+            describe(&doc)
+        )
     } else {
-        format!("saved as {}; that's now the active document", describe(&doc))
+        format!(
+            "saved as {}; that's now the active document",
+            describe(&doc)
+        )
     };
     // The generic error says nothing once the file is there: SolidWorks
     // reports it for a drawing's DXF export that worked.
@@ -577,7 +752,11 @@ pub fn open_reply_text(
 ) -> Result<String, McpError> {
     let Some(doc) = reply.document.as_ref().filter(|_| reply.opened) else {
         let errors = bit_names(reply.errors, LOAD_ERRORS);
-        let reason = if errors.is_empty() { "SolidWorks gave no reason".to_string() } else { errors.join("; ") };
+        let reason = if errors.is_empty() {
+            "SolidWorks gave no reason".to_string()
+        } else {
+            errors.join("; ")
+        };
         return Err(McpError::internal_error(
             format!("SolidWorks couldn't open {}: {reason}", request.path),
             None,
@@ -600,7 +779,10 @@ pub fn open_reply_text(
         }
         text
     } else if reply.already_open {
-        format!("{} was already open; it's now the active document", describe(doc))
+        format!(
+            "{} was already open; it's now the active document",
+            describe(doc)
+        )
     } else {
         format!("opened {}; it's now the active document", describe(doc))
     };
@@ -637,14 +819,18 @@ pub fn template_file(value: Option<&str>, extension: &str, what: &str) -> Result
         .map(str::to_ascii_lowercase)
         .filter(|e| ["drwdot", "slddrt", "prtdot", "asmdot"].contains(&e.as_str()));
     if given.as_deref().is_some_and(|e| e != extension) {
-        return Err(invalid(format!("{value:?} isn't a {what} -- those are .{extension} files")));
+        return Err(invalid(format!(
+            "{value:?} isn't a {what} -- those are .{extension} files"
+        )));
     }
     if is_absolute(value) {
         if !Path::new(value).is_file() {
             return Err(invalid(format!("there's no file {value}")));
         }
         if given.is_none() {
-            return Err(invalid(format!("{value:?} isn't a {what} -- those are .{extension} files")));
+            return Err(invalid(format!(
+                "{value:?} isn't a {what} -- those are .{extension} files"
+            )));
         }
     } else if value.contains(['\\', '/']) {
         return Err(invalid(format!(
@@ -667,7 +853,10 @@ pub fn paper(
         }
         (Some(size), None) => (Some(size.sw()), 0.0, 0.0),
         (None, Some([w, h])) => {
-            if ![w, h].iter().all(|s| s.is_finite() && *s > 0.0 && *s <= MAX_SHEET_MM) {
+            if ![w, h]
+                .iter()
+                .all(|s| s.is_finite() && *s > 0.0 && *s <= MAX_SHEET_MM)
+            {
                 return Err(invalid(format!(
                     "paper_size_mm = [width, height] in mm, each above 0 and at most {MAX_SHEET_MM}"
                 )));
@@ -680,7 +869,9 @@ pub fn paper(
 
 /// The NewDrawing request for `params`: sizes in meters, enums as SolidWorks' values. An inch
 /// drawing from a template without a sheet gets ANSI B paper, the inch counterpart of A3.
-pub fn new_drawing_request(params: &CreateDrawingParams) -> Result<proto::NewDrawingRequest, McpError> {
+pub fn new_drawing_request(
+    params: &CreateDrawingParams,
+) -> Result<proto::NewDrawingRequest, McpError> {
     let (paper_size, width, height) = paper(params.paper_size, params.paper_size_mm)?;
     let inch = params.units.units == Some(units::UnitSystem::Ips);
     Ok(proto::NewDrawingRequest {
@@ -704,7 +895,10 @@ pub fn new_document_reply_text(kind: &str, document: Option<&proto::Document>) -
 }
 
 fn file_name(path: &str) -> &str {
-    Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or(path)
+    Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(path)
 }
 
 /// "A3 (420 x 297 mm)", or "500 x 300 mm" for a custom size.
@@ -729,7 +923,11 @@ pub fn sheet_format_text(format_path: &str) -> String {
 
 /// "Sheet1, A3 (420 x 297 mm), sheet format a3 - iso, scale 1:2, first-angle projection"
 pub fn sheet_text(sheet: &proto::SheetInfo, format_path: &str) -> String {
-    let projection = if sheet.first_angle { "first-angle" } else { "third-angle" };
+    let projection = if sheet.first_angle {
+        "first-angle"
+    } else {
+        "third-angle"
+    };
     format!(
         "{}, {}, {}, scale {}:{}, {projection} projection",
         sheet.name,
@@ -742,8 +940,15 @@ pub fn sheet_text(sheet: &proto::SheetInfo, format_path: &str) -> String {
 
 /// "created drawing Draw1 from Drawing.drwdot: Sheet1, A3 (420 x 297 mm), ..."
 pub fn new_drawing_reply_text(reply: &proto::NewDrawingResponse) -> String {
-    let title = reply.document.as_ref().map(|doc| doc.title.as_str()).unwrap_or_default();
-    let mut text = format!("created drawing {title} from {}", file_name(&reply.template));
+    let title = reply
+        .document
+        .as_ref()
+        .map(|doc| doc.title.as_str())
+        .unwrap_or_default();
+    let mut text = format!(
+        "created drawing {title} from {}",
+        file_name(&reply.template)
+    );
     if let Some(sheet) = &reply.sheet {
         text += &format!(": {}", sheet_text(sheet, &reply.sheet_format_path));
     }
@@ -759,17 +964,29 @@ mod tests {
     use super::*;
 
     fn save(path: Option<&str>) -> SaveDocumentParams {
-        SaveDocumentParams { path: path.map(Into::into), ..Default::default() }
+        SaveDocumentParams {
+            path: path.map(Into::into),
+            ..Default::default()
+        }
     }
 
     #[test]
     fn close_requests() {
         let r = close_request(&CloseDocumentParams::default()).unwrap();
         assert_eq!((r.document.as_str(), r.discard_changes), ("", false));
-        let params = CloseDocumentParams { document: Some(" Part1 ".into()), discard_changes: true };
+        let params = CloseDocumentParams {
+            document: Some(" Part1 ".into()),
+            discard_changes: true,
+        };
         let r = close_request(&params).unwrap();
         assert_eq!((r.document.as_str(), r.discard_changes), ("Part1", true));
-        assert!(close_request(&CloseDocumentParams { document: Some(" ".into()), ..Default::default() }).is_err());
+        assert!(
+            close_request(&CloseDocumentParams {
+                document: Some(" ".into()),
+                ..Default::default()
+            })
+            .is_err()
+        );
     }
 
     #[test]
@@ -794,7 +1011,12 @@ mod tests {
         reply.still_loaded = true;
         reply.active = None;
         let text = close_reply_text(&reply);
-        assert!(text.contains("keeps it loaded for that document, with its unsaved changes. No document"), "{text}");
+        assert!(
+            text.contains(
+                "keeps it loaded for that document, with its unsaved changes. No document"
+            ),
+            "{text}"
+        );
         let reply = proto::CloseDocumentResponse {
             closed: Some(doc("Part1", "")),
             had_unsaved_changes: true,
@@ -806,18 +1028,35 @@ mod tests {
     #[test]
     fn documents_are_keyed_by_file_else_session_and_title() {
         let reply = |title: &str, path: &str, session: &str| proto::GetActiveDocumentResponse {
-            document: Some(proto::Document { title: title.into(), r#type: 1, path: path.into(), ..Default::default() }),
+            document: Some(proto::Document {
+                title: title.into(),
+                r#type: 1,
+                path: path.into(),
+                ..Default::default()
+            }),
             session: session.into(),
         };
         let saved = document_key(&reply("block.SLDPRT", r"C:\Dir\Block.SLDPRT", "s1"));
-        assert_eq!(saved, (r"file:c:\dir\block.sldprt".to_string(), "block.SLDPRT".to_string()));
+        assert_eq!(
+            saved,
+            (
+                r"file:c:\dir\block.sldprt".to_string(),
+                "block.SLDPRT".to_string()
+            )
+        );
         // Same file after SolidWorks restarted: same document.
-        assert_eq!(document_key(&reply("block.SLDPRT", r"c:\dir\block.sldprt", "s2")).0, saved.0);
+        assert_eq!(
+            document_key(&reply("block.SLDPRT", r"c:\dir\block.sldprt", "s2")).0,
+            saved.0
+        );
         // Part1 of another session is another document.
         let new1 = document_key(&reply("Part1", "", "s1")).0;
         assert_ne!(new1, document_key(&reply("Part1", "", "s2")).0);
         assert_ne!(new1, document_key(&reply("Part2", "", "s1")).0);
-        let none = proto::GetActiveDocumentResponse { document: None, session: "s1".into() };
+        let none = proto::GetActiveDocumentResponse {
+            document: None,
+            session: "s1".into(),
+        };
         assert_eq!(document_key(&none).0, "");
     }
 
@@ -838,8 +1077,14 @@ mod tests {
 
     #[test]
     fn save_checks_the_path() {
-        assert!(save_request(&save(Some("block.SLDPRT"))).is_err(), "relative");
-        assert!(save_request(&save(Some("C:\\x\\block.docx"))).is_err(), "unknown format");
+        assert!(
+            save_request(&save(Some("block.SLDPRT"))).is_err(),
+            "relative"
+        );
+        assert!(
+            save_request(&save(Some("C:\\x\\block.docx"))).is_err(),
+            "unknown format"
+        );
         let dir = std::env::temp_dir();
         let missing = dir.join("sld_mcp_no_such_dir").join("a.SLDPRT");
         if is_absolute(missing.to_str().unwrap()) {
@@ -848,11 +1093,17 @@ mod tests {
             std::fs::write(&existing, b"x").unwrap();
             let p = existing.to_str().unwrap();
             assert!(save_request(&save(Some(p))).is_err(), "exists");
-            let request =
-                save_request(&SaveDocumentParams { path: Some(p.into()), overwrite: true, ..Default::default() })
-                    .unwrap();
+            let request = save_request(&SaveDocumentParams {
+                path: Some(p.into()),
+                overwrite: true,
+                ..Default::default()
+            })
+            .unwrap();
             assert!(request.copy, "exports are copies");
-            assert_eq!(request.allowed_types, vec![DocumentType::Part as i32, DocumentType::Assembly as i32]);
+            assert_eq!(
+                request.allowed_types,
+                vec![DocumentType::Part as i32, DocumentType::Assembly as i32]
+            );
             std::fs::remove_file(existing).unwrap();
         }
     }
@@ -873,13 +1124,37 @@ mod tests {
             return;
         }
         let request = pdf(None, None, Some(path)).unwrap();
-        assert_eq!(request.pdf, Some(proto::PdfExport { sheets: vec![], color: None }), "all sheets");
-        let request = pdf(Some(vec![" Sheet2 ", "Sheet1", "Sheet2"]), Some(false), Some(path)).unwrap();
-        assert_eq!(request.pdf, Some(proto::PdfExport { sheets: vec!["Sheet2".into(), "Sheet1".into()], color: Some(false) }));
+        assert_eq!(
+            request.pdf,
+            Some(proto::PdfExport {
+                sheets: vec![],
+                color: None
+            }),
+            "all sheets"
+        );
+        let request = pdf(
+            Some(vec![" Sheet2 ", "Sheet1", "Sheet2"]),
+            Some(false),
+            Some(path),
+        )
+        .unwrap();
+        assert_eq!(
+            request.pdf,
+            Some(proto::PdfExport {
+                sheets: vec!["Sheet2".into(), "Sheet1".into()],
+                color: Some(false)
+            })
+        );
         assert!(pdf(Some(vec![]), None, Some(path)).is_err(), "no sheets");
-        assert!(pdf(Some(vec![" "]), None, Some(path)).is_err(), "blank name");
+        assert!(
+            pdf(Some(vec![" "]), None, Some(path)).is_err(),
+            "blank name"
+        );
         let dxf = file.with_extension("dxf");
-        assert!(pdf(Some(vec!["Sheet1"]), None, dxf.to_str()).is_err(), "not a PDF");
+        assert!(
+            pdf(Some(vec!["Sheet1"]), None, dxf.to_str()).is_err(),
+            "not a PDF"
+        );
         assert!(pdf(None, Some(true), None).is_err(), "in place");
         assert_eq!(save_request(&save(dxf.to_str())).unwrap().pdf, None);
     }
@@ -889,25 +1164,46 @@ mod tests {
         let request = proto::SaveDocumentRequest {
             path: r"C:\d.pdf".into(),
             copy: true,
-            pdf: Some(proto::PdfExport { sheets: vec![], color: Some(false) }),
+            pdf: Some(proto::PdfExport {
+                sheets: vec![],
+                color: Some(false),
+            }),
             ..Default::default()
         };
         let reply = proto::SaveDocumentResponse {
-            document: Some(proto::Document { title: "d - Sheet1".into(), r#type: 3, path: String::new(), ..Default::default() }),
+            document: Some(proto::Document {
+                title: "d - Sheet1".into(),
+                r#type: 3,
+                path: String::new(),
+                ..Default::default()
+            }),
             saved_path: r"C:\d.pdf".into(),
             saved: true,
             pdf_sheets: vec!["Sheet1".into(), "Sheet2".into()],
             ..Default::default()
         };
         let text = save_reply_text(&request, &reply).unwrap();
-        assert!(text.contains("as PDF") && text.contains("2 pages, one per sheet: Sheet1, Sheet2; black and white"), "{text}");
+        assert!(
+            text.contains("as PDF")
+                && text.contains("2 pages, one per sheet: Sheet1, Sheet2; black and white"),
+            "{text}"
+        );
     }
 
     #[test]
     fn open_takes_native_files_and_imports() {
-        let open = |p: &str, read_only: bool| open_request(&OpenDocumentParams { path: p.into(), read_only });
+        let open = |p: &str, read_only: bool| {
+            open_request(&OpenDocumentParams {
+                path: p.into(),
+                read_only,
+            })
+        };
         let err = open("C:\\x\\block.stl", false).unwrap_err();
-        assert!(err.message.contains(".X_B") && !err.message.contains(".STL"), "{}", err.message);
+        assert!(
+            err.message.contains(".X_B") && !err.message.contains(".STL"),
+            "{}",
+            err.message
+        );
         assert!(open("block.SLDPRT", false).is_err());
         assert!(open("C:\\sld_mcp_no_such_dir\\block.SLDPRT", false).is_err());
         assert!(open("C:\\sld_mcp_no_such_dir\\block.step", false).is_err());
@@ -919,54 +1215,124 @@ mod tests {
         }
         std::fs::write(&file, b"ISO-10303-21;").unwrap();
         let request = open(path, false).unwrap();
-        assert!(request.import && request.r#type == DocumentType::Unspecified as i32, "{request:?}");
+        assert!(
+            request.import && request.r#type == DocumentType::Unspecified as i32,
+            "{request:?}"
+        );
         assert!(open(path, true).unwrap_err().message.contains("read_only"));
         std::fs::remove_file(file).unwrap();
     }
 
     #[test]
     fn import_reply_points_at_recognition() {
-        let request = proto::OpenDocumentRequest { path: r"C:\in\bracket.STEP".into(), import: true, ..Default::default() };
-        let doc = proto::Document { title: "bracket.SLDPRT".into(), r#type: 1, ..Default::default() };
-        let reply = proto::OpenDocumentResponse { document: Some(doc), opened: true, ..Default::default() };
+        let request = proto::OpenDocumentRequest {
+            path: r"C:\in\bracket.STEP".into(),
+            import: true,
+            ..Default::default()
+        };
+        let doc = proto::Document {
+            title: "bracket.SLDPRT".into(),
+            r#type: 1,
+            ..Default::default()
+        };
+        let reply = proto::OpenDocumentResponse {
+            document: Some(doc),
+            opened: true,
+            ..Default::default()
+        };
         let text = open_reply_text(&request, &reply).unwrap();
-        assert!(text.starts_with("imported bracket.STEP as bracket.SLDPRT (part, never saved)"), "{text}");
-        assert!(text.contains("recognize_features") && text.contains(".SLDPRT path"), "{text}");
+        assert!(
+            text.starts_with("imported bracket.STEP as bracket.SLDPRT (part, never saved)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("recognize_features") && text.contains(".SLDPRT path"),
+            "{text}"
+        );
     }
 
     #[test]
     fn bits_are_named() {
         assert_eq!(bit_names(64 | 2, SAVE_ERRORS).len(), 2);
-        assert_eq!(bit_names(1 << 30, SAVE_ERRORS), vec![format!("code {}", 1 << 30)]);
+        assert_eq!(
+            bit_names(1 << 30, SAVE_ERRORS),
+            vec![format!("code {}", 1 << 30)]
+        );
         assert!(bit_names(0, LOAD_WARNINGS).is_empty());
     }
 
     #[test]
     fn failed_save_is_an_error() {
         let request = save_request(&save(None)).unwrap();
-        let reply = proto::SaveDocumentResponse { saved: false, errors: 2, saved_path: "C:\\a.SLDPRT".into(), ..Default::default() };
+        let reply = proto::SaveDocumentResponse {
+            saved: false,
+            errors: 2,
+            saved_path: "C:\\a.SLDPRT".into(),
+            ..Default::default()
+        };
         let err = save_reply_text(&request, &reply).unwrap_err();
         assert!(err.message.contains("read-only"), "{}", err.message);
         // Saved after all: the generic error isn't repeated.
-        let reply = proto::SaveDocumentResponse { saved: true, errors: 1, ..reply };
-        assert!(!save_reply_text(&request, &reply).unwrap().contains("reported"));
+        let reply = proto::SaveDocumentResponse {
+            saved: true,
+            errors: 1,
+            ..reply
+        };
+        assert!(
+            !save_reply_text(&request, &reply)
+                .unwrap()
+                .contains("reported")
+        );
     }
 
     #[test]
     fn missing_references_are_explained() {
-        let request = proto::OpenDocumentRequest { path: "C:\\a.SLDASM".into(), r#type: 2, ..Default::default() };
-        let doc = proto::Document { title: "a.SLDASM".into(), r#type: 2, path: request.path.clone(), ..Default::default() };
-        let reply = proto::OpenDocumentResponse { document: Some(doc), opened: true, errors: 2, ..Default::default() };
+        let request = proto::OpenDocumentRequest {
+            path: "C:\\a.SLDASM".into(),
+            r#type: 2,
+            ..Default::default()
+        };
+        let doc = proto::Document {
+            title: "a.SLDASM".into(),
+            r#type: 2,
+            path: request.path.clone(),
+            ..Default::default()
+        };
+        let reply = proto::OpenDocumentResponse {
+            document: Some(doc),
+            opened: true,
+            errors: 2,
+            ..Default::default()
+        };
         let text = open_reply_text(&request, &reply).unwrap();
-        assert!(text.contains("suppressed") && !text.contains("file wasn't found"), "{text}");
-        let reply = proto::OpenDocumentResponse { document: None, opened: false, errors: 2, ..reply };
-        assert!(open_reply_text(&request, &reply).unwrap_err().message.contains("wasn't found"));
+        assert!(
+            text.contains("suppressed") && !text.contains("file wasn't found"),
+            "{text}"
+        );
+        let reply = proto::OpenDocumentResponse {
+            document: None,
+            opened: false,
+            errors: 2,
+            ..reply
+        };
+        assert!(
+            open_reply_text(&request, &reply)
+                .unwrap_err()
+                .message
+                .contains("wasn't found")
+        );
     }
 
     #[test]
     fn drawing_requests_map_sizes_and_units() {
         let request = new_drawing_request(&CreateDrawingParams::default()).unwrap();
-        assert_eq!(request, proto::NewDrawingRequest { units: Some(proto::UnitsChange::default()), ..Default::default() });
+        assert_eq!(
+            request,
+            proto::NewDrawingRequest {
+                units: Some(proto::UnitsChange::default()),
+                ..Default::default()
+            }
+        );
 
         let params: CreateDrawingParams = serde_json::from_value(serde_json::json!({
             "sheet_format": " a3 - iso ", "paper_size": "A4_portrait", "units": "ips"
@@ -975,23 +1341,61 @@ mod tests {
         let request = new_drawing_request(&params).unwrap();
         assert_eq!(request.fallback_paper_size, Some(2)); // ANSI B for an inch drawing
         let units = request.units.unwrap();
-        assert_eq!((request.sheet_format.as_str(), request.paper_size, units.unit_system), ("a3 - iso", Some(7), 3));
-        let params: CreateDrawingParams =
-            serde_json::from_value(serde_json::json!({"units": "mmgs", "decimals": 1, "drafting_standard": "iso"})).unwrap();
+        assert_eq!(
+            (
+                request.sheet_format.as_str(),
+                request.paper_size,
+                units.unit_system
+            ),
+            ("a3 - iso", Some(7), 3)
+        );
+        let params: CreateDrawingParams = serde_json::from_value(
+            serde_json::json!({"units": "mmgs", "decimals": 1, "drafting_standard": "iso"}),
+        )
+        .unwrap();
         let request = new_drawing_request(&params).unwrap();
-        assert_eq!(request.units, Some(proto::UnitsChange { unit_system: 5, length_decimals: Some(1), drafting_standard: 2 }));
+        assert_eq!(
+            request.units,
+            Some(proto::UnitsChange {
+                unit_system: 5,
+                length_decimals: Some(1),
+                drafting_standard: 2
+            })
+        );
         assert_eq!(request.fallback_paper_size, None);
 
-        let params = CreateDrawingParams { paper_size_mm: Some([500.0, 300.0]), ..Default::default() };
+        let params = CreateDrawingParams {
+            paper_size_mm: Some([500.0, 300.0]),
+            ..Default::default()
+        };
         let request = new_drawing_request(&params).unwrap();
-        assert_eq!((request.paper_size, request.width, request.height), (Some(12), 0.5, 0.3));
+        assert_eq!(
+            (request.paper_size, request.width, request.height),
+            (Some(12), 0.5, 0.3)
+        );
 
         for bad in [
-            CreateDrawingParams { paper_size: Some(PaperSize::A3), paper_size_mm: Some([1.0, 1.0]), ..Default::default() },
-            CreateDrawingParams { paper_size_mm: Some([0.0, 300.0]), ..Default::default() },
-            CreateDrawingParams { template: Some("Part.prtdot".into()), ..Default::default() },
-            CreateDrawingParams { sheet_format: Some("formats\\a3 - iso".into()), ..Default::default() },
-            CreateDrawingParams { template: Some("C:\\no\\such\\Drawing.drwdot".into()), ..Default::default() },
+            CreateDrawingParams {
+                paper_size: Some(PaperSize::A3),
+                paper_size_mm: Some([1.0, 1.0]),
+                ..Default::default()
+            },
+            CreateDrawingParams {
+                paper_size_mm: Some([0.0, 300.0]),
+                ..Default::default()
+            },
+            CreateDrawingParams {
+                template: Some("Part.prtdot".into()),
+                ..Default::default()
+            },
+            CreateDrawingParams {
+                sheet_format: Some("formats\\a3 - iso".into()),
+                ..Default::default()
+            },
+            CreateDrawingParams {
+                template: Some("C:\\no\\such\\Drawing.drwdot".into()),
+                ..Default::default()
+            },
         ] {
             assert!(new_drawing_request(&bad).is_err(), "{bad:?}");
         }
@@ -1003,7 +1407,12 @@ mod tests {
             document: Some(proto::Document {
                 title: "Draw1".into(),
                 r#type: 3,
-                units: Some(proto::DocumentUnits { unit_system: 5, length_unit: 0, length_decimals: 2, drafting_standard: 2 }),
+                units: Some(proto::DocumentUnits {
+                    unit_system: 5,
+                    length_unit: 0,
+                    length_decimals: 2,
+                    drafting_standard: 2,
+                }),
                 ..Default::default()
             }),
             template: r"C:\templates\Drawing.drwdot".into(),

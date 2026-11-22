@@ -51,7 +51,11 @@ fn text(value: Option<&str>) -> String {
 }
 
 fn mm2(p: DVec2) -> String {
-    format!("[{}, {}]", round(p.x * MM_PER_M, 2), round(p.y * MM_PER_M, 2))
+    format!(
+        "[{}, {}]",
+        round(p.x * MM_PER_M, 2),
+        round(p.y * MM_PER_M, 2)
+    )
 }
 
 // ---- Coordinates ----------------------------------------------------------------
@@ -89,7 +93,11 @@ impl ViewFrame {
 
 /// The frames of a sheet's views, by name.
 pub fn frames(sheet: &proto::SheetInfo) -> HashMap<String, ViewFrame> {
-    sheet.views.iter().filter_map(|v| Some((v.name.clone(), ViewFrame::of(v)?))).collect()
+    sheet
+        .views
+        .iter()
+        .filter_map(|v| Some((v.name.clone(), ViewFrame::of(v)?)))
+        .collect()
 }
 
 pub fn outline(view: &proto::ViewInfo) -> Option<(DVec2, DVec2)> {
@@ -100,11 +108,19 @@ pub fn outline(view: &proto::ViewInfo) -> Option<(DVec2, DVec2)> {
 
 pub(crate) fn point(at_mm: [f64; 2], what: &str) -> Result<DVec2, McpError> {
     let p = DVec2::new(at_mm[0], at_mm[1]) / MM_PER_M;
-    if p.is_finite() { Ok(p) } else { Err(invalid(format!("{what}: give [x, y] in mm"))) }
+    if p.is_finite() {
+        Ok(p)
+    } else {
+        Err(invalid(format!("{what}: give [x, y] in mm")))
+    }
 }
 
 pub(crate) fn sheet_point(p: DVec2) -> proto::DrawingPoint {
-    proto::DrawingPoint { x: p.x, y: p.y, view_name: String::new() }
+    proto::DrawingPoint {
+        x: p.x,
+        y: p.y,
+        view_name: String::new(),
+    }
 }
 
 // ---- Names ------------------------------------------------------------------------
@@ -460,12 +476,20 @@ fn project(shape: &Shape, p: DVec2) -> Option<DVec2> {
     match shape {
         Shape::Line { a, b } => {
             let d = *b - *a;
-            let t = if d.length_squared() > 0.0 { ((p - *a).dot(d) / d.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
+            let t = if d.length_squared() > 0.0 {
+                ((p - *a).dot(d) / d.length_squared()).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
             Some(*a + d * t)
         }
         Shape::Circle { center, radius } | Shape::Arc { center, radius, .. } => {
             let v = p - *center;
-            let dir = if v.length() > 1e-12 { v.normalize() } else { DVec2::X };
+            let dir = if v.length() > 1e-12 {
+                v.normalize()
+            } else {
+                DVec2::X
+            };
             Some(*center + dir * *radius)
         }
         Shape::Point { p: q } => Some(*q),
@@ -478,13 +502,27 @@ fn project(shape: &Shape, p: DVec2) -> Option<DVec2> {
 /// middle, the point itself.
 fn tip_candidates(shape: &Shape) -> Vec<DVec2> {
     match shape {
-        Shape::Line { a, b } => [0.5, 0.35, 0.65, 0.2, 0.8, 0.1, 0.9].iter().map(|t| *a + (*b - *a) * *t).collect(),
-        Shape::Circle { center, radius } => (0..8)
-            .map(|k| *center + DVec2::from_angle((45.0 + 90.0 * k as f64 / 2.0).to_radians()) * *radius)
+        Shape::Line { a, b } => [0.5, 0.35, 0.65, 0.2, 0.8, 0.1, 0.9]
+            .iter()
+            .map(|t| *a + (*b - *a) * *t)
             .collect(),
-        Shape::Arc { center, radius, a, b } => {
+        Shape::Circle { center, radius } => (0..8)
+            .map(|k| {
+                *center + DVec2::from_angle((45.0 + 90.0 * k as f64 / 2.0).to_radians()) * *radius
+            })
+            .collect(),
+        Shape::Arc {
+            center,
+            radius,
+            a,
+            b,
+        } => {
             let m = (*a + *b) / 2.0 - *center;
-            vec![if m.length() > 1e-9 { *center + m.normalize() * *radius } else { *a }]
+            vec![if m.length() > 1e-9 {
+                *center + m.normalize() * *radius
+            } else {
+                *a
+            }]
         }
         Shape::Point { p } => vec![*p],
         Shape::Curve { .. } => Vec::new(),
@@ -496,8 +534,16 @@ fn tip_candidates(shape: &Shape) -> Vec<DVec2> {
 /// whatever is picked there), else the first.
 fn default_tip(shape: &Shape, others: &[&Shape]) -> Option<DVec2> {
     let candidates = tip_candidates(shape);
-    let clear = |p: &DVec2| others.iter().all(|o| project(o, *p).is_none_or(|q| q.distance(*p) > 2.0 * TIP_SLACK));
-    candidates.iter().find(|p| clear(p)).or(candidates.first()).copied()
+    let clear = |p: &DVec2| {
+        others
+            .iter()
+            .all(|o| project(o, *p).is_none_or(|q| q.distance(*p) > 2.0 * TIP_SLACK))
+    };
+    candidates
+        .iter()
+        .find(|p| clear(p))
+        .or(candidates.first())
+        .copied()
 }
 
 /// A rough size of the text on the paper: [width, height], sheet meters.
@@ -515,7 +561,11 @@ pub(crate) fn text_spot(tip: DVec2, outline: Option<(DVec2, DVec2)>, size: DVec2
         Some((lo, hi)) => {
             let middle = (lo + hi) / 2.0;
             let away = tip - middle;
-            let dir = if away.length() > 1e-9 { away.normalize() } else { DVec2::new(1.0, 1.0).normalize() };
+            let dir = if away.length() > 1e-9 {
+                away.normalize()
+            } else {
+                DVec2::new(1.0, 1.0).normalize()
+            };
             (dir, exit_distance(tip, dir, lo, hi))
         }
         None => (DVec2::new(1.0, 1.0).normalize(), 0.0),
@@ -523,7 +573,10 @@ pub(crate) fn text_spot(tip: DVec2, outline: Option<(DVec2, DVec2)>, size: DVec2
     let at = tip + dir * (past + TEXT_CLEARANCE);
     // The corner given is the text's upper left: text to the left of `at`
     // ends there, text above it sits on it.
-    DVec2::new(if dir.x < 0.0 { at.x - size.x } else { at.x }, if dir.y > 0.0 { at.y + size.y } else { at.y })
+    DVec2::new(
+        if dir.x < 0.0 { at.x - size.x } else { at.x },
+        if dir.y > 0.0 { at.y + size.y } else { at.y },
+    )
 }
 
 /// What the leaders of a note will be: entity refs, arrow tips (all or
@@ -535,7 +588,12 @@ pub(crate) struct Leaders {
     pub remarks: Vec<String>,
 }
 
-pub(crate) fn leaders(ids: &IdRegistry, cache: &Cache, attach_to: &[String], arrows: &[[f64; 2]]) -> Result<Leaders, McpError> {
+pub(crate) fn leaders(
+    ids: &IdRegistry,
+    cache: &Cache,
+    attach_to: &[String],
+    arrows: &[[f64; 2]],
+) -> Result<Leaders, McpError> {
     if attach_to.len() > MAX_LEADERS {
         return Err(invalid(format!("at most {MAX_LEADERS} leaders per note")));
     }
@@ -546,7 +604,12 @@ pub(crate) fn leaders(ids: &IdRegistry, cache: &Cache, attach_to: &[String], arr
             attach_to.len()
         )));
     }
-    let mut out = Leaders { refs: Vec::new(), tips: Vec::new(), view: None, remarks: Vec::new() };
+    let mut out = Leaders {
+        refs: Vec::new(),
+        tips: Vec::new(),
+        view: None,
+        remarks: Vec::new(),
+    };
     for id in attach_to {
         let r = drawing::decode_ref(ids, id)?;
         match &out.view {
@@ -560,7 +623,10 @@ pub(crate) fn leaders(ids: &IdRegistry, cache: &Cache, attach_to: &[String], arr
         }
         out.refs.push(r);
     }
-    let shapes: Vec<Option<&Shape>> = attach_to.iter().map(|id| cache.entity(id).map(|g| &g.shape)).collect();
+    let shapes: Vec<Option<&Shape>> = attach_to
+        .iter()
+        .map(|id| cache.entity(id).map(|g| &g.shape))
+        .collect();
     if !arrows.is_empty() {
         for (i, given) in arrows.iter().enumerate() {
             let p = point(*given, "arrow_at_mm")?;
@@ -584,7 +650,10 @@ pub(crate) fn leaders(ids: &IdRegistry, cache: &Cache, attach_to: &[String], arr
             .zip(&shapes)
             .zip(&out.refs)
             .map(|((id, s), r)| {
-                let others: Vec<&Shape> = cache.others_in(&r.view_name, id).map(|g| &g.shape).collect();
+                let others: Vec<&Shape> = cache
+                    .others_in(&r.view_name, id)
+                    .map(|g| &g.shape)
+                    .collect();
                 s.and_then(|s| default_tip(s, &others))
             })
             .collect();
@@ -603,7 +672,10 @@ pub(crate) fn leaders(ids: &IdRegistry, cache: &Cache, attach_to: &[String], arr
 // ---- Requests ---------------------------------------------------------------------
 
 fn style(params: &NoteStyleParams, document_font: bool) -> Result<proto::NoteStyle, McpError> {
-    let mut s = proto::NoteStyle { document_font, ..Default::default() };
+    let mut s = proto::NoteStyle {
+        document_font,
+        ..Default::default()
+    };
     if let Some(h) = params.height_mm {
         if !(h.is_finite() && h > 0.0 && h < 1000.0) {
             return Err(invalid("height_mm: give the text height in mm, above 0"));
@@ -620,7 +692,11 @@ fn style(params: &NoteStyleParams, document_font: bool) -> Result<proto::NoteSty
     s.italic = params.italic;
     s.underline = params.underline;
     if document_font
-        && (s.text_height.is_some() || s.font.is_some() || s.bold.is_some() || s.italic.is_some() || s.underline.is_some())
+        && (s.text_height.is_some()
+            || s.font.is_some()
+            || s.bold.is_some()
+            || s.italic.is_some()
+            || s.underline.is_some())
     {
         return Err(invalid(
             "document_font puts the note back on the document's font: give it alone, or height_mm / font / bold / \
@@ -668,7 +744,9 @@ pub fn add_request(
     let view = text(params.view.as_deref());
     let leaders = leaders(ids, cache, &params.attach_to, &params.arrow_at_mm)?;
     if params.attach_to.is_empty() && !params.arrow_at_mm.is_empty() {
-        return Err(invalid("arrow_at_mm goes with attach_to: the entities the leaders point at"));
+        return Err(invalid(
+            "arrow_at_mm goes with attach_to: the entities the leaders point at",
+        ));
     }
     if let Some(lv) = &leaders.view
         && !view.is_empty()
@@ -679,10 +757,16 @@ pub fn add_request(
         )));
     }
     let note_view = leaders.view.clone().unwrap_or(view.clone());
-    let place = params.place.unwrap_or(if note_view.is_empty() { Place::Sheet } else { Place::View });
+    let place = params.place.unwrap_or(if note_view.is_empty() {
+        Place::Sheet
+    } else {
+        Place::View
+    });
     match place {
         Place::View if note_view.is_empty() => {
-            return Err(invalid("in=\"view\": say which view (view=\"Drawing View1\")"));
+            return Err(invalid(
+                "in=\"view\": say which view (view=\"Drawing View1\")",
+            ));
         }
         Place::Sheet | Place::SheetFormat if leaders.view.is_some() => {
             return Err(invalid(format!(
@@ -693,17 +777,25 @@ pub fn add_request(
         Place::Sheet | Place::SheetFormat if !view.is_empty() => {
             return Err(invalid(format!(
                 "a {} note doesn't belong to a view: leave `view` out, or use in=\"view\"",
-                if place == Place::Sheet { "sheet" } else { "sheet format" }
+                if place == Place::Sheet {
+                    "sheet"
+                } else {
+                    "sheet format"
+                }
             )));
         }
         _ => {}
     }
     if params.style.leader.is_some_and(|l| l != LeaderKind::None) && leaders.refs.is_empty() {
-        return Err(invalid("a leader needs something to point at: give attach_to"));
+        return Err(invalid(
+            "a leader needs something to point at: give attach_to",
+        ));
     }
     let mut remarks = leaders.remarks;
     let position = match (params.at_mm, params.at_view_mm) {
-        (Some(_), Some(_)) => return Err(invalid("give at_mm (sheet) or at_view_mm (view), not both")),
+        (Some(_), Some(_)) => {
+            return Err(invalid("give at_mm (sheet) or at_view_mm (view), not both"));
+        }
         (Some(at), None) => Some(sheet_point(point(at, "at_mm")?)),
         (None, Some(at)) => {
             if place != Place::View {
@@ -712,12 +804,24 @@ pub fn add_request(
                 ));
             }
             let p = point(at, "at_view_mm")?;
-            Some(proto::DrawingPoint { x: p.x, y: p.y, view_name: note_view.clone() })
+            Some(proto::DrawingPoint {
+                x: p.x,
+                y: p.y,
+                view_name: note_view.clone(),
+            })
         }
         (None, None) => match leaders.tips.first() {
             Some(tip) => {
-                let height = params.style.height_mm.map(|h| h / MM_PER_M).unwrap_or(DEFAULT_TEXT_HEIGHT);
-                let at = text_spot(*tip, cache.outline(&note_view), text_size(&params.text, height));
+                let height = params
+                    .style
+                    .height_mm
+                    .map(|h| h / MM_PER_M)
+                    .unwrap_or(DEFAULT_TEXT_HEIGHT);
+                let at = text_spot(
+                    *tip,
+                    cache.outline(&note_view),
+                    text_size(&params.text, height),
+                );
                 remarks.push("the text was placed next to the first arrow, outside the view; pass at_mm to choose".into());
                 Some(sheet_point(at))
             }
@@ -726,7 +830,11 @@ pub fn add_request(
     };
     let request = proto::SetupDrawingAnnotationRequest {
         sheet_name: text(params.sheet.as_deref()),
-        view_name: if place == Place::View { note_view } else { String::new() },
+        view_name: if place == Place::View {
+            note_view
+        } else {
+            String::new()
+        },
         owner: place.sw() as i32,
         text: Some(params.text.clone()),
         position,
@@ -749,13 +857,17 @@ pub fn edit_request(
 ) -> Result<(proto::SetupDrawingAnnotationRequest, Vec<String>), McpError> {
     let name = text(Some(&params.name));
     if name.is_empty() {
-        return Err(invalid("name: give the annotation's name, e.g. \"DetailItem12\""));
+        return Err(invalid(
+            "name: give the annotation's name, e.g. \"DetailItem12\"",
+        ));
     }
     let view = text(params.view.as_deref());
     let attach_to = params.attach_to.as_deref().unwrap_or_default();
     let arrows = params.arrow_at_mm.as_deref().unwrap_or_default();
     if params.attach_to.as_ref().is_some_and(Vec::is_empty) {
-        return Err(invalid("attach_to: give the entities, or leave it out (leader=\"none\" hides the leaders)"));
+        return Err(invalid(
+            "attach_to: give the entities, or leave it out (leader=\"none\" hides the leaders)",
+        ));
     }
     if !arrows.is_empty() && attach_to.is_empty() {
         return Err(invalid(
@@ -787,21 +899,33 @@ pub fn edit_request(
         ..Default::default()
     };
     if params.text.as_ref().is_some_and(|t| t.trim().is_empty()) {
-        return Err(invalid("text: give the new text (delete_drawing_annotations removes a note)"));
+        return Err(invalid(
+            "text: give the new text (delete_drawing_annotations removes a note)",
+        ));
     }
     match (params.at_mm, params.at_view_mm, params.move_by_mm) {
         (None, None, None) => {}
         (Some(at), None, None) => request.position = Some(sheet_point(point(at, "at_mm")?)),
         (None, Some(at), None) => {
             if view.is_empty() {
-                return Err(invalid("at_view_mm: give `view`, the view the annotation is in"));
+                return Err(invalid(
+                    "at_view_mm: give `view`, the view the annotation is in",
+                ));
             }
             let p = point(at, "at_view_mm")?;
-            request.position = Some(proto::DrawingPoint { x: p.x, y: p.y, view_name: view.clone() });
+            request.position = Some(proto::DrawingPoint {
+                x: p.x,
+                y: p.y,
+                view_name: view.clone(),
+            });
         }
         (None, None, Some(by)) => {
             let d = point(by, "move_by_mm")?;
-            request.move_by = Some(proto::Vec3 { x: d.x, y: d.y, z: 0.0 });
+            request.move_by = Some(proto::Vec3 {
+                x: d.x,
+                y: d.y,
+                z: 0.0,
+            });
         }
         _ => return Err(invalid("give one of at_mm, at_view_mm and move_by_mm")),
     }
@@ -824,10 +948,19 @@ pub fn edit_request(
     Ok((request, leaders.remarks))
 }
 
-pub fn delete_request(params: &DeleteDrawingAnnotationsParams) -> Result<proto::DeleteDrawingAnnotationsRequest, McpError> {
-    let names: Vec<String> = params.names.iter().map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).collect();
+pub fn delete_request(
+    params: &DeleteDrawingAnnotationsParams,
+) -> Result<proto::DeleteDrawingAnnotationsRequest, McpError> {
+    let names: Vec<String> = params
+        .names
+        .iter()
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .collect();
     if names.is_empty() || names.len() > MAX_DELETED {
-        return Err(invalid(format!("names: give 1 to {MAX_DELETED} annotation names")));
+        return Err(invalid(format!(
+            "names: give 1 to {MAX_DELETED} annotation names"
+        )));
     }
     Ok(proto::DeleteDrawingAnnotationsRequest {
         names,
@@ -839,7 +972,8 @@ pub fn delete_request(params: &DeleteDrawingAnnotationsParams) -> Result<proto::
 pub fn inspect_request(params: &InspectDrawingAnnotationsParams) -> proto::InspectDrawingRequest {
     proto::InspectDrawingRequest {
         include_annotations: true,
-        skip_sheet_format: !(params.include_sheet_format || params.place == Some(Place::SheetFormat)),
+        skip_sheet_format: !(params.include_sheet_format
+            || params.place == Some(Place::SheetFormat)),
         ..Default::default()
     }
 }
@@ -855,7 +989,12 @@ fn box_of(b: &proto::Box3) -> Option<(DVec2, DVec2)> {
 /// The box around an annotation's text (and leaders) on the sheet: a
 /// note's extent, else its leaders' points and its position.
 fn extent(a: &proto::AnnotationInfo) -> Option<(DVec2, DVec2)> {
-    if let Some(b) = a.note.as_ref().and_then(|n| n.extent.as_ref()).and_then(box_of) {
+    if let Some(b) = a
+        .note
+        .as_ref()
+        .and_then(|n| n.extent.as_ref())
+        .and_then(box_of)
+    {
         return Some(b);
     }
     None
@@ -864,7 +1003,11 @@ fn extent(a: &proto::AnnotationInfo) -> Option<(DVec2, DVec2)> {
 /// One annotation as the drawing annotation tools show it: what
 /// inspect_drawing shows plus where it belongs, its position in sheet mm
 /// and (in a view) the view's coordinates, its look, box and leaders.
-pub fn annotation_entry(ids: &mut IdRegistry, frames: &HashMap<String, ViewFrame>, a: &proto::AnnotationInfo) -> Value {
+pub fn annotation_entry(
+    ids: &mut IdRegistry,
+    frames: &HashMap<String, ViewFrame>,
+    a: &proto::AnnotationInfo,
+) -> Value {
     let in_view = (a.owner() == proto::AnnotationOwner::View).then_some(a.owner_name.as_str());
     let mut obj = match annotation_json(ids, in_view, a) {
         Value::Object(o) => o,
@@ -895,7 +1038,11 @@ pub fn annotation_entry(ids: &mut IdRegistry, frames: &HashMap<String, ViewFrame
             }),
         );
         if let Some(f) = frame {
-            let centers: Vec<Value> = m.centers.iter().map(|c| sheet_mm(f.to_sheet(DVec2::new(c.x, c.y)))).collect();
+            let centers: Vec<Value> = m
+                .centers
+                .iter()
+                .map(|c| sheet_mm(f.to_sheet(DVec2::new(c.x, c.y))))
+                .collect();
             obj.insert("centers_mm".into(), Value::Array(centers));
         }
     }
@@ -907,9 +1054,16 @@ pub fn annotation_entry(ids: &mut IdRegistry, frames: &HashMap<String, ViewFrame
             s.insert("font".into(), json!(n.font));
         }
         if n.text_height > 0.0 {
-            s.insert("height_mm".into(), json!(round(n.text_height * MM_PER_M, 2)));
+            s.insert(
+                "height_mm".into(),
+                json!(round(n.text_height * MM_PER_M, 2)),
+            );
         }
-        for (key, on) in [("bold", n.bold), ("italic", n.italic), ("underline", n.underline)] {
+        for (key, on) in [
+            ("bold", n.bold),
+            ("italic", n.italic),
+            ("underline", n.underline),
+        ] {
             if on {
                 s.insert(key.into(), json!(true));
             }
@@ -930,7 +1084,10 @@ pub fn annotation_entry(ids: &mut IdRegistry, frames: &HashMap<String, ViewFrame
     }
     if let Some(b) = &a.balloon {
         obj.insert("type".into(), json!("balloon"));
-        obj.insert("balloon".into(), crate::table::balloon_json(b, a.note.as_ref().is_some_and(|n| n.border == 7)));
+        obj.insert(
+            "balloon".into(),
+            crate::table::balloon_json(b, a.note.as_ref().is_some_and(|n| n.border == 7)),
+        );
     }
     if !a.layer.is_empty() {
         obj.insert("layer".into(), json!(a.layer));
@@ -970,13 +1127,19 @@ pub fn annotation_entry(ids: &mut IdRegistry, frames: &HashMap<String, ViewFrame
 /// What looks wrong about where an annotation ended up on `sheet`.
 fn placement_warnings(sheet: &proto::SheetInfo, a: &proto::AnnotationInfo) -> Vec<String> {
     let mut out = Vec::new();
-    let Some((lo, hi)) = extent(a).or_else(|| a.position.as_ref().map(|p| (DVec2::new(p.x, p.y), DVec2::new(p.x, p.y))))
-    else {
+    let Some((lo, hi)) = extent(a).or_else(|| {
+        a.position
+            .as_ref()
+            .map(|p| (DVec2::new(p.x, p.y), DVec2::new(p.x, p.y)))
+    }) else {
         return out;
     };
     let slack = 1e-4;
     if sheet.width > 0.0
-        && (lo.x < -slack || lo.y < -slack || hi.x > sheet.width + slack || hi.y > sheet.height + slack)
+        && (lo.x < -slack
+            || lo.y < -slack
+            || hi.x > sheet.width + slack
+            || hi.y > sheet.height + slack)
     {
         out.push(format!(
             "it reaches past the sheet's edges ({:.0} x {:.0} mm)",
@@ -985,11 +1148,17 @@ fn placement_warnings(sheet: &proto::SheetInfo, a: &proto::AnnotationInfo) -> Ve
         ));
     }
     let overlaps = |v: &proto::ViewInfo| {
-        outline(v).is_some_and(|(vlo, vhi)| lo.x < vhi.x && vlo.x < hi.x && lo.y < vhi.y && vlo.y < hi.y)
+        outline(v)
+            .is_some_and(|(vlo, vhi)| lo.x < vhi.x && vlo.x < hi.x && lo.y < vhi.y && vlo.y < hi.y)
     };
     match a.owner() {
         proto::AnnotationOwner::Sheet | proto::AnnotationOwner::SheetFormat => {
-            let over: Vec<&str> = sheet.views.iter().filter(|v| overlaps(v)).map(|v| v.name.as_str()).collect();
+            let over: Vec<&str> = sheet
+                .views
+                .iter()
+                .filter(|v| overlaps(v))
+                .map(|v| v.name.as_str())
+                .collect();
             if !over.is_empty() {
                 out.push(format!(
                     "it's over {} but belongs to the {}: it stays put when the view moves (attach_to_view makes it \
@@ -1000,7 +1169,12 @@ fn placement_warnings(sheet: &proto::SheetInfo, a: &proto::AnnotationInfo) -> Ve
             }
         }
         proto::AnnotationOwner::View => {
-            if let Some((vlo, vhi)) = sheet.views.iter().find(|v| v.name == a.owner_name).and_then(outline) {
+            if let Some((vlo, vhi)) = sheet
+                .views
+                .iter()
+                .find(|v| v.name == a.owner_name)
+                .and_then(outline)
+            {
                 let gap = DVec2::ZERO.max(vlo - hi).max(lo - vhi).length();
                 if gap > FAR_FROM_VIEW {
                     out.push(format!(
@@ -1020,13 +1194,26 @@ fn placement_warnings(sheet: &proto::SheetInfo, a: &proto::AnnotationInfo) -> Ve
 fn first_text(a: &proto::AnnotationInfo) -> String {
     // A frame's or datum symbol's raw texts are SolidWorks' symbol codes.
     if let Some(g) = a.gtol.as_ref().filter(|g| !g.frames.is_empty()) {
-        return g.frames.iter().map(pmi::frame_callout).collect::<Vec<_>>().join(" / ");
+        return g
+            .frames
+            .iter()
+            .map(pmi::frame_callout)
+            .collect::<Vec<_>>()
+            .join(" / ");
     }
     if !a.datum_label.trim().is_empty() {
         return format!("datum {}", a.datum_label.trim());
     }
-    let t = a.text.first().map(|t| t.replace("\r\n", " / ").replace('\n', " / ")).unwrap_or_default();
-    if t.chars().count() > 40 { format!("{}...", t.chars().take(40).collect::<String>()) } else { t }
+    let t = a
+        .text
+        .first()
+        .map(|t| t.replace("\r\n", " / ").replace('\n', " / "))
+        .unwrap_or_default();
+    if t.chars().count() > 40 {
+        format!("{}...", t.chars().take(40).collect::<String>())
+    } else {
+        t
+    }
 }
 
 /// The reply to add_drawing_note / edit_drawing_annotation.
@@ -1036,29 +1223,44 @@ pub fn setup_reply(
     reply: &proto::SetupDrawingAnnotationResponse,
     remarks: &[String],
 ) -> String {
-    let Some(a) = &reply.annotation else { return "done".to_string() };
+    let Some(a) = &reply.annotation else {
+        return "done".to_string();
+    };
     let sheet = reply.sheet.clone().unwrap_or_default();
     let frames = frames(&sheet);
     let kind = pmi::type_name(a.r#type);
     let mut text = if reply.replaced.is_empty() {
-        format!("{} {kind} {}", if reply.created { "added" } else { "changed" }, a.name)
+        format!(
+            "{} {kind} {}",
+            if reply.created { "added" } else { "changed" },
+            a.name
+        )
     } else {
         let why = if request.leader_to.is_empty() {
             "SolidWorks doesn't move a sheet note into a view, so it was made again there"
         } else {
             "its leaders were made again"
         };
-        format!("changed note {} -- {why}: it's now {} ({} was deleted) --", reply.replaced, a.name, reply.replaced)
+        format!(
+            "changed note {} -- {why}: it's now {} ({} was deleted) --",
+            reply.replaced, a.name, reply.replaced
+        )
     };
     let words = first_text(a);
     if !words.is_empty() && a.r#type == 6 {
         text += &format!(" \"{words}\"");
     }
     text += &match a.owner() {
-        proto::AnnotationOwner::View => format!(" in {} on {} (it moves with the view)", a.owner_name, sheet.name),
+        proto::AnnotationOwner::View => format!(
+            " in {} on {} (it moves with the view)",
+            a.owner_name, sheet.name
+        ),
         proto::AnnotationOwner::Sheet => format!(" on sheet {}", sheet.name),
         proto::AnnotationOwner::SheetFormat => {
-            format!(" in the sheet format of {} (the title block layer: shown and hidden with the format)", sheet.name)
+            format!(
+                " in the sheet format of {} (the title block layer: shown and hidden with the format)",
+                sheet.name
+            )
         }
         proto::AnnotationOwner::Unspecified => String::new(),
     };
@@ -1073,7 +1275,11 @@ pub fn setup_reply(
         if a.owner() == proto::AnnotationOwner::View
             && let Some(f) = frames.get(&a.owner_name)
         {
-            text += &format!(" ({} mm in {}'s coordinates)", mm2(f.to_view(p)), a.owner_name);
+            text += &format!(
+                " ({} mm in {}'s coordinates)",
+                mm2(f.to_view(p)),
+                a.owner_name
+            );
         }
     }
     if let Some((lo, hi)) = extent(a) {
@@ -1086,9 +1292,18 @@ pub fn setup_reply(
         );
     }
     if !a.leaders.is_empty() {
-        let tips: Vec<String> =
-            a.leaders.iter().filter_map(|l| l.points.last()).map(|p| mm2(DVec2::new(p.x, p.y))).collect();
-        text += &format!("; {} {} leader(s), arrows at {} mm", a.leaders.len(), leader_name(a.leader_style), tips.join(", "));
+        let tips: Vec<String> = a
+            .leaders
+            .iter()
+            .filter_map(|l| l.points.last())
+            .map(|p| mm2(DVec2::new(p.x, p.y)))
+            .collect();
+        text += &format!(
+            "; {} {} leader(s), arrows at {} mm",
+            a.leaders.len(),
+            leader_name(a.leader_style),
+            tips.join(", ")
+        );
     }
     if sheet.name != reply.active_sheet && !reply.active_sheet.is_empty() {
         text += &format!(" ({} stays the active sheet)", reply.active_sheet);
@@ -1100,18 +1315,31 @@ pub fn setup_reply(
     // the view as it is now).
     let asked = request.position.as_ref().and_then(|asked| {
         let at = DVec2::new(asked.x, asked.y);
-        if asked.view_name.is_empty() { Some(at) } else { frames.get(&asked.view_name).map(|f| f.to_sheet(at)) }
+        if asked.view_name.is_empty() {
+            Some(at)
+        } else {
+            frames.get(&asked.view_name).map(|f| f.to_sheet(at))
+        }
     });
     if let (Some(asked), Some(p)) = (asked, &a.position)
         && asked.distance(DVec2::new(p.x, p.y)) > TIP_SLACK
     {
-        notes.push(format!("it's at {} sheet mm, not {} sheet mm", mm2(DVec2::new(p.x, p.y)), mm2(asked)));
+        notes.push(format!(
+            "it's at {} sheet mm, not {} sheet mm",
+            mm2(DVec2::new(p.x, p.y)),
+            mm2(asked)
+        ));
     }
     // Arrows go where their entity was picked (SolidWorks numbers the
     // leaders in its own order, so they're matched by place). A datum
     // symbol has no leader: its triangle sits where it was picked; so does
     // a surface finish symbol's point with no_leader.
-    let tips: Vec<DVec2> = a.leaders.iter().filter_map(|l| l.points.last()).map(|p| DVec2::new(p.x, p.y)).collect();
+    let tips: Vec<DVec2> = a
+        .leaders
+        .iter()
+        .filter_map(|l| l.points.last())
+        .map(|p| DVec2::new(p.x, p.y))
+        .collect();
     let datum = a.r#type == 2 || a.leaders.is_empty();
     for (i, asked) in request.arrow_points.iter().enumerate().filter(|_| !datum) {
         let asked = DVec2::new(asked.x, asked.y);
@@ -1126,7 +1354,10 @@ pub fn setup_reply(
     notes.extend(placement_warnings(&sheet, a));
     if !notes.is_empty() {
         let notes = notes.join("; ");
-        text += &format!("\nNote: {notes}{}", if notes.ends_with(['.', '?']) { "" } else { "." });
+        text += &format!(
+            "\nNote: {notes}{}",
+            if notes.ends_with(['.', '?']) { "" } else { "." }
+        );
     }
     text += &format!("\n{}", annotation_entry(ids, &frames, a));
     text
@@ -1138,8 +1369,14 @@ pub fn delete_reply(reply: &proto::DeleteDrawingAnnotationsResponse) -> String {
         .iter()
         .map(|a| {
             let words = first_text(a);
-            let words = if words.is_empty() { String::new() } else { format!(" \"{words}\"") };
-            let place = owner_text(a).map(|o| format!(", {}", o.replace('_', " "))).unwrap_or_default();
+            let words = if words.is_empty() {
+                String::new()
+            } else {
+                format!(" \"{words}\"")
+            };
+            let place = owner_text(a)
+                .map(|o| format!(", {}", o.replace('_', " ")))
+                .unwrap_or_default();
             format!("{} ({}{words}{place})", a.name, pmi::type_name(a.r#type))
         })
         .collect();
@@ -1164,10 +1401,19 @@ pub fn render_inspect(
         .collect();
     if sheets.is_empty() {
         let names: Vec<&str> = reply.sheets.iter().map(|s| s.name.as_str()).collect();
-        return Err(invalid(format!("the drawing has no sheet {want_sheet:?} (its sheets: {})", names.join(", "))));
+        return Err(invalid(format!(
+            "the drawing has no sheet {want_sheet:?} (its sheets: {})",
+            names.join(", ")
+        )));
     }
-    if !want_view.is_empty() && !sheets.iter().any(|s| s.views.iter().any(|v| v.name == want_view)) {
-        return Err(invalid(format!("no view {want_view:?} -- inspect_drawing lists the views")));
+    if !want_view.is_empty()
+        && !sheets
+            .iter()
+            .any(|s| s.views.iter().any(|v| v.name == want_view))
+    {
+        return Err(invalid(format!(
+            "no view {want_view:?} -- inspect_drawing lists the views"
+        )));
     }
 
     let offset = params.offset.unwrap_or(0);
@@ -1198,7 +1444,8 @@ pub fn render_inspect(
                 || (!kind.is_empty()
                     && pmi::type_name(a.r#type) != kind
                     && !(kind == "balloon" && a.balloon.is_some()))
-                || (!contains.is_empty() && !a.text.iter().any(|t| t.to_lowercase().contains(&contains)))
+                || (!contains.is_empty()
+                    && !a.text.iter().any(|t| t.to_lowercase().contains(&contains)))
             {
                 continue;
             }
@@ -1224,7 +1471,8 @@ pub fn render_inspect(
                 }
                 if let Some(f) = ViewFrame::of(v) {
                     e.insert("view_origin_mm".into(), sheet_mm(f.origin));
-                    if let Some(scale) = drawing::scale_text(v.scale_numerator, v.scale_denominator) {
+                    if let Some(scale) = drawing::scale_text(v.scale_numerator, v.scale_denominator)
+                    {
                         e.insert("scale".into(), json!(scale));
                     }
                     if f.angle.abs() > 1e-9 {
@@ -1240,7 +1488,13 @@ pub fn render_inspect(
             s.insert("active".into(), json!(true));
         }
         if sheet.width > 0.0 {
-            s.insert("size_mm".into(), json!([round(sheet.width * MM_PER_M, 1), round(sheet.height * MM_PER_M, 1)]));
+            s.insert(
+                "size_mm".into(),
+                json!([
+                    round(sheet.width * MM_PER_M, 1),
+                    round(sheet.height * MM_PER_M, 1)
+                ]),
+            );
         }
         s.insert("views".into(), Value::Array(views));
         s.insert("annotations".into(), Value::Array(entries));
@@ -1310,10 +1564,22 @@ mod tests {
             scale_numerator: 1.0,
             scale_denominator: 1.0 / scale,
             angle,
-            model_origin: Some(proto::Vec3 { x: origin[0], y: origin[1], z: 0.0 }),
+            model_origin: Some(proto::Vec3 {
+                x: origin[0],
+                y: origin[1],
+                z: 0.0,
+            }),
             outline: Some(proto::Box3 {
-                min: Some(proto::Vec3 { x: origin[0] - 0.03, y: origin[1] - 0.02, z: 0.0 }),
-                max: Some(proto::Vec3 { x: origin[0] + 0.03, y: origin[1] + 0.02, z: 0.0 }),
+                min: Some(proto::Vec3 {
+                    x: origin[0] - 0.03,
+                    y: origin[1] - 0.02,
+                    z: 0.0,
+                }),
+                max: Some(proto::Vec3 {
+                    x: origin[0] + 0.03,
+                    y: origin[1] + 0.02,
+                    z: 0.0,
+                }),
             }),
             ..Default::default()
         }
@@ -1331,24 +1597,62 @@ mod tests {
         let f = ViewFrame::of(&view("V", [0.1, 0.1], 1.0, std::f64::consts::FRAC_PI_2)).unwrap();
         assert!((f.to_sheet(DVec2::new(0.01, 0.0)) - DVec2::new(0.1, 0.11)).length() < 1e-12);
         // No transform reported: no frame.
-        assert!(ViewFrame::of(&proto::ViewInfo { scale_denominator: 1.0, ..Default::default() }).is_none());
+        assert!(
+            ViewFrame::of(&proto::ViewInfo {
+                scale_denominator: 1.0,
+                ..Default::default()
+            })
+            .is_none()
+        );
     }
 
     #[test]
     fn tips_land_on_the_entity() {
-        let line = Shape::Line { a: DVec2::new(0.1, 0.1), b: DVec2::new(0.14, 0.1) };
+        let line = Shape::Line {
+            a: DVec2::new(0.1, 0.1),
+            b: DVec2::new(0.14, 0.1),
+        };
         let near = |a: Option<DVec2>, b: DVec2| a.is_some_and(|a| a.distance(b) < 1e-12);
         assert!(near(default_tip(&line, &[]), DVec2::new(0.12, 0.1)));
         // Something else crosses the middle: the next spot along.
-        let across = Shape::Line { a: DVec2::new(0.117, 0.1), b: DVec2::new(0.123, 0.1) };
+        let across = Shape::Line {
+            a: DVec2::new(0.117, 0.1),
+            b: DVec2::new(0.123, 0.1),
+        };
         assert!(near(default_tip(&line, &[&across]), DVec2::new(0.114, 0.1)));
-        assert!(near(project(&line, DVec2::new(0.13, 0.105)), DVec2::new(0.13, 0.1)));
-        assert!(near(project(&line, DVec2::new(0.2, 0.1)), DVec2::new(0.14, 0.1)));
-        let circle = Shape::Circle { center: DVec2::new(0.1, 0.1), radius: 0.005 };
+        assert!(near(
+            project(&line, DVec2::new(0.13, 0.105)),
+            DVec2::new(0.13, 0.1)
+        ));
+        assert!(near(
+            project(&line, DVec2::new(0.2, 0.1)),
+            DVec2::new(0.14, 0.1)
+        ));
+        let circle = Shape::Circle {
+            center: DVec2::new(0.1, 0.1),
+            radius: 0.005,
+        };
         let tip = default_tip(&circle, &[]).unwrap();
-        assert!((tip.distance(DVec2::new(0.1, 0.1)) - 0.005).abs() < 1e-12 && tip.x > 0.1 && tip.y > 0.1);
-        assert!((project(&circle, DVec2::new(0.1, 0.2)).unwrap() - DVec2::new(0.1, 0.105)).length() < 1e-12);
-        assert_eq!(project(&Shape::Curve { a: DVec2::ZERO, b: DVec2::X, center: None }, DVec2::Y), None);
+        assert!(
+            (tip.distance(DVec2::new(0.1, 0.1)) - 0.005).abs() < 1e-12
+                && tip.x > 0.1
+                && tip.y > 0.1
+        );
+        assert!(
+            (project(&circle, DVec2::new(0.1, 0.2)).unwrap() - DVec2::new(0.1, 0.105)).length()
+                < 1e-12
+        );
+        assert_eq!(
+            project(
+                &Shape::Curve {
+                    a: DVec2::ZERO,
+                    b: DVec2::X,
+                    center: None
+                },
+                DVec2::Y
+            ),
+            None
+        );
     }
 
     #[test]
@@ -1368,20 +1672,38 @@ mod tests {
     fn add_requests_say_where_the_note_belongs() {
         let ids = IdRegistry::default();
         let cache = Cache::default();
-        let add = |v: serde_json::Value| add_request(&ids, &cache, &serde_json::from_value(v).unwrap());
+        let add =
+            |v: serde_json::Value| add_request(&ids, &cache, &serde_json::from_value(v).unwrap());
         // Sheet by default; a view note when a view is given.
         let (r, _) = add(json!({"text": "NOTE 1", "at_mm": [50, 250]})).unwrap();
-        assert_eq!((r.owner(), r.view_name.as_str()), (proto::AnnotationOwner::Sheet, ""));
-        assert_eq!(r.position, Some(proto::DrawingPoint { x: 0.05, y: 0.25, view_name: String::new() }));
-        let (r, _) = add(json!({"text": "A", "view": "Drawing View2", "at_view_mm": [10, -4]})).unwrap();
-        assert_eq!((r.owner(), r.view_name.as_str()), (proto::AnnotationOwner::View, "Drawing View2"));
+        assert_eq!(
+            (r.owner(), r.view_name.as_str()),
+            (proto::AnnotationOwner::Sheet, "")
+        );
+        assert_eq!(
+            r.position,
+            Some(proto::DrawingPoint {
+                x: 0.05,
+                y: 0.25,
+                view_name: String::new()
+            })
+        );
+        let (r, _) =
+            add(json!({"text": "A", "view": "Drawing View2", "at_view_mm": [10, -4]})).unwrap();
+        assert_eq!(
+            (r.owner(), r.view_name.as_str()),
+            (proto::AnnotationOwner::View, "Drawing View2")
+        );
         assert_eq!(r.position.unwrap().view_name, "Drawing View2");
         let (r, _) = add(json!({"text": "T", "in": "sheet_format", "sheet": "Sheet2", "at_mm": [300, 20],
             "height_mm": 5, "bold": true, "angle_deg": 90, "border": "box", "justification": "center"}))
         .unwrap();
         assert_eq!(r.owner(), proto::AnnotationOwner::SheetFormat);
         let s = r.style.unwrap();
-        assert_eq!((s.text_height, s.bold, s.border, s.justification), (Some(0.005), Some(true), Some(4), Some(2)));
+        assert_eq!(
+            (s.text_height, s.bold, s.border, s.justification),
+            (Some(0.005), Some(true), Some(4), Some(2))
+        );
         assert!((s.angle.unwrap() - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
         // Refused: coordinates of the wrong frame, a view for a sheet note,
         // a view note without a view, both positions, a leader to nothing.
@@ -1403,38 +1725,74 @@ mod tests {
     fn edit_requests_need_one_position_and_a_change() {
         let ids = IdRegistry::default();
         let cache = Cache::default();
-        let edit = |v: serde_json::Value| edit_request(&ids, &cache, &serde_json::from_value(v).unwrap());
+        let edit =
+            |v: serde_json::Value| edit_request(&ids, &cache, &serde_json::from_value(v).unwrap());
         assert!(edit(json!({"name": "DetailItem3"})).is_err());
-        assert!(edit(json!({"name": "DetailItem3", "at_mm": [1, 2], "move_by_mm": [1, 0]})).is_err());
+        assert!(
+            edit(json!({"name": "DetailItem3", "at_mm": [1, 2], "move_by_mm": [1, 0]})).is_err()
+        );
         assert!(edit(json!({"name": "DetailItem3", "at_view_mm": [1, 2]})).is_err());
         assert!(edit(json!({"name": "DetailItem3", "document_font": true, "bold": true})).is_err());
-        assert!(edit(json!({"name": "DetailItem3", "document_font": true, "angle_deg": 15})).is_err());
+        assert!(
+            edit(json!({"name": "DetailItem3", "document_font": true, "angle_deg": 15})).is_err()
+        );
         let (r, _) = edit(json!({"name": " DetailItem3 ", "move_by_mm": [10, -5]})).unwrap();
         assert_eq!(r.name, "DetailItem3");
-        assert_eq!(r.move_by, Some(proto::Vec3 { x: 0.01, y: -0.005, z: 0.0 }));
-        let (r, _) = edit(json!({"name": "N", "view": "Drawing View1", "at_view_mm": [0, 25], "arrow": "dot"})).unwrap();
+        assert_eq!(
+            r.move_by,
+            Some(proto::Vec3 {
+                x: 0.01,
+                y: -0.005,
+                z: 0.0
+            })
+        );
+        let (r, _) = edit(
+            json!({"name": "N", "view": "Drawing View1", "at_view_mm": [0, 25], "arrow": "dot"}),
+        )
+        .unwrap();
         assert_eq!(r.position.unwrap().view_name, "Drawing View1");
         assert_eq!(r.arrow, Some(3));
-        let (r, _) = edit(json!({"name": "N", "layer": "", "attach_to_view": "Drawing View2"})).unwrap();
-        assert_eq!((r.layer.as_deref(), r.attach_to_view.as_str()), (Some(""), "Drawing View2"));
+        let (r, _) =
+            edit(json!({"name": "N", "layer": "", "attach_to_view": "Drawing View2"})).unwrap();
+        assert_eq!(
+            (r.layer.as_deref(), r.attach_to_view.as_str()),
+            (Some(""), "Drawing View2")
+        );
     }
 
-    fn note(owner: proto::AnnotationOwner, owner_name: &str, lo: [f64; 2], hi: [f64; 2]) -> proto::AnnotationInfo {
+    fn note(
+        owner: proto::AnnotationOwner,
+        owner_name: &str,
+        lo: [f64; 2],
+        hi: [f64; 2],
+    ) -> proto::AnnotationInfo {
         proto::AnnotationInfo {
             name: "DetailItem9".into(),
             r#type: 6,
             text: vec!["HELLO".into()],
             owner: owner as i32,
             owner_name: owner_name.into(),
-            position: Some(proto::Vec3 { x: lo[0], y: hi[1], z: 0.0 }),
+            position: Some(proto::Vec3 {
+                x: lo[0],
+                y: hi[1],
+                z: 0.0,
+            }),
             note: Some(proto::NoteInfo {
                 text_height: 0.0035,
                 document_font: true,
                 justification: 1,
                 smart_arrows: true,
                 extent: Some(proto::Box3 {
-                    min: Some(proto::Vec3 { x: lo[0], y: lo[1], z: 0.0 }),
-                    max: Some(proto::Vec3 { x: hi[0], y: hi[1], z: 0.0 }),
+                    min: Some(proto::Vec3 {
+                        x: lo[0],
+                        y: lo[1],
+                        z: 0.0,
+                    }),
+                    max: Some(proto::Vec3 {
+                        x: hi[0],
+                        y: hi[1],
+                        z: 0.0,
+                    }),
                 }),
                 ..Default::default()
             }),
@@ -1456,16 +1814,54 @@ mod tests {
     fn warnings_catch_misplaced_notes() {
         let s = sheet();
         // A sheet note over a view doesn't follow it.
-        let w = placement_warnings(&s, &note(proto::AnnotationOwner::Sheet, "Sheet1", [0.11, 0.14], [0.13, 0.145]));
-        assert!(w.len() == 1 && w[0].contains("over Drawing View1 but belongs to the sheet"), "{w:?}");
+        let w = placement_warnings(
+            &s,
+            &note(
+                proto::AnnotationOwner::Sheet,
+                "Sheet1",
+                [0.11, 0.14],
+                [0.13, 0.145],
+            ),
+        );
+        assert!(
+            w.len() == 1 && w[0].contains("over Drawing View1 but belongs to the sheet"),
+            "{w:?}"
+        );
         // A view note far from its view.
-        let w = placement_warnings(&s, &note(proto::AnnotationOwner::View, "Drawing View1", [0.3, 0.25], [0.32, 0.255]));
+        let w = placement_warnings(
+            &s,
+            &note(
+                proto::AnnotationOwner::View,
+                "Drawing View1",
+                [0.3, 0.25],
+                [0.32, 0.255],
+            ),
+        );
         assert!(w.len() == 1 && w[0].contains("sits 1"), "{w:?}");
         // Off the sheet.
-        let w = placement_warnings(&s, &note(proto::AnnotationOwner::Sheet, "Sheet1", [0.41, 0.01], [0.44, 0.02]));
-        assert!(w.len() == 1 && w[0].contains("past the sheet's edges"), "{w:?}");
+        let w = placement_warnings(
+            &s,
+            &note(
+                proto::AnnotationOwner::Sheet,
+                "Sheet1",
+                [0.41, 0.01],
+                [0.44, 0.02],
+            ),
+        );
+        assert!(
+            w.len() == 1 && w[0].contains("past the sheet's edges"),
+            "{w:?}"
+        );
         // Fine.
-        let w = placement_warnings(&s, &note(proto::AnnotationOwner::View, "Drawing View1", [0.1, 0.18], [0.12, 0.185]));
+        let w = placement_warnings(
+            &s,
+            &note(
+                proto::AnnotationOwner::View,
+                "Drawing View1",
+                [0.1, 0.18],
+                [0.12, 0.185],
+            ),
+        );
         assert!(w.is_empty(), "{w:?}");
     }
 
@@ -1473,10 +1869,26 @@ mod tests {
     fn entries_show_both_frames_and_the_owner() {
         let mut ids = IdRegistry::default();
         let s = sheet();
-        let mut a = note(proto::AnnotationOwner::View, "Drawing View1", [0.1, 0.18], [0.12, 0.185]);
+        let mut a = note(
+            proto::AnnotationOwner::View,
+            "Drawing View1",
+            [0.1, 0.18],
+            [0.12, 0.185],
+        );
         a.leader_style = 2049;
         a.leaders = vec![proto::AnnotationLeader {
-            points: vec![proto::Vec3 { x: 0.1, y: 0.18, z: 0.0 }, proto::Vec3 { x: 0.11, y: 0.16, z: 0.0 }],
+            points: vec![
+                proto::Vec3 {
+                    x: 0.1,
+                    y: 0.18,
+                    z: 0.0,
+                },
+                proto::Vec3 {
+                    x: 0.11,
+                    y: 0.16,
+                    z: 0.0,
+                },
+            ],
             arrow: 1,
         }];
         let e = annotation_entry(&mut ids, &frames(&s), &a);
@@ -1487,7 +1899,10 @@ mod tests {
         assert_eq!(e["leaders"][0]["arrow_at_view_mm"], json!([-10.0, 10.0]));
         assert_eq!(e["leaders"][0]["arrow"], json!("smart"));
         assert_eq!(e["style"], json!({"font": "document", "height_mm": 3.5}));
-        assert!(e.get("position").is_none() && e.get("imported").is_none(), "{e}");
+        assert!(
+            e.get("position").is_none() && e.get("imported").is_none(),
+            "{e}"
+        );
 
         let reply = proto::SetupDrawingAnnotationResponse {
             annotation: Some(a),
@@ -1496,7 +1911,12 @@ mod tests {
             active_sheet: "Sheet1".into(),
             ..Default::default()
         };
-        let text = setup_reply(&mut ids, &proto::SetupDrawingAnnotationRequest::default(), &reply, &[]);
+        let text = setup_reply(
+            &mut ids,
+            &proto::SetupDrawingAnnotationRequest::default(),
+            &reply,
+            &[],
+        );
         assert!(
             text.starts_with(
                 "added note DetailItem9 \"HELLO\" in Drawing View1 on Sheet1 (it moves with the view): text's \
@@ -1504,6 +1924,9 @@ mod tests {
             ),
             "{text}"
         );
-        assert!(text.contains("1 straight leader(s), arrows at [110, 160] mm"), "{text}");
+        assert!(
+            text.contains("1 straight leader(s), arrows at [110, 160] mm"),
+            "{text}"
+        );
     }
 }

@@ -4,6 +4,7 @@ mod center_mark;
 mod component;
 mod configuration;
 mod delete;
+mod derived_view;
 mod design_table;
 mod diagnose;
 mod dimxpert;
@@ -14,9 +15,9 @@ mod drawing_image;
 mod edit;
 mod equation;
 mod feature_edit;
-mod feature_text;
 mod feature_inspect;
 mod feature_order;
+mod feature_text;
 mod files;
 mod fillet;
 mod gdt;
@@ -46,15 +47,14 @@ mod selection;
 mod sheet;
 mod sheet_format;
 mod shell;
-mod sketch_edit;
 mod sketch;
+mod sketch_edit;
 mod sketch_tools;
 mod sweep;
 mod table;
 mod tolerance;
 mod tool_schema;
 mod toolsets;
-mod derived_view;
 mod undo;
 mod units;
 mod view;
@@ -63,26 +63,21 @@ mod visibility;
 use std::sync::{Arc, Mutex};
 
 use addin::AddinClient;
+use addin::proto;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use addin::proto;
 use inspect::{DEFAULT_INSPECT_LIMIT, IdRegistry, InspectModelParams, InspectWhat, Kind, MM_PER_M};
 use render_views::{
-    DEFAULT_TILE_PX, RenderViewsParams, TILE_PX_RANGE, describe_picks, describe_plane, grid_columns, render_cameras,
-    section_plane,
-};
-use sketch_tools::{
-    AddSketchRelationsParams, DimensionScheme, DimensionSketchParams, FullyDefineSketchParams, InspectSketchParams,
-    MAX_CONSTRAINTS, MAX_DIMENSION_ENTITIES, MAX_RELATION_ENTITIES, PointConverter, SetDimensionParams, SketchParams,
-    SketchShape, dimension_value, sketch_status_note,
+    DEFAULT_TILE_PX, RenderViewsParams, TILE_PX_RANGE, describe_picks, describe_plane,
+    grid_columns, render_cameras, section_plane,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, Implementation,
-    ListToolsResult,
-    PaginatedRequestParams, ProtocolVersion, ServerCapabilities, ServerInfo,
+    CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
+    Implementation, ListToolsResult, PaginatedRequestParams, ProtocolVersion, ServerCapabilities,
+    ServerInfo,
 };
 use rmcp::service::RequestContext;
 use rmcp::transport::stdio;
@@ -91,6 +86,12 @@ use rmcp::{
     tool_router,
 };
 use serde::Deserialize;
+use sketch_tools::{
+    AddSketchRelationsParams, DimensionScheme, DimensionSketchParams, FullyDefineSketchParams,
+    InspectSketchParams, MAX_CONSTRAINTS, MAX_DIMENSION_ENTITIES, MAX_RELATION_ENTITIES,
+    PointConverter, SetDimensionParams, SketchParams, SketchShape, dimension_value,
+    sketch_status_note,
+};
 use tonic::Code;
 use tracing_subscriber::EnvFilter;
 
@@ -102,8 +103,6 @@ const TOOL_LIST_TTL_MS: u64 = 5 * 60 * 1000;
 /// few COM calls; if SolidWorks is too busy for that, the call goes ahead with
 /// the document the last check found.
 const DOCUMENT_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
-
 
 /// A trimmed, possibly empty name for the wire ("" = the add-in's default).
 fn trimmed(name: Option<String>) -> String {
@@ -137,7 +136,6 @@ fn angle_rad(value_deg: f64) -> Result<f64, McpError> {
     Ok(value_deg.to_radians())
 }
 
-
 /// "1 line", "3 lines".
 fn count_of(n: usize, singular: &str) -> String {
     if n == 1 {
@@ -170,9 +168,6 @@ struct ExtrudeSketchParams {
     #[serde(default)]
     mid_plane: bool,
 }
-
-
-
 
 #[derive(Clone)]
 struct SolidWorksTools {
@@ -232,7 +227,11 @@ impl SolidWorksTools {
         let name = reply
             .document
             .map(|doc| match &doc.units {
-                Some(units) => format!("{}; units {}", files::describe(&doc), units::describe(units)),
+                Some(units) => format!(
+                    "{}; units {}",
+                    files::describe(&doc),
+                    units::describe(units)
+                ),
                 None => files::describe(&doc),
             })
             .unwrap_or_else(|| "(no active document)".to_string());
@@ -256,17 +255,26 @@ impl SolidWorksTools {
                 .await
                 .map_err(|status| self.addin_error(status))?;
             let Some(document) = reply.document else {
-                return Err(McpError::invalid_params("no document is open in SolidWorks", None));
+                return Err(McpError::invalid_params(
+                    "no document is open in SolidWorks",
+                    None,
+                ));
             };
-            return Ok(CallToolResult::success(vec![ContentBlock::text(units::reply_text(&document, None))]));
+            return Ok(CallToolResult::success(vec![ContentBlock::text(
+                units::reply_text(&document, None),
+            )]));
         }
         let reply = self
             .addin
-            .set_document_units(proto::SetDocumentUnitsRequest { units: Some(units::change(&params)?) })
+            .set_document_units(proto::SetDocumentUnitsRequest {
+                units: Some(units::change(&params)?),
+            })
             .await
             .map_err(|status| self.addin_error(status))?;
         let document = reply.document.unwrap_or_default();
-        Ok(CallToolResult::success(vec![ContentBlock::text(units::reply_text(&document, reply.before.as_ref()))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            units::reply_text(&document, reply.before.as_ref()),
+        )]))
     }
 
     #[tool(
@@ -332,7 +340,9 @@ impl SolidWorksTools {
             .close_document(request)
             .await
             .map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(files::close_reply_text(&reply))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            files::close_reply_text(&reply),
+        )]))
     }
 
     #[tool(
@@ -348,8 +358,11 @@ impl SolidWorksTools {
         &self,
         Parameters(params): Parameters<references::FileReferencesParams>,
     ) -> Result<CallToolResult, McpError> {
-        let reply = references::run(&self.addin, &params, |status| self.addin_error(status)).await?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(reply.to_string())]))
+        let reply =
+            references::run(&self.addin, &params, |status| self.addin_error(status)).await?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            reply.to_string(),
+        )]))
     }
 
     #[tool(
@@ -358,10 +371,19 @@ impl SolidWorksTools {
                        of an existing sketch doesn't undo reliably (use delete_sketch_entities). \
                        No redo; hiding a component can't be undone."
     )]
-    async fn undo(&self, Parameters(params): Parameters<undo::UndoParams>) -> Result<CallToolResult, McpError> {
+    async fn undo(
+        &self,
+        Parameters(params): Parameters<undo::UndoParams>,
+    ) -> Result<CallToolResult, McpError> {
         let request = undo::request(&params)?;
-        let reply = self.addin.undo(request).await.map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(undo::reply_text(&reply))]))
+        let reply = self
+            .addin
+            .undo(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            undo::reply_text(&reply),
+        )]))
     }
 
     #[tool(
@@ -375,7 +397,10 @@ impl SolidWorksTools {
                        it opens are closed and listed. inspect_model ids don't exist here: find \
                        things by name or position."
     )]
-    async fn run_macro(&self, Parameters(params): Parameters<macro_run::RunMacroParams>) -> Result<CallToolResult, McpError> {
+    async fn run_macro(
+        &self,
+        Parameters(params): Parameters<macro_run::RunMacroParams>,
+    ) -> Result<CallToolResult, McpError> {
         let text = macro_run::run(&self.addin, &params).await?;
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -391,7 +416,10 @@ impl SolidWorksTools {
         Parameters(params): Parameters<visibility::SetVisibilityParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             visibility::request(&ids, &params)?
         };
         let reply = self
@@ -399,7 +427,9 @@ impl SolidWorksTools {
             .set_visibility(request)
             .await
             .map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(visibility::reply_text(&params, &reply))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            visibility::reply_text(&params, &reply),
+        )]))
     }
 
     #[tool(
@@ -417,7 +447,9 @@ impl SolidWorksTools {
             .configurations(configuration::request(&params)?)
             .await
             .map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(configuration::configurations_text(&params, &reply))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            configuration::configurations_text(&params, &reply),
+        )]))
     }
 
     #[tool(
@@ -432,7 +464,10 @@ impl SolidWorksTools {
         Parameters(params): Parameters<configuration::SetSuppressionParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             configuration::suppression_request(&ids, &params)?
         };
         let reply = self
@@ -440,7 +475,9 @@ impl SolidWorksTools {
             .set_suppression(request)
             .await
             .map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(configuration::suppression_text(&params, &reply))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            configuration::suppression_text(&params, &reply),
+        )]))
     }
 
     #[tool(
@@ -454,11 +491,20 @@ impl SolidWorksTools {
         Parameters(params): Parameters<feature_order::RollbackParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             feature_order::rollback_request(&ids, &params)?
         };
-        let reply = self.addin.rollback(request).await.map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(feature_order::rollback_text(&params, &reply))]))
+        let reply = self
+            .addin
+            .rollback(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            feature_order::rollback_text(&params, &reply),
+        )]))
     }
 
     #[tool(
@@ -473,11 +519,20 @@ impl SolidWorksTools {
         Parameters(params): Parameters<feature_order::ReorderParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             feature_order::reorder_request(&ids, &params)?
         };
-        let reply = self.addin.reorder_feature(request).await.map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(feature_order::reorder_text(&reply))]))
+        let reply = self
+            .addin
+            .reorder_feature(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            feature_order::reorder_text(&reply),
+        )]))
     }
 
     #[tool(
@@ -500,12 +555,19 @@ impl SolidWorksTools {
             .map_err(|status| self.addin_error(status))?;
         let request = equation::request(&params, &listing.equations)?;
         let reply = if params.changes_anything() {
-            self.addin.equations(request.clone()).await.map_err(|status| self.addin_error(status))?
+            self.addin
+                .equations(request.clone())
+                .await
+                .map_err(|status| self.addin_error(status))?
         } else {
             listing
         };
-        let unit = self.active_units().map_or("millimeters", |u| units::length_name(&u));
-        Ok(CallToolResult::success(vec![ContentBlock::text(equation::equations_text(&params, &request, &reply, unit))]))
+        let unit = self
+            .active_units()
+            .map_or("millimeters", |u| units::length_name(&u));
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            equation::equations_text(&params, &request, &reply, unit),
+        )]))
     }
 
     #[tool(
@@ -524,7 +586,9 @@ impl SolidWorksTools {
         // SolidWorks reports a column or value it can't use in a modal dialog.
         let (reply, dialogs) = macro_run::closing_dialogs(self.addin.design_table(request)).await;
         let reply = reply.map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(design_table::reply_text(&params, &reply, &dialogs))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            design_table::reply_text(&params, &reply, &dialogs),
+        )]))
     }
 
     #[tool(
@@ -540,7 +604,9 @@ impl SolidWorksTools {
             .new_part(units::change(&params)?)
             .await
             .map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(files::new_document_reply_text("part", document.as_ref()))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            files::new_document_reply_text("part", document.as_ref()),
+        )]))
     }
 
     #[tool(
@@ -557,7 +623,9 @@ impl SolidWorksTools {
             .new_assembly(units::change(&params)?)
             .await
             .map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(files::new_document_reply_text("assembly", document.as_ref()))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            files::new_document_reply_text("assembly", document.as_ref()),
+        )]))
     }
 
     #[tool(
@@ -576,7 +644,9 @@ impl SolidWorksTools {
             .new_drawing(request)
             .await
             .map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(files::new_drawing_reply_text(&reply))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            files::new_drawing_reply_text(&reply),
+        )]))
     }
 
     #[tool(
@@ -589,7 +659,10 @@ impl SolidWorksTools {
                        ids, the sketch's closed and open contours (an extrude needs closed ones) \
                        and its axes in model space."
     )]
-    async fn sketch(&self, Parameters(params): Parameters<SketchParams>) -> Result<CallToolResult, McpError> {
+    async fn sketch(
+        &self,
+        Parameters(params): Parameters<SketchParams>,
+    ) -> Result<CallToolResult, McpError> {
         params.check_applies()?;
         if params.shape == SketchShape::Rectangle {
             let width_mm = *params.needs(&params.width_mm, "width_mm")?;
@@ -606,7 +679,8 @@ impl SolidWorksTools {
         }
         let mut points = PointConverter::default();
         let (entities, what) = params.entities(&mut points)?;
-        self.draw_sketch(params.target, points.model_space(), entities, what).await
+        self.draw_sketch(params.target, points.model_space(), entities, what)
+            .await
     }
 
     #[tool(
@@ -621,13 +695,23 @@ impl SolidWorksTools {
         Parameters(params): Parameters<sketch_edit::SketchFilletParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             sketch_edit::fillet_request(&ids, &params)?
         };
         let reply = self.addin.sketch_corners(request).await.map_err(|status| {
-            feature_text::with_legend(self.addin_error(status), "entity", &sketch_edit::given(&params.entities))
+            feature_text::with_legend(
+                self.addin_error(status),
+                "entity",
+                &sketch_edit::given(&params.entities),
+            )
         })?;
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = format!(
             "filleted {} with radius {} mm in {}.{}",
             sketch_edit::given(&params.entities).join(", "),
@@ -650,13 +734,23 @@ impl SolidWorksTools {
         Parameters(params): Parameters<sketch_edit::SketchChamferParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             sketch_edit::chamfer_request(&ids, &params)?
         };
         let reply = self.addin.sketch_corners(request).await.map_err(|status| {
-            feature_text::with_legend(self.addin_error(status), "entity", &sketch_edit::given(&params.entities))
+            feature_text::with_legend(
+                self.addin_error(status),
+                "entity",
+                &sketch_edit::given(&params.entities),
+            )
         })?;
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = format!(
             "chamfered {} in {}.{}",
             sketch_edit::given(&params.entities).join(", "),
@@ -677,7 +771,10 @@ impl SolidWorksTools {
         Parameters(params): Parameters<sketch_edit::TrimParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             sketch_edit::trim_request(&ids, &params)?
         };
         let legend = [params.entity.trim().to_string()];
@@ -685,8 +782,13 @@ impl SolidWorksTools {
             .addin
             .trim_sketch_entity(request)
             .await
-            .map_err(|status| feature_text::with_legend(self.addin_error(status), "entity", &legend))?;
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            .map_err(|status| {
+                feature_text::with_legend(self.addin_error(status), "entity", &legend)
+            })?;
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = format!(
             "trimmed {} in {}.{}",
             params.entity.trim(),
@@ -706,7 +808,10 @@ impl SolidWorksTools {
         Parameters(params): Parameters<sketch_edit::ExtendParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             sketch_edit::extend_request(&ids, &params)?
         };
         let legend = [params.entity.trim().to_string()];
@@ -714,8 +819,13 @@ impl SolidWorksTools {
             .addin
             .trim_sketch_entity(request)
             .await
-            .map_err(|status| feature_text::with_legend(self.addin_error(status), "entity", &legend))?;
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            .map_err(|status| {
+                feature_text::with_legend(self.addin_error(status), "entity", &legend)
+            })?;
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = format!(
             "extended {} in {}.{}",
             params.entity.trim(),
@@ -738,13 +848,27 @@ impl SolidWorksTools {
         Parameters(params): Parameters<sketch_edit::ConvertParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             sketch_edit::convert_request(&ids, &params)?
         };
-        let reply = self.addin.convert_entities(request).await.map_err(|status| {
-            feature_text::with_legend(self.addin_error(status), "entity", &sketch_edit::given(&params.entities))
-        })?;
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let reply = self
+            .addin
+            .convert_entities(request)
+            .await
+            .map_err(|status| {
+                feature_text::with_legend(
+                    self.addin_error(status),
+                    "entity",
+                    &sketch_edit::given(&params.entities),
+                )
+            })?;
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = sketch_edit::convert_text(&mut ids, &params, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -760,7 +884,10 @@ impl SolidWorksTools {
         Parameters(params): Parameters<ExtrudeSketchParams>,
     ) -> Result<CallToolResult, McpError> {
         if params.through_all && !params.cut {
-            return Err(McpError::invalid_params("through_all is for cuts (cut=true)", None));
+            return Err(McpError::invalid_params(
+                "through_all is for cuts (cut=true)",
+                None,
+            ));
         }
         let depth_mm = match (params.through_all, params.depth_mm) {
             (true, _) => 0.0,
@@ -772,7 +899,10 @@ impl SolidWorksTools {
                 ));
             }
             (false, None) if params.cut => {
-                return Err(McpError::invalid_params("give depth_mm, or set through_all", None));
+                return Err(McpError::invalid_params(
+                    "give depth_mm, or set through_all",
+                    None,
+                ));
             }
             (false, None) => return Err(McpError::invalid_params("give depth_mm", None)),
         };
@@ -872,7 +1002,10 @@ impl SolidWorksTools {
         Parameters(params): Parameters<fillet::FilletParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             fillet::fillet_request(&ids, &params)?
         };
         let reply = self
@@ -880,7 +1013,9 @@ impl SolidWorksTools {
             .fillet_edges(request)
             .await
             .map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(fillet::fillet_text(&params, &reply))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            fillet::fillet_text(&params, &reply),
+        )]))
     }
 
     #[tool(
@@ -893,7 +1028,10 @@ impl SolidWorksTools {
         Parameters(params): Parameters<fillet::ChamferParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             fillet::chamfer_request(&ids, &params)?
         };
         let reply = self
@@ -901,7 +1039,9 @@ impl SolidWorksTools {
             .chamfer_edges(request)
             .await
             .map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(fillet::chamfer_text(&params, &reply))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            fillet::chamfer_text(&params, &reply),
+        )]))
     }
 
     #[tool(
@@ -921,7 +1061,9 @@ impl SolidWorksTools {
             .create_helix(request)
             .await
             .map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(helix::reply_text(&params, &reply))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            helix::reply_text(&params, &reply),
+        )]))
     }
 
     #[tool(
@@ -935,7 +1077,10 @@ impl SolidWorksTools {
         Parameters(params): Parameters<shell::ShellParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             shell::request(&ids, &params)?
         };
         let reply = self
@@ -943,7 +1088,9 @@ impl SolidWorksTools {
             .shell_body(request)
             .await
             .map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(shell::reply_text(&params, &reply))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            shell::reply_text(&params, &reply),
+        )]))
     }
 
     #[tool(
@@ -965,7 +1112,8 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(
-            rib::reply_text(&params, &reply) + &sketch_status_note(&reply.sketch_name, reply.sketch_status()),
+            rib::reply_text(&params, &reply)
+                + &sketch_status_note(&reply.sketch_name, reply.sketch_status()),
         )]))
     }
 
@@ -980,7 +1128,10 @@ impl SolidWorksTools {
         Parameters(params): Parameters<draft::DraftParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             draft::request(&ids, &params)?
         };
         let reply = self
@@ -988,7 +1139,9 @@ impl SolidWorksTools {
             .draft_faces(request)
             .await
             .map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(draft::reply_text(&params, &reply))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            draft::reply_text(&params, &reply),
+        )]))
     }
 
     #[tool(
@@ -1001,16 +1154,27 @@ impl SolidWorksTools {
         Parameters(params): Parameters<mirror::MirrorFeaturesParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             mirror::features_request(&ids, &params)?
         };
-        let noun = if params.features.is_empty() { "body" } else { "feature" };
+        let noun = if params.features.is_empty() {
+            "body"
+        } else {
+            "feature"
+        };
         let reply = self
             .addin
             .mirror_features(request)
             .await
-            .map_err(|status| feature_text::with_legend(self.addin_error(status), noun, &mirror::given(&params)))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(mirror::features_text(&params, &reply))]))
+            .map_err(|status| {
+                feature_text::with_legend(self.addin_error(status), noun, &mirror::given(&params))
+            })?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            mirror::features_text(&params, &reply),
+        )]))
     }
 
     #[tool(
@@ -1023,18 +1187,31 @@ impl SolidWorksTools {
         Parameters(params): Parameters<pattern::LinearPatternParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             pattern::linear_request(&ids, &params)?
         };
-        let noun = if params.features.is_empty() { "body" } else { "feature" };
+        let noun = if params.features.is_empty() {
+            "body"
+        } else {
+            "feature"
+        };
         let reply = self
             .addin
             .pattern_features(request)
             .await
             .map_err(|status| {
-                feature_text::with_legend(self.addin_error(status), noun, &pattern::given(&params.features, &params.bodies))
+                feature_text::with_legend(
+                    self.addin_error(status),
+                    noun,
+                    &pattern::given(&params.features, &params.bodies),
+                )
             })?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(pattern::linear_text(&params, &reply))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            pattern::linear_text(&params, &reply),
+        )]))
     }
 
     #[tool(
@@ -1047,18 +1224,31 @@ impl SolidWorksTools {
         Parameters(params): Parameters<pattern::CircularPatternParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             pattern::circular_request(&ids, &params)?
         };
-        let noun = if params.features.is_empty() { "body" } else { "feature" };
+        let noun = if params.features.is_empty() {
+            "body"
+        } else {
+            "feature"
+        };
         let reply = self
             .addin
             .pattern_features(request)
             .await
             .map_err(|status| {
-                feature_text::with_legend(self.addin_error(status), noun, &pattern::given(&params.features, &params.bodies))
+                feature_text::with_legend(
+                    self.addin_error(status),
+                    noun,
+                    &pattern::given(&params.features, &params.bodies),
+                )
             })?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(pattern::circular_text(&params, &reply))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            pattern::circular_text(&params, &reply),
+        )]))
     }
 
     #[tool(
@@ -1119,7 +1309,10 @@ impl SolidWorksTools {
             limit: params.limit.unwrap_or(DEFAULT_INSPECT_LIMIT),
         };
         let mut json = {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             assembly::render_inspect(&mut ids, &reply, &filters)
         };
         if let Some(obj) = json.as_object_mut() {
@@ -1136,7 +1329,9 @@ impl SolidWorksTools {
                 _ => {}
             }
         }
-        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            json.to_string(),
+        )]))
     }
 
     #[tool(
@@ -1152,7 +1347,9 @@ impl SolidWorksTools {
     ) -> Result<CallToolResult, McpError> {
         let (scope_persist_id, scope_feature_name) = match params.within.as_deref().map(str::trim) {
             None | Some("") => (Vec::new(), String::new()),
-            Some(within) if IdRegistry::looks_like_id(within) => (self.resolve_id(within)?, String::new()),
+            Some(within) if IdRegistry::looks_like_id(within) => {
+                (self.resolve_id(within)?, String::new())
+            }
             Some(feature_name) => (Vec::new(), feature_name.to_string()),
         };
         let request = proto::InspectModelRequest {
@@ -1170,10 +1367,15 @@ impl SolidWorksTools {
             .map_err(|status| self.addin_error(status))?;
         assembly::place_inspect_reply(&mut reply);
         let json = {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             recognize::render(&mut ids, &reply)
         };
-        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            json.to_string(),
+        )]))
     }
 
     #[tool(
@@ -1197,11 +1399,16 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         let json = {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             pmi::render(&mut ids, &reply, &params, on.as_deref())
         };
         let json = units::note_text_units(json, self.active_units().as_ref());
-        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            json.to_string(),
+        )]))
     }
 
     #[tool(
@@ -1283,7 +1490,10 @@ impl SolidWorksTools {
         let units = self.active_units();
         let standard = dimxpert::standard(params.standard, units.as_ref());
         let (request, tolerance) = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             dimxpert::request(&ids, &params, standard)?
         };
         let use_block = tolerance.is_none()
@@ -1291,21 +1501,32 @@ impl SolidWorksTools {
             && params.kind != dimxpert::PmiDimensionKind::Basic;
         // A read failure must occur before inserting anything into the part.
         let block = if use_block {
-            let preferences = self.addin.document_preferences(dimxpert::block_read_request())
-                .await.map_err(|status| self.addin_error(status))?;
+            let preferences = self
+                .addin
+                .document_preferences(dimxpert::block_read_request())
+                .await
+                .map_err(|status| self.addin_error(status))?;
             dimxpert::block_table(&preferences)
         } else {
             None
         };
         // DimXpert warns in a modal dialog when a dimension over-constrains
         // the part (seen 2026-11-12).
-        let (reply, dialogs) = macro_run::closing_dialogs(self.addin.add_pmi_dimension(request)).await;
+        let (reply, dialogs) =
+            macro_run::closing_dialogs(self.addin.add_pmi_dimension(request)).await;
         let mut reply = reply.map_err(|status| self.addin_error(status))?;
         if let Some(why) = dimxpert::overconstrained(&dialogs) {
-            return Err(self.reject_pmi(&reply.annotations, McpError::invalid_params(why, None)).await);
+            return Err(self
+                .reject_pmi(&reply.annotations, McpError::invalid_params(why, None))
+                .await);
         }
         let (requests, general) = match dimxpert::dimension_tolerances(
-            &reply.annotations, tolerance.as_ref(), block.as_ref(), use_block, params.values.decimals, units.as_ref(),
+            &reply.annotations,
+            tolerance.as_ref(),
+            block.as_ref(),
+            use_block,
+            params.values.decimals,
+            units.as_ref(),
         ) {
             Ok(plan) => plan,
             Err(error) => return Err(self.reject_pmi(&reply.annotations, error).await),
@@ -1317,14 +1538,20 @@ impl SolidWorksTools {
                 other => {
                     let error = match other {
                         Err(status) => self.addin_error(status),
-                        Ok(_) => McpError::internal_error("SolidWorks returned no toleranced dimension", None),
+                        Ok(_) => McpError::internal_error(
+                            "SolidWorks returned no toleranced dimension",
+                            None,
+                        ),
                     };
                     return Err(self.reject_pmi(&reply.annotations, error).await);
                 }
             }
         }
         let text = {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             dimxpert::reply(&mut ids, &params, &reply.annotations, &general, &dialogs)
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
@@ -1332,10 +1559,13 @@ impl SolidWorksTools {
 
     async fn reject_pmi(&self, added: &[proto::AnnotationInfo], error: McpError) -> McpError {
         let names: Vec<String> = added.iter().map(|a| a.name.clone()).collect();
-        let cleanup = self.addin.delete_drawing_annotations(proto::DeleteDrawingAnnotationsRequest {
-            names: names.clone(),
-            ..Default::default()
-        }).await;
+        let cleanup = self
+            .addin
+            .delete_drawing_annotations(proto::DeleteDrawingAnnotationsRequest {
+                names: names.clone(),
+                ..Default::default()
+            })
+            .await;
         dimxpert::cleanup_error(error, &names, cleanup)
     }
 
@@ -1353,7 +1583,10 @@ impl SolidWorksTools {
         let units = self.active_units();
         let standard = dimxpert::standard(params.standard, units.as_ref());
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             dimxpert::scheme_request(&ids, &params)?
         };
         // The geometric scheme's options (composite frames, values) are the
@@ -1364,10 +1597,14 @@ impl SolidWorksTools {
                 .await
                 .map_err(|status| self.addin_error(status))?;
         }
-        let (reply, dialogs) = macro_run::closing_dialogs(self.addin.auto_dimension_scheme(request)).await;
+        let (reply, dialogs) =
+            macro_run::closing_dialogs(self.addin.auto_dimension_scheme(request)).await;
         let reply = reply.map_err(|status| self.addin_error(status))?;
         let text = {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             dimxpert::scheme_reply(&mut ids, &params, &reply, units.as_ref(), &dialogs)
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
@@ -1395,7 +1632,11 @@ impl SolidWorksTools {
                 None,
             ));
         }
-        let units = active.document.as_ref().and_then(|d| d.units.clone()).or_else(|| self.active_units());
+        let units = active
+            .document
+            .as_ref()
+            .and_then(|d| d.units.clone())
+            .or_else(|| self.active_units());
         let standard = dimxpert::standard(params.standard, units.as_ref());
         let (request, remarks) = dimxpert::general_tolerance_request(&params, standard)?;
         let reply = self
@@ -1403,8 +1644,11 @@ impl SolidWorksTools {
             .document_preferences(request)
             .await
             .map_err(|status| self.addin_error(status))?;
-        let json = dimxpert::general_tolerance_json(&params, &reply, standard, units.as_ref(), &remarks);
-        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+        let json =
+            dimxpert::general_tolerance_json(&params, &reply, standard, units.as_ref(), &remarks);
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            json.to_string(),
+        )]))
     }
 
     #[tool(
@@ -1419,8 +1663,14 @@ impl SolidWorksTools {
         Parameters(params): Parameters<center_mark::AddCenterMarksParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let cache = self
+                .drawings
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             center_mark::marks_request(&ids, &cache, &params)?
         };
         let reply = self
@@ -1429,8 +1679,17 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         let text = {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            center_mark::reply(&mut ids, "center mark(s)", &request.view_name, &params.on, &reply)
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            center_mark::reply(
+                &mut ids,
+                "center mark(s)",
+                &request.view_name,
+                &params.on,
+                &reply,
+            )
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -1445,8 +1704,14 @@ impl SolidWorksTools {
         Parameters(params): Parameters<center_mark::AddCenterlinesParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let cache = self
+                .drawings
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             center_mark::lines_request(&ids, &cache, &params)?
         };
         let reply = self
@@ -1454,10 +1719,23 @@ impl SolidWorksTools {
             .add_centerlines(request.clone())
             .await
             .map_err(|status| self.addin_error(status))?;
-        let asked: Vec<String> = params.between.iter().map(|[a, b]| format!("{a} / {b}")).collect();
+        let asked: Vec<String> = params
+            .between
+            .iter()
+            .map(|[a, b]| format!("{a} / {b}"))
+            .collect();
         let text = {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            center_mark::reply(&mut ids, "centerline(s)", &request.view_name, &asked, &reply)
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            center_mark::reply(
+                &mut ids,
+                "centerline(s)",
+                &request.view_name,
+                &asked,
+                &reply,
+            )
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -1482,12 +1760,20 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         let json = {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let mut cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut cache = self
+                .drawings
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             drawing::render_inspect(&mut ids, &mut cache, &reply, &params)
         };
         let json = units::note_text_units(json, self.active_units().as_ref());
-        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            json.to_string(),
+        )]))
     }
 
     #[tool(
@@ -1502,8 +1788,14 @@ impl SolidWorksTools {
         Parameters(params): Parameters<drawing::AddDrawingDimensionsParams>,
     ) -> Result<CallToolResult, McpError> {
         let (request, labels) = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let cache = self
+                .drawings
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             drawing::dimensions_request(&ids, &cache, &params)?
         };
         let reply = self
@@ -1533,10 +1825,15 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         let json = {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             drawing::render_model_items(&mut ids, &reply)
         };
-        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            json.to_string(),
+        )]))
     }
 
     #[tool(
@@ -1552,8 +1849,17 @@ impl SolidWorksTools {
         use drawing_image as di;
         let max_px = di::max_px(&params)?;
         let region = di::region(&params)?;
-        let view = params.view.as_deref().map(str::trim).filter(|v| !v.is_empty());
-        let sheet = params.sheet.as_deref().map(str::trim).unwrap_or_default().to_string();
+        let view = params
+            .view
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty());
+        let sheet = params
+            .sheet
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string();
         // The whole sheet: the add-in fits it to max_px. A zoom: the
         // region's resolution, or a guess for a view until its outline is
         // known.
@@ -1589,7 +1895,11 @@ impl SolidWorksTools {
             }
         }
         let picture = di::picture(&image, &reply, crop, max_px)?;
-        let document = if reply.document_title.is_empty() { "the drawing" } else { reply.document_title.as_str() };
+        let document = if reply.document_title.is_empty() {
+            "the drawing"
+        } else {
+            reply.document_title.as_str()
+        };
         let text = di::reply_text(&reply, document, crop, &picture);
         Ok(CallToolResult::success(vec![
             ContentBlock::image(BASE64.encode(&picture.png), "image/png"),
@@ -1644,19 +1954,35 @@ impl SolidWorksTools {
     ) -> Result<CallToolResult, McpError> {
         use derived_view::ViewRequest;
         let params = match params.split()? {
-            ViewRequest::Model(params) => return self.setup_drawing_view(view::create_request(&params)?).await,
+            ViewRequest::Model(params) => {
+                return self
+                    .setup_drawing_view(view::create_request(&params)?)
+                    .await;
+            }
             derived => derived,
         };
         let drawing = self.inspect_views().await?;
         let plan = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let cache = self
+                .drawings
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             match params {
                 ViewRequest::Model(_) => unreachable!("made above"),
                 ViewRequest::Projected(params) => derived_view::projected_plan(&drawing, &params)?,
-                ViewRequest::Section(params) => derived_view::section_plan(&drawing, &ids, &cache, &params)?,
-                ViewRequest::Detail(params) => derived_view::detail_plan(&drawing, &cache, &params)?,
-                ViewRequest::Auxiliary(params) => derived_view::auxiliary_plan(&drawing, &ids, &cache, &params)?,
+                ViewRequest::Section(params) => {
+                    derived_view::section_plan(&drawing, &ids, &cache, &params)?
+                }
+                ViewRequest::Detail(params) => {
+                    derived_view::detail_plan(&drawing, &cache, &params)?
+                }
+                ViewRequest::Auxiliary(params) => {
+                    derived_view::auxiliary_plan(&drawing, &ids, &cache, &params)?
+                }
             }
         };
         self.derive_drawing_view(plan).await
@@ -1684,7 +2010,8 @@ impl SolidWorksTools {
         &self,
         Parameters(params): Parameters<derived_view::CropViewParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.shape_drawing_view(derived_view::crop_request(&params)?).await
+        self.shape_drawing_view(derived_view::crop_request(&params)?)
+            .await
     }
 
     #[tool(
@@ -1698,15 +2025,14 @@ impl SolidWorksTools {
         &self,
         Parameters(params): Parameters<derived_view::BreakViewParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.shape_drawing_view(derived_view::break_request(&params)?).await
+        self.shape_drawing_view(derived_view::break_request(&params)?)
+            .await
     }
 
-    #[tool(
-        description = "List the annotations of the active drawing: name (for \
+    #[tool(description = "List the annotations of the active drawing: name (for \
                        edit_drawing_annotation / delete_drawing_annotations), whether it belongs \
                        to a view, the sheet or the sheet format, text, position on the sheet and \
-                       in its view, box, style, layer and leaders with what they're attached to."
-    )]
+                       in its view, box, style, layer and leaders with what they're attached to.")]
     async fn inspect_drawing_annotations(
         &self,
         Parameters(params): Parameters<note::InspectDrawingAnnotationsParams>,
@@ -1717,11 +2043,16 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         let json = {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             note::render_inspect(&mut ids, &reply, &params)?
         };
         let json = units::note_text_units(json, self.active_units().as_ref());
-        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            json.to_string(),
+        )]))
     }
 
     #[tool(
@@ -1735,8 +2066,14 @@ impl SolidWorksTools {
         Parameters(params): Parameters<note::AddDrawingNoteParams>,
     ) -> Result<CallToolResult, McpError> {
         let (request, remarks) = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let cache = self
+                .drawings
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             note::add_request(&ids, &cache, &params)?
         };
         self.setup_drawing_annotation(request, remarks).await
@@ -1753,8 +2090,14 @@ impl SolidWorksTools {
         Parameters(params): Parameters<note::EditDrawingAnnotationParams>,
     ) -> Result<CallToolResult, McpError> {
         let (request, remarks) = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let cache = self
+                .drawings
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             note::edit_request(&ids, &cache, &params)?
         };
         self.setup_drawing_annotation(request, remarks).await
@@ -1776,7 +2119,9 @@ impl SolidWorksTools {
             .delete_drawing_annotations(note::delete_request(&params)?)
             .await
             .map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(note::delete_reply(&reply))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            note::delete_reply(&reply),
+        )]))
     }
 
     #[tool(
@@ -1794,7 +2139,9 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         let json = table::render_inspect(&reply, &params)?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            json.to_string(),
+        )]))
     }
 
     #[tool(
@@ -1810,7 +2157,10 @@ impl SolidWorksTools {
         Parameters(params): Parameters<table::AddDrawingTableParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             table::add_request(&ids, &params)?
         };
         let mut reply = self
@@ -1822,25 +2172,37 @@ impl SolidWorksTools {
         let mut moved_to = None;
         if request.position.is_none()
             && let (Some(sheet), Some(t)) = (&reply.sheet, &reply.table)
-            && let Some(to) = table::relocation(sheet, t, params.kind, Some(request.view_name.as_str()))
+            && let Some(to) =
+                table::relocation(sheet, t, params.kind, Some(request.view_name.as_str()))
         {
             let move_request = proto::SetupDrawingTableRequest {
                 name: t.name.clone(),
                 sheet_name: sheet.name.clone(),
-                position: Some(proto::Vec3 { x: to.x, y: to.y, z: 0.0 }),
+                position: Some(proto::Vec3 {
+                    x: to.x,
+                    y: to.y,
+                    z: 0.0,
+                }),
                 ..Default::default()
             };
             match self.addin.setup_drawing_table(move_request).await {
                 Ok(moved) => {
                     let tags = std::mem::take(&mut reply.hole_tags);
-                    reply = proto::SetupDrawingTableResponse { created: true, hole_tags: tags, ..moved };
+                    reply = proto::SetupDrawingTableResponse {
+                        created: true,
+                        hole_tags: tags,
+                        ..moved
+                    };
                     moved_to = Some(to);
                 }
                 Err(status) => tracing::warn!("moving the new table clear failed: {status}"),
             }
         }
         let text = {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             table::setup_reply(&mut ids, &request, &reply, moved_to)
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
@@ -1865,10 +2227,18 @@ impl SolidWorksTools {
             let found = tables
                 .sheets
                 .iter()
-                .filter(|s| request.sheet_name.is_empty() || s.name.eq_ignore_ascii_case(&request.sheet_name))
+                .filter(|s| {
+                    request.sheet_name.is_empty()
+                        || s.name.eq_ignore_ascii_case(&request.sheet_name)
+                })
                 .flat_map(|s| s.tables.iter())
                 .find(|t| t.name == request.name)
-                .ok_or_else(|| McpError::invalid_params(format!("the drawing has no table named {:?}", request.name), None))?;
+                .ok_or_else(|| {
+                    McpError::invalid_params(
+                        format!("the drawing has no table named {:?}", request.name),
+                        None,
+                    )
+                })?;
             table::apply_move_by(&mut request, found, by)?;
         }
         let reply = self
@@ -1877,7 +2247,10 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         let text = {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             table::setup_reply(&mut ids, &request, &reply, None)
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
@@ -1896,7 +2269,10 @@ impl SolidWorksTools {
         Parameters(params): Parameters<table::AddBalloonsParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             table::balloons_request(&ids, &params)?
         };
         let reply = self
@@ -1905,7 +2281,10 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         let text = {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             table::balloons_reply(&mut ids, &request, &reply)
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
@@ -1929,14 +2308,26 @@ impl SolidWorksTools {
         let sheet = sheet_format::find_sheet(&info, params.sheet.as_deref().unwrap_or("").trim())?;
         let standard = params
             .standard
-            .unwrap_or(sheet_format::SheetStandard::for_document(units::is_inch(self.active_units().as_ref())));
-        let border = sheet_format::border(glam::DVec2::new(sheet.width, sheet.height), &params, standard)?;
+            .unwrap_or(sheet_format::SheetStandard::for_document(units::is_inch(
+                self.active_units().as_ref(),
+            )));
+        let border = sheet_format::border(
+            glam::DVec2::new(sheet.width, sheet.height),
+            &params,
+            standard,
+        )?;
         let reply = self
             .addin
-            .draw_sheet_format(sheet_format::border_request(&sheet.name, &border, params.weight))
+            .draw_sheet_format(sheet_format::border_request(
+                &sheet.name,
+                &border,
+                params.weight,
+            ))
             .await
             .map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(sheet_format::border_reply(&sheet.name, &border, &reply))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            sheet_format::border_reply(&sheet.name, &border, &reply),
+        )]))
     }
 
     #[tool(
@@ -1966,9 +2357,15 @@ impl SolidWorksTools {
         let on_frame = params.corner_mm.is_none() && frame.is_some();
         let standard = params
             .standard
-            .unwrap_or(sheet_format::SheetStandard::for_document(units::is_inch(self.active_units().as_ref())));
+            .unwrap_or(sheet_format::SheetStandard::for_document(units::is_inch(
+                self.active_units().as_ref(),
+            )));
         let width_mm = params.width_mm.unwrap_or(standard.title_block_width_mm());
-        let rows = if params.rows.is_empty() { sheet_format::default_rows(width_mm, standard) } else { params.rows.clone() };
+        let rows = if params.rows.is_empty() {
+            sheet_format::default_rows(width_mm, standard)
+        } else {
+            params.rows.clone()
+        };
         let block = sheet_format::title_block(
             &rows,
             width_mm / MM_PER_M,
@@ -1977,26 +2374,34 @@ impl SolidWorksTools {
             params.fields.unwrap_or(true),
             standard,
         )?;
-        if block.properties.iter().any(|p| p.of == sheet_format::PropertyOf::Model) && sheet.views.is_empty() {
+        if block
+            .properties
+            .iter()
+            .any(|p| p.of == sheet_format::PropertyOf::Model)
+            && sheet.views.is_empty()
+        {
             return Err(McpError::invalid_params(
-                format!("{} has no views, so there's no model to set model properties on; add a view first", sheet.name),
+                format!(
+                    "{} has no views, so there's no model to set model properties on; add a view first",
+                    sheet.name
+                ),
                 None,
             ));
         }
         for request in sheet_format::property_requests(&sheet.name, &block.properties, false) {
-            self.addin.custom_properties(request).await.map_err(|status| self.addin_error(status))?;
+            self.addin
+                .custom_properties(request)
+                .await
+                .map_err(|status| self.addin_error(status))?;
         }
         let reply = self
             .addin
             .draw_sheet_format(sheet_format::title_block_request(&sheet.name, &block))
             .await
             .map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(sheet_format::title_block_reply(
-            sheet,
-            &block,
-            &reply,
-            &block.properties,
-        ))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            sheet_format::title_block_reply(sheet, &block, &reply, &block.properties),
+        )]))
     }
 
     #[tool(
@@ -2007,8 +2412,12 @@ impl SolidWorksTools {
         &self,
         Parameters(params): Parameters<sheet_format::InspectTitleBlockParams>,
     ) -> Result<CallToolResult, McpError> {
-        let json = self.title_block_fields(params.sheet.as_deref().unwrap_or("").trim()).await?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+        let json = self
+            .title_block_fields(params.sheet.as_deref().unwrap_or("").trim())
+            .await?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            json.to_string(),
+        )]))
     }
 
     #[tool(
@@ -2023,7 +2432,10 @@ impl SolidWorksTools {
         Parameters(params): Parameters<sheet_format::FillTitleBlockParams>,
     ) -> Result<CallToolResult, McpError> {
         if params.values.is_empty() {
-            return Err(McpError::invalid_params("give `values` to fill in (inspect_title_block lists the fields)", None));
+            return Err(McpError::invalid_params(
+                "give `values` to fill in (inspect_title_block lists the fields)",
+                None,
+            ));
         }
         let sheet_name = params.sheet.as_deref().unwrap_or("").trim().to_string();
         let info = self
@@ -2033,24 +2445,41 @@ impl SolidWorksTools {
             .map_err(|status| self.addin_error(status))?;
         let sheet = sheet_format::find_sheet(&info, &sheet_name)?;
         let fields = sheet_format::fields(sheet);
-        let (values, unlisted) = sheet_format::route_values(&fields, &params.values, params.allow_unlisted)?;
+        let (values, unlisted) =
+            sheet_format::route_values(&fields, &params.values, params.allow_unlisted)?;
         for request in sheet_format::property_requests(&sheet.name, &values, params.replace_links) {
-            self.addin.custom_properties(request).await.map_err(|status| self.addin_error(status))?;
+            self.addin
+                .custom_properties(request)
+                .await
+                .map_err(|status| self.addin_error(status))?;
         }
         let set: Vec<String> = values
             .iter()
             .map(|v| {
-                let of = if v.of == sheet_format::PropertyOf::Model { "model: save it too" } else { "drawing" };
+                let of = if v.of == sheet_format::PropertyOf::Model {
+                    "model: save it too"
+                } else {
+                    "drawing"
+                };
                 format!("{}={:?} ({of})", v.name, v.value)
             })
             .collect();
-        let mut lines = vec![format!("set {} for {}'s title block.", set.join(", "), sheet.name)];
+        let mut lines = vec![format!(
+            "set {} for {}'s title block.",
+            set.join(", "),
+            sheet.name
+        )];
         if !unlisted.is_empty() {
-            lines.push(format!("No title block note shows {} (set on the drawing anyway).", unlisted.join(", ")));
+            lines.push(format!(
+                "No title block note shows {} (set on the drawing anyway).",
+                unlisted.join(", ")
+            ));
         }
         let json = self.title_block_fields(&sheet.name).await?;
         lines.push(json.to_string());
-        Ok(CallToolResult::success(vec![ContentBlock::text(lines.join("\n"))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            lines.join("\n"),
+        )]))
     }
 
     #[tool(
@@ -2069,7 +2498,9 @@ impl SolidWorksTools {
             .custom_properties(properties::properties_request(&params)?)
             .await
             .map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(properties::properties_json(&reply).to_string())]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            properties::properties_json(&reply).to_string(),
+        )]))
     }
 
     #[tool(
@@ -2088,15 +2519,26 @@ impl SolidWorksTools {
         let known = properties::has_known(&params);
         let info = self
             .addin
-            .inspect_drawing(if known { sheet_format::fields_request() } else { proto::InspectDrawingRequest::default() })
+            .inspect_drawing(if known {
+                sheet_format::fields_request()
+            } else {
+                proto::InspectDrawingRequest::default()
+            })
             .await
             .map_err(|status| self.addin_error(status))?;
         let sheet = sheet_format::find_sheet(&info, params.sheet.as_deref().unwrap_or("").trim())?;
-        let fields = if known { sheet_format::fields(sheet) } else { Vec::new() };
+        let fields = if known {
+            sheet_format::fields(sheet)
+        } else {
+            Vec::new()
+        };
         let plan = properties::plan(&params, &fields)?;
         if plan.needs_model() && sheet.views.is_empty() {
             return Err(McpError::invalid_params(
-                format!("{} has no views, so there's no model to set model properties on; add a view first", sheet.name),
+                format!(
+                    "{} has no views, so there's no model to set model properties on; add a view first",
+                    sheet.name
+                ),
                 None,
             ));
         }
@@ -2106,32 +2548,50 @@ impl SolidWorksTools {
         } else {
             Some(
                 self.addin
-                    .custom_properties(properties::plan_request(&plan, sheet_format::PropertyOf::Model, &sheet.name, params.replace_links))
+                    .custom_properties(properties::plan_request(
+                        &plan,
+                        sheet_format::PropertyOf::Model,
+                        &sheet.name,
+                        params.replace_links,
+                    ))
                     .await
                     .map_err(|status| self.addin_error(status))?,
             )
         };
         let drawing = self
             .addin
-            .custom_properties(properties::plan_request(&plan, sheet_format::PropertyOf::Drawing, &sheet.name, params.replace_links))
+            .custom_properties(properties::plan_request(
+                &plan,
+                sheet_format::PropertyOf::Drawing,
+                &sheet.name,
+                params.replace_links,
+            ))
             .await
             .map_err(|status| self.addin_error(status))?;
-        let is_part = model.as_ref().and_then(|m| m.document.as_ref()).is_some_and(|d| d.r#type() == proto::DocumentType::Part);
+        let is_part = model
+            .as_ref()
+            .and_then(|m| m.document.as_ref())
+            .is_some_and(|d| d.r#type() == proto::DocumentType::Part);
         let material = if is_part {
             self.addin
-                .part_material(proto::PartMaterialRequest { sheet_name: sheet.name.clone(), ..Default::default() })
+                .part_material(proto::PartMaterialRequest {
+                    sheet_name: sheet.name.clone(),
+                    ..Default::default()
+                })
                 .await
                 .ok()
         } else {
             None
         };
-        Ok(CallToolResult::success(vec![ContentBlock::text(properties::drawing_properties_reply(
-            &sheet.name,
-            &plan,
-            &drawing,
-            model.as_ref(),
-            material.as_ref(),
-        ))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            properties::drawing_properties_reply(
+                &sheet.name,
+                &plan,
+                &drawing,
+                model.as_ref(),
+                material.as_ref(),
+            ),
+        )]))
     }
 
     #[tool(
@@ -2147,32 +2607,56 @@ impl SolidWorksTools {
         Parameters(params): Parameters<properties::PartMaterialParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = properties::material_request(&params)?;
-        let before = self.addin.part_material(request.clone()).await.map_err(|status| self.addin_error(status))?;
+        let before = self
+            .addin
+            .part_material(request.clone())
+            .await
+            .map_err(|status| self.addin_error(status))?;
         let materials = properties::load_databases(&before.database_folders);
         if let Some(query) = &params.search {
-            return Ok(CallToolResult::success(vec![ContentBlock::text(properties::search_reply(&before, &materials, query))]));
+            return Ok(CallToolResult::success(vec![ContentBlock::text(
+                properties::search_reply(&before, &materials, query),
+            )]));
         }
         let name = params.material.as_deref().unwrap_or("").trim();
         let database = params.database.as_deref().unwrap_or("").trim();
-        let entry = if name.is_empty() { None } else { properties::resolve(&materials, name, database)? };
+        let entry = if name.is_empty() {
+            None
+        } else {
+            properties::resolve(&materials, name, database)?
+        };
         let changed = params.remove || !name.is_empty();
         let mut after = if changed {
             let set = proto::PartMaterialRequest {
-                material: entry.map(|m| m.name.clone()).unwrap_or_else(|| name.to_string()),
-                database: entry.map(|m| m.database.clone()).unwrap_or_else(|| database.to_string()),
+                material: entry
+                    .map(|m| m.name.clone())
+                    .unwrap_or_else(|| name.to_string()),
+                database: entry
+                    .map(|m| m.database.clone())
+                    .unwrap_or_else(|| database.to_string()),
                 remove: params.remove,
                 ..request.clone()
             };
-            self.addin.part_material(set).await.map_err(|status| self.addin_error(status))?
+            self.addin
+                .part_material(set)
+                .await
+                .map_err(|status| self.addin_error(status))?
         } else {
             before.clone()
         };
         let entry = entry.or_else(|| materials.iter().find(|m| m.name == after.material));
         if params.link_property {
             if after.material.is_empty() {
-                return Err(McpError::invalid_params("the part has no material to link; give material", None));
+                return Err(McpError::invalid_params(
+                    "the part has no material to link; give material",
+                    None,
+                ));
             }
-            let part = after.document.as_ref().map(|d| d.title.clone()).unwrap_or_default();
+            let part = after
+                .document
+                .as_ref()
+                .map(|d| d.title.clone())
+                .unwrap_or_default();
             self.addin
                 .custom_properties(proto::CustomPropertiesRequest {
                     document: request.document.clone(),
@@ -2188,15 +2672,15 @@ impl SolidWorksTools {
                 })
                 .await
                 .map_err(|status| self.addin_error(status))?;
-            after = self.addin.part_material(request).await.map_err(|status| self.addin_error(status))?;
+            after = self
+                .addin
+                .part_material(request)
+                .await
+                .map_err(|status| self.addin_error(status))?;
         }
-        Ok(CallToolResult::success(vec![ContentBlock::text(properties::material_reply(
-            &before,
-            &after,
-            entry,
-            changed,
-            params.link_property,
-        ))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            properties::material_reply(&before, &after, entry, changed, params.link_property),
+        )]))
     }
 
     #[tool(
@@ -2215,7 +2699,9 @@ impl SolidWorksTools {
             Some(section) => Some(
                 render::Vec3::from_array(section.normal)
                     .try_normalize()
-                    .ok_or_else(|| McpError::invalid_params("section normal has no length", None))?,
+                    .ok_or_else(|| {
+                        McpError::invalid_params("section normal has no length", None)
+                    })?,
             ),
         };
         let views = render_cameras(params.views.as_deref(), section_normal)?;
@@ -2328,10 +2814,15 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         let json = {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             sketch::render_inspect(&mut ids, &reply)
         };
-        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            json.to_string(),
+        )]))
     }
 
     #[tool(
@@ -2346,7 +2837,10 @@ impl SolidWorksTools {
         Parameters(params): Parameters<feature_inspect::InspectFeatureParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             feature_inspect::request(&ids, &params)?
         };
         let reply = self
@@ -2355,10 +2849,15 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         let json = {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             feature_inspect::render(&mut ids, &reply)
         };
-        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            json.to_string(),
+        )]))
     }
 
     #[tool(
@@ -2383,13 +2882,19 @@ impl SolidWorksTools {
         for (i, spec) in params.dimensions.iter().enumerate() {
             let at = |e: McpError| prefix_error(e, &format!("dimension {}", i + 1));
             let value = dimension_value(spec).map_err(at)?;
-            let refs = self.sketch_refs(&spec.entities, MAX_DIMENSION_ENTITIES).map_err(at)?;
+            let refs = self
+                .sketch_refs(&spec.entities, MAX_DIMENSION_ENTITIES)
+                .map_err(at)?;
             dimensions.push(proto::SketchDimension {
                 kind: proto::DimensionKind::from(spec.kind).into(),
                 refs,
                 value,
             });
-            labels.push(format!("{} of {}", spec.kind.name(), spec.entities.join(" & ")));
+            labels.push(format!(
+                "{} of {}",
+                spec.kind.name(),
+                spec.entities.join(" & ")
+            ));
         }
         let reply = self
             .addin
@@ -2407,7 +2912,10 @@ impl SolidWorksTools {
             .map(|(d, label)| format!("{} ({label})", sketch::dimension_text(d)))
             .collect();
         let mut text = format!("added to {}: {}.", reply.sketch_name, added.join(", "));
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         text += &sketch::state_text(&mut ids, &reply.sketch_name, reply.state.as_ref());
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -2439,7 +2947,11 @@ impl SolidWorksTools {
                 kind: proto::RelationKind::from(spec.kind).into(),
                 refs,
             });
-            labels.push(format!("{} {}", spec.kind.name(), spec.entities.join(" & ")));
+            labels.push(format!(
+                "{} {}",
+                spec.kind.name(),
+                spec.entities.join(" & ")
+            ));
         }
         let reply = self
             .addin
@@ -2456,7 +2968,10 @@ impl SolidWorksTools {
             reply.sketch_name,
             labels.join(", ")
         );
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         text += &sketch::state_text(&mut ids, &reply.sketch_name, reply.state.as_ref());
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -2478,15 +2993,16 @@ impl SolidWorksTools {
                 None,
             ));
         }
-        let datum = |datum: &Option<String>, what: &str| -> Result<Option<proto::SketchRef>, McpError> {
-            match datum.as_deref().map(str::trim) {
-                None | Some("") => Ok(None),
-                Some(id) => self
-                    .sketch_ref(id)
-                    .map(Some)
-                    .map_err(|e| prefix_error(e, what)),
-            }
-        };
+        let datum =
+            |datum: &Option<String>, what: &str| -> Result<Option<proto::SketchRef>, McpError> {
+                match datum.as_deref().map(str::trim) {
+                    None | Some("") => Ok(None),
+                    Some(id) => self
+                        .sketch_ref(id)
+                        .map(Some)
+                        .map_err(|e| prefix_error(e, what)),
+                }
+            };
         let request = proto::FullyDefineSketchRequest {
             sketch_name: trimmed(params.sketch_name),
             skip_relations: !params.relations,
@@ -2506,7 +3022,11 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
 
-        let dims: Vec<String> = reply.added_dimensions.iter().map(sketch::dimension_text).collect();
+        let dims: Vec<String> = reply
+            .added_dimensions
+            .iter()
+            .map(sketch::dimension_text)
+            .collect();
         let mut text = if dims.is_empty() && reply.added_relations == 0 {
             format!("added nothing to {}.", reply.sketch_name)
         } else {
@@ -2522,7 +3042,10 @@ impl SolidWorksTools {
             t.push('.');
             t
         };
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         text += &sketch::state_text(&mut ids, &reply.sketch_name, reply.state.as_ref());
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -2540,7 +3063,10 @@ impl SolidWorksTools {
     ) -> Result<CallToolResult, McpError> {
         let name = params.name.trim().to_string();
         if name.is_empty() {
-            return Err(McpError::invalid_params("give the dimension's name, e.g. D1@Sketch1", None));
+            return Err(McpError::invalid_params(
+                "give the dimension's name, e.g. D1@Sketch1",
+                None,
+            ));
         }
         let value = match (params.value_mm, params.value_deg) {
             (Some(v), None) => proto::set_dimension_value_request::Value::Length(positive_mm(v)?),
@@ -2593,7 +3119,9 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         let json = tolerance::reply_json(&request, &reply);
-        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            json.to_string(),
+        )]))
     }
 
     #[tool(
@@ -2612,21 +3140,28 @@ impl SolidWorksTools {
             Some(on) if Kind::of_id(on) == Some(Kind::Face) => self.resolve_id(on)?,
             Some(on) => {
                 return Err(McpError::invalid_params(
-                    format!("`on` must be a face id like \"face:4\" from inspect_model, got {on:?}"),
+                    format!(
+                        "`on` must be a face id like \"face:4\" from inspect_model, got {on:?}"
+                    ),
                     None,
                 ));
             }
         };
         let mut params = params;
         let inch = units::is_inch(self.active_units().as_ref());
-        params.standard.get_or_insert_with(|| hole::default_standard(&params.size, inch));
+        params
+            .standard
+            .get_or_insert_with(|| hole::default_standard(&params.size, inch));
         let request = hole::request(&params, face_persist_id)?;
         let reply = self
             .addin
             .hole_wizard(request)
             .await
             .map_err(|status| self.addin_error(status))?;
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = hole::reply_text(&mut ids, &params, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -2644,8 +3179,10 @@ impl SolidWorksTools {
     ) -> Result<CallToolResult, McpError> {
         let entities = assembly::check(&params)?;
         let persist_ids = [
-            self.resolve_id(&entities[0]).map_err(|e| prefix_error(e, "entity 1"))?,
-            self.resolve_id(&entities[1]).map_err(|e| prefix_error(e, "entity 2"))?,
+            self.resolve_id(&entities[0])
+                .map_err(|e| prefix_error(e, "entity 1"))?,
+            self.resolve_id(&entities[1])
+                .map_err(|e| prefix_error(e, "entity 2"))?,
         ];
         let request = assembly::request(&params, persist_ids);
         let reply = self
@@ -2653,7 +3190,10 @@ impl SolidWorksTools {
             .add_mate(request)
             .await
             .map_err(|status| self.addin_error(status))?;
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = assembly::reply_text(&mut ids, &params, &entities, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -2674,7 +3214,10 @@ impl SolidWorksTools {
             .insert_components(request)
             .await
             .map_err(|status| self.addin_error(status))?;
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = component::reply_text(&mut ids, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -2695,7 +3238,10 @@ impl SolidWorksTools {
             .replace_components(request)
             .await
             .map_err(|status| self.addin_error(status))?;
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = component::replace_reply_text(&mut ids, &params, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -2716,7 +3262,10 @@ impl SolidWorksTools {
             .fix_components(request)
             .await
             .map_err(|status| self.addin_error(status))?;
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = component::fix_reply_text(&mut ids, &params, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -2739,7 +3288,10 @@ impl SolidWorksTools {
             .move_component(request.clone())
             .await
             .map_err(|status| self.addin_error(status))?;
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = component::move_reply_text(&mut ids, &params, &request, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -2757,7 +3309,10 @@ impl SolidWorksTools {
         Parameters(params): Parameters<motion::SweepMateParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             motion::sweep_request(&ids, &params)?
         };
         let reply = self
@@ -2765,7 +3320,10 @@ impl SolidWorksTools {
             .sweep_mate(request.clone())
             .await
             .map_err(|status| self.addin_error(status))?;
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = motion::sweep_reply_text(&mut ids, &request, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -2789,10 +3347,15 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         let json = {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             mobility::reply_json(&mut ids, &request, &reply)
         };
-        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            json.to_string(),
+        )]))
     }
 
     #[tool(
@@ -2814,10 +3377,15 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         let json = {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             interference::render(&mut ids, &params, &wanted, &reply)
         };
-        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            json.to_string(),
+        )]))
     }
 
     #[tool(
@@ -2827,13 +3395,25 @@ impl SolidWorksTools {
                        perpendicular, closest points and X / Y / Z offsets. mm, degrees. Overlap: \
                        check_interference."
     )]
-    async fn measure(&self, Parameters(params): Parameters<measure::MeasureParams>) -> Result<CallToolResult, McpError> {
+    async fn measure(
+        &self,
+        Parameters(params): Parameters<measure::MeasureParams>,
+    ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             measure::measure_request(&ids, &params)?
         };
-        let reply = self.addin.measure(request).await.map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(measure::measure_json(&params, &reply).to_string())]))
+        let reply = self
+            .addin
+            .measure(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            measure::measure_json(&params, &reply).to_string(),
+        )]))
     }
 
     #[tool(
@@ -2857,17 +3437,32 @@ impl SolidWorksTools {
         let request = if !params.select.is_empty() && self.active_is_drawing().await {
             self.drawing_selection_request(&params).await?
         } else {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             selection::request(&ids, &params)?
         };
-        let mut reply = self.addin.user_selection(request).await.map_err(|status| self.addin_error(status))?;
+        let mut reply = self
+            .addin
+            .user_selection(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
         assembly::place_selection_reply(&mut reply);
         let json = {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let mut cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut cache = self
+                .drawings
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             selection::render(&mut ids, &mut cache, &reply)
         };
-        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            json.to_string(),
+        )]))
     }
 
     #[tool(
@@ -2882,11 +3477,20 @@ impl SolidWorksTools {
         Parameters(params): Parameters<measure::MassPropertiesParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             measure::mass_request(&ids, &params)?
         };
-        let reply = self.addin.get_mass_properties(request).await.map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(measure::mass_json(&params, &reply).to_string())]))
+        let reply = self
+            .addin
+            .get_mass_properties(request)
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            measure::mass_json(&params, &reply).to_string(),
+        )]))
     }
 
     #[tool(
@@ -2902,7 +3506,10 @@ impl SolidWorksTools {
         Parameters(params): Parameters<delete::DeleteFeaturesParams>,
     ) -> Result<CallToolResult, McpError> {
         let features = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             delete::feature_targets(&ids, &params.features)?
         };
         let reply = self
@@ -2913,7 +3520,9 @@ impl SolidWorksTools {
                 delete_absorbed: params.delete_absorbed,
             })
             .await
-            .map_err(|status| feature_text::with_legend(self.addin_error(status), "feature", &params.features))?;
+            .map_err(|status| {
+                feature_text::with_legend(self.addin_error(status), "feature", &params.features)
+            })?;
         let text = delete::features_reply_text(&params, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -2929,7 +3538,10 @@ impl SolidWorksTools {
         Parameters(params): Parameters<delete::DeleteSketchEntitiesParams>,
     ) -> Result<CallToolResult, McpError> {
         let items = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             delete::sketch_items(&ids, &params.entities)?
         };
         let reply = self
@@ -2939,8 +3551,13 @@ impl SolidWorksTools {
                 items,
             })
             .await
-            .map_err(|status| feature_text::with_legend(self.addin_error(status), "entity", &params.entities))?;
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            .map_err(|status| {
+                feature_text::with_legend(self.addin_error(status), "entity", &params.entities)
+            })?;
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = delete::sketch_reply_text(&mut ids, &params.entities, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -2957,15 +3574,27 @@ impl SolidWorksTools {
         Parameters(params): Parameters<mirror::MirrorSketchParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             mirror::sketch_request(&ids, &params)?
         };
         let reply = self
             .addin
             .mirror_sketch_entities(request)
             .await
-            .map_err(|status| feature_text::with_legend(self.addin_error(status), "entity", &mirror::given_entities(&params)))?;
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            .map_err(|status| {
+                feature_text::with_legend(
+                    self.addin_error(status),
+                    "entity",
+                    &mirror::given_entities(&params),
+                )
+            })?;
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = mirror::sketch_text(&mut ids, &params, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -2982,15 +3611,27 @@ impl SolidWorksTools {
         Parameters(params): Parameters<offset::OffsetParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             offset::request(&ids, &params)?
         };
         let reply = self
             .addin
             .offset_sketch_entities(request)
             .await
-            .map_err(|status| feature_text::with_legend(self.addin_error(status), "entity", &offset::given(&params)))?;
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            .map_err(|status| {
+                feature_text::with_legend(
+                    self.addin_error(status),
+                    "entity",
+                    &offset::given(&params),
+                )
+            })?;
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = offset::reply_text(&mut ids, &params, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -3005,7 +3646,10 @@ impl SolidWorksTools {
         Parameters(params): Parameters<pattern::LinearSketchPatternParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             pattern::linear_sketch_request(&ids, &params)?
         };
         let reply = self
@@ -3013,9 +3657,16 @@ impl SolidWorksTools {
             .pattern_sketch_entities(request)
             .await
             .map_err(|status| {
-                feature_text::with_legend(self.addin_error(status), "entity", &pattern::given_entities(&params.entities))
+                feature_text::with_legend(
+                    self.addin_error(status),
+                    "entity",
+                    &pattern::given_entities(&params.entities),
+                )
             })?;
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let how = pattern::linear_sketch_how(&params);
         let text = pattern::sketch_text(&mut ids, &params.entities, &how, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
@@ -3031,7 +3682,10 @@ impl SolidWorksTools {
         Parameters(params): Parameters<pattern::CircularSketchPatternParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             pattern::circular_sketch_request(&ids, &params)?
         };
         let reply = self
@@ -3039,9 +3693,16 @@ impl SolidWorksTools {
             .pattern_sketch_entities(request)
             .await
             .map_err(|status| {
-                feature_text::with_legend(self.addin_error(status), "entity", &pattern::given_entities(&params.entities))
+                feature_text::with_legend(
+                    self.addin_error(status),
+                    "entity",
+                    &pattern::given_entities(&params.entities),
+                )
             })?;
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let how = pattern::circular_sketch_how(&params);
         let text = pattern::sketch_text(&mut ids, &params.entities, &how, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
@@ -3064,10 +3725,15 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         let json = {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             diagnose::render(&mut ids, &reply)
         };
-        Ok(CallToolResult::success(vec![ContentBlock::text(json.to_string())]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            json.to_string(),
+        )]))
     }
 
     #[tool(
@@ -3082,7 +3748,10 @@ impl SolidWorksTools {
         Parameters(params): Parameters<edit::EditExtrudeParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             edit::extrude_request(&ids, &params)?
         };
         let reply = self
@@ -3114,15 +3783,19 @@ impl SolidWorksTools {
             );
         }
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             edit::mate_request(&ids, &params, persist_ids)?
         };
-        let reply = self
-            .addin
-            .edit_mate(request)
-            .await
-            .map_err(|status| feature_text::with_legend(self.addin_error(status), "entity", &entities))?;
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let reply = self.addin.edit_mate(request).await.map_err(|status| {
+            feature_text::with_legend(self.addin_error(status), "entity", &entities)
+        })?;
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = edit::mate_reply_text(&mut ids, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -3140,7 +3813,10 @@ impl SolidWorksTools {
         Parameters(params): Parameters<feature_edit::EditFilletParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             feature_edit::fillet_request(&ids, &params)?
         };
         let reply = self
@@ -3148,7 +3824,10 @@ impl SolidWorksTools {
             .edit_fillet(request)
             .await
             .map_err(|status| self.addin_error(status))?;
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = feature_edit::fillet_reply_text(&mut ids, &params, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -3164,16 +3843,20 @@ impl SolidWorksTools {
         Parameters(params): Parameters<feature_edit::EditPatternParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             feature_edit::pattern_request(&ids, &params)?
         };
         let features = params.features.clone().unwrap_or_default();
-        let reply = self
-            .addin
-            .edit_pattern(request)
-            .await
-            .map_err(|status| feature_text::with_legend(self.addin_error(status), "feature", &features))?;
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let reply = self.addin.edit_pattern(request).await.map_err(|status| {
+            feature_text::with_legend(self.addin_error(status), "feature", &features)
+        })?;
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = feature_edit::pattern_reply_text(&mut ids, &params, &reply);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -3189,7 +3872,10 @@ impl SolidWorksTools {
         Parameters(params): Parameters<feature_edit::EditSweepParams>,
     ) -> Result<CallToolResult, McpError> {
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             feature_edit::sweep_request(&ids, &params)?
         };
         let reply = self
@@ -3197,7 +3883,9 @@ impl SolidWorksTools {
             .edit_sweep(request)
             .await
             .map_err(|status| self.addin_error(status))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(feature_edit::sweep_reply_text(&params, &reply))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            feature_edit::sweep_reply_text(&params, &reply),
+        )]))
     }
     #[tool(
         description = "Add a reference plane, axis, point or coordinate system to the active part \
@@ -3211,7 +3899,10 @@ impl SolidWorksTools {
         Parameters(params): Parameters<refgeom::ReferenceGeometryParams>,
     ) -> Result<CallToolResult, McpError> {
         let (request, from, given) = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             refgeom::geometry_request(&ids, params)?
         };
         self.reference_geometry(request, &from, &given).await
@@ -3222,7 +3913,10 @@ impl SolidWorksTools {
     async fn revolve(&self, params: revolve::RevolveParams) -> Result<CallToolResult, McpError> {
         let cut = params.cut;
         let request = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             revolve::request(&ids, &params, cut)?
         };
         let reply = self
@@ -3230,7 +3924,10 @@ impl SolidWorksTools {
             .revolve_sketch(request)
             .await
             .map_err(|status| self.addin_error(status))?;
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = revolve::reply_text(&mut ids, &params, &reply, cut)
             + &sketch_status_note(&reply.sketch_name, reply.sketch_status());
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
@@ -3278,8 +3975,13 @@ impl SolidWorksTools {
             .addin
             .create_reference_geometry(request)
             .await
-            .map_err(|status| feature_text::with_legend(self.addin_error(status), "reference", given))?;
-        let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            .map_err(|status| {
+                feature_text::with_legend(self.addin_error(status), "reference", given)
+            })?;
+        let mut ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let text = refgeom::reply_text(&mut ids, &reply, from);
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
     }
@@ -3289,13 +3991,24 @@ impl SolidWorksTools {
     /// the active document is the one the registry has, under a new file
     /// (Save As), so its ids carry over.
     async fn track_document(&self, rename: bool) {
-        let active = self.addin.get_active_document(Some(DOCUMENT_CHECK_TIMEOUT)).await;
-        *self.active.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
-            active.as_ref().ok().and_then(|reply| reply.document.clone());
+        let active = self
+            .addin
+            .get_active_document(Some(DOCUMENT_CHECK_TIMEOUT))
+            .await;
+        *self
+            .active
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = active
+            .as_ref()
+            .ok()
+            .and_then(|reply| reply.document.clone());
         match active {
             Ok(reply) => {
                 let (key, name) = files::document_key(&reply);
-                let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut ids = self
+                    .ids
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 if rename {
                     ids.rename_document(&key, &name);
                 } else {
@@ -3311,7 +4024,12 @@ impl SolidWorksTools {
     /// start, else (that check failed) asked again; false if that can't be
     /// told.
     async fn active_is_drawing(&self) -> bool {
-        let snapshot = self.active.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ref().map(|d| d.r#type());
+        let snapshot = self
+            .active
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .map(|d| d.r#type());
         let kind = match snapshot {
             Some(kind) => Some(kind),
             None => self
@@ -3335,7 +4053,10 @@ impl SolidWorksTools {
     ) -> Result<proto::SelectionRequest, McpError> {
         selection::check(params)?;
         let picks = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             selection::drawing_picks(&ids, params)?
         };
         let refs = match selection::view_refs(&picks) {
@@ -3347,9 +4068,11 @@ impl SolidWorksTools {
                     .await
                     .map_err(|status| self.addin_error(status))?;
                 let detail = match selection::detail_request(&picks, &overview) {
-                    Some(request) => {
-                        self.addin.inspect_drawing(request).await.map_err(|status| self.addin_error(status))?
-                    }
+                    Some(request) => self
+                        .addin
+                        .inspect_drawing(request)
+                        .await
+                        .map_err(|status| self.addin_error(status))?,
                     None => overview,
                 };
                 selection::resolve_picks(&picks, &detail)?
@@ -3360,12 +4083,19 @@ impl SolidWorksTools {
 
     /// The active document's units as of this tool call's start.
     fn active_units(&self) -> Option<proto::DocumentUnits> {
-        self.active.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ref().and_then(|doc| doc.units)
+        self.active
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .and_then(|doc| doc.units)
     }
 
     /// The persist ID behind an id handed out by inspect_model.
     fn resolve_id(&self, id: &str) -> Result<Vec<u8>, McpError> {
-        let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let ids = self
+            .ids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         ids.persist_id(id).ok_or_else(|| {
             McpError::invalid_params(
                 ids.unknown_id(id, "inspect_model", "call inspect_model for current ones"),
@@ -3376,7 +4106,10 @@ impl SolidWorksTools {
 
     /// add_sheet / activate_sheet / edit_sheet: the RPC, then the drawing
     /// cache brought up to date with the sheet's views.
-    async fn setup_sheet(&self, request: proto::SetupSheetRequest) -> Result<CallToolResult, McpError> {
+    async fn setup_sheet(
+        &self,
+        request: proto::SetupSheetRequest,
+    ) -> Result<CallToolResult, McpError> {
         let reply = self
             .addin
             .setup_sheet(request.clone())
@@ -3384,32 +4117,50 @@ impl SolidWorksTools {
             .map_err(|status| self.addin_error(status))?;
         if let Some(sheet) = &reply.sheet {
             let moved = request.scale_numerator.is_some() || request.first_angle.is_some();
-            let mut cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut cache = self
+                .drawings
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             cache.sheet_changed(&sheet.views, moved);
         }
-        Ok(CallToolResult::success(vec![ContentBlock::text(sheet::reply_text(&request, &reply))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            sheet::reply_text(&request, &reply),
+        )]))
     }
 
     /// create_drawing_view / edit_drawing_view: the RPC; a new view without
     /// at_mm, made in the sheet's middle, is then moved clear of the other
     /// views. The drawing cache forgets the redrawn views' edges.
-    async fn setup_drawing_view(&self, request: proto::SetupDrawingViewRequest) -> Result<CallToolResult, McpError> {
+    async fn setup_drawing_view(
+        &self,
+        request: proto::SetupDrawingViewRequest,
+    ) -> Result<CallToolResult, McpError> {
         let mut reply = self
             .addin
             .setup_drawing_view(request.clone())
             .await
             .map_err(|status| self.addin_error(status))?;
-        let asked_at = request.position.as_ref().map(|p| glam::DVec2::new(p.x, p.y));
+        let asked_at = request
+            .position
+            .as_ref()
+            .map(|p| glam::DVec2::new(p.x, p.y));
         let mut moved_to = None;
         if request.create
             && request.position.is_none()
-            && let Some(spot) = reply.sheet.as_ref().and_then(|s| view::free_spot(s, &reply.view_name))
+            && let Some(spot) = reply
+                .sheet
+                .as_ref()
+                .and_then(|s| view::free_spot(s, &reply.view_name))
         {
             let moved = self
                 .addin
                 .setup_drawing_view(proto::SetupDrawingViewRequest {
                     view_name: reply.view_name.clone(),
-                    position: Some(proto::Vec3 { x: spot.x, y: spot.y, z: 0.0 }),
+                    position: Some(proto::Vec3 {
+                        x: spot.x,
+                        y: spot.y,
+                        z: 0.0,
+                    }),
                     ..Default::default()
                 })
                 .await;
@@ -3423,11 +4174,17 @@ impl SolidWorksTools {
                     reply = moved;
                     moved_to = Some(spot);
                 }
-                Err(status) => tracing::warn!("moving the new view {} clear failed: {status}", reply.view_name),
+                Err(status) => tracing::warn!(
+                    "moving the new view {} clear failed: {status}",
+                    reply.view_name
+                ),
             }
         }
         if let Some(sheet) = &reply.sheet {
-            let mut cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut cache = self
+                .drawings
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let rescaled = reply.sheet_scale_before.as_ref().is_some_and(|b| {
                 b.numerator != sheet.scale_numerator || b.denominator != sheet.scale_denominator
             });
@@ -3440,33 +4197,49 @@ impl SolidWorksTools {
             }
             cache.sheet_changed(&sheet.views, rescaled);
         }
-        Ok(CallToolResult::success(vec![ContentBlock::text(view::reply_text(&request, &reply, asked_at, moved_to))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            view::reply_text(&request, &reply, asked_at, moved_to),
+        )]))
     }
 
     /// The active drawing's sheets and views as they are now, for working
     /// out where a derived view goes.
     async fn inspect_views(&self) -> Result<proto::InspectDrawingResponse, McpError> {
         self.addin
-            .inspect_drawing(proto::InspectDrawingRequest { skip_sheet_format: true, ..Default::default() })
+            .inspect_drawing(proto::InspectDrawingRequest {
+                skip_sheet_format: true,
+                ..Default::default()
+            })
             .await
             .map_err(|status| self.addin_error(status))
     }
 
     /// create_drawing_view's derived views: the RPC, then, unless placed by the
     /// caller, the new view is moved clear of the other views.
-    async fn derive_drawing_view(&self, plan: derived_view::Plan) -> Result<CallToolResult, McpError> {
+    async fn derive_drawing_view(
+        &self,
+        plan: derived_view::Plan,
+    ) -> Result<CallToolResult, McpError> {
         let mut reply = self
             .addin
             .derive_drawing_view(plan.request.clone())
             .await
             .map_err(|status| self.addin_error(status))?;
         let mut moved_to = None;
-        if let Some(spot) = reply.sheet.as_ref().and_then(|s| plan.clear_spot(s, &reply.view_name)) {
+        if let Some(spot) = reply
+            .sheet
+            .as_ref()
+            .and_then(|s| plan.clear_spot(s, &reply.view_name))
+        {
             let moved = self
                 .addin
                 .setup_drawing_view(proto::SetupDrawingViewRequest {
                     view_name: reply.view_name.clone(),
-                    position: Some(proto::Vec3 { x: spot.x, y: spot.y, z: 0.0 }),
+                    position: Some(proto::Vec3 {
+                        x: spot.x,
+                        y: spot.y,
+                        z: 0.0,
+                    }),
                     ..Default::default()
                 })
                 .await;
@@ -3477,31 +4250,52 @@ impl SolidWorksTools {
                     reply = moved;
                     moved_to = Some(spot);
                 }
-                Err(status) => tracing::warn!("moving the new view {} clear failed: {status}", reply.view_name),
+                Err(status) => tracing::warn!(
+                    "moving the new view {} clear failed: {status}",
+                    reply.view_name
+                ),
             }
         }
         if let Some(sheet) = &reply.sheet {
-            let mut cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut cache = self
+                .drawings
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             cache.sheet_changed(&sheet.views, false);
         }
         reply.created = true;
-        let text = view::reply_text(&proto::SetupDrawingViewRequest::default(), &reply, None, moved_to);
-        Ok(CallToolResult::success(vec![ContentBlock::text(plan.finish_text(text, &reply))]))
+        let text = view::reply_text(
+            &proto::SetupDrawingViewRequest::default(),
+            &reply,
+            None,
+            moved_to,
+        );
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            plan.finish_text(text, &reply),
+        )]))
     }
 
     /// crop_view / break_view: the RPC; the view's entity positions are
     /// asked for again before use.
-    async fn shape_drawing_view(&self, request: proto::ShapeDrawingViewRequest) -> Result<CallToolResult, McpError> {
+    async fn shape_drawing_view(
+        &self,
+        request: proto::ShapeDrawingViewRequest,
+    ) -> Result<CallToolResult, McpError> {
         let reply = self
             .addin
             .shape_drawing_view(request.clone())
             .await
             .map_err(|status| self.addin_error(status))?;
         if let Some(sheet) = &reply.sheet {
-            let mut cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut cache = self
+                .drawings
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             cache.sheet_changed(&sheet.views, false);
         }
-        Ok(CallToolResult::success(vec![ContentBlock::text(derived_view::shape_reply_text(&request, &reply))]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            derived_view::shape_reply_text(&request, &reply),
+        )]))
     }
 
     /// add_drawing_note / edit_drawing_annotation: the RPC; the drawing
@@ -3517,11 +4311,17 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         if let Some(sheet) = &reply.sheet {
-            let mut cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut cache = self
+                .drawings
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             cache.sheet_changed(&sheet.views, false);
         }
         let text = {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             note::setup_reply(&mut ids, &request, &reply, &remarks)
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
@@ -3549,15 +4349,24 @@ impl SolidWorksTools {
         };
         if document.r#type() == proto::DocumentType::Drawing {
             let (request, mut placed) = {
-                let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                let cache = self.drawings.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let ids = self
+                    .ids
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let cache = self
+                    .drawings
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 gdt::drawing_request(&ids, &cache, symbol, place)?
             };
             placed.extend(remarks);
             return self.setup_drawing_annotation(request, placed).await;
         }
         let (request, mut placed) = {
-            let ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             gdt::model_request(&ids, symbol, place)?
         };
         placed.extend(remarks);
@@ -3568,7 +4377,10 @@ impl SolidWorksTools {
             .await
             .map_err(|status| self.addin_error(status))?;
         let text = {
-            let mut ids = self.ids.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             gdt::model_reply(&mut ids, &request, &reply, &remarks)
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
@@ -3589,9 +4401,16 @@ impl SolidWorksTools {
             .custom_properties(proto::CustomPropertiesRequest::default())
             .await
             .map_err(|status| self.addin_error(status))?;
-        let model = if fields.iter().any(|f| f.of == sheet_format::PropertyOf::Model) && !sheet.views.is_empty() {
+        let model = if fields
+            .iter()
+            .any(|f| f.of == sheet_format::PropertyOf::Model)
+            && !sheet.views.is_empty()
+        {
             self.addin
-                .custom_properties(proto::CustomPropertiesRequest { sheet_name: sheet.name.clone(), ..Default::default() })
+                .custom_properties(proto::CustomPropertiesRequest {
+                    sheet_name: sheet.name.clone(),
+                    ..Default::default()
+                })
                 .await
                 .ok()
         } else {
@@ -3612,12 +4431,18 @@ impl SolidWorksTools {
             Code::Unavailable => format!(
                 "can't reach the sld_mcp add-in{} -- open SolidWorks with the \
                  sld_mcp add-in enabled ({})",
-                self.addin.endpoint().map(|at| format!(" at {at}")).unwrap_or_default(),
+                self.addin
+                    .endpoint()
+                    .map(|at| format!(" at {at}"))
+                    .unwrap_or_default(),
                 status.message()
             ),
             Code::Unauthenticated => format!(
                 "the sld_mcp add-in{} refused the call: {}",
-                self.addin.endpoint().map(|at| format!(" at {at}")).unwrap_or_default(),
+                self.addin
+                    .endpoint()
+                    .map(|at| format!(" at {at}"))
+                    .unwrap_or_default(),
                 status.message()
             ),
             Code::DeadlineExceeded => {
@@ -3649,16 +4474,27 @@ impl ServerHandler for SolidWorksTools {
     ) -> Result<CallToolResponse, McpError> {
         if !self.filter.allows(&request.name) {
             return Err(McpError::invalid_params(
-                format!("tool {} isn't enabled on this server (--modes / --inspect-only)", request.name),
+                format!(
+                    "tool {} isn't enabled on this server (--modes / --inspect-only)",
+                    request.name
+                ),
                 None,
             ));
         }
         if !self.tool_router.has_route(&request.name) {
-            return Err(McpError::invalid_params(format!("unknown tool {}", request.name), None));
+            return Err(McpError::invalid_params(
+                format!("unknown tool {}", request.name),
+                None,
+            ));
         }
         self.track_document(false).await;
-        let result = self.tool_router.call(ToolCallContext::new(self, request, context)).await;
-        Ok(result.unwrap_or_else(|error| CallToolResult::error(vec![ContentBlock::text(error.message)]).into()))
+        let result = self
+            .tool_router
+            .call(ToolCallContext::new(self, request, context))
+            .await;
+        Ok(result.unwrap_or_else(|error| {
+            CallToolResult::error(vec![ContentBlock::text(error.message)]).into()
+        }))
     }
 
     // Written by hand because the one #[tool_handler] generates leaves out
@@ -3669,7 +4505,12 @@ impl ServerHandler for SolidWorksTools {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        let tools = self.tools.iter().filter(|tool| self.filter.allows(&tool.name)).cloned().collect();
+        let tools = self
+            .tools
+            .iter()
+            .filter(|tool| self.filter.allows(&tool.name))
+            .cloned()
+            .collect();
         Ok(ListToolsResult::with_all_items(tools)
             .with_ttl_ms(TOOL_LIST_TTL_MS)
             .with_cache_scope(CacheScope::Public))
@@ -3678,7 +4519,10 @@ impl ServerHandler for SolidWorksTools {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             // from_build_env() expands rmcp's own Cargo env vars, so it reports "rmcp".
-            .with_server_info(Implementation::new("solidworks-mcp", env!("CARGO_PKG_VERSION")))
+            .with_server_info(Implementation::new(
+                "solidworks-mcp",
+                env!("CARGO_PKG_VERSION"),
+            ))
             // Only a fallback: rmcp answers with whichever known version the
             // client asks for, currently 2026-07-28 for Claude Code.
             .with_protocol_version(ProtocolVersion::V_2024_11_05)
@@ -3731,12 +4575,17 @@ mod tests {
 
     #[test]
     fn every_tool_is_in_exactly_one_toolset_entry() {
-        let mut tools: Vec<String> =
-            SolidWorksTools::tool_router().list_all().into_iter().map(|t| t.name.to_string()).collect();
-        let mut grouped: Vec<String> = toolsets::TOOLS.iter().map(|(name, ..)| name.to_string()).collect();
+        let mut tools: Vec<String> = SolidWorksTools::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        let mut grouped: Vec<String> = toolsets::TOOLS
+            .iter()
+            .map(|(name, ..)| name.to_string())
+            .collect();
         tools.sort();
         grouped.sort();
         assert_eq!(tools, grouped);
     }
-
 }

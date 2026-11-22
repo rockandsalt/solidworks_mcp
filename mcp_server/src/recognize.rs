@@ -48,7 +48,11 @@ fn add(a: V, b: V) -> V {
 }
 
 fn cross(a: V, b: V) -> V {
-    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 
 fn unit(v: V) -> Option<V> {
@@ -73,7 +77,10 @@ struct Axis {
 
 impl Axis {
     fn of(f: &proto::FaceInfo) -> Option<Axis> {
-        Some(Axis { o: xyz(f.origin.as_ref()?), a: unit(xyz(f.axis.as_ref()?))? })
+        Some(Axis {
+            o: xyz(f.origin.as_ref()?),
+            a: unit(xyz(f.axis.as_ref()?))?,
+        })
     }
 
     fn t(&self, p: V) -> f64 {
@@ -120,26 +127,39 @@ impl<'a> Topology<'a> {
             .faces
             .iter()
             .enumerate()
-            .map(|(i, f)| ((f.component_persist_id.as_slice(), f.persist_id.as_slice()), i))
+            .map(|(i, f)| {
+                (
+                    (f.component_persist_id.as_slice(), f.persist_id.as_slice()),
+                    i,
+                )
+            })
             .collect();
         let mut face_edges = vec![Vec::new(); reply.faces.len()];
         for (e, edge) in reply.edges.iter().enumerate() {
             for pid in &edge.face_persist_ids {
-                if let Some(&f) = index.get(&(edge.component_persist_id.as_slice(), pid.as_slice())) {
+                if let Some(&f) = index.get(&(edge.component_persist_id.as_slice(), pid.as_slice()))
+                {
                     face_edges[f].push(e);
                 }
             }
         }
-        Topology { faces: &reply.faces, edges: &reply.edges, index, face_edges }
+        Topology {
+            faces: &reply.faces,
+            edges: &reply.edges,
+            index,
+            face_edges,
+        }
     }
 
     /// The faces at an edge that are listed; None for one that isn't
     /// (outside `within`).
     fn edge_faces(&self, e: usize) -> impl Iterator<Item = Option<usize>> + '_ {
         let edge = &self.edges[e];
-        edge.face_persist_ids
-            .iter()
-            .map(move |pid| self.index.get(&(edge.component_persist_id.as_slice(), pid.as_slice())).copied())
+        edge.face_persist_ids.iter().map(move |pid| {
+            self.index
+                .get(&(edge.component_persist_id.as_slice(), pid.as_slice()))
+                .copied()
+        })
     }
 
     fn neighbours(&self, f: usize) -> Vec<usize> {
@@ -154,11 +174,16 @@ impl<'a> Topology<'a> {
     }
 
     fn adjacent(&self, f: usize, g: usize) -> bool {
-        self.face_edges[f].iter().any(|&e| self.edge_faces(e).any(|h| h == Some(g)))
+        self.face_edges[f]
+            .iter()
+            .any(|&e| self.edge_faces(e).any(|h| h == Some(g)))
     }
 
     fn body(&self, f: usize) -> (&[u8], &[u8]) {
-        (&self.faces[f].component_persist_id, &self.faces[f].body_persist_id)
+        (
+            &self.faces[f].component_persist_id,
+            &self.faces[f].body_persist_id,
+        )
     }
 
     fn normal(&self, f: usize) -> Option<V> {
@@ -199,7 +224,10 @@ impl UnionFind {
             }
             by_root.entry(root).or_default().push(m);
         }
-        order.into_iter().map(|r| by_root.remove(&r).unwrap_or_default()).collect()
+        order
+            .into_iter()
+            .map(|r| by_root.remove(&r).unwrap_or_default())
+            .collect()
     }
 }
 
@@ -219,8 +247,18 @@ fn revolved(topo: &Topology, f: usize) -> Option<Revolved> {
     let face = &topo.faces[f];
     let axis = Axis::of(face)?;
     match face.surface_type() {
-        S::Cylinder => Some(Revolved { cone: false, axis, radius: face.radius, half_angle: 0.0 }),
-        S::Cone => Some(Revolved { cone: true, axis, radius: face.radius, half_angle: face.half_angle }),
+        S::Cylinder => Some(Revolved {
+            cone: false,
+            axis,
+            radius: face.radius,
+            half_angle: 0.0,
+        }),
+        S::Cone => Some(Revolved {
+            cone: true,
+            axis,
+            radius: face.radius,
+            half_angle: face.half_angle,
+        }),
         S::Revolution => fit_revolution(topo, f, axis),
         _ => None,
     }
@@ -247,14 +285,27 @@ fn fit_revolution(topo: &Topology, f: usize, axis: Axis) -> Option<Revolved> {
         return None;
     }
     let slope = (high.1 - low.1) / (high.0 - low.0);
-    if points.iter().any(|&(t, r)| (r - (low.1 + slope * (t - low.0))).abs() > TOL) {
+    if points
+        .iter()
+        .any(|&(t, r)| (r - (low.1 + slope * (t - low.0))).abs() > TOL)
+    {
         return None;
     }
     let radius = low.1 - slope * low.0;
     if slope.abs() * (high.0 - low.0) < TOL {
-        return Some(Revolved { cone: false, axis, radius: low.1, half_angle: 0.0 });
+        return Some(Revolved {
+            cone: false,
+            axis,
+            radius: low.1,
+            half_angle: 0.0,
+        });
     }
-    Some(Revolved { cone: true, axis, radius, half_angle: slope.abs().atan() })
+    Some(Revolved {
+        cone: true,
+        axis,
+        radius,
+        half_angle: slope.abs().atan(),
+    })
 }
 
 /// Coaxial cylinder or cone faces of one surface, joined where they meet
@@ -293,7 +344,9 @@ fn rounds(topo: &Topology) -> Vec<Round> {
     let mut sets = UnionFind::new(faces.len());
     for (i, &f) in candidates.iter().enumerate() {
         for &g in &candidates[i + 1..] {
-            let (Some(a), Some(b)) = (shapes[f], shapes[g]) else { continue };
+            let (Some(a), Some(b)) = (shapes[f], shapes[g]) else {
+                continue;
+            };
             let same = a.cone == b.cone
                 && topo.body(f) == topo.body(g)
                 && (a.radius - b.radius).abs() < TOL
@@ -337,7 +390,11 @@ fn rounds(topo: &Topology) -> Vec<Round> {
                 && let Some(p) = &faces[members[0]].sample_point
             {
                 let height = r_max / shape.half_angle.tan();
-                if axis.t(xyz(p)) > t0 { t1 = t0 + height } else { t0 -= height }
+                if axis.t(xyz(p)) > t0 {
+                    t1 = t0 + height
+                } else {
+                    t0 -= height
+                }
                 r_min = 0.0;
             }
             if t1 - t0 < TOL {
@@ -346,8 +403,14 @@ fn rounds(topo: &Topology) -> Vec<Round> {
             let slant = (t1 - t0) / shape.half_angle.cos().max(1e-6);
             let mean_r = (r_min + r_max) / 2.0;
             let area: f64 = members.iter().map(|&f| faces[f].area).sum();
-            let span = if mean_r > 0.0 { area / (mean_r * slant) } else { 0.0 };
-            let concave = members.iter().find_map(|&f| inspect::points_at_axis(&faces[f]));
+            let span = if mean_r > 0.0 {
+                area / (mean_r * slant)
+            } else {
+                0.0
+            };
+            let concave = members
+                .iter()
+                .find_map(|&f| inspect::points_at_axis(&faces[f]));
             Some(Round {
                 cone,
                 faces: members,
@@ -374,8 +437,9 @@ struct Hole {
 /// Full concave rounds on one axis that meet, directly or across a planar
 /// face lying wholly inside them, are one hole.
 fn holes(topo: &Topology, rounds: &[Round]) -> Vec<Hole> {
-    let candidates: Vec<usize> =
-        (0..rounds.len()).filter(|&r| rounds[r].concave == Some(true) && rounds[r].full()).collect();
+    let candidates: Vec<usize> = (0..rounds.len())
+        .filter(|&r| rounds[r].concave == Some(true) && rounds[r].full())
+        .collect();
     let mut round_of: HashMap<usize, usize> = HashMap::new();
     for &r in &candidates {
         for &f in &rounds[r].faces {
@@ -386,7 +450,10 @@ fn holes(topo: &Topology, rounds: &[Round]) -> Vec<Hole> {
     for (i, &r) in candidates.iter().enumerate() {
         for &s in &candidates[i + 1..] {
             if rounds[r].axis.same_line(&rounds[s].axis)
-                && rounds[r].faces.iter().any(|&f| rounds[s].faces.iter().any(|&g| topo.adjacent(f, g)))
+                && rounds[r]
+                    .faces
+                    .iter()
+                    .any(|&f| rounds[s].faces.iter().any(|&g| topo.adjacent(f, g)))
             {
                 sets.union(r, s);
             }
@@ -398,11 +465,20 @@ fn holes(topo: &Topology, rounds: &[Round]) -> Vec<Hole> {
             continue;
         }
         let Some(n) = topo.normal(f) else { continue };
-        let around: Option<Vec<usize>> = topo.neighbours(f).iter().map(|g| round_of.get(g).copied()).collect();
-        let Some(around) = around.filter(|a| !a.is_empty()) else { continue };
+        let around: Option<Vec<usize>> = topo
+            .neighbours(f)
+            .iter()
+            .map(|g| round_of.get(g).copied())
+            .collect();
+        let Some(around) = around.filter(|a| !a.is_empty()) else {
+            continue;
+        };
         // Every edge must be shared within the listing too (else it borders
         // something outside `within`).
-        if topo.face_edges[f].iter().any(|&e| topo.edge_faces(e).any(|g| g.is_none())) {
+        if topo.face_edges[f]
+            .iter()
+            .any(|&e| topo.edge_faces(e).any(|g| g.is_none()))
+        {
             continue;
         }
         let axis = rounds[around[0]].axis;
@@ -424,7 +500,10 @@ fn holes(topo: &Topology, rounds: &[Round]) -> Vec<Hole> {
                 .filter(|(_, r)| members.contains(r))
                 .map(|&(f, _)| f)
                 .collect();
-            Hole { rounds: members, planes }
+            Hole {
+                rounds: members,
+                planes,
+            }
         })
         .collect()
 }
@@ -447,8 +526,16 @@ fn hole_shape(topo: &Topology, rounds: &[Round], hole: &Hole) -> Option<HoleShap
         let p = axis.t(rounds[r].axis.point(rounds[r].t1));
         (o.min(p), o.max(p))
     };
-    let t0 = hole.rounds.iter().map(|&r| along(r).0).fold(f64::MAX, f64::min);
-    let t1 = hole.rounds.iter().map(|&r| along(r).1).fold(f64::MIN, f64::max);
+    let t0 = hole
+        .rounds
+        .iter()
+        .map(|&r| along(r).0)
+        .fold(f64::MAX, f64::min);
+    let t1 = hole
+        .rounds
+        .iter()
+        .map(|&r| along(r).1)
+        .fold(f64::MIN, f64::max);
     let inside: Vec<usize> = hole
         .rounds
         .iter()
@@ -457,12 +544,18 @@ fn hole_shape(topo: &Topology, rounds: &[Round], hole: &Hole) -> Option<HoleShap
         .collect();
     // An end is open where an edge there meets a face outside the hole.
     let open_at = |end: f64| {
-        hole.rounds.iter().flat_map(|&r| rounds[r].faces.iter()).any(|&f| {
-            topo.face_edges[f].iter().any(|&e| {
-                axis.edge_t(&topo.edges[e]).is_some_and(|(a, b)| (a - end).abs() < TOL || (b - end).abs() < TOL)
-                    && topo.edge_faces(e).any(|g| g.is_none_or(|g| !inside.contains(&g)))
+        hole.rounds
+            .iter()
+            .flat_map(|&r| rounds[r].faces.iter())
+            .any(|&f| {
+                topo.face_edges[f].iter().any(|&e| {
+                    axis.edge_t(&topo.edges[e])
+                        .is_some_and(|(a, b)| (a - end).abs() < TOL || (b - end).abs() < TOL)
+                        && topo
+                            .edge_faces(e)
+                            .any(|g| g.is_none_or(|g| !inside.contains(&g)))
+                })
             })
-        })
     };
     let widest_at = |end: f64| {
         hole.rounds
@@ -499,7 +592,13 @@ fn hole_shape(topo: &Topology, rounds: &[Round], hole: &Hole) -> Option<HoleShap
         Some(&(r, from, _)) if !through && rounds[r].cone && steps.len() > 1 => from,
         _ => t1 - t0,
     };
-    Some(HoleShape { through, entry: axis.point(entry_t), direction: scale(axis.a, sign), depth, steps })
+    Some(HoleShape {
+        through,
+        entry: axis.point(entry_t),
+        direction: scale(axis.a, sign),
+        depth,
+        steps,
+    })
 }
 
 /// "8" or "8.25": millimeters for text.
@@ -537,7 +636,12 @@ struct Rounds {
 
 impl Recognizer<'_> {
     fn ids(&self, ids: &mut IdRegistry, faces: &[usize]) -> Value {
-        json!(faces.iter().filter_map(|&f| ids.id_for(Kind::Face, &self.topo.faces[f].persist_id)).collect::<Vec<_>>())
+        json!(
+            faces
+                .iter()
+                .filter_map(|&f| ids.id_for(Kind::Face, &self.topo.faces[f].persist_id))
+                .collect::<Vec<_>>()
+        )
     }
 
     fn take(&mut self, faces: &[usize]) {
@@ -547,7 +651,8 @@ impl Recognizer<'_> {
     }
 
     fn body_id(&self, ids: &mut IdRegistry, f: usize) -> Value {
-        ids.id_for(Kind::Body, &self.topo.faces[f].body_persist_id).map_or(Value::Null, Value::String)
+        ids.id_for(Kind::Body, &self.topo.faces[f].body_persist_id)
+            .map_or(Value::Null, Value::String)
     }
 
     /// Holes (simple, counterbore, countersink); `summary` gets a line per
@@ -556,9 +661,20 @@ impl Recognizer<'_> {
         let mut hole_list = Vec::new();
         let mut hole_lines: BTreeMap<String, usize> = BTreeMap::new();
         for hole in holes(&self.topo, &self.rounds) {
-            let Some(shape) = hole_shape(&self.topo, &self.rounds, &hole) else { continue };
-            let cylinders: Vec<usize> = shape.steps.iter().map(|s| s.0).filter(|&i| !self.rounds[i].cone).collect();
-            let Some(diameter) = cylinders.iter().map(|&i| 2.0 * self.rounds[i].radius).reduce(f64::min) else {
+            let Some(shape) = hole_shape(&self.topo, &self.rounds, &hole) else {
+                continue;
+            };
+            let cylinders: Vec<usize> = shape
+                .steps
+                .iter()
+                .map(|s| s.0)
+                .filter(|&i| !self.rounds[i].cone)
+                .collect();
+            let Some(diameter) = cylinders
+                .iter()
+                .map(|&i| 2.0 * self.rounds[i].radius)
+                .reduce(f64::min)
+            else {
                 continue; // only cones: a conical pocket
             };
             let mut obj = Map::new();
@@ -581,7 +697,10 @@ impl Recognizer<'_> {
             };
             let last = shape.steps[shape.steps.len() - 1].0;
             if !shape.through && self.rounds[last].cone {
-                obj.insert("drill_point_angle_deg".into(), json!(deg(2.0 * self.rounds[last].half_angle)));
+                obj.insert(
+                    "drill_point_angle_deg".into(),
+                    json!(deg(2.0 * self.rounds[last].half_angle)),
+                );
             }
             obj.insert("kind".into(), json!(kind));
             obj.insert("diameter_mm".into(), json!(mm(diameter)));
@@ -596,9 +715,15 @@ impl Recognizer<'_> {
                     .map(|&(i, from, to)| {
                         let round = &self.rounds[i];
                         let mut s = Map::new();
-                        s.insert("surface".into(), json!(if round.cone { "cone" } else { "cylinder" }));
+                        s.insert(
+                            "surface".into(),
+                            json!(if round.cone { "cone" } else { "cylinder" }),
+                        );
                         if round.cone {
-                            s.insert("diameters_mm".into(), json!([mm(2.0 * round.r_max), mm(2.0 * round.r_min)]));
+                            s.insert(
+                                "diameters_mm".into(),
+                                json!([mm(2.0 * round.r_max), mm(2.0 * round.r_min)]),
+                            );
                         } else {
                             s.insert("diameter_mm".into(), json!(mm(2.0 * round.radius)));
                         }
@@ -619,7 +744,11 @@ impl Recognizer<'_> {
             obj.insert("body".into(), self.body_id(ids, faces[0]));
             self.take(&faces);
             let mut line = format!("Ø{} {kind} hole", num(diameter));
-            line += &if shape.through { ", through".to_string() } else { format!(", {} deep", num(shape.depth)) };
+            line += &if shape.through {
+                ", through".to_string()
+            } else {
+                format!(", {} deep", num(shape.depth))
+            };
             if let Some(Value::Object(c)) = obj.get("counterbore") {
                 line += &format!(" (counterbore Ø{} x {})", c["diameter_mm"], c["depth_mm"]);
             }
@@ -662,7 +791,10 @@ impl Recognizer<'_> {
                     Some(false) => "round",
                     None => "blend",
                 };
-                fillets.entry(((round.radius * 1e7).round() as i64, kind)).or_default().extend(&faces);
+                fillets
+                    .entry(((round.radius * 1e7).round() as i64, kind))
+                    .or_default()
+                    .extend(&faces);
             } else if !round.cone && !round.full() {
                 arcs.push(json!({
                     "radius_mm": mm(round.radius),
@@ -673,7 +805,8 @@ impl Recognizer<'_> {
                     "length_mm": mm(round.length()),
                     "faces": self.ids(ids, &faces),
                 }));
-            } else if round.cone && round.concave == Some(false) && round.r_max - round.r_min > TOL {
+            } else if round.cone && round.concave == Some(false) && round.r_max - round.r_min > TOL
+            {
                 chamfers.push(json!({
                     "kind": "conical",
                     "axial_mm": mm(round.length()),
@@ -697,7 +830,10 @@ impl Recognizer<'_> {
                 Some(false) => "fillet",
                 None => "blend",
             };
-            fillets.entry(((face.minor_radius * 1e7).round() as i64, kind)).or_default().push(f);
+            fillets
+                .entry(((face.minor_radius * 1e7).round() as i64, kind))
+                .or_default()
+                .push(f);
             self.used[f] = true;
         }
         if !bosses.is_empty() {
@@ -711,9 +847,17 @@ impl Recognizer<'_> {
             })
             .collect();
         if !arcs.is_empty() {
-            summary.push(format!("{} rounded end(s) (partial cylinders, e.g. slot ends)", arcs.len()));
+            summary.push(format!(
+                "{} rounded end(s) (partial cylinders, e.g. slot ends)",
+                arcs.len()
+            ));
         }
-        Rounds { bosses, fillets: fillet_list, arcs, chamfers }
+        Rounds {
+            bosses,
+            fillets: fillet_list,
+            arcs,
+            chamfers,
+        }
     }
 
     /// Planar chamfers: a narrow face between two planes, leaning on both.
@@ -740,7 +884,10 @@ impl Recognizer<'_> {
             if self.used[f] || self.topo.faces[f].surface_type() != S::Plane {
                 continue;
             }
-            let (Some(n), Some(o)) = (self.topo.normal(f), self.topo.faces[f].origin.as_ref()) else { continue };
+            let (Some(n), Some(o)) = (self.topo.normal(f), self.topo.faces[f].origin.as_ref())
+            else {
+                continue;
+            };
             let at = |d: V| dot(xyz(o), d);
             match directions.iter_mut().find(|(d, _)| parallel(*d, n)) {
                 Some((d, faces)) => faces.push((at(*d), f)),
@@ -750,7 +897,10 @@ impl Recognizer<'_> {
         }
         let plane_count: usize = directions.iter().map(|(_, faces)| faces.len()).sum();
         if plane_count > 0 {
-            summary.push(format!("{plane_count} planar face(s) in {} direction(s)", directions.len()));
+            summary.push(format!(
+                "{plane_count} planar face(s) in {} direction(s)",
+                directions.len()
+            ));
         }
         let planes: Vec<Value> = directions
             .iter_mut()
@@ -776,7 +926,11 @@ impl Recognizer<'_> {
 pub fn render(ids: &mut IdRegistry, reply: &proto::InspectModelResponse) -> Value {
     let topo = Topology::new(reply);
     let rounds = rounds(&topo);
-    let mut r = Recognizer { used: vec![false; topo.faces.len()], topo, rounds };
+    let mut r = Recognizer {
+        used: vec![false; topo.faces.len()],
+        topo,
+        rounds,
+    };
     let mut out = Map::new();
     if let Some(doc) = &reply.document {
         out.insert("document".into(), json!(doc.title));
@@ -792,7 +946,12 @@ pub fn render(ids: &mut IdRegistry, reply: &proto::InspectModelResponse) -> Valu
     }
     let mut summary: Vec<String> = Vec::new();
     let hole_list = r.holes_json(ids, &mut summary);
-    let Rounds { bosses, fillets: fillet_list, arcs, mut chamfers } = r.rounds_json(ids, &mut summary);
+    let Rounds {
+        bosses,
+        fillets: fillet_list,
+        arcs,
+        mut chamfers,
+    } = r.rounds_json(ids, &mut summary);
     r.planar_chamfers(ids, &mut chamfers);
     if !chamfers.is_empty() {
         summary.push(format!("{} chamfer(s)", chamfers.len()));
@@ -881,7 +1040,10 @@ fn planar_chamfer(topo: &Topology, f: usize) -> Option<(Map<String, Value>, usiz
             obj.insert("width_mm".into(), json!(mm(width)));
             obj.insert(
                 "legs_mm".into(),
-                json!([mm(width * beta.sin() / phi.sin()), mm(width * alpha.sin() / phi.sin())]),
+                json!([
+                    mm(width * beta.sin() / phi.sin()),
+                    mm(width * alpha.sin() / phi.sin())
+                ]),
             );
             obj.insert("length_mm".into(), json!(mm(length)));
             return Some((obj, a, b));
@@ -903,7 +1065,11 @@ mod tests {
     impl Builder {
         fn face(&mut self, f: proto::FaceInfo) -> Vec<u8> {
             let pid = vec![1, self.0.faces.len() as u8];
-            self.0.faces.push(proto::FaceInfo { persist_id: pid.clone(), body_persist_id: vec![9], ..f });
+            self.0.faces.push(proto::FaceInfo {
+                persist_id: pid.clone(),
+                body_persist_id: vec![9],
+                ..f
+            });
             pid
         }
 
@@ -919,7 +1085,15 @@ mod tests {
 
         /// A Z-axis cylinder of radius r from z0 to z1 at (x, y), in `parts`
         /// faces, concave (a hole) or not.
-        fn cylinder(&mut self, at: [f64; 2], r: f64, hole: bool, z0: f64, z1: f64, parts: usize) -> Vec<Vec<u8>> {
+        fn cylinder(
+            &mut self,
+            at: [f64; 2],
+            r: f64,
+            hole: bool,
+            z0: f64,
+            z1: f64,
+            parts: usize,
+        ) -> Vec<Vec<u8>> {
             let n = if hole { -1.0 } else { 1.0 };
             (0..parts)
                 .map(|_| {
@@ -974,24 +1148,44 @@ mod tests {
                 b.circle([0.0, 0.0, z], 0.004, &[half, cap]);
             }
         }
-        b.line([0.004, 0.0, 0.0], [0.004, 0.0, 0.01], &[&through[0], &through[1]]);
-        b.line([-0.004, 0.0, 0.0], [-0.004, 0.0, 0.01], &[&through[0], &through[1]]);
+        b.line(
+            [0.004, 0.0, 0.0],
+            [0.004, 0.0, 0.01],
+            &[&through[0], &through[1]],
+        );
+        b.line(
+            [-0.004, 0.0, 0.0],
+            [-0.004, 0.0, 0.01],
+            &[&through[0], &through[1]],
+        );
 
-        let blind = b.cylinder([0.02, 0.0], 0.0025, true, 0.004, 0.01, 1).remove(0);
-        let floor = b.plane([0.0, 0.0, 1.0], [0.02, 0.0, 0.004], std::f64::consts::PI * 0.0025 * 0.0025);
+        let blind = b
+            .cylinder([0.02, 0.0], 0.0025, true, 0.004, 0.01, 1)
+            .remove(0);
+        let floor = b.plane(
+            [0.0, 0.0, 1.0],
+            [0.02, 0.0, 0.004],
+            std::f64::consts::PI * 0.0025 * 0.0025,
+        );
         b.circle([0.02, 0.0, 0.01], 0.0025, &[&blind, &top]);
         b.circle([0.02, 0.0, 0.004], 0.0025, &[&blind, &floor]);
 
-        let cbore = b.cylinder([-0.02, 0.0], 0.0055, true, 0.007, 0.01, 1).remove(0);
+        let cbore = b
+            .cylinder([-0.02, 0.0], 0.0055, true, 0.007, 0.01, 1)
+            .remove(0);
         let shoulder = b.plane([0.0, 0.0, 1.0], [-0.02, 0.0, 0.007], 7e-5);
-        let bore = b.cylinder([-0.02, 0.0], 0.003, true, 0.0, 0.007, 1).remove(0);
+        let bore = b
+            .cylinder([-0.02, 0.0], 0.003, true, 0.0, 0.007, 1)
+            .remove(0);
         b.circle([-0.02, 0.0, 0.01], 0.0055, &[&cbore, &top]);
         b.circle([-0.02, 0.0, 0.007], 0.0055, &[&cbore, &shoulder]);
         b.circle([-0.02, 0.0, 0.007], 0.003, &[&bore, &shoulder]);
         b.circle([-0.02, 0.0, 0.0], 0.003, &[&bore, &bottom]);
 
         // A 4 mm hole 5 deep from the top with a 118 degree drill point.
-        let drilled = b.cylinder([0.0, 0.02], 0.002, true, 0.005, 0.01, 1).remove(0);
+        let drilled = b
+            .cylinder([0.0, 0.02], 0.002, true, 0.005, 0.01, 1)
+            .remove(0);
         let half = 59f64.to_radians();
         let tip = 0.002 / half.tan();
         let point = b.face(proto::FaceInfo {
@@ -1016,23 +1210,39 @@ mod tests {
         let json = render(&mut ids, &plate());
         let holes = json["holes"].as_array().unwrap();
         assert_eq!(holes.len(), 4, "{json:#}");
-        let drilled = holes.iter().find(|h| h["diameter_mm"] == json!(4.0)).unwrap();
+        let drilled = holes
+            .iter()
+            .find(|h| h["diameter_mm"] == json!(4.0))
+            .unwrap();
         assert_eq!(drilled["through"], json!(false), "{json:#}");
-        assert_eq!(drilled["depth_mm"], json!(5.0), "to the drill point's shoulder");
+        assert_eq!(
+            drilled["depth_mm"],
+            json!(5.0),
+            "to the drill point's shoulder"
+        );
         assert_eq!(drilled["drill_point_angle_deg"], json!(118.0));
         assert_eq!(drilled["entry_mm"], json!([0.0, 20.0, 10.0]));
         assert!(json.get("other_faces").is_none(), "{json:#}");
         let by_dia = |d: f64| holes.iter().find(|h| h["diameter_mm"] == json!(d)).unwrap();
         let through = by_dia(8.0);
-        assert_eq!((through["kind"].clone(), through["through"].clone()), (json!("simple"), json!(true)));
+        assert_eq!(
+            (through["kind"].clone(), through["through"].clone()),
+            (json!("simple"), json!(true))
+        );
         assert_eq!(through["faces"].as_array().unwrap().len(), 2, "both halves");
         let blind = by_dia(5.0);
-        assert_eq!((blind["through"].clone(), blind["depth_mm"].clone()), (json!(false), json!(6.0)));
+        assert_eq!(
+            (blind["through"].clone(), blind["depth_mm"].clone()),
+            (json!(false), json!(6.0))
+        );
         assert_eq!(blind["entry_mm"], json!([20.0, 0.0, 10.0]));
         assert_eq!(blind["direction"], json!([0.0, 0.0, -1.0]));
         let cbore = by_dia(6.0);
         assert_eq!(cbore["kind"], json!("counterbore"));
-        assert_eq!(cbore["counterbore"], json!({"diameter_mm": 11.0, "depth_mm": 3.0}));
+        assert_eq!(
+            cbore["counterbore"],
+            json!({"diameter_mm": 11.0, "depth_mm": 3.0})
+        );
         assert_eq!(cbore["entry_mm"], json!([-20.0, 0.0, 10.0]));
         assert_eq!(cbore["through"], json!(true));
         let summary = json["summary"].to_string();
@@ -1083,7 +1293,10 @@ mod tests {
         let hole = &json["holes"][0];
         assert_eq!(hole["kind"], json!("counterbore"), "{json:#}");
         assert_eq!(hole["diameter_mm"], json!(6.0));
-        assert_eq!(hole["counterbore"], json!({"diameter_mm": 11.0, "depth_mm": 3.0}));
+        assert_eq!(
+            hole["counterbore"],
+            json!({"diameter_mm": 11.0, "depth_mm": 3.0})
+        );
         assert_eq!(hole["entry_mm"], json!([0.0, 0.0, 10.0]));
     }
 
@@ -1119,7 +1332,11 @@ mod tests {
         let mut ids = IdRegistry::default();
         let json = render(&mut ids, &b.0);
         let boss = &json["bosses"][0];
-        assert_eq!((boss["diameter_mm"].clone(), boss["length_mm"].clone()), (json!(6.0), json!(20.0)), "{json:#}");
+        assert_eq!(
+            (boss["diameter_mm"].clone(), boss["length_mm"].clone()),
+            (json!(6.0), json!(20.0)),
+            "{json:#}"
+        );
         assert_eq!(json["fillets"][0]["radius_mm"], json!(2.0), "{json:#}");
         assert_eq!(json["fillets"][0]["kind"], json!("round"));
         let c = &json["chamfers"][0];

@@ -3,9 +3,9 @@
 //! (`--modes`, `--inspect-only`) so a client without tool search lists fewer
 //! tools; access also gives each tool's MCP annotations.
 
-use rmcp::model::ToolAnnotations;
 use Access::{Destructive, Edit, Inspect};
 use Mode::{Assembly, Drawing, Modeling};
+use rmcp::model::ToolAnnotations;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Mode {
@@ -163,7 +163,10 @@ pub struct Filter {
 
 impl Default for Filter {
     fn default() -> Self {
-        Self { modes: ALL.to_vec(), inspect_only: false }
+        Self {
+            modes: ALL.to_vec(),
+            inspect_only: false,
+        }
     }
 }
 
@@ -177,7 +180,9 @@ impl Filter {
             match arg.as_str() {
                 "--inspect-only" => filter.inspect_only = true,
                 "--modes" => {
-                    let list = args.next().ok_or_else(|| anyhow::anyhow!("--modes needs a list"))?;
+                    let list = args
+                        .next()
+                        .ok_or_else(|| anyhow::anyhow!("--modes needs a list"))?;
                     filter.modes = list
                         .split(',')
                         .map(|m| match m.trim() {
@@ -233,7 +238,13 @@ mod tests {
     fn parses_arguments() {
         assert_eq!(Filter::from_args(args("")).unwrap(), Filter::default());
         let f = Filter::from_args(args("--modes drawing,assembly --inspect-only")).unwrap();
-        assert_eq!(f, Filter { modes: vec![Drawing, Assembly], inspect_only: true });
+        assert_eq!(
+            f,
+            Filter {
+                modes: vec![Drawing, Assembly],
+                inspect_only: true
+            }
+        );
         assert!(Filter::from_args(args("--dynamic")).is_err());
         assert!(Filter::from_args(args("--modes part")).is_err());
         assert!(Filter::from_args(args("--modes")).is_err());

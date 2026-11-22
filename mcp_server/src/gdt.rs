@@ -45,7 +45,12 @@ fn text(value: Option<&str>) -> String {
 }
 
 fn mm3(p: DVec3) -> String {
-    format!("[{}, {}, {}]", round(p.x * MM_PER_M, 2), round(p.y * MM_PER_M, 2), round(p.z * MM_PER_M, 2))
+    format!(
+        "[{}, {}, {}]",
+        round(p.x * MM_PER_M, 2),
+        round(p.y * MM_PER_M, 2),
+        round(p.z * MM_PER_M, 2)
+    )
 }
 
 // ---- Names ------------------------------------------------------------------------
@@ -63,7 +68,11 @@ pub enum Characteristic {
     // Profile: datums optional.
     #[serde(alias = "line_profile", alias = "profile_line")]
     ProfileOfALine,
-    #[serde(alias = "surface_profile", alias = "profile_surface", alias = "profile")]
+    #[serde(
+        alias = "surface_profile",
+        alias = "profile_surface",
+        alias = "profile"
+    )]
     ProfileOfASurface,
     // Orientation: at least one datum.
     Angularity,
@@ -205,9 +214,14 @@ impl GdtStandard {
 
 /// The standard to check against, and a remark when it isn't the one the
 /// document's drafting standard draws the symbols by.
-fn standard(asked: Option<GdtStandard>, units: Option<&proto::DocumentUnits>) -> (GdtStandard, Vec<String>) {
+fn standard(
+    asked: Option<GdtStandard>,
+    units: Option<&proto::DocumentUnits>,
+) -> (GdtStandard, Vec<String>) {
     let document = GdtStandard::of_document(units);
-    let Some(asked) = asked else { return (document, Vec::new()) };
+    let Some(asked) = asked else {
+        return (document, Vec::new());
+    };
     let remarks = units
         .filter(|u| (1..=7).contains(&u.drafting_standard) && asked != document)
         .map(|u| {
@@ -230,7 +244,9 @@ fn letter_remark(label: &str, standard: GdtStandard) -> Option<String> {
         return None;
     }
     Some(match standard {
-        GdtStandard::Asme => format!("datum letter {label}: ASME Y14.5 doesn't use I, O and Q (they read as 1 and 0) -- pick another"),
+        GdtStandard::Asme => format!(
+            "datum letter {label}: ASME Y14.5 doesn't use I, O and Q (they read as 1 and 0) -- pick another"
+        ),
         GdtStandard::Iso => format!("datum letter {label} is easily misread as 1 or 0"),
     })
 }
@@ -479,26 +495,91 @@ pub enum WeldKind {
 
 /// Each symbol's codes in SolidWorks' symbol library (gtol97.sym): ISO, ANSI.
 const WELD_CODES: &[(WeldKind, &str, Option<&str>, Option<&str>)] = &[
-    (WeldKind::Fillet, "fillet", Some("<WELD-FILL>"), Some("<AWLD-FILL>")),
-    (WeldKind::Square, "square", Some("<WELD-BUSQ>"), Some("<AWLD-GSQ>")),
+    (
+        WeldKind::Fillet,
+        "fillet",
+        Some("<WELD-FILL>"),
+        Some("<AWLD-FILL>"),
+    ),
+    (
+        WeldKind::Square,
+        "square",
+        Some("<WELD-BUSQ>"),
+        Some("<AWLD-GSQ>"),
+    ),
     (WeldKind::V, "v", Some("<WELD-BUSV>"), Some("<AWLD-GV>")),
-    (WeldKind::Bevel, "bevel", Some("<WELD-BUSB>"), Some("<AWLD-GBVL>")),
+    (
+        WeldKind::Bevel,
+        "bevel",
+        Some("<WELD-BUSB>"),
+        Some("<AWLD-GBVL>"),
+    ),
     (WeldKind::U, "u", Some("<WELD-BUSU>"), Some("<AWLD-GU>")),
     (WeldKind::J, "j", Some("<WELD-BUSJ>"), Some("<AWLD-GJ>")),
-    (WeldKind::Plug, "plug", Some("<WELD-PLUG>"), Some("<AWLD-PLUG>")),
-    (WeldKind::Spot, "spot", Some("<WELD-SPOT>"), Some("<AWLD-SPOT>")),
-    (WeldKind::Seam, "seam", Some("<WELD-SEAM>"), Some("<AWLD-SEAM>")),
-    (WeldKind::Backing, "backing", Some("<WELD-BACK>"), Some("<AWLD-BACK>")),
-    (WeldKind::VWithRoot, "v_with_root", Some("<WELD-BUSVBR>"), None),
-    (WeldKind::BevelWithRoot, "bevel_with_root", Some("<WELD-BUSBR>"), None),
+    (
+        WeldKind::Plug,
+        "plug",
+        Some("<WELD-PLUG>"),
+        Some("<AWLD-PLUG>"),
+    ),
+    (
+        WeldKind::Spot,
+        "spot",
+        Some("<WELD-SPOT>"),
+        Some("<AWLD-SPOT>"),
+    ),
+    (
+        WeldKind::Seam,
+        "seam",
+        Some("<WELD-SEAM>"),
+        Some("<AWLD-SEAM>"),
+    ),
+    (
+        WeldKind::Backing,
+        "backing",
+        Some("<WELD-BACK>"),
+        Some("<AWLD-BACK>"),
+    ),
+    (
+        WeldKind::VWithRoot,
+        "v_with_root",
+        Some("<WELD-BUSVBR>"),
+        None,
+    ),
+    (
+        WeldKind::BevelWithRoot,
+        "bevel_with_root",
+        Some("<WELD-BUSBR>"),
+        None,
+    ),
     (WeldKind::Scarf, "scarf", None, Some("<AWLD-GSCR>")),
     (WeldKind::FlareV, "flare_v", None, Some("<AWLD-GFLV>")),
-    (WeldKind::FlareBevel, "flare_bevel", None, Some("<AWLD-GFLB>")),
+    (
+        WeldKind::FlareBevel,
+        "flare_bevel",
+        None,
+        Some("<AWLD-GFLB>"),
+    ),
     (WeldKind::Stud, "stud", None, Some("<AWLD-STUD>")),
-    (WeldKind::MeltThrough, "melt_through", None, Some("<AWLD-MELT>")),
+    (
+        WeldKind::MeltThrough,
+        "melt_through",
+        None,
+        Some("<AWLD-MELT>"),
+    ),
     (WeldKind::Surfacing, "surfacing", None, Some("<AWLD-SURF>")),
-    (WeldKind::EdgeFlange, "edge_flange", None, Some("<AWLD-FEDG>")),
-    (WeldKind::CornerFlange, "corner_flange", None, Some("<AWLD-FCOR>")),
+    (
+        WeldKind::EdgeFlange,
+        "edge_flange",
+        None,
+        Some("<AWLD-FEDG>"),
+    ),
+    (
+        WeldKind::CornerFlange,
+        "corner_flange",
+        None,
+        Some("<AWLD-FCOR>"),
+    ),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, schemars::JsonSchema)]
@@ -586,8 +667,12 @@ impl FrameText<'_> {
     /// RFS asked for: nothing to show in either standard.
     fn rfs_left_off(&mut self) {
         let why = match self.standard {
-            GdtStandard::Asme => "RFS is the default since ASME Y14.5-1994, which dropped the (S) symbol",
-            GdtStandard::Iso => "ISO has no (S): a tolerance applies regardless of feature size unless (M) or (L) is given",
+            GdtStandard::Asme => {
+                "RFS is the default since ASME Y14.5-1994, which dropped the (S) symbol"
+            }
+            GdtStandard::Iso => {
+                "ISO has no (S): a tolerance applies regardless of feature size unless (M) or (L) is given"
+            }
         };
         self.remark(format!("{why}, so RFS was left off"));
     }
@@ -606,7 +691,11 @@ impl FrameText<'_> {
     }
 }
 
-fn tolerance_text(value: &ToleranceValue, what: &str, out: &mut FrameText) -> Result<String, McpError> {
+fn tolerance_text(
+    value: &ToleranceValue,
+    what: &str,
+    out: &mut FrameText,
+) -> Result<String, McpError> {
     let t = match value {
         ToleranceValue::Mm(v) => {
             if !(v.is_finite() && *v > 0.0) {
@@ -614,14 +703,18 @@ fn tolerance_text(value: &ToleranceValue, what: &str, out: &mut FrameText) -> Re
             }
             let t = out.length(*v, &format!("{what} tolerance"));
             if t.parse::<f64>().is_ok_and(|v| v <= 0.0) {
-                return Err(invalid(format!("{what}: {v} mm rounds to 0 in the document's unit -- give it as text")));
+                return Err(invalid(format!(
+                    "{what}: {v} mm rounds to 0 in the document's unit -- give it as text"
+                )));
             }
             t
         }
         ToleranceValue::Text(t) => t.trim().to_string(),
     };
     if t.is_empty() || t.len() > MAX_TOLERANCE_TEXT || t.contains(['<', '>']) {
-        return Err(invalid(format!("{what}: give the tolerance in mm, e.g. 0.05")));
+        return Err(invalid(format!(
+            "{what}: give the tolerance in mm, e.g. 0.05"
+        )));
     }
     Ok(t)
 }
@@ -635,14 +728,23 @@ fn datum_ref(text: &str, what: &str) -> Result<(String, i32), McpError> {
                 "M" | "MMC" => Modifier::Mmc.sw(),
                 "L" | "LMC" => Modifier::Lmc.sw(),
                 "S" | "RFS" => Modifier::Rfs.sw(),
-                other => return Err(invalid(format!("{what}: unknown material condition ({other}); use (M), (L) or (S)"))),
+                other => {
+                    return Err(invalid(format!(
+                        "{what}: unknown material condition ({other}); use (M), (L) or (S)"
+                    )));
+                }
             };
             (label.trim(), condition)
         }
         None => (t, 0),
     };
-    if label.is_empty() || label.len() > 16 || !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-        return Err(invalid(format!("{what}: a datum reference is a letter such as \"A\", \"B(M)\" or \"A-B\", not {text:?}")));
+    if label.is_empty()
+        || label.len() > 16
+        || !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err(invalid(format!(
+            "{what}: a datum reference is a letter such as \"A\", \"B(M)\" or \"A-B\", not {text:?}"
+        )));
     }
     Ok((label.to_string(), condition))
 }
@@ -650,7 +752,9 @@ fn datum_ref(text: &str, what: &str) -> Result<(String, i32), McpError> {
 fn frame(p: &FrameParams, what: &str, text: &mut FrameText) -> Result<proto::GtolFrame, McpError> {
     let c = p.characteristic;
     if p.datums.len() > 3 {
-        return Err(invalid(format!("{what}: at most 3 datums (primary, secondary, tertiary)")));
+        return Err(invalid(format!(
+            "{what}: at most 3 datums (primary, secondary, tertiary)"
+        )));
     }
     if c.is_form() && !p.datums.is_empty() {
         return Err(invalid(format!(
@@ -659,9 +763,14 @@ fn frame(p: &FrameParams, what: &str, text: &mut FrameText) -> Result<proto::Gto
         )));
     }
     if c.needs_datum() && p.datums.is_empty() {
-        return Err(invalid(format!("{what}: {} needs a datum reference (datums: [\"A\"])", c.name())));
+        return Err(invalid(format!(
+            "{what}: {} needs a datum reference (datums: [\"A\"])",
+            c.name()
+        )));
     }
-    if text.standard == GdtStandard::Asme && matches!(c, Characteristic::Concentricity | Characteristic::Symmetry) {
+    if text.standard == GdtStandard::Asme
+        && matches!(c, Characteristic::Concentricity | Characteristic::Symmetry)
+    {
         text.remark(format!(
             "ASME Y14.5-2018 dropped {} (fine on a Y14.5-2009 drawing): position with a diameter zone controls \
              coaxial features, position or profile symmetric ones",
@@ -685,7 +794,9 @@ fn frame(p: &FrameParams, what: &str, text: &mut FrameText) -> Result<proto::Gto
     for (i, d) in p.datums.iter().enumerate() {
         let (label, mut condition) = datum_ref(d, &format!("{what}, datum {}", i + 1))?;
         if out.datums.contains(&label) {
-            return Err(invalid(format!("{what}: datum {label} is referenced twice")));
+            return Err(invalid(format!(
+                "{what}: datum {label} is referenced twice"
+            )));
         }
         if condition == Modifier::Rfs.sw() {
             text.rfs_left_off();
@@ -704,8 +815,15 @@ pub fn gtol(
     units: Option<&proto::DocumentUnits>,
 ) -> Result<(proto::GdtSymbol, Vec<String>), McpError> {
     let (standard, remarks) = standard(params.standard, units);
-    let mut out = FrameText { units, standard, remarks };
-    let mut g = proto::AnnotationGtol { composite: params.composite, ..Default::default() };
+    let mut out = FrameText {
+        units,
+        standard,
+        remarks,
+    };
+    let mut g = proto::AnnotationGtol {
+        composite: params.composite,
+        ..Default::default()
+    };
     g.frames.push(frame(&params.frame, "frame", &mut out)?);
     if let Some(second) = &params.second_frame {
         g.frames.push(frame(second, "second_frame", &mut out)?);
@@ -718,9 +836,16 @@ pub fn gtol(
     }
     if params.composite {
         if params.second_frame.is_none() {
-            return Err(invalid("composite needs second_frame: the lower row of the composite frame"));
+            return Err(invalid(
+                "composite needs second_frame: the lower row of the composite frame",
+            ));
         }
-        if !matches!(params.frame.characteristic, Characteristic::Position | Characteristic::ProfileOfASurface | Characteristic::ProfileOfALine) {
+        if !matches!(
+            params.frame.characteristic,
+            Characteristic::Position
+                | Characteristic::ProfileOfASurface
+                | Characteristic::ProfileOfALine
+        ) {
             return Err(invalid("composite frames are for position and profile"));
         }
         if standard == GdtStandard::Iso {
@@ -739,11 +864,18 @@ pub fn gtol(
     }
     if let Some(h) = params.projected_zone_mm {
         if !(h.is_finite() && h > 0.0) {
-            return Err(invalid("projected_zone_mm: the zone's height in mm, above 0"));
+            return Err(invalid(
+                "projected_zone_mm: the zone's height in mm, above 0",
+            ));
         }
         g.projected_zone_height = out.length(h, "projected_zone_mm");
     }
-    Ok((proto::GdtSymbol { kind: Some(proto::gdt_symbol::Kind::Gtol(g)) }, out.remarks))
+    Ok((
+        proto::GdtSymbol {
+            kind: Some(proto::gdt_symbol::Kind::Gtol(g)),
+        },
+        out.remarks,
+    ))
 }
 
 /// The symbol add_datum_symbol asks for, in a document with `units`, and
@@ -758,7 +890,12 @@ pub fn datum(
     }
     let (standard, mut remarks) = standard(params.standard, units);
     remarks.extend(letter_remark(&label, standard));
-    Ok((proto::GdtSymbol { kind: Some(proto::gdt_symbol::Kind::Datum(proto::DatumSymbol { label })) }, remarks))
+    Ok((
+        proto::GdtSymbol {
+            kind: Some(proto::gdt_symbol::Kind::Datum(proto::DatumSymbol { label })),
+        },
+        remarks,
+    ))
 }
 
 /// The symbol add_surface_finish_symbol asks for.
@@ -768,23 +905,29 @@ pub fn surface_finish(params: &AddSurfaceFinishParams) -> Result<proto::GdtSymbo
             return Err(invalid("no_leader stands the symbol on an entity: give on"));
         }
         if params.place.at_mm.is_some() || params.place.at_view_mm.is_some() {
-            return Err(invalid("with no_leader the symbol stands on its entity at arrow_at_mm: at_mm doesn't apply"));
+            return Err(invalid(
+                "with no_leader the symbol stands on its entity at arrow_at_mm: at_mm doesn't apply",
+            ));
         }
     }
     if !text(params.place.dimension.as_deref()).is_empty() {
-        return Err(invalid("a surface finish symbol goes on an entity (on), not a dimension"));
+        return Err(invalid(
+            "a surface finish symbol goes on an entity (on), not a dimension",
+        ));
     }
     Ok(proto::GdtSymbol {
-        kind: Some(proto::gdt_symbol::Kind::SurfaceFinish(proto::SurfaceFinishSymbol {
-            symbol_type: params.kind.unwrap_or(SurfaceFinishKind::Basic).sw(),
-            lay: params.lay.map(Lay::sw).unwrap_or(0),
-            roughness: text(params.roughness.as_deref()),
-            roughness_min: text(params.roughness_min.as_deref()),
-            production_method: text(params.production_method.as_deref()),
-            sampling_length: text(params.sampling_length.as_deref()),
-            allowance: text(params.allowance.as_deref()),
-            no_leader: params.no_leader,
-        })),
+        kind: Some(proto::gdt_symbol::Kind::SurfaceFinish(
+            proto::SurfaceFinishSymbol {
+                symbol_type: params.kind.unwrap_or(SurfaceFinishKind::Basic).sw(),
+                lay: params.lay.map(Lay::sw).unwrap_or(0),
+                roughness: text(params.roughness.as_deref()),
+                roughness_min: text(params.roughness_min.as_deref()),
+                production_method: text(params.production_method.as_deref()),
+                sampling_length: text(params.sampling_length.as_deref()),
+                allowance: text(params.allowance.as_deref()),
+                no_leader: params.no_leader,
+            },
+        )),
     })
 }
 
@@ -792,9 +935,22 @@ fn weld_side(side: &WeldSideParams, standard: GdtStandard) -> Result<proto::Weld
     let symbol = match side.symbol {
         None => String::new(),
         Some(kind) => {
-            let (_, name, iso, asme) = WELD_CODES.iter().find(|c| c.0 == kind).expect("every weld kind has codes");
-            let code = if standard == GdtStandard::Iso { iso } else { asme };
-            code.ok_or_else(|| invalid(format!("{name} isn't a weld symbol of {}", weld_standard_name(standard))))?.to_string()
+            let (_, name, iso, asme) = WELD_CODES
+                .iter()
+                .find(|c| c.0 == kind)
+                .expect("every weld kind has codes");
+            let code = if standard == GdtStandard::Iso {
+                iso
+            } else {
+                asme
+            };
+            code.ok_or_else(|| {
+                invalid(format!(
+                    "{name} isn't a weld symbol of {}",
+                    weld_standard_name(standard)
+                ))
+            })?
+            .to_string()
         }
     };
     Ok(proto::WeldSide {
@@ -821,19 +977,32 @@ pub fn weld(
     units: Option<&proto::DocumentUnits>,
 ) -> Result<(proto::GdtSymbol, Vec<String>), McpError> {
     if text(params.place.on.as_deref()).is_empty() {
-        return Err(invalid("a weld symbol points at the joint: give on (a view entity in a drawing, an edge or face in a part)"));
+        return Err(invalid(
+            "a weld symbol points at the joint: give on (a view entity in a drawing, an edge or face in a part)",
+        ));
     }
     if !text(params.place.dimension.as_deref()).is_empty() {
-        return Err(invalid("a weld symbol goes on an entity (on), not a dimension"));
+        return Err(invalid(
+            "a weld symbol goes on an entity (on), not a dimension",
+        ));
     }
     if params.arrow_side.is_none() && params.other_side.is_none() {
-        return Err(invalid("say what the weld is: arrow_side and / or other_side"));
+        return Err(invalid(
+            "say what the weld is: arrow_side and / or other_side",
+        ));
     }
     if params.both_sides && (params.other_side.is_some() || params.arrow_side.is_none()) {
-        return Err(invalid("both_sides repeats arrow_side: give arrow_side only"));
+        return Err(invalid(
+            "both_sides repeats arrow_side: give arrow_side only",
+        ));
     }
     let (standard, remarks) = standard(params.standard, units);
-    let side = |s: &Option<WeldSideParams>| s.as_ref().map(|s| weld_side(s, standard)).transpose().map(Option::unwrap_or_default);
+    let side = |s: &Option<WeldSideParams>| {
+        s.as_ref()
+            .map(|s| weld_side(s, standard))
+            .transpose()
+            .map(Option::unwrap_or_default)
+    };
     let arrow = side(&params.arrow_side)?;
     let other = side(&params.other_side)?;
     let (top, bottom, symmetric) = match standard {
@@ -882,8 +1051,13 @@ pub fn surface_finish_json(s: &proto::SurfaceFinishSymbol, obj: &mut Map<String,
 fn weld_side_json(side: &proto::WeldSide) -> Option<Value> {
     let mut obj = Map::new();
     if !side.symbol.is_empty() {
-        let name = WELD_CODES.iter().find(|c| c.2 == Some(side.symbol.as_str()) || c.3 == Some(side.symbol.as_str()));
-        obj.insert("symbol".into(), json!(name.map_or(side.symbol.as_str(), |c| c.1)));
+        let name = WELD_CODES
+            .iter()
+            .find(|c| c.2 == Some(side.symbol.as_str()) || c.3 == Some(side.symbol.as_str()));
+        obj.insert(
+            "symbol".into(),
+            json!(name.map_or(side.symbol.as_str(), |c| c.1)),
+        );
     }
     if !side.size.is_empty() {
         obj.insert("size".into(), json!(side.size));
@@ -909,7 +1083,11 @@ pub fn weld_json(w: &proto::WeldSymbolSpec, obj: &mut Map<String, Value>) {
     if let Some(side) = w.bottom.as_ref().and_then(weld_side_json) {
         obj.insert("below_line".into(), side);
     }
-    for (key, on) in [("both_sides", w.symmetric), ("all_around", w.all_around), ("field_weld", w.field_weld)] {
+    for (key, on) in [
+        ("both_sides", w.symmetric),
+        ("all_around", w.all_around),
+        ("field_weld", w.field_weld),
+    ] {
         if on {
             obj.insert(key.into(), json!(true));
         }
@@ -922,9 +1100,18 @@ pub fn weld_json(w: &proto::WeldSymbolSpec, obj: &mut Map<String, Value>) {
 /// The callout of a frame row as asked, for the reply text.
 fn callout_of(symbol: &proto::GdtSymbol) -> String {
     match &symbol.kind {
-        Some(proto::gdt_symbol::Kind::Gtol(g)) => g.frames.iter().map(pmi::frame_callout).collect::<Vec<_>>().join(" / "),
-        Some(proto::gdt_symbol::Kind::Datum(d)) => format!("datum {}", if d.label.is_empty() { "?" } else { &d.label }),
-        Some(proto::gdt_symbol::Kind::SurfaceFinish(s)) => format!("surface finish {}", s.roughness),
+        Some(proto::gdt_symbol::Kind::Gtol(g)) => g
+            .frames
+            .iter()
+            .map(pmi::frame_callout)
+            .collect::<Vec<_>>()
+            .join(" / "),
+        Some(proto::gdt_symbol::Kind::Datum(d)) => {
+            format!("datum {}", if d.label.is_empty() { "?" } else { &d.label })
+        }
+        Some(proto::gdt_symbol::Kind::SurfaceFinish(s)) => {
+            format!("surface finish {}", s.roughness)
+        }
         Some(proto::gdt_symbol::Kind::Weld(_)) => "weld".to_string(),
         None => String::new(),
     }
@@ -934,9 +1121,11 @@ fn callout_of(symbol: &proto::GdtSymbol) -> String {
 
 fn model_point(v: &[f64], what: &str) -> Result<proto::Vec3, McpError> {
     match v {
-        [x, y, z] if x.is_finite() && y.is_finite() && z.is_finite() => {
-            Ok(proto::Vec3 { x: x / MM_PER_M, y: y / MM_PER_M, z: z / MM_PER_M })
-        }
+        [x, y, z] if x.is_finite() && y.is_finite() && z.is_finite() => Ok(proto::Vec3 {
+            x: x / MM_PER_M,
+            y: y / MM_PER_M,
+            z: z / MM_PER_M,
+        }),
         [_, _] => Err(invalid(format!(
             "{what}: in a part or assembly give [x, y, z] model mm ([x, y] sheet mm is for drawings)"
         ))),
@@ -951,12 +1140,21 @@ pub fn model_request(
     place: &PlaceParams,
 ) -> Result<(proto::AddModelAnnotationRequest, Vec<String>), McpError> {
     if place.view.is_some() || place.sheet.is_some() || place.at_view_mm.is_some() {
-        return Err(invalid("view, sheet and at_view_mm are for drawings; the active document is a part or assembly"));
+        return Err(invalid(
+            "view, sheet and at_view_mm are for drawings; the active document is a part or assembly",
+        ));
     }
-    if matches!(&symbol.kind, Some(proto::gdt_symbol::Kind::SurfaceFinish(s)) if s.no_leader) && place.arrow_at_mm.is_none() {
-        return Err(invalid("no_leader in a part or assembly: say where it stands with arrow_at_mm"));
+    if matches!(&symbol.kind, Some(proto::gdt_symbol::Kind::SurfaceFinish(s)) if s.no_leader)
+        && place.arrow_at_mm.is_none()
+    {
+        return Err(invalid(
+            "no_leader in a part or assembly: say where it stands with arrow_at_mm",
+        ));
     }
-    let mut request = proto::AddModelAnnotationRequest { symbol: Some(symbol), ..Default::default() };
+    let mut request = proto::AddModelAnnotationRequest {
+        symbol: Some(symbol),
+        ..Default::default()
+    };
     let on = text(place.on.as_deref());
     if !text(place.dimension.as_deref()).is_empty() {
         // SolidWorks makes it, with nothing attached and nowhere to show
@@ -969,17 +1167,25 @@ pub fn model_request(
         match Kind::of_id(&on) {
             Some(Kind::Face | Kind::Edge) => {}
             Some(Kind::ViewEdge | Kind::ViewVertex | Kind::Silhouette) => {
-                return Err(invalid(format!("{on} is a drawing view's entity; the active document is a part or assembly")));
+                return Err(invalid(format!(
+                    "{on} is a drawing view's entity; the active document is a part or assembly"
+                )));
             }
-            _ => return Err(invalid(format!("on: a face or edge id from inspect_model (\"face:7\"), not {on:?}"))),
+            _ => {
+                return Err(invalid(format!(
+                    "on: a face or edge id from inspect_model (\"face:7\"), not {on:?}"
+                )));
+            }
         }
-        request.attach_to = ids
-            .persist_id(&on)
-            .ok_or_else(|| invalid(ids.unknown_id(&on, "inspect_model", "call inspect_model for current ones")))?;
+        request.attach_to = ids.persist_id(&on).ok_or_else(|| {
+            invalid(ids.unknown_id(&on, "inspect_model", "call inspect_model for current ones"))
+        })?;
     }
     if let Some(a) = &place.arrow_at_mm {
         if on.is_empty() {
-            return Err(invalid("arrow_at_mm goes with on: the face or edge the leader points at"));
+            return Err(invalid(
+                "arrow_at_mm goes with on: the face or edge the leader points at",
+            ));
         }
         request.arrow_at = Some(model_point(a, "arrow_at_mm")?);
     }
@@ -1000,15 +1206,29 @@ pub fn model_reply(
     reply: &proto::AddModelAnnotationResponse,
     remarks: &[String],
 ) -> String {
-    let Some(a) = &reply.annotation else { return "done".to_string() };
+    let Some(a) = &reply.annotation else {
+        return "done".to_string();
+    };
     let json = pmi::annotation_json(ids, a);
     let mut text = format!("added {} {}", pmi::type_name(a.r#type), a.name);
     match (&a.gtol, a.datum_label.trim()) {
         (Some(g), _) if !g.frames.is_empty() => {
-            text += &format!(" ({})", g.frames.iter().map(pmi::frame_callout).collect::<Vec<_>>().join(" / "));
+            text += &format!(
+                " ({})",
+                g.frames
+                    .iter()
+                    .map(pmi::frame_callout)
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            );
         }
         (_, label) if !label.is_empty() => text += &format!(" (datum {label})"),
-        _ => text += &format!(" ({})", request.symbol.as_ref().map(callout_of).unwrap_or_default()),
+        _ => {
+            text += &format!(
+                " ({})",
+                request.symbol.as_ref().map(callout_of).unwrap_or_default()
+            )
+        }
     }
     if let Some(Value::Array(on)) = json.get("attached") {
         let on: Vec<&str> = on.iter().filter_map(Value::as_str).collect();
@@ -1019,7 +1239,12 @@ pub fn model_reply(
     // Positions and leader points are in the annotation view's plane (the
     // arrow's face / edge point projected into it), so they're compared
     // across that plane only.
-    let normal = reply.annotation_view_normal.as_ref().map(vec3).filter(|n| n.length() > 0.5).map(DVec3::normalize);
+    let normal = reply
+        .annotation_view_normal
+        .as_ref()
+        .map(vec3)
+        .filter(|n| n.length() > 0.5)
+        .map(DVec3::normalize);
     let in_plane = |v: DVec3| normal.map_or(v, |n| v - n * v.dot(n));
     let tip = a.leaders.first().and_then(|l| l.points.last()).map(vec3);
     let mut notes = remarks.to_vec();
@@ -1029,7 +1254,10 @@ pub fn model_reply(
         }
         (Some(asked), Some(t)) => {
             text += &format!(", arrow drawn at {} mm", mm3(t));
-            notes.push(format!("the arrow isn't where asked ({} mm): SolidWorks picked the entity elsewhere", mm3(asked)));
+            notes.push(format!(
+                "the arrow isn't where asked ({} mm): SolidWorks picked the entity elsewhere",
+                mm3(asked)
+            ));
         }
         (None, Some(t)) => text += &format!(", arrow drawn at {} mm", mm3(t)),
         _ => {}
@@ -1047,7 +1275,11 @@ pub fn model_reply(
     if let (Some(asked), Some(p)) = (&request.position, &a.position) {
         let (asked, p) = (vec3(asked), vec3(p));
         if in_plane(asked - p).length() > ARROW_SLACK {
-            notes.push(format!("the text is at {} mm, not {} mm as asked", mm3(p), mm3(asked)));
+            notes.push(format!(
+                "the text is at {} mm, not {} mm as asked",
+                mm3(p),
+                mm3(asked)
+            ));
         } else if asked.distance(p) > ARROW_SLACK {
             notes.push(format!(
                 "the text is at {} mm: SolidWorks keeps it in {}'s plane, so only its depth differs from {} mm",
@@ -1080,13 +1312,19 @@ pub fn drawing_request(
     if !on.is_empty() && !dimension.is_empty() {
         return Err(invalid("give on (a view entity) or dimension, not both"));
     }
-    if !on.is_empty() && matches!(Kind::of_id(&on), Some(Kind::Face | Kind::Edge | Kind::Vertex)) {
+    if !on.is_empty()
+        && matches!(
+            Kind::of_id(&on),
+            Some(Kind::Face | Kind::Edge | Kind::Vertex)
+        )
+    {
         return Err(invalid(format!(
             "{on} is a model id; in a drawing give a view entity from inspect_drawing with the view (\"view_edge:4\")"
         )));
     }
     let is_datum = matches!(symbol.kind, Some(proto::gdt_symbol::Kind::Datum(_)));
-    let standing = matches!(&symbol.kind, Some(proto::gdt_symbol::Kind::SurfaceFinish(s)) if s.no_leader);
+    let standing =
+        matches!(&symbol.kind, Some(proto::gdt_symbol::Kind::SurfaceFinish(s)) if s.no_leader);
     if is_datum && !dimension.is_empty() {
         // SolidWorks makes it attached to nothing, off the view (seen
         // 2026-10-24).
@@ -1095,13 +1333,21 @@ pub fn drawing_request(
         ));
     }
     if is_datum && on.is_empty() {
-        return Err(invalid("a datum symbol goes on a view entity: give on (\"view_edge:4\")"));
+        return Err(invalid(
+            "a datum symbol goes on a view entity: give on (\"view_edge:4\")",
+        ));
     }
-    let attach: Vec<String> = if on.is_empty() { Vec::new() } else { vec![on.clone()] };
+    let attach: Vec<String> = if on.is_empty() {
+        Vec::new()
+    } else {
+        vec![on.clone()]
+    };
     let arrows: Vec<[f64; 2]> = match &place.arrow_at_mm {
         None => Vec::new(),
         Some(_) if on.is_empty() => {
-            return Err(invalid("arrow_at_mm goes with on: the view entity the leader points at"));
+            return Err(invalid(
+                "arrow_at_mm goes with on: the view entity the leader points at",
+            ));
         }
         Some(a) => match a.as_slice() {
             [x, y] => vec![[*x, *y]],
@@ -1114,13 +1360,19 @@ pub fn drawing_request(
         && !view.is_empty()
         && *lv != view
     {
-        return Err(invalid(format!("{on} is in {lv}, so the symbol belongs to {lv}, not {view}")));
+        return Err(invalid(format!(
+            "{on} is in {lv}, so the symbol belongs to {lv}, not {view}"
+        )));
     }
     if (!on.is_empty() || !dimension.is_empty()) && place.sheet.is_some() {
-        return Err(invalid("sheet is for a free frame; one on an entity or dimension goes on that view's sheet"));
+        return Err(invalid(
+            "sheet is for a free frame; one on an entity or dimension goes on that view's sheet",
+        ));
     }
     if standing && leaders.tips.is_empty() {
-        return Err(invalid("no_leader: say where it stands (arrow_at_mm), or inspect_drawing the view first for the edge's middle"));
+        return Err(invalid(
+            "no_leader: say where it stands (arrow_at_mm), or inspect_drawing the view first for the edge's middle",
+        ));
     }
     let owner_view = leaders.view.clone().unwrap_or(view.clone());
     let position = match (&place.at_mm, place.at_view_mm) {
@@ -1192,24 +1444,53 @@ mod tests {
 
     #[test]
     fn inch_documents_get_inch_values() {
-        let inch = proto::DocumentUnits { unit_system: 3, length_unit: 3, length_decimals: 3, drafting_standard: 1 };
+        let inch = proto::DocumentUnits {
+            unit_system: 3,
+            length_unit: 3,
+            length_decimals: 3,
+            drafting_standard: 1,
+        };
         let mut f = frame_params(Characteristic::Position, &["A"]);
         f.tolerance = ToleranceValue::Mm(0.127);
         let mut p = params(f.clone());
         p.projected_zone_mm = Some(25.4);
         let (symbol, remarks) = gtol(&p, Some(&inch)).unwrap();
         let g = gtol_of(&symbol);
-        assert_eq!((g.frames[0].tolerance1.as_str(), g.projected_zone_height.as_str()), ("0.005", "1"));
+        assert_eq!(
+            (
+                g.frames[0].tolerance1.as_str(),
+                g.projected_zone_height.as_str()
+            ),
+            ("0.005", "1")
+        );
         assert_eq!(remarks.len(), 2);
-        assert!(remarks[0].contains("0.127 mm is written as 0.005 (inches"), "{remarks:?}");
+        assert!(
+            remarks[0].contains("0.127 mm is written as 0.005 (inches"),
+            "{remarks:?}"
+        );
         // Text goes as typed; a mm document is left alone.
         f.tolerance = ToleranceValue::Text("0.005".into());
         let (symbol, remarks) = gtol(&params(f.clone()), Some(&inch)).unwrap();
-        assert_eq!((gtol_of(&symbol).frames[0].tolerance1.as_str(), remarks.len()), ("0.005", 0));
+        assert_eq!(
+            (
+                gtol_of(&symbol).frames[0].tolerance1.as_str(),
+                remarks.len()
+            ),
+            ("0.005", 0)
+        );
         f.tolerance = ToleranceValue::Mm(0.05);
-        let mm = proto::DocumentUnits { unit_system: 5, ..Default::default() };
+        let mm = proto::DocumentUnits {
+            unit_system: 5,
+            ..Default::default()
+        };
         let (symbol, remarks) = gtol(&params(f.clone()), Some(&mm)).unwrap();
-        assert_eq!((gtol_of(&symbol).frames[0].tolerance1.as_str(), remarks.len()), ("0.05", 0));
+        assert_eq!(
+            (
+                gtol_of(&symbol).frames[0].tolerance1.as_str(),
+                remarks.len()
+            ),
+            ("0.05", 0)
+        );
         // Too small to show.
         f.tolerance = ToleranceValue::Mm(0.0001);
         assert!(gtol(&params(f), Some(&inch)).is_err());
@@ -1253,10 +1534,21 @@ mod tests {
         let s = mm_gtol(&params(f)).unwrap();
         let g = gtol_of(&s);
         let row = &g.frames[0];
-        assert_eq!((row.symbol, row.tolerance1.as_str(), row.tolerance1_diameter, row.tolerance1_condition), (23, "0.1", true, 1));
+        assert_eq!(
+            (
+                row.symbol,
+                row.tolerance1.as_str(),
+                row.tolerance1_diameter,
+                row.tolerance1_condition
+            ),
+            (23, "0.1", true, 1)
+        );
         assert_eq!(row.datums, vec!["A", "B", "C"]);
         assert_eq!(row.datum_conditions, vec![0, 1, 0]);
-        assert_eq!(pmi::frame_callout(row), "position | dia 0.1 (M) | A | B (M) | C");
+        assert_eq!(
+            pmi::frame_callout(row),
+            "position | dia 0.1 (M) | A | B (M) | C"
+        );
     }
 
     #[test]
@@ -1267,18 +1559,37 @@ mod tests {
         assert!(mm_gtol(&params(frame_params(Characteristic::Flatness, &[]))).is_ok());
         assert!(mm_gtol(&params(frame_params(Characteristic::Position, &[]))).is_ok());
         // At most 3 datums, no repeats, sane letters.
-        assert!(mm_gtol(&params(frame_params(Characteristic::Position, &["A", "B", "C", "D"]))).is_err());
+        assert!(
+            mm_gtol(&params(frame_params(
+                Characteristic::Position,
+                &["A", "B", "C", "D"]
+            )))
+            .is_err()
+        );
         assert!(mm_gtol(&params(frame_params(Characteristic::Position, &["A", "A"]))).is_err());
         assert!(mm_gtol(&params(frame_params(Characteristic::Position, &["A(X)"]))).is_err());
-        assert!(mm_gtol(&params(frame_params(Characteristic::Position, &["<MOD-MMC>"]))).is_err());
-        let common = mm_gtol(&params(frame_params(Characteristic::CircularRunout, &["A-B"]))).unwrap();
+        assert!(
+            mm_gtol(&params(frame_params(
+                Characteristic::Position,
+                &["<MOD-MMC>"]
+            )))
+            .is_err()
+        );
+        let common = mm_gtol(&params(frame_params(
+            Characteristic::CircularRunout,
+            &["A-B"],
+        )))
+        .unwrap();
         assert_eq!(gtol_of(&common).frames[0].datums, vec!["A-B"]);
         // Tolerances: positive mm or a plain text.
         let mut f = frame_params(Characteristic::Flatness, &[]);
         f.tolerance = ToleranceValue::Mm(-0.1);
         assert!(mm_gtol(&params(f.clone())).is_err());
         f.tolerance = ToleranceValue::Text("0.1/25".into());
-        assert_eq!(gtol_of(&mm_gtol(&params(f)).unwrap()).frames[0].tolerance1, "0.1/25");
+        assert_eq!(
+            gtol_of(&mm_gtol(&params(f)).unwrap()).frames[0].tolerance1,
+            "0.1/25"
+        );
     }
 
     #[test]
@@ -1287,7 +1598,10 @@ mod tests {
         p.composite = true;
         assert!(mm_gtol(&p).is_err(), "composite without a second frame");
         p.second_frame = Some(frame_params(Characteristic::Flatness, &[]));
-        assert!(mm_gtol(&p).is_err(), "composite rows share a characteristic");
+        assert!(
+            mm_gtol(&p).is_err(),
+            "composite rows share a characteristic"
+        );
         p.second_frame = Some(frame_params(Characteristic::Position, &["A"]));
         p.standard = Some(GdtStandard::Asme);
         let s = mm_gtol(&p).unwrap();
@@ -1295,14 +1609,24 @@ mod tests {
         assert_eq!(gtol_of(&s).frames.len(), 2);
         // ISO has none: refused, but two separate frames are fine.
         p.standard = Some(GdtStandard::Iso);
-        assert!(mm_gtol(&p).unwrap_err().message.contains("ISO 1101 has no composite frames"));
+        assert!(
+            mm_gtol(&p)
+                .unwrap_err()
+                .message
+                .contains("ISO 1101 has no composite frames")
+        );
         p.composite = false;
         assert!(!gtol_of(&mm_gtol(&p).unwrap()).composite);
     }
 
     fn units(drafting_standard: i32, unit_system: i32) -> proto::DocumentUnits {
         let length_unit = if unit_system == 3 { 3 } else { 0 };
-        proto::DocumentUnits { unit_system, length_unit, length_decimals: 2, drafting_standard }
+        proto::DocumentUnits {
+            unit_system,
+            length_unit,
+            length_decimals: 2,
+            drafting_standard,
+        }
     }
 
     #[test]
@@ -1311,14 +1635,26 @@ mod tests {
         assert_eq!(of(Some(&units(1, 5))), GdtStandard::Asme);
         assert_eq!(of(Some(&units(2, 3))), GdtStandard::Iso);
         assert_eq!(of(Some(&units(3, 5))), GdtStandard::Iso, "DIN");
-        assert_eq!(of(Some(&units(8, 3))), GdtStandard::Asme, "user defined, inch");
+        assert_eq!(
+            of(Some(&units(8, 3))),
+            GdtStandard::Asme,
+            "user defined, inch"
+        );
         assert_eq!(of(Some(&units(0, 5))), GdtStandard::Iso);
         assert_eq!(of(None), GdtStandard::Iso);
         // Asked for one the document doesn't draw by: a remark, no refusal.
         let (s, remarks) = standard(Some(GdtStandard::Asme), Some(&units(2, 5)));
         assert_eq!(s, GdtStandard::Asme);
-        assert!(remarks[0].contains("drafting standard is ISO") && remarks[0].contains("drafting_standard=ansi"), "{remarks:?}");
-        assert!(standard(Some(GdtStandard::Iso), Some(&units(2, 5))).1.is_empty());
+        assert!(
+            remarks[0].contains("drafting standard is ISO")
+                && remarks[0].contains("drafting_standard=ansi"),
+            "{remarks:?}"
+        );
+        assert!(
+            standard(Some(GdtStandard::Iso), Some(&units(2, 5)))
+                .1
+                .is_empty()
+        );
         assert!(standard(Some(GdtStandard::Iso), None).1.is_empty());
         // The document's standard picks the rules: composite frames in an ANSI part only.
         let mut p = params(frame_params(Characteristic::Position, &["A", "B"]));
@@ -1337,7 +1673,10 @@ mod tests {
             p.standard = Some(standard);
             let (s, remarks) = gtol(&p, None).unwrap();
             let row = &gtol_of(&s).frames[0];
-            assert_eq!((row.tolerance1_condition, row.datum_conditions.clone()), (0, vec![0, 0, 1]));
+            assert_eq!(
+                (row.tolerance1_condition, row.datum_conditions.clone()),
+                (0, vec![0, 0, 1])
+            );
             assert_eq!(remarks.len(), 1, "one remark for both: {remarks:?}");
             assert!(remarks[0].contains("RFS was left off"));
         }
@@ -1348,11 +1687,18 @@ mod tests {
         let mut p = params(frame_params(Characteristic::Concentricity, &["A"]));
         p.standard = Some(GdtStandard::Asme);
         let (_, remarks) = gtol(&p, None).unwrap();
-        assert!(remarks[0].contains("Y14.5-2018 dropped concentricity"), "{remarks:?}");
+        assert!(
+            remarks[0].contains("Y14.5-2018 dropped concentricity"),
+            "{remarks:?}"
+        );
         p.standard = Some(GdtStandard::Iso);
         assert!(gtol(&p, None).unwrap().1.is_empty());
         let d = |label: &str, standard| {
-            let params = AddDatumSymbolParams { label: Some(label.into()), standard: Some(standard), ..Default::default() };
+            let params = AddDatumSymbolParams {
+                label: Some(label.into()),
+                standard: Some(standard),
+                ..Default::default()
+            };
             datum(&params, None).unwrap().1
         };
         assert!(d("I", GdtStandard::Asme)[0].contains("ASME Y14.5 doesn't use I, O and Q"));
@@ -1362,14 +1708,27 @@ mod tests {
 
     #[test]
     fn weld_sides_follow_the_standard() {
-        let fillet = WeldSideParams { symbol: Some(WeldKind::Fillet), size: Some("5".into()), ..Default::default() };
-        let v = WeldSideParams { symbol: Some(WeldKind::V), ..Default::default() };
-        let on = PlaceParams { on: Some("view_edge:1".into()), ..Default::default() };
+        let fillet = WeldSideParams {
+            symbol: Some(WeldKind::Fillet),
+            size: Some("5".into()),
+            ..Default::default()
+        };
+        let v = WeldSideParams {
+            symbol: Some(WeldKind::V),
+            ..Default::default()
+        };
+        let on = PlaceParams {
+            on: Some("view_edge:1".into()),
+            ..Default::default()
+        };
         let params = |standard| AddWeldSymbolParams {
             arrow_side: Some(fillet.clone()),
             other_side: Some(v.clone()),
             standard: Some(standard),
-            place: PlaceParams { on: on.on.clone(), ..Default::default() },
+            place: PlaceParams {
+                on: on.on.clone(),
+                ..Default::default()
+            },
             ..Default::default()
         };
         let spec = |s: proto::GdtSymbol| match s.kind {
@@ -1389,12 +1748,43 @@ mod tests {
 
     #[test]
     fn weld_refusals() {
-        let on = || PlaceParams { on: Some("view_edge:1".into()), ..Default::default() };
-        let side = |kind| Some(WeldSideParams { symbol: Some(kind), ..Default::default() });
+        let on = || PlaceParams {
+            on: Some("view_edge:1".into()),
+            ..Default::default()
+        };
+        let side = |kind| {
+            Some(WeldSideParams {
+                symbol: Some(kind),
+                ..Default::default()
+            })
+        };
         // No entity, nothing said, a symbol of the other standard.
-        assert!(weld(&AddWeldSymbolParams { arrow_side: side(WeldKind::Fillet), ..Default::default() }, None).is_err());
-        assert!(weld(&AddWeldSymbolParams { place: on(), ..Default::default() }, None).is_err());
-        let stud = AddWeldSymbolParams { arrow_side: side(WeldKind::Stud), standard: Some(GdtStandard::Iso), place: on(), ..Default::default() };
+        assert!(
+            weld(
+                &AddWeldSymbolParams {
+                    arrow_side: side(WeldKind::Fillet),
+                    ..Default::default()
+                },
+                None
+            )
+            .is_err()
+        );
+        assert!(
+            weld(
+                &AddWeldSymbolParams {
+                    place: on(),
+                    ..Default::default()
+                },
+                None
+            )
+            .is_err()
+        );
+        let stud = AddWeldSymbolParams {
+            arrow_side: side(WeldKind::Stud),
+            standard: Some(GdtStandard::Iso),
+            place: on(),
+            ..Default::default()
+        };
         assert!(weld(&stud, None).unwrap_err().message.contains("ISO 2553"));
         // Both sides: symmetric in ISO, drawn twice in ANSI.
         let both = |standard| AddWeldSymbolParams {
@@ -1404,21 +1794,49 @@ mod tests {
             place: on(),
             ..Default::default()
         };
-        let Some(proto::gdt_symbol::Kind::Weld(w)) = weld(&both(GdtStandard::Iso), None).unwrap().0.kind else { panic!() };
+        let Some(proto::gdt_symbol::Kind::Weld(w)) =
+            weld(&both(GdtStandard::Iso), None).unwrap().0.kind
+        else {
+            panic!()
+        };
         assert!(w.symmetric);
-        let Some(proto::gdt_symbol::Kind::Weld(w)) = weld(&both(GdtStandard::Asme), None).unwrap().0.kind else { panic!() };
+        let Some(proto::gdt_symbol::Kind::Weld(w)) =
+            weld(&both(GdtStandard::Asme), None).unwrap().0.kind
+        else {
+            panic!()
+        };
         assert!(!w.symmetric && w.top == w.bottom);
     }
 
     #[test]
     fn every_weld_kind_has_a_code() {
         for kind in [
-            WeldKind::Fillet, WeldKind::Square, WeldKind::V, WeldKind::Bevel, WeldKind::U, WeldKind::J, WeldKind::Plug,
-            WeldKind::Spot, WeldKind::Seam, WeldKind::Backing, WeldKind::VWithRoot, WeldKind::BevelWithRoot, WeldKind::Scarf,
-            WeldKind::FlareV, WeldKind::FlareBevel, WeldKind::Stud, WeldKind::MeltThrough, WeldKind::Surfacing,
-            WeldKind::EdgeFlange, WeldKind::CornerFlange,
+            WeldKind::Fillet,
+            WeldKind::Square,
+            WeldKind::V,
+            WeldKind::Bevel,
+            WeldKind::U,
+            WeldKind::J,
+            WeldKind::Plug,
+            WeldKind::Spot,
+            WeldKind::Seam,
+            WeldKind::Backing,
+            WeldKind::VWithRoot,
+            WeldKind::BevelWithRoot,
+            WeldKind::Scarf,
+            WeldKind::FlareV,
+            WeldKind::FlareBevel,
+            WeldKind::Stud,
+            WeldKind::MeltThrough,
+            WeldKind::Surfacing,
+            WeldKind::EdgeFlange,
+            WeldKind::CornerFlange,
         ] {
-            let name: &str = WELD_CODES.iter().find(|c| c.0 == kind).expect("in the table").1;
+            let name: &str = WELD_CODES
+                .iter()
+                .find(|c| c.0 == kind)
+                .expect("in the table")
+                .1;
             assert_eq!(serde_json::to_value(name).unwrap(), json!(name));
             let parsed: WeldKind = serde_json::from_value(json!(name)).unwrap();
             assert_eq!(parsed, kind);
@@ -1427,26 +1845,42 @@ mod tests {
 
     #[test]
     fn surface_finish_refusals() {
-        let no_on = AddSurfaceFinishParams { no_leader: true, ..Default::default() };
+        let no_on = AddSurfaceFinishParams {
+            no_leader: true,
+            ..Default::default()
+        };
         assert!(surface_finish(&no_on).is_err());
         let placed = AddSurfaceFinishParams {
             no_leader: true,
-            place: PlaceParams { on: Some("view_edge:1".into()), at_mm: Some(vec![1.0, 2.0]), ..Default::default() },
+            place: PlaceParams {
+                on: Some("view_edge:1".into()),
+                at_mm: Some(vec![1.0, 2.0]),
+                ..Default::default()
+            },
             ..Default::default()
         };
-        assert!(surface_finish(&placed).unwrap_err().message.contains("at_mm"));
-        let Some(proto::gdt_symbol::Kind::SurfaceFinish(s)) = surface_finish(&AddSurfaceFinishParams {
-            kind: Some(SurfaceFinishKind::MachiningRequired),
-            lay: Some(Lay::Perpendicular),
-            roughness: Some(" Ra 3.2 ".into()),
-            ..Default::default()
-        })
-        .unwrap()
-        .kind
+        assert!(
+            surface_finish(&placed)
+                .unwrap_err()
+                .message
+                .contains("at_mm")
+        );
+        let Some(proto::gdt_symbol::Kind::SurfaceFinish(s)) =
+            surface_finish(&AddSurfaceFinishParams {
+                kind: Some(SurfaceFinishKind::MachiningRequired),
+                lay: Some(Lay::Perpendicular),
+                roughness: Some(" Ra 3.2 ".into()),
+                ..Default::default()
+            })
+            .unwrap()
+            .kind
         else {
             panic!()
         };
-        assert_eq!((s.symbol_type, s.lay, s.roughness.as_str()), (1, 5, "Ra 3.2"));
+        assert_eq!(
+            (s.symbol_type, s.lay, s.roughness.as_str()),
+            (1, 5, "Ra 3.2")
+        );
     }
 
     #[test]
@@ -1461,7 +1895,9 @@ mod tests {
         assert_eq!(p.frame.modifier, Some(Modifier::Mmc));
         assert_eq!(p.frame.tolerance, ToleranceValue::Text("0.2".into()));
         assert_eq!(p.place.on.as_deref(), Some("face:3"));
-        let d: AddDatumSymbolParams = serde_json::from_value(serde_json::json!({ "label": "B", "on": "view_edge:2" })).unwrap();
+        let d: AddDatumSymbolParams =
+            serde_json::from_value(serde_json::json!({ "label": "B", "on": "view_edge:2" }))
+                .unwrap();
         assert_eq!(d.label.as_deref(), Some("B"));
     }
 }

@@ -73,10 +73,15 @@ fn unique(edges: &[String]) -> Vec<&str> {
 fn edge_refs(ids: &IdRegistry, edges: &[String]) -> Result<Vec<proto::GeometryRef>, McpError> {
     let seen = unique(edges);
     if seen.is_empty() {
-        return Err(invalid("edges is empty -- give edge ids (\"edge:7\") or face ids from inspect_model"));
+        return Err(invalid(
+            "edges is empty -- give edge ids (\"edge:7\") or face ids from inspect_model",
+        ));
     }
     if seen.len() > MAX_EDGES {
-        return Err(invalid(format!("at most {MAX_EDGES} edges and faces per call, got {}", seen.len())));
+        return Err(invalid(format!(
+            "at most {MAX_EDGES} edges and faces per call, got {}",
+            seen.len()
+        )));
     }
     seen.into_iter()
         .map(|edge| {
@@ -104,7 +109,10 @@ fn positive_mm(value: f64, name: &str) -> Result<f64, McpError> {
     Ok(value / MM_PER_M)
 }
 
-pub fn fillet_request(ids: &IdRegistry, params: &FilletParams) -> Result<proto::FilletEdgesRequest, McpError> {
+pub fn fillet_request(
+    ids: &IdRegistry,
+    params: &FilletParams,
+) -> Result<proto::FilletEdgesRequest, McpError> {
     Ok(proto::FilletEdgesRequest {
         edges: edge_refs(ids, &params.edges)?,
         radius: positive_mm(params.radius_mm, "radius_mm")?,
@@ -112,20 +120,31 @@ pub fn fillet_request(ids: &IdRegistry, params: &FilletParams) -> Result<proto::
     })
 }
 
-pub fn chamfer_request(ids: &IdRegistry, params: &ChamferParams) -> Result<proto::ChamferEdgesRequest, McpError> {
+pub fn chamfer_request(
+    ids: &IdRegistry,
+    params: &ChamferParams,
+) -> Result<proto::ChamferEdgesRequest, McpError> {
     let angle = match params.angle_deg {
         None => 0.0,
         Some(a) if !(a.is_finite() && a > 0.0 && a < 90.0) => {
-            return Err(invalid(format!("angle_deg must be more than 0 and less than 90, got {a}")));
+            return Err(invalid(format!(
+                "angle_deg must be more than 0 and less than 90, got {a}"
+            )));
         }
         Some(_) if params.distance2_mm.is_some() => {
             return Err(invalid("give angle_deg or distance2_mm, not both"));
         }
         Some(a) => a.to_radians(),
     };
-    let other_distance = params.distance2_mm.map(|d| positive_mm(d, "distance2_mm")).transpose()?.unwrap_or(0.0);
+    let other_distance = params
+        .distance2_mm
+        .map(|d| positive_mm(d, "distance2_mm"))
+        .transpose()?
+        .unwrap_or(0.0);
     if params.flip && angle == 0.0 && other_distance == 0.0 {
-        return Err(invalid("flip only applies with angle_deg or distance2_mm -- an equal-distance chamfer is symmetric"));
+        return Err(invalid(
+            "flip only applies with angle_deg or distance2_mm -- an equal-distance chamfer is symmetric",
+        ));
     }
     Ok(proto::ChamferEdgesRequest {
         edges: edge_refs(ids, &params.edges)?,
@@ -179,7 +198,11 @@ mod tests {
     }
 
     fn fillet(edges: &[&str], radius_mm: f64) -> FilletParams {
-        FilletParams { edges: edges.iter().map(|e| e.to_string()).collect(), radius_mm, tangent_propagation: true }
+        FilletParams {
+            edges: edges.iter().map(|e| e.to_string()).collect(),
+            radius_mm,
+            tangent_propagation: true,
+        }
     }
 
     fn chamfer(edges: &[&str], distance_mm: f64) -> ChamferParams {
@@ -206,7 +229,10 @@ mod tests {
     fn fillet_takes_edges_and_faces_once_each_in_meters() {
         let (ids, edge, face) = registry();
         let r = fillet_request(&ids, &fillet(&[&edge, &face, &format!(" {edge} ")], 2.5)).unwrap();
-        assert_eq!(persist_ids(&r.edges), vec![b"edge".to_vec(), b"face".to_vec()]);
+        assert_eq!(
+            persist_ids(&r.edges),
+            vec![b"edge".to_vec(), b"face".to_vec()]
+        );
         assert!((r.radius - 0.0025).abs() < 1e-15 && r.tangent_propagation);
     }
 
@@ -219,7 +245,10 @@ mod tests {
         }
         assert!(fillet_request(&ids, &fillet(&[], 1.0)).is_err());
         for bad in [0.0, -1.0, f64::NAN] {
-            assert!(fillet_request(&ids, &fillet(&[&edge], bad)).is_err(), "{bad}");
+            assert!(
+                fillet_request(&ids, &fillet(&[&edge], bad)).is_err(),
+                "{bad}"
+            );
         }
     }
 
@@ -263,14 +292,27 @@ mod tests {
 
     #[test]
     fn replies() {
-        let reply = proto::EdgeFeatureResponse { feature_name: "Fillet1".into() };
+        let reply = proto::EdgeFeatureResponse {
+            feature_name: "Fillet1".into(),
+        };
         let text = fillet_text(&fillet(&["edge:3", "face:1", "edge:3"], 2.0), &reply);
-        assert!(text.starts_with("created Fillet1: a 2 mm radius on edge:3, face:1."), "{text}");
-        let reply = proto::EdgeFeatureResponse { feature_name: "Chamfer1".into() };
+        assert!(
+            text.starts_with("created Fillet1: a 2 mm radius on edge:3, face:1."),
+            "{text}"
+        );
+        let reply = proto::EdgeFeatureResponse {
+            feature_name: "Chamfer1".into(),
+        };
         let mut p = chamfer(&["edge:3"], 1.0);
-        assert!(chamfer_text(&p, &reply).starts_with("created Chamfer1: 1 mm x 45 degrees (equal distance) on edge:3."));
+        assert!(
+            chamfer_text(&p, &reply)
+                .starts_with("created Chamfer1: 1 mm x 45 degrees (equal distance) on edge:3.")
+        );
         p.distance2_mm = Some(2.0);
         p.flip = true;
-        assert!(chamfer_text(&p, &reply).starts_with("created Chamfer1: 1 mm x 2 mm, flipped on edge:3."));
+        assert!(
+            chamfer_text(&p, &reply)
+                .starts_with("created Chamfer1: 1 mm x 2 mm, flipped on edge:3.")
+        );
     }
 }

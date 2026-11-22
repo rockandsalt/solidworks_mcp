@@ -25,7 +25,11 @@ fn dvec3(v: &proto::Vec3) -> DVec3 {
 }
 
 fn to_proto(v: DVec3) -> proto::Vec3 {
-    proto::Vec3 { x: v.x, y: v.y, z: v.z }
+    proto::Vec3 {
+        x: v.x,
+        y: v.y,
+        z: v.z,
+    }
 }
 
 /// Where a component sits in the assembly: the rigid transform from its own
@@ -86,7 +90,11 @@ impl Placement {
         };
         let (mut new_lo, mut new_hi) = (DVec3::INFINITY, DVec3::NEG_INFINITY);
         for corner in 0..8 {
-            let p = DVec3::select(BVec3::new(corner & 1 != 0, corner & 2 != 0, corner & 4 != 0), hi, lo);
+            let p = DVec3::select(
+                BVec3::new(corner & 1 != 0, corner & 2 != 0, corner & 4 != 0),
+                hi,
+                lo,
+            );
             let q = self.point(p);
             new_lo = new_lo.min(q);
             new_hi = new_hi.max(q);
@@ -98,7 +106,11 @@ impl Placement {
     fn place_floats(&self, values: &mut [f32], is_point: bool) {
         for p in values.chunks_exact_mut(3) {
             let v = DVec3::new(p[0].into(), p[1].into(), p[2].into());
-            let q = if is_point { self.point(v) } else { self.0.transform_vector3(v) };
+            let q = if is_point {
+                self.point(v)
+            } else {
+                self.0.transform_vector3(v)
+            };
             (p[0], p[1], p[2]) = (q.x as f32, q.y as f32, q.z as f32);
         }
     }
@@ -209,12 +221,16 @@ pub fn place_mesh(mesh: &mut proto::GetMeshResponse) {
         return;
     }
     for face in &mut mesh.faces {
-        let Some(p) = placements.get(&face.component_persist_id) else { continue };
+        let Some(p) = placements.get(&face.component_persist_id) else {
+            continue;
+        };
         p.place_floats(&mut face.triangles, true);
         p.place_floats(&mut face.normals, false);
     }
     for edge in &mut mesh.edges {
-        let Some(p) = placements.get(&edge.component_persist_id) else { continue };
+        let Some(p) = placements.get(&edge.component_persist_id) else {
+            continue;
+        };
         p.place_floats(&mut edge.points, true);
     }
 }
@@ -232,7 +248,10 @@ fn id_value(id: Option<String>) -> Value {
 
 pub fn component_json(ids: &mut IdRegistry, c: &proto::ComponentInfo) -> Value {
     let mut obj = Map::new();
-    obj.insert("id".into(), id_value(ids.id_for(Kind::Component, &c.persist_id)));
+    obj.insert(
+        "id".into(),
+        id_value(ids.id_for(Kind::Component, &c.persist_id)),
+    );
     obj.insert("name".into(), json!(c.name));
     if !c.file.is_empty() {
         obj.insert("file".into(), json!(file_name(&c.file)));
@@ -243,7 +262,10 @@ pub fn component_json(ids: &mut IdRegistry, c: &proto::ComponentInfo) -> Value {
     obj.insert("fixed".into(), json!(c.fixed));
     match c.state() {
         proto::ComponentState::Lightweight => {
-            obj.insert("state".into(), json!("lightweight (resolve it to see its geometry)"));
+            obj.insert(
+                "state".into(),
+                json!("lightweight (resolve it to see its geometry)"),
+            );
         }
         proto::ComponentState::Suppressed => {
             obj.insert("state".into(), json!("suppressed"));
@@ -257,7 +279,10 @@ pub fn component_json(ids: &mut IdRegistry, c: &proto::ComponentInfo) -> Value {
         obj.insert("subassembly".into(), json!(true));
     }
     if !c.parent_persist_id.is_empty() {
-        obj.insert("parent".into(), id_value(ids.id_for(Kind::Component, &c.parent_persist_id)));
+        obj.insert(
+            "parent".into(),
+            id_value(ids.id_for(Kind::Component, &c.parent_persist_id)),
+        );
     }
     if let Some(origin) = &c.origin {
         obj.insert("origin_mm".into(), point_mm(origin));
@@ -273,17 +298,28 @@ pub fn component_json(ids: &mut IdRegistry, c: &proto::ComponentInfo) -> Value {
     if let Some(b) = &c.r#box
         && let (Some(lo), Some(hi)) = (&b.min, &b.max)
     {
-        obj.insert("bbox_mm".into(), json!({ "min": point_mm(lo), "max": point_mm(hi) }));
+        obj.insert(
+            "bbox_mm".into(),
+            json!({ "min": point_mm(lo), "max": point_mm(hi) }),
+        );
     }
     Value::Object(obj)
 }
 
 /// The JSON for one InspectModel reply: the document, an assembly's
 /// components and mates, then features and geometry (crate::inspect).
-pub fn render_inspect(ids: &mut IdRegistry, reply: &proto::InspectModelResponse, filters: &inspect::Filters) -> Value {
+pub fn render_inspect(
+    ids: &mut IdRegistry,
+    reply: &proto::InspectModelResponse,
+    filters: &inspect::Filters,
+) -> Value {
     let mut out = inspect::render_document(reply);
     if !reply.components.is_empty() {
-        let components = reply.components.iter().map(|c| component_json(ids, c)).collect();
+        let components = reply
+            .components
+            .iter()
+            .map(|c| component_json(ids, c))
+            .collect();
         out.insert("components".into(), Value::Array(components));
     }
     if !reply.mates.is_empty() {
@@ -372,7 +408,10 @@ pub fn limits_text(m: &proto::MateInfo) -> String {
 
 pub fn mate_json(ids: &mut IdRegistry, m: &proto::MateInfo) -> Value {
     let mut obj = Map::new();
-    obj.insert("id".into(), id_value(ids.id_for(Kind::Feature, &m.persist_id)));
+    obj.insert(
+        "id".into(),
+        id_value(ids.id_for(Kind::Feature, &m.persist_id)),
+    );
     obj.insert("name".into(), json!(m.name));
     let kind = m.r#type();
     obj.insert(
@@ -411,7 +450,11 @@ pub fn mate_json(ids: &mut IdRegistry, m: &proto::MateInfo) -> Value {
         obj.insert("suppressed".into(), json!(true));
     }
     if m.error_code != 0 {
-        let key = if m.error_is_warning { "warning" } else { "error" };
+        let key = if m.error_is_warning {
+            "warning"
+        } else {
+            "error"
+        };
         obj.insert(key.into(), json!(mate_error_name(m.error_code)));
     }
     Value::Object(obj)
@@ -540,19 +583,31 @@ fn invalid(message: impl Into<String>) -> McpError {
 }
 
 /// A limit mate's (min, max), both given or neither; 0 <= min <= max <= `top`.
-fn limit_pair(min: Option<f64>, max: Option<f64>, min_name: &str, max_name: &str, top: f64) -> Result<Option<(f64, f64)>, McpError> {
+fn limit_pair(
+    min: Option<f64>,
+    max: Option<f64>,
+    min_name: &str,
+    max_name: &str,
+    top: f64,
+) -> Result<Option<(f64, f64)>, McpError> {
     match (min, max) {
         (None, None) => Ok(None),
         (Some(lo), Some(hi)) => {
             if !(lo.is_finite() && hi.is_finite() && 0.0 <= lo && lo <= hi && hi <= top) {
-                let range = if top.is_finite() { format!(" (0 to {top})") } else { " (0 or more)".into() };
+                let range = if top.is_finite() {
+                    format!(" (0 to {top})")
+                } else {
+                    " (0 or more)".into()
+                };
                 return Err(invalid(format!(
                     "{min_name} / {max_name} must satisfy 0 <= {min_name} <= {max_name}{range}, got {lo} / {hi}"
                 )));
             }
             Ok(Some((lo, hi)))
         }
-        _ => Err(invalid(format!("a limit mate needs both {min_name} and {max_name}"))),
+        _ => Err(invalid(format!(
+            "a limit mate needs both {min_name} and {max_name}"
+        ))),
     }
 }
 
@@ -560,7 +615,11 @@ fn limit_pair(min: Option<f64>, max: Option<f64>, min_name: &str, max_name: &str
 /// entity ids, trimmed. The caller resolves them to persist ids.
 pub fn check(params: &AddMateParams) -> Result<[String; 2], McpError> {
     let kind = params.kind;
-    let entities: Vec<String> = params.entities.iter().map(|e| e.trim().to_string()).collect();
+    let entities: Vec<String> = params
+        .entities
+        .iter()
+        .map(|e| e.trim().to_string())
+        .collect();
     let [a, b] = <[String; 2]>::try_from(entities)
         .map_err(|_| invalid("a mate takes exactly two entities"))?;
     if a == b {
@@ -592,17 +651,29 @@ pub fn check(params: &AddMateParams) -> Result<[String; 2], McpError> {
         }
     }
 
-    let distance_limits = limit_pair(params.min_mm, params.max_mm, "min_mm", "max_mm", f64::INFINITY)?;
+    let distance_limits = limit_pair(
+        params.min_mm,
+        params.max_mm,
+        "min_mm",
+        "max_mm",
+        f64::INFINITY,
+    )?;
     let angle_limits = limit_pair(params.min_deg, params.max_deg, "min_deg", "max_deg", 180.0)?;
     if distance_limits.is_some() && kind != MateKind::Distance {
-        return Err(invalid("only distance mates take min_mm / max_mm (limit angles: kind=\"angle\" with min_deg / max_deg)"));
+        return Err(invalid(
+            "only distance mates take min_mm / max_mm (limit angles: kind=\"angle\" with min_deg / max_deg)",
+        ));
     }
     if angle_limits.is_some() && kind != MateKind::Angle {
-        return Err(invalid("only angle mates take min_deg / max_deg (limit distances: kind=\"distance\" with min_mm / max_mm)"));
+        return Err(invalid(
+            "only angle mates take min_deg / max_deg (limit distances: kind=\"distance\" with min_mm / max_mm)",
+        ));
     }
     match (kind, params.distance_mm) {
         (MateKind::Distance, None) if distance_limits.is_none() => {
-            return Err(invalid("a distance mate needs distance_mm (or min_mm and max_mm for a limit mate)"));
+            return Err(invalid(
+                "a distance mate needs distance_mm (or min_mm and max_mm for a limit mate)",
+            ));
         }
         (MateKind::Distance, Some(d)) if !(d.is_finite() && d >= 0.0) => {
             return Err(invalid(format!("distance_mm must be 0 or more, got {d}")));
@@ -612,7 +683,9 @@ pub fn check(params: &AddMateParams) -> Result<[String; 2], McpError> {
     }
     match (kind, params.angle_deg) {
         (MateKind::Angle, None) if angle_limits.is_none() => {
-            return Err(invalid("an angle mate needs angle_deg (or min_deg and max_deg for a limit mate)"));
+            return Err(invalid(
+                "an angle mate needs angle_deg (or min_deg and max_deg for a limit mate)",
+            ));
         }
         (MateKind::Angle, Some(d)) if !(d.is_finite() && (0.0..=180.0).contains(&d)) => {
             return Err(invalid(format!("angle_deg must be 0 to 180, got {d}")));
@@ -653,16 +726,30 @@ pub fn request(params: &AddMateParams, persist_ids: [Vec<u8>; 2]) -> proto::AddM
         entity_persist_ids: persist_ids.to_vec(),
         alignment: proto::MateAlignment::from(params.alignment.unwrap_or_default()).into(),
         flip: params.flip,
-        distance: params.distance_mm.or(params.min_mm).map_or(0.0, |d| d / MM_PER_M),
-        angle: params.angle_deg.or(params.min_deg).map_or(0.0, f64::to_radians),
+        distance: params
+            .distance_mm
+            .or(params.min_mm)
+            .map_or(0.0, |d| d / MM_PER_M),
+        angle: params
+            .angle_deg
+            .or(params.min_deg)
+            .map_or(0.0, f64::to_radians),
         lock_rotation: params.lock_rotation,
-        limits: match (params.kind, params.min_mm, params.max_mm, params.min_deg, params.max_deg) {
-            (MateKind::Distance, Some(lo), Some(hi), _, _) => {
-                Some(proto::MateLimits { min: lo / MM_PER_M, max: hi / MM_PER_M })
-            }
-            (MateKind::Angle, _, _, Some(lo), Some(hi)) => {
-                Some(proto::MateLimits { min: lo.to_radians(), max: hi.to_radians() })
-            }
+        limits: match (
+            params.kind,
+            params.min_mm,
+            params.max_mm,
+            params.min_deg,
+            params.max_deg,
+        ) {
+            (MateKind::Distance, Some(lo), Some(hi), _, _) => Some(proto::MateLimits {
+                min: lo / MM_PER_M,
+                max: hi / MM_PER_M,
+            }),
+            (MateKind::Angle, _, _, Some(lo), Some(hi)) => Some(proto::MateLimits {
+                min: lo.to_radians(),
+                max: hi.to_radians(),
+            }),
             _ => None,
         },
     }
@@ -697,7 +784,9 @@ pub fn reply_text(
     let Some(mate) = &reply.mate else {
         return format!("added a {} mate.", params.kind.name());
     };
-    let mate_id = ids.id_for(Kind::Feature, &mate.persist_id).unwrap_or_default();
+    let mate_id = ids
+        .id_for(Kind::Feature, &mate.persist_id)
+        .unwrap_or_default();
     let mut text = format!("added {} ({mate_id}): {}", mate.name, params.kind.name());
     if let Some(a) = alignment_name(mate.alignment()) {
         text += &format!(", {}", a.replace('_', "-"));
@@ -713,14 +802,22 @@ pub fn reply_text(
         text += &format!(", {a} deg");
     }
     text += &limits_text(mate);
-    let names: Vec<&str> = mate.component_names.iter().map(String::as_str).filter(|n| !n.is_empty()).collect();
+    let names: Vec<&str> = mate
+        .component_names
+        .iter()
+        .map(String::as_str)
+        .filter(|n| !n.is_empty())
+        .collect();
     text += &format!(", between {} and {}", entities[0], entities[1]);
     if !names.is_empty() {
         text += &format!(" ({})", names.join(" / "));
     }
     text.push('.');
     if mate.error_code != 0 {
-        text += &format!(" SolidWorks flags it: {}.", mate_error_name(mate.error_code));
+        text += &format!(
+            " SolidWorks flags it: {}.",
+            mate_error_name(mate.error_code)
+        );
     }
     if !reply.components.is_empty() {
         let places: Vec<String> = reply.components.iter().map(placement_text).collect();
@@ -739,7 +836,10 @@ pub fn reply_text(
                 dim.name
             );
         } else {
-            text += &format!(" Change its value later with set_dimension name=\"{}\".", dim.name);
+            text += &format!(
+                " Change its value later with set_dimension name=\"{}\".",
+                dim.name
+            );
         }
     }
     text
@@ -780,7 +880,10 @@ mod tests {
                 component_persist_id: b"c1".to_vec(),
                 normal: v(1.0, 0.0, 0.0),
                 origin: v(0.01, 0.0, 0.0),
-                r#box: Some(proto::Box3 { min: v(0.0, 0.0, 0.0), max: v(0.02, 0.01, 0.005) }),
+                r#box: Some(proto::Box3 {
+                    min: v(0.0, 0.0, 0.0),
+                    max: v(0.02, 0.01, 0.005),
+                }),
                 ..Default::default()
             }],
             edges: vec![proto::EdgeInfo {
@@ -791,7 +894,10 @@ mod tests {
             }],
             bodies: vec![proto::BodyInfo {
                 component_persist_id: b"other".to_vec(),
-                r#box: Some(proto::Box3 { min: v(0.0, 0.0, 0.0), max: v(1.0, 1.0, 1.0) }),
+                r#box: Some(proto::Box3 {
+                    min: v(0.0, 0.0, 0.0),
+                    max: v(1.0, 1.0, 1.0),
+                }),
                 ..Default::default()
             }],
             ..Default::default()
@@ -823,7 +929,10 @@ mod tests {
             ..Default::default()
         };
         place_inspect_reply(&mut reply);
-        assert!(close(reply.faces[0].normal.as_ref().unwrap(), [1.0, 0.0, 0.0]));
+        assert!(close(
+            reply.faces[0].normal.as_ref().unwrap(),
+            [1.0, 0.0, 0.0]
+        ));
     }
 
     #[test]
@@ -895,7 +1004,10 @@ mod tests {
         assert_eq!(json["type"], "distance");
         assert_eq!(json["alignment"], "anti_aligned");
         assert_eq!(json["distance_mm"], 12.5);
-        assert_eq!(json["components"], json!(["bracket-1 (component:1)", "(assembly)"]));
+        assert_eq!(
+            json["components"],
+            json!(["bracket-1 (component:1)", "(assembly)"])
+        );
         assert!(json["error"].as_str().unwrap().contains("over-defined"));
     }
 
@@ -951,7 +1063,14 @@ mod tests {
         p.min_deg = Some(0.0);
         p.max_deg = Some(10.0);
         assert!(check(&p).is_err());
-        assert!(request(&params(MateKind::Coincident, &["face:1", "face:2"]), [vec![], vec![]]).limits.is_none());
+        assert!(
+            request(
+                &params(MateKind::Coincident, &["face:1", "face:2"]),
+                [vec![], vec![]]
+            )
+            .limits
+            .is_none()
+        );
     }
 
     #[test]
@@ -961,7 +1080,10 @@ mod tests {
             persist_id: b"m".to_vec(),
             name: "LimitAngle1".into(),
             r#type: proto::MateType::Angle.into(),
-            limits: Some(proto::MateLimits { min: 0.0, max: std::f64::consts::FRAC_PI_4 }),
+            limits: Some(proto::MateLimits {
+                min: 0.0,
+                max: std::f64::consts::FRAC_PI_4,
+            }),
             ..Default::default()
         };
         let json = mate_json(&mut ids, &mate);
@@ -1013,12 +1135,36 @@ mod tests {
                 ..Default::default()
             }),
             components: vec![turned(false)],
-            mates: vec![proto::MateInfo { name: "Coincident1".into(), ..Default::default() }],
-            features: vec![proto::FeatureInfo { name: "Front Plane".into(), ..Default::default() }],
+            mates: vec![proto::MateInfo {
+                name: "Coincident1".into(),
+                ..Default::default()
+            }],
+            features: vec![proto::FeatureInfo {
+                name: "Front Plane".into(),
+                ..Default::default()
+            }],
             ..Default::default()
         };
-        let out = render_inspect(&mut IdRegistry::default(), &reply, &inspect::Filters::default());
-        let keys: Vec<&str> = out.as_object().unwrap().keys().map(String::as_str).collect();
-        assert_eq!(keys, ["document", "document_type", "components", "mates", "features"]);
+        let out = render_inspect(
+            &mut IdRegistry::default(),
+            &reply,
+            &inspect::Filters::default(),
+        );
+        let keys: Vec<&str> = out
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                "document",
+                "document_type",
+                "components",
+                "mates",
+                "features"
+            ]
+        );
     }
 }

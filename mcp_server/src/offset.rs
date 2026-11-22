@@ -4,12 +4,12 @@
 use rmcp::{ErrorData as McpError, schemars};
 use serde::Deserialize;
 
-use crate::sketch_tools::SketchTarget;
 use crate::addin::proto;
 use crate::feature_text::problems_text;
 use crate::inspect::{IdRegistry, Kind, MM_PER_M};
 use crate::mirror::{sketch_ref, unique};
 use crate::sketch;
+use crate::sketch_tools::SketchTarget;
 
 /// The add-in's limit.
 const MAX_ENTITIES: usize = 1000;
@@ -85,7 +85,11 @@ fn model_id(ids: &IdRegistry, entity: &str, what: &str) -> Result<Vec<u8>, McpEr
     ids.persist_id(entity).ok_or_else(|| {
         invalid(format!(
             "{what}: {}",
-            ids.unknown_id(entity, "inspect_model", "call inspect_model for current ones")
+            ids.unknown_id(
+                entity,
+                "inspect_model",
+                "call inspect_model for current ones"
+            )
         ))
     })
 }
@@ -96,7 +100,12 @@ fn new_sketch_place(
     params: &OffsetParams,
     entities: &[&str],
 ) -> Result<(proto::Plane, Vec<u8>), McpError> {
-    let on = params.target.on.as_deref().map(str::trim).filter(|on| !on.is_empty());
+    let on = params
+        .target
+        .on
+        .as_deref()
+        .map(str::trim)
+        .filter(|on| !on.is_empty());
     match (on, params.target.plane, entities) {
         (Some(_), Some(_), _) => Err(invalid("give plane or on for the new sketch, not both")),
         (Some(on), None, _) => Ok((proto::Plane::Unspecified, model_id(ids, on, "on")?)),
@@ -111,7 +120,10 @@ fn new_sketch_place(
     }
 }
 
-pub fn request(ids: &IdRegistry, params: &OffsetParams) -> Result<proto::OffsetSketchEntitiesRequest, McpError> {
+pub fn request(
+    ids: &IdRegistry,
+    params: &OffsetParams,
+) -> Result<proto::OffsetSketchEntitiesRequest, McpError> {
     if !(params.distance_mm.is_finite() && params.distance_mm > 0.0) {
         return Err(invalid(format!(
             "distance_mm must be more than 0, got {} (use side for the direction)",
@@ -122,11 +134,22 @@ pub fn request(ids: &IdRegistry, params: &OffsetParams) -> Result<proto::OffsetS
     if entities.len() > MAX_ENTITIES {
         return Err(invalid(format!("at most {MAX_ENTITIES} entities per call")));
     }
-    let sketch_name = params.target.sketch_name.as_deref().map(str::trim).unwrap_or_default().to_string();
+    let sketch_name = params
+        .target
+        .sketch_name
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string();
     if entities.is_empty() && sketch_name.is_empty() {
-        return Err(invalid("give the entities to offset, or sketch_name to offset a whole sketch"));
+        return Err(invalid(
+            "give the entities to offset, or sketch_name to offset a whole sketch",
+        ));
     }
-    let model = entities.iter().filter(|e| matches!(Kind::of_id(e), Some(Kind::Edge | Kind::Face))).count();
+    let model = entities
+        .iter()
+        .filter(|e| matches!(Kind::of_id(e), Some(Kind::Edge | Kind::Face)))
+        .count();
     if model > 0 && model < entities.len() {
         return Err(invalid(
             "give sketch entities or model edges and faces, not both -- offset them in two calls",
@@ -143,7 +166,9 @@ pub fn request(ids: &IdRegistry, params: &OffsetParams) -> Result<proto::OffsetS
         OffsetCaps::Lines => proto::OffsetCaps::Lines,
     };
     if caps != proto::OffsetCaps::None && side != proto::OffsetSide::Both {
-        return Err(invalid("caps only go with side \"both\": they close the two offsets of an open chain"));
+        return Err(invalid(
+            "caps only go with side \"both\": they close the two offsets of an open chain",
+        ));
     }
 
     let mut wire = proto::OffsetSketchEntitiesRequest {
@@ -153,7 +178,12 @@ pub fn request(ids: &IdRegistry, params: &OffsetParams) -> Result<proto::OffsetS
         sketch_name,
         ..Default::default()
     };
-    let has_place = params.target.plane.is_some() || params.target.on.as_deref().is_some_and(|on| !on.trim().is_empty());
+    let has_place = params.target.plane.is_some()
+        || params
+            .target
+            .on
+            .as_deref()
+            .is_some_and(|on| !on.trim().is_empty());
     if model > 0 {
         if params.caps_or_construction() {
             return Err(invalid(
@@ -177,7 +207,9 @@ pub fn request(ids: &IdRegistry, params: &OffsetParams) -> Result<proto::OffsetS
             wire.plane = plane.into();
             wire.on_persist_id = on;
         } else if has_place {
-            return Err(invalid("give either sketch_name (an existing sketch) or plane/on (a new one), not both"));
+            return Err(invalid(
+                "give either sketch_name (an existing sketch) or plane/on (a new one), not both",
+            ));
         }
         return Ok(wire);
     }
@@ -216,7 +248,10 @@ impl OffsetParams {
 
 /// The given entities, trimmed and once each, for error legends.
 pub fn given(params: &OffsetParams) -> Vec<String> {
-    unique(&params.entities).into_iter().map(str::to_string).collect()
+    unique(&params.entities)
+        .into_iter()
+        .map(str::to_string)
+        .collect()
 }
 
 fn side_text(side: OffsetSide) -> &'static str {
@@ -229,23 +264,42 @@ fn side_text(side: OffsetSide) -> &'static str {
 
 /// "offset line:1, line:2 by 5 mm outward in Sketch1. New: line:3 (point:7 -> point:8), ...
 /// Sketch1 now has 2 closed and 0 open contours. ..."
-pub fn reply_text(ids: &mut IdRegistry, params: &OffsetParams, reply: &proto::OffsetSketchEntitiesResponse) -> String {
+pub fn reply_text(
+    ids: &mut IdRegistry,
+    params: &OffsetParams,
+    reply: &proto::OffsetSketchEntitiesResponse,
+) -> String {
     let given = unique(&params.entities);
-    let what = if given.is_empty() { "the whole sketch".to_string() } else { given.join(", ") };
-    let new_sketch = if reply.created_sketch { " (new sketch)" } else { "" };
+    let what = if given.is_empty() {
+        "the whole sketch".to_string()
+    } else {
+        given.join(", ")
+    };
+    let new_sketch = if reply.created_sketch {
+        " (new sketch)"
+    } else {
+        ""
+    };
     let mut text = format!(
         "offset {what} by {} mm {} in {}{new_sketch}.",
         params.distance_mm,
         side_text(params.side),
         reply.sketch_name
     );
-    let new: Vec<String> = reply.items.iter().filter_map(|item| sketch::item_summary(ids, item)).collect();
+    let new: Vec<String> = reply
+        .items
+        .iter()
+        .filter_map(|item| sketch::item_summary(ids, item))
+        .collect();
     if !new.is_empty() {
         text += &format!(" New: {}.", new.join(", "));
     }
-    let model = given.iter().any(|e| matches!(Kind::of_id(e), Some(Kind::Edge | Kind::Face)));
+    let model = given
+        .iter()
+        .any(|e| matches!(Kind::of_id(e), Some(Kind::Edge | Kind::Face)));
     if given.iter().any(|e| Kind::of_id(e) == Some(Kind::Face)) {
-        text += " A face offsets its outer loop only: give a hole's edge ids to offset the hole too.";
+        text +=
+            " A face offsets its outer loop only: give a hole's edge ids to offset the hole too.";
     }
     if !model && params.add_dimension.unwrap_or(true) {
         text += " The distance is a dimension (inspect_sketch lists it, set_dimension changes it).";
@@ -274,7 +328,13 @@ mod tests {
     }
 
     fn line(ids: &mut IdRegistry, id1: i64) -> (String, proto::SketchItemRef) {
-        let r = proto::SketchItemRef { sketch_persist_id: b"sk".to_vec(), point: false, id0: 0, id1, ..Default::default() };
+        let r = proto::SketchItemRef {
+            sketch_persist_id: b"sk".to_vec(),
+            point: false,
+            id0: 0,
+            id1,
+            ..Default::default()
+        };
         (sketch::ref_id(ids, Kind::Line, &r).unwrap(), r)
     }
 
@@ -288,7 +348,11 @@ mod tests {
             construction: false,
             base_construction: false,
             add_dimension: None,
-            target: SketchTarget { sketch_name: None, plane: None, on: None },
+            target: SketchTarget {
+                sketch_name: None,
+                plane: None,
+                on: None,
+            },
         }
     }
 
@@ -370,7 +434,13 @@ mod tests {
         let face = ids.id_for(Kind::Face, b"face").unwrap();
         let (a, _) = line(&mut ids, 1);
         let point = {
-            let r = proto::SketchItemRef { sketch_persist_id: b"sk".to_vec(), point: true, id0: 0, id1: 9, ..Default::default() };
+            let r = proto::SketchItemRef {
+                sketch_persist_id: b"sk".to_vec(),
+                point: true,
+                id0: 0,
+                id1: 9,
+                ..Default::default()
+            };
             sketch::ref_id(&mut ids, Kind::SketchPoint, &r).unwrap()
         };
         assert!(request(&ids, &params(&[])).is_err());
@@ -379,7 +449,14 @@ mod tests {
             p.distance_mm = bad;
             assert!(request(&ids, &p).is_err(), "{bad}");
         }
-        for bad in [&point, "line:99", "edge:99", "face:99", "Boss-Extrude1", "origin"] {
+        for bad in [
+            &point,
+            "line:99",
+            "edge:99",
+            "face:99",
+            "Boss-Extrude1",
+            "origin",
+        ] {
             let mut p = params(&[bad]);
             p.target.sketch_name = Some("Sketch1".into());
             assert!(request(&ids, &p).is_err(), "{bad}");
@@ -428,19 +505,42 @@ mod tests {
         };
         let text = reply_text(&mut ids, &params(&[&a]), &reply);
         let new_id = sketch::ref_id(&mut ids, Kind::Line, &new_ref).unwrap();
-        assert!(text.starts_with(&format!("offset {a} by 5 mm outward in Sketch1. New: {new_id}.")), "{text}");
-        assert!(text.contains("is a dimension") && text.contains("Sketch1 now has 2 closed and 0 open contours."), "{text}");
+        assert!(
+            text.starts_with(&format!(
+                "offset {a} by 5 mm outward in Sketch1. New: {new_id}."
+            )),
+            "{text}"
+        );
+        assert!(
+            text.contains("is a dimension")
+                && text.contains("Sketch1 now has 2 closed and 0 open contours."),
+            "{text}"
+        );
 
         let face = ids.id_for(Kind::Face, b"face").unwrap();
         let mut p = params(&[&face]);
         p.side = OffsetSide::Inward;
-        let reply = proto::OffsetSketchEntitiesResponse { created_sketch: true, ..reply };
+        let reply = proto::OffsetSketchEntitiesResponse {
+            created_sketch: true,
+            ..reply
+        };
         let text = reply_text(&mut ids, &p, &reply);
-        assert!(text.starts_with(&format!("offset {face} by 5 mm inward in Sketch1 (new sketch).")), "{text}");
-        assert!(text.contains("outer loop only") && !text.contains("is a dimension"), "{text}");
+        assert!(
+            text.starts_with(&format!(
+                "offset {face} by 5 mm inward in Sketch1 (new sketch)."
+            )),
+            "{text}"
+        );
+        assert!(
+            text.contains("outer loop only") && !text.contains("is a dimension"),
+            "{text}"
+        );
 
         let mut p = params(&[]);
         p.side = OffsetSide::Both;
-        assert!(reply_text(&mut ids, &p, &reply).starts_with("offset the whole sketch by 5 mm to both sides"));
+        assert!(
+            reply_text(&mut ids, &p, &reply)
+                .starts_with("offset the whole sketch by 5 mm to both sides")
+        );
     }
 }

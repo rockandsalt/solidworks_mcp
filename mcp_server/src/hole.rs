@@ -84,9 +84,15 @@ impl HoleStandard {
     }
 
     fn from_sw(value: i32) -> Option<Self> {
-        [Self::Iso, Self::AnsiMetric, Self::AnsiInch, Self::Din, Self::Jis]
-            .into_iter()
-            .find(|s| s.sw() == value)
+        [
+            Self::Iso,
+            Self::AnsiMetric,
+            Self::AnsiInch,
+            Self::Din,
+            Self::Jis,
+        ]
+        .into_iter()
+        .find(|s| s.sw() == value)
     }
 
     fn name(self) -> &'static str {
@@ -130,9 +136,23 @@ pub enum Fastener {
 const ALL_FASTENERS: [Fastener; 17] = {
     use Fastener::*;
     [
-        ScrewClearance, Drill, TapDrill, Dowel, SocketHeadCapScrew, HexBolt, HexCapScrew, PanHead,
-        CheeseHead, ButtonHead, ShoulderScrew, FlatHead, FlatHead100, SocketFlatHead, RaisedHead,
-        Tapped, BottomingTapped,
+        ScrewClearance,
+        Drill,
+        TapDrill,
+        Dowel,
+        SocketHeadCapScrew,
+        HexBolt,
+        HexCapScrew,
+        PanHead,
+        CheeseHead,
+        ButtonHead,
+        ShoulderScrew,
+        FlatHead,
+        FlatHead100,
+        SocketFlatHead,
+        RaisedHead,
+        Tapped,
+        BottomingTapped,
     ]
 };
 
@@ -262,12 +282,14 @@ impl Fastener {
 
     fn from_sw(value: i32) -> Option<(HoleStandard, Fastener)> {
         use HoleStandard::*;
-        [Iso, AnsiMetric, AnsiInch, Din, Jis].into_iter().find_map(|standard| {
-            ALL_FASTENERS
-                .into_iter()
-                .find(|f| f.sw(standard) == Some(value))
-                .map(|f| (standard, f))
-        })
+        [Iso, AnsiMetric, AnsiInch, Din, Jis]
+            .into_iter()
+            .find_map(|standard| {
+                ALL_FASTENERS
+                    .into_iter()
+                    .find(|f| f.sw(standard) == Some(value))
+                    .map(|f| (standard, f))
+            })
     }
 }
 
@@ -276,7 +298,9 @@ impl Fastener {
 /// else (drill sizes) follows the part's units.
 pub fn default_standard(size: &str, inch_document: bool) -> HoleStandard {
     let size = size.trim();
-    let metric = size.strip_prefix(['M', 'm']).is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()));
+    let metric = size
+        .strip_prefix(['M', 'm'])
+        .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()));
     if metric {
         HoleStandard::Iso
     } else if size.starts_with('#') || size.contains('/') || inch_document {
@@ -388,27 +412,42 @@ fn opt_mm(value: Option<f64>, what: &str) -> Result<Option<f64>, McpError> {
     match value {
         None => Ok(None),
         Some(v) if v.is_finite() && v > 0.0 => Ok(Some(v / MM_PER_M)),
-        Some(v) => Err(invalid(format!("{what} must be a positive number of millimeters, got {v}"))),
+        Some(v) => Err(invalid(format!(
+            "{what} must be a positive number of millimeters, got {v}"
+        ))),
     }
 }
 
 /// The trimmed sketch name, if one was given.
 pub fn sketch_name(params: &HoleWizardParams) -> Option<&str> {
-    params.sketch_name.as_deref().map(str::trim).filter(|s| !s.is_empty())
+    params
+        .sketch_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
 }
 
 /// The trimmed face id, if one was given.
 pub fn face_id(params: &HoleWizardParams) -> Option<&str> {
-    params.on.as_deref().map(str::trim).filter(|s| !s.is_empty())
+    params
+        .on
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
 }
 
 /// The wire request. `face_persist_id` is what `params.on` resolved to (empty with a sketch).
-pub fn request(params: &HoleWizardParams, face_persist_id: Vec<u8>) -> Result<proto::HoleWizardRequest, McpError> {
+pub fn request(
+    params: &HoleWizardParams,
+    face_persist_id: Vec<u8>,
+) -> Result<proto::HoleWizardRequest, McpError> {
     let kind = params.kind;
     let sketch_name = sketch_name(params);
     match (sketch_name, face_id(params)) {
         (Some(_), Some(_)) => {
-            return Err(invalid("give either sketch_name (a sketch of hole points) or `on` (a face), not both"));
+            return Err(invalid(
+                "give either sketch_name (a sketch of hole points) or `on` (a face), not both",
+            ));
         }
         (None, None) => {
             return Err(invalid(
@@ -417,7 +456,9 @@ pub fn request(params: &HoleWizardParams, face_persist_id: Vec<u8>) -> Result<pr
             ));
         }
         (Some(_), None) if params.locations.is_some() => {
-            return Err(invalid("locations only go with `on`; with a sketch, its points are the hole centers"));
+            return Err(invalid(
+                "locations only go with `on`; with a sketch, its points are the hole centers",
+            ));
         }
         _ => {}
     }
@@ -455,7 +496,9 @@ pub fn request(params: &HoleWizardParams, face_persist_id: Vec<u8>) -> Result<pr
         (true, _) => 0.0,
         (false, Some(d)) if d.is_finite() && d > 0.0 => d / MM_PER_M,
         (false, Some(d)) => {
-            return Err(invalid(format!("depth must be a positive number of millimeters, got {d}")));
+            return Err(invalid(format!(
+                "depth must be a positive number of millimeters, got {d}"
+            )));
         }
         (false, None) => return Err(invalid("give depth_mm, or set through_all")),
     };
@@ -463,15 +506,38 @@ pub fn request(params: &HoleWizardParams, face_persist_id: Vec<u8>) -> Result<pr
     // Options that only apply to some kinds.
     let only = |set: bool, name: &str, for_kind: HoleKind| -> Result<(), McpError> {
         if set && kind != for_kind {
-            return Err(invalid(format!("{name} only applies to kind \"{}\"", for_kind.name())));
+            return Err(invalid(format!(
+                "{name} only applies to kind \"{}\"",
+                for_kind.name()
+            )));
         }
         Ok(())
     };
-    only(params.counterbore_diameter_mm.is_some(), "counterbore_diameter_mm", HoleKind::Counterbore)?;
-    only(params.counterbore_depth_mm.is_some(), "counterbore_depth_mm", HoleKind::Counterbore)?;
-    only(params.countersink_diameter_mm.is_some(), "countersink_diameter_mm", HoleKind::Countersink)?;
-    only(params.countersink_angle_deg.is_some(), "countersink_angle_deg", HoleKind::Countersink)?;
-    only(params.thread_depth_mm.is_some(), "thread_depth_mm", HoleKind::Tapped)?;
+    only(
+        params.counterbore_diameter_mm.is_some(),
+        "counterbore_diameter_mm",
+        HoleKind::Counterbore,
+    )?;
+    only(
+        params.counterbore_depth_mm.is_some(),
+        "counterbore_depth_mm",
+        HoleKind::Counterbore,
+    )?;
+    only(
+        params.countersink_diameter_mm.is_some(),
+        "countersink_diameter_mm",
+        HoleKind::Countersink,
+    )?;
+    only(
+        params.countersink_angle_deg.is_some(),
+        "countersink_angle_deg",
+        HoleKind::Countersink,
+    )?;
+    only(
+        params.thread_depth_mm.is_some(),
+        "thread_depth_mm",
+        HoleKind::Tapped,
+    )?;
     only(params.cosmetic_thread, "cosmetic_thread", HoleKind::Tapped)?;
     if params.fit.is_some() && kind == HoleKind::Tapped {
         return Err(invalid("fit doesn't apply to tapped holes"));
@@ -480,19 +546,29 @@ pub fn request(params: &HoleWizardParams, face_persist_id: Vec<u8>) -> Result<pr
     let countersink_angle = match params.countersink_angle_deg {
         None => None,
         Some(a) if a.is_finite() && a > 0.0 && a < 180.0 => Some(a.to_radians()),
-        Some(a) => return Err(invalid(format!("countersink_angle_deg must be between 0 and 180, got {a}"))),
+        Some(a) => {
+            return Err(invalid(format!(
+                "countersink_angle_deg must be between 0 and 180, got {a}"
+            )));
+        }
     };
 
     let locations = params.locations.as_deref().unwrap_or_default();
     if locations.len() > MAX_HOLE_LOCATIONS {
-        return Err(invalid(format!("at most {MAX_HOLE_LOCATIONS} locations per call")));
+        return Err(invalid(format!(
+            "at most {MAX_HOLE_LOCATIONS} locations per call"
+        )));
     }
     let locations = locations
         .iter()
         .enumerate()
         .map(|(i, p)| {
             if p.iter().all(|v| v.is_finite()) {
-                Ok(proto::Vec3 { x: p[0] / MM_PER_M, y: p[1] / MM_PER_M, z: p[2] / MM_PER_M })
+                Ok(proto::Vec3 {
+                    x: p[0] / MM_PER_M,
+                    y: p[1] / MM_PER_M,
+                    z: p[2] / MM_PER_M,
+                })
             } else {
                 Err(invalid(format!("location {} must be finite", i + 1)))
             }
@@ -510,7 +586,11 @@ pub fn request(params: &HoleWizardParams, face_persist_id: Vec<u8>) -> Result<pr
         through_all: params.through_all,
         depth,
         reverse_direction: params.reverse_direction,
-        fit: params.fit.map(proto::ScrewFit::from).unwrap_or(proto::ScrewFit::Unspecified).into(),
+        fit: params
+            .fit
+            .map(proto::ScrewFit::from)
+            .unwrap_or(proto::ScrewFit::Unspecified)
+            .into(),
         diameter: opt_mm(params.diameter_mm, "diameter_mm")?,
         counterbore_diameter: opt_mm(params.counterbore_diameter_mm, "counterbore_diameter_mm")?,
         counterbore_depth: opt_mm(params.counterbore_depth_mm, "counterbore_depth_mm")?,
@@ -548,7 +628,10 @@ fn spec_text(kind: HoleKind, spec: &proto::HoleSpec) -> String {
     }
     match kind {
         HoleKind::Counterbore => {
-            if let (Some(d), Some(h)) = (len("Ø", spec.counterbore_diameter), len("", spec.counterbore_depth)) {
+            if let (Some(d), Some(h)) = (
+                len("Ø", spec.counterbore_diameter),
+                len("", spec.counterbore_depth),
+            ) {
                 parts.push(format!("counterbore {d} x {h} deep"));
             }
         }
@@ -576,9 +659,17 @@ pub(crate) fn fastener_text(standard: i32, fastener_type: i32) -> String {
 }
 
 /// The tool's reply.
-pub fn reply_text(ids: &mut IdRegistry, params: &HoleWizardParams, reply: &proto::HoleWizardResponse) -> String {
+pub fn reply_text(
+    ids: &mut IdRegistry,
+    params: &HoleWizardParams,
+    reply: &proto::HoleWizardResponse,
+) -> String {
     let spec = reply.spec.clone().unwrap_or_default();
-    let size = if spec.size.is_empty() { params.size.trim() } else { spec.size.as_str() };
+    let size = if spec.size.is_empty() {
+        params.size.trim()
+    } else {
+        spec.size.as_str()
+    };
     let fastener = match Fastener::from_sw(spec.fastener_type) {
         Some((standard, f)) => format!("{} {}", standard.name(), f.name().replace('_', " ")),
         None => HoleStandard::from_sw(spec.standard)
@@ -670,7 +761,10 @@ mod tests {
         assert_eq!(default_standard("Ø5.0", false), HoleStandard::Iso);
         assert_eq!(default_standard("Letter F", true), HoleStandard::AnsiInch);
         // Unset in the request: ISO.
-        let p = HoleWizardParams { standard: None, ..params(HoleKind::Counterbore) };
+        let p = HoleWizardParams {
+            standard: None,
+            ..params(HoleKind::Counterbore)
+        };
         assert_eq!(request(&p, vec![1]).unwrap().standard, 8);
     }
 
@@ -680,17 +774,40 @@ mod tests {
         assert_eq!((r.standard, r.fastener_type), (8, 139)); // ISO socket head cap screw
         assert_eq!(r.kind(), proto::HoleKind::Counterbore);
         assert!(r.through_all);
-        assert_eq!(request(&params(HoleKind::Hole), vec![1]).unwrap().fastener_type, 144);
-        assert_eq!(request(&params(HoleKind::Countersink), vec![1]).unwrap().fastener_type, 141);
-        assert_eq!(request(&params(HoleKind::Tapped), vec![1]).unwrap().fastener_type, 147);
+        assert_eq!(
+            request(&params(HoleKind::Hole), vec![1])
+                .unwrap()
+                .fastener_type,
+            144
+        );
+        assert_eq!(
+            request(&params(HoleKind::Countersink), vec![1])
+                .unwrap()
+                .fastener_type,
+            141
+        );
+        assert_eq!(
+            request(&params(HoleKind::Tapped), vec![1])
+                .unwrap()
+                .fastener_type,
+            147
+        );
     }
 
     #[test]
     fn every_kind_has_its_default_fastener_in_every_standard() {
         use HoleStandard::*;
         for standard in [Iso, AnsiMetric, AnsiInch, Din, Jis] {
-            for kind in [HoleKind::Hole, HoleKind::Counterbore, HoleKind::Countersink, HoleKind::Tapped] {
-                assert!(kind.default_fastener().sw(standard).is_some(), "{standard:?} {kind:?}");
+            for kind in [
+                HoleKind::Hole,
+                HoleKind::Counterbore,
+                HoleKind::Countersink,
+                HoleKind::Tapped,
+            ] {
+                assert!(
+                    kind.default_fastener().sw(standard).is_some(),
+                    "{standard:?} {kind:?}"
+                );
             }
         }
     }
@@ -718,7 +835,11 @@ mod tests {
         let mut p = params(HoleKind::Counterbore);
         p.fastener = Some(Fastener::ButtonHead); // ISO has none
         let err = request(&p, vec![1]).unwrap_err();
-        assert!(err.message.contains("socket_head_cap_screw"), "{}", err.message);
+        assert!(
+            err.message.contains("socket_head_cap_screw"),
+            "{}",
+            err.message
+        );
 
         let mut p = params(HoleKind::Hole);
         p.countersink_angle_deg = Some(90.0);
