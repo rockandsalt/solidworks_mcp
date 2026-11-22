@@ -1,7 +1,7 @@
 #include "pch.h"
 #include "service/SketchHelpers.h"
+#include <catch2/catch_test_macros.hpp>
 #include <algorithm>
-#include <iostream>
 
 namespace
 {
@@ -13,7 +13,7 @@ namespace
 
 // An arc's bounding points are its ends and the quadrant points it passes,
 // going its own way round.
-bool TestArcBoundingPoints()
+TEST_CASE("an arc's bounding points are its ends and the quadrant points it passes")
 {
 	using sld_mcp::service::ArcBoundingPoints;
 	const Eigen::Vector2d c(1.0, 2.0);
@@ -22,21 +22,26 @@ bool TestArcBoundingPoints()
 	const double s = std::sqrt(2.0);
 	const Eigen::Vector2d northEast = c + Eigen::Vector2d(s, s), northWest = c + Eigen::Vector2d(-s, s);
 
-	// A quarter counterclockwise from east to north passes no other quadrant.
-	const auto quarter = ArcBoundingPoints(c, 2.0, east, north, false);
-	const bool quarterOk = Has(quarter, east) && Has(quarter, north) && !Has(quarter, west) && !Has(quarter, south);
-	// The same ends clockwise go the long way round, through south and west.
-	const auto longWay = ArcBoundingPoints(c, 2.0, east, north, true);
-	const bool longWayOk = Has(longWay, west) && Has(longWay, south);
-	// From north-east to north-west counterclockwise: only north between.
-	const auto top = ArcBoundingPoints(c, 2.0, northEast, northWest, false);
-	const bool topOk = top.size() == 3 && Has(top, north) && !Has(top, east) && !Has(top, west);
-
-	if (!quarterOk || !longWayOk || !topOk)
+	SECTION("a quarter counterclockwise from east to north passes no other quadrant")
 	{
-		std::cerr << "FAIL: an arc's bounding points (ends and the quadrant points it passes)\n";
-		return false;
+		const auto quarter = ArcBoundingPoints(c, 2.0, east, north, false);
+		CHECK(Has(quarter, east));
+		CHECK(Has(quarter, north));
+		CHECK_FALSE(Has(quarter, west));
+		CHECK_FALSE(Has(quarter, south));
 	}
-	std::cout << "PASS: an arc's bounding points are its ends and the quadrant points it passes\n";
-	return true;
+	SECTION("the same ends clockwise go the long way round, through south and west")
+	{
+		const auto longWay = ArcBoundingPoints(c, 2.0, east, north, true);
+		CHECK(Has(longWay, west));
+		CHECK(Has(longWay, south));
+	}
+	SECTION("from north-east to north-west counterclockwise: only north between")
+	{
+		const auto top = ArcBoundingPoints(c, 2.0, northEast, northWest, false);
+		CHECK(top.size() == 3);
+		CHECK(Has(top, north));
+		CHECK_FALSE(Has(top, east));
+		CHECK_FALSE(Has(top, west));
+	}
 }

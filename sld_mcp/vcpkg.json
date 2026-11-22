@@ -3,6 +3,7 @@
   "version-string": "0.1.0",
   "description": "SolidWorks add-in hosting the gRPC server for the sld_mcp MCP bridge",
   "dependencies": [
+    "catch2",
     "eigen3",
     "grpc"
   ],

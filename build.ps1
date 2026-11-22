@@ -31,8 +31,8 @@
     PATH, in its default install folder, or in MAKENSIS), and bundles the
     vc_redist.x64.exe of the Visual Studio that built the add-in.
 
-    The test target builds the native execution tests in Release using installed
-    C++ dependencies, with output separate from the installed or development DLL.
+    The test target builds the native tests (Catch2, sld_mcp\tests\*.cpp) in
+    Release, with output separate from the installed or development DLL.
     It does not start, stop, or reset SolidWorks. SwTypeLibDir optionally overrides
     the project's default type-library location for add-in builds and tests.
 #>
@@ -354,10 +354,9 @@ function Test-Addin {
     $msbuild = Find-MSBuild
     $vsPath = Find-VsInstallPath
     $project = Join-Path $root 'sld_mcp\sld_mcp.vcxproj'
-    $outDir = Join-Path $root 'build\mesh-cancellation'
-    # Reuse installed dependencies and keep output away from any loaded DLL.
-    $properties = @('-p:Configuration=Release', '-p:Platform=x64',
-        '-p:VcpkgManifestInstall=false', "-p:OutDir=$outDir\")
+    $outDir = Join-Path $root 'build\native-tests'
+    # Keep output away from any loaded DLL.
+    $properties = @('-p:Configuration=Release', '-p:Platform=x64', "-p:OutDir=$outDir\")
     if ($SwTypeLibDir) { $properties += "-p:SwTypeLibDir=$SwTypeLibDir" }
     & $msbuild $project @properties -t:Build -m:2 -nologo -v:minimal
     if ($LASTEXITCODE) { throw 'Add-in test build failed.' }
@@ -375,17 +374,19 @@ function Test-Addin {
     $names += @('SolidWorksService', 'CadExecutor', 'MainThread', 'pch', 'sld_mcp.pb', 'sld_mcp.grpc.pb')
     $objects = @($names | ForEach-Object { Join-Path $objectDir "$_.obj" })
     $libraries = @(Get-ChildItem (Join-Path $dependencyDir 'lib') -Filter '*.lib' | ForEach-Object FullName)
-    $testExe = Join-Path $outDir 'mesh_cancellation_tests.exe'
+    # Catch2 supplies main(); vcpkg keeps it in manual-link so the add-in never links it.
+    # With main only in a library, the linker needs /SUBSYSTEM:CONSOLE to find it (LNK1561).
+    $libraries += Join-Path $dependencyDir 'lib\manual-link\Catch2Main.lib'
+    $tests = @(Get-ChildItem (Join-Path $projectDir 'tests') -Filter '*.cpp' | ForEach-Object FullName)
+    $testExe = Join-Path $outDir 'sld_mcp_tests.exe'
     & cl.exe /nologo /std:c++17 /EHsc /MD /D_UNICODE /DUNICODE /D_USE_MATH_DEFINES "/I$projectDir" "/I$($settings.SwTypeLibDir)" `
         "/I$generatedDir" "/I$(Join-Path $dependencyDir 'include')" `
-        (Join-Path $projectDir 'tests\MeshCancellation.cpp') (Join-Path $projectDir 'tests\PmiPreferences.cpp') `
-        (Join-Path $projectDir 'tests\SketchGeometry.cpp') (Join-Path $projectDir 'tests\NamedViews.cpp') `
-        "/Fo$outDir\" "/Fe$testExe" `
-        /link @objects @libraries ws2_32.lib crypt32.lib iphlpapi.lib bcrypt.lib dbghelp.lib `
+        @tests "/Fo$outDir\" "/Fe$testExe" `
+        /link /SUBSYSTEM:CONSOLE @objects @libraries ws2_32.lib crypt32.lib iphlpapi.lib bcrypt.lib dbghelp.lib `
         ole32.lib oleaut32.lib uuid.lib user32.lib advapi32.lib shell32.lib
     if ($LASTEXITCODE) { throw 'Native execution test build failed.' }
     & $testExe
-    if ($LASTEXITCODE) { throw 'Native execution regression failed.' }
+    if ($LASTEXITCODE) { throw 'Native tests failed.' }
 }
 
 function Build-Server {

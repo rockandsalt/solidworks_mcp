@@ -1,7 +1,7 @@
 #include "pch.h"
 #include "service/PreferenceHelpers.h"
 #include "service/AnnotationHelpers.h"
-#include <iostream>
+#include <catch2/catch_test_macros.hpp>
 
 namespace
 {
@@ -46,7 +46,7 @@ namespace
 	};
 }
 
-bool TestPmiPreferences()
+TEST_CASE("document preference edits roll back in order and report failures")
 {
 	using namespace sld_mcp::service;
 	sld_mcp::v1::DocumentPreferencesRequest request;
@@ -55,50 +55,56 @@ bool TestPmiPreferences()
 	(*request.mutable_set_doubles())[126] = 0.5;
 	Preferences preferences;
 	bool changed = false;
-	const auto refused = ApplyDocumentPreferenceChanges(&preferences, request, changed);
-	if (refused.ok() || changed || preferences.block || preferences.decimals != 2 || preferences.tolerance != 0.01)
-	{
-		std::cerr << "FAIL: failed preference edit did not restore dependent values before the mode\n";
-		return false;
-	}
-	preferences.failRestore = true;
-	const auto partial = ApplyDocumentPreferenceChanges(&preferences, request, changed);
-	if (partial.ok() || !changed || partial.error_message().find("couldn't restore integer 405") == std::string::npos)
-	{
-		std::cerr << "FAIL: preference rollback failure was not reported\n";
-		return false;
-	}
-	preferences = Preferences{};
-	preferences.failRead = true;
-	const auto unreadable = ApplyDocumentPreferenceChanges(&preferences, request, changed);
-	if (unreadable.ok() || changed || preferences.block || preferences.decimals != 2)
-	{
-		std::cerr << "FAIL: unreadable original preference must not be overwritten\n";
-		return false;
-	}
-	preferences = Preferences{};
-	request.mutable_set_doubles()->clear();
-	const auto success = ApplyDocumentPreferenceChanges(&preferences, request, changed);
-	if (!success.ok() || !changed || !preferences.block || preferences.decimals != 3)
-		return false;
 
+	SECTION("a failed edit restores dependent values before the mode")
+	{
+		const auto refused = ApplyDocumentPreferenceChanges(&preferences, request, changed);
+		CHECK_FALSE(refused.ok());
+		CHECK_FALSE(changed);
+		CHECK_FALSE(preferences.block);
+		CHECK(preferences.decimals == 2);
+		CHECK(preferences.tolerance == 0.01);
+	}
+	SECTION("a rollback that fails is reported")
+	{
+		preferences.failRestore = true;
+		const auto partial = ApplyDocumentPreferenceChanges(&preferences, request, changed);
+		CHECK_FALSE(partial.ok());
+		CHECK(changed);
+		CHECK(partial.error_message().find("couldn't restore integer 405") != std::string::npos);
+	}
+	SECTION("an unreadable original preference is not overwritten")
+	{
+		preferences.failRead = true;
+		const auto unreadable = ApplyDocumentPreferenceChanges(&preferences, request, changed);
+		CHECK_FALSE(unreadable.ok());
+		CHECK_FALSE(changed);
+		CHECK_FALSE(preferences.block);
+		CHECK(preferences.decimals == 2);
+	}
+	SECTION("edits that all succeed are applied")
+	{
+		request.mutable_set_doubles()->clear();
+		const auto success = ApplyDocumentPreferenceChanges(&preferences, request, changed);
+		CHECK(success.ok());
+		CHECK(changed);
+		CHECK(preferences.block);
+		CHECK(preferences.decimals == 3);
+	}
+}
+
+TEST_CASE("inherited precision resolves the matching linear or angular document default")
+{
+	using namespace sld_mcp::service;
+	Preferences preferences;
 	Display display;
-	if (PrimaryDimensionPrecision(&display, &preferences, false) != 3 ||
-		PrimaryDimensionPrecision(&display, &preferences, true) != 1)
-	{
-		std::cerr << "FAIL: inherited precision must resolve the matching document default\n";
-		return false;
-	}
-	display.precision = 4;
+	CHECK(PrimaryDimensionPrecision(&display, &preferences, false) == 3);
+	CHECK(PrimaryDimensionPrecision(&display, &preferences, true) == 1);
+
 	preferences.failRead = true;
-	if (PrimaryDimensionPrecision(&display, &preferences, false) != 4)
-		return false;
+	display.precision = 4;
+	CHECK(PrimaryDimensionPrecision(&display, &preferences, false) == 4);
+	// A failed read of the document default stays unknown.
 	display.precision = swPrecisionFollowsDocumentSetting;
-	if (PrimaryDimensionPrecision(&display, &preferences, false).has_value())
-	{
-		std::cerr << "FAIL: failed precision read must remain unknown\n";
-		return false;
-	}
-	std::cout << "PASS: preference rollback order/failures and inherited linear/angular precision\n";
-	return true;
+	CHECK_FALSE(PrimaryDimensionPrecision(&display, &preferences, false).has_value());
 }

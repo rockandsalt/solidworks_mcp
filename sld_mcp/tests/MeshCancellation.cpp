@@ -3,23 +3,24 @@
 #include "SolidWorksService.h"
 #include "MainThread.h"
 #include "service/Common.h"
+#include <catch2/catch_test_macros.hpp>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <future>
-#include <iostream>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
 #include <vector>
 
 using namespace std::chrono_literals;
+using namespace sld_mcp::service;
 
 namespace
 {
-	using namespace sld_mcp::service;
-
-	bool TestGateLifecycle(ExecutionPolicy policy)
+	// Assertions stay on the test thread: Catch2's are not thread-safe, so
+	// work on other threads hands back what it saw.
+	void CheckGateLifecycle(ExecutionPolicy policy)
 	{
 		RequestGate gate;
 		std::atomic<bool> cancelled{ false };
@@ -56,70 +57,11 @@ namespace
 		const bool stopped = running.get();
 		const bool recovered = next.get();
 		const bool read = policy == ExecutionPolicy::Cancellable;
-		return started && held && recovered && stopped == read && finished != read;
-	}
-
-	bool TestGateAdmissionAndExceptions()
-	{
-		RequestGate gate;
-		// An already-expired edit cannot start, even though an admitted edit
-		// would be allowed to finish. Both policy types share admission rules.
-		RequestControl expired([] { return true; }, ExecutionPolicy::CompleteOperation);
-		bool ran = false, rejected = false;
-		try { gate.Execute(expired, [&] { ran = true; return 0; }); }
-		catch (const RequestCancelled&) { rejected = true; }
-		if (!rejected || ran)
-			return false;
-		RequestControl active([] { return false; }, ExecutionPolicy::CompleteOperation);
-		bool cleaned = false;
-		struct Cleanup { bool& done; ~Cleanup() { done = true; } };
-		try
-		{
-			gate.Execute(active, [&]() -> int {
-				Cleanup cleanup{ cleaned };
-				throw std::runtime_error("fake CAD failure");
-			});
-		}
-		catch (const std::runtime_error&) {}
-		return gate.Execute(active, [&] { return cleaned; });
-	}
-
-	// RPCs that read unless asked to change: only the plain read may stop early.
-	bool TestReadOrChangePolicies()
-	{
-		constexpr auto read = ExecutionPolicy::Cancellable;
-		constexpr auto change = ExecutionPolicy::CompleteOperation;
-
-		sld_mcp::v1::SelectionRequest selection;
-		bool passed = PolicyFor(selection) == read;
-		selection.set_append(true);
-		passed = passed && PolicyFor(selection) == read;
-		selection.add_select()->set_feature_name("Boss-Extrude1");
-		passed = passed && PolicyFor(selection) == change;
-		sld_mcp::v1::SelectionRequest drawing;
-		drawing.add_select_view_entities()->set_view_name("Drawing View1");
-		passed = passed && PolicyFor(drawing) == change;
-		sld_mcp::v1::SelectionRequest clear;
-		clear.set_clear(true);
-		passed = passed && PolicyFor(clear) == change;
-
-		sld_mcp::v1::ConfigurationsRequest configurations;
-		passed = passed && PolicyFor(configurations) == read;
-		configurations.set_activate("Default");
-		passed = passed && PolicyFor(configurations) == change;
-		configurations.set_delete_("Other");
-		passed = passed && PolicyFor(configurations) == change;
-		configurations.mutable_create();
-		passed = passed && PolicyFor(configurations) == change;
-
-		sld_mcp::v1::EquationsRequest equations;
-		passed = passed && PolicyFor(equations) == read;
-		equations.add_delete_("Width");
-		passed = passed && PolicyFor(equations) == change;
-		sld_mcp::v1::EquationsRequest set;
-		set.add_set()->set_name("Width");
-		passed = passed && PolicyFor(set) == change;
-		return passed;
+		CHECK(started);
+		CHECK(held);
+		CHECK(recovered);
+		CHECK(stopped == read);
+		CHECK(finished != read);
 	}
 
 	// Blocks the first connection lookup while GetMesh owns the model mutex.
@@ -193,70 +135,6 @@ namespace
 		PumpUntil(future, duration);
 	}
 
-	bool TestMainThread()
-	{
-		using Outcome = MainThread::Outcome;
-		MainThread main;
-		const DWORD owner = GetCurrentThreadId();
-		auto never = [] { return false; };
-
-		// Work runs on the owning thread; an exception it throws reaches the caller.
-		auto ran = std::async(std::launch::async, [&] {
-			DWORD ranOn = 0;
-			const bool done = main.Run([&] { ranOn = GetCurrentThreadId(); }, never) == Outcome::Done;
-			bool threw = false;
-			try { main.Run([] { throw std::runtime_error("fake CAD failure"); }, never); }
-			catch (const std::runtime_error&) { threw = true; }
-			return done && ranOn == owner && threw;
-		});
-		if (!PumpUntil(ran, 2s) || !ran.get())
-			return false;
-
-		// Cancelled while queued (the owner isn't pumping): it never runs, not
-		// even once the owner pumps again.
-		bool late = false;
-		std::atomic<bool> cancel{ false };
-		auto queued = std::async(std::launch::async, [&] {
-			return main.Run([&] { late = true; }, [&] { return cancel.load(); });
-		});
-		std::this_thread::sleep_for(100ms);
-		cancel = true;
-		if (queued.wait_for(1s) != std::future_status::ready || queued.get() != Outcome::NotStarted)
-			return false;
-		Pump(100ms);
-		if (late)
-			return false;
-
-		// Work queued while other work runs and pumps messages (as SolidWorks does
-		// inside some calls) waits for it instead of running nested.
-		std::vector<int> order;
-		std::future<Outcome> inner;
-		auto outer = std::async(std::launch::async, [&] {
-			return main.Run([&] {
-				order.push_back(1);
-				inner = std::async(std::launch::async, [&] { return main.Run([&] { order.push_back(3); }, never); });
-				Pump(200ms);
-				order.push_back(2);
-			}, never);
-		});
-		if (!PumpUntil(outer, 2s) || outer.get() != Outcome::Done || !inner.valid() ||
-			!PumpUntil(inner, 2s) || inner.get() != Outcome::Done || order != std::vector<int>{ 1, 2, 3 })
-			return false;
-
-		// Close: queued work is let go without running, new work is refused.
-		bool closedRan = false;
-		auto pending = std::async(std::launch::async, [&] { return main.Run([&] { closedRan = true; }, never); });
-		std::this_thread::sleep_for(100ms);
-		main.Close();
-		if (pending.wait_for(1s) != std::future_status::ready || pending.get() != Outcome::Closed)
-			return false;
-		auto refused = std::async(std::launch::async, [&] { return main.Run([] {}, never); });
-		if (refused.wait_for(1s) != std::future_status::ready || refused.get() != Outcome::Closed)
-			return false;
-		Pump(100ms);
-		return !closedRan;
-	}
-
 	// Records which thread looks the connection up; failing it keeps the
 	// handler away from any real SolidWorks API.
 	class ThreadGit final : public IGlobalInterfaceTable
@@ -285,53 +163,6 @@ namespace
 		std::atomic<int> calls{ 0 };
 		std::atomic<DWORD> thread{ 0 };
 	};
-
-	// The production executor with a main thread: an RPC that expires while
-	// queued never connects; a fresh one connects on the main thread.
-	bool TestExecutorOnMainThread()
-	{
-		MainThread main;
-		ThreadGit git;
-		SolidWorksService service(&git, 1, &main);
-		grpc::ServerBuilder builder;
-		int port = 0;
-		builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials(), &port);
-		builder.RegisterService(&service);
-		auto server = builder.BuildAndStart();
-		if (!server || !port)
-			return false;
-		auto channel = grpc::CreateChannel("127.0.0.1:" + std::to_string(port), grpc::InsecureChannelCredentials());
-		auto call = [channel](std::chrono::milliseconds timeout) {
-			return std::async(std::launch::async, [channel, timeout] {
-				auto stub = sld_mcp::v1::SolidWorks::NewStub(channel);
-				grpc::ClientContext context;
-				context.set_deadline(std::chrono::system_clock::now() + timeout);
-				sld_mcp::v1::GetActiveDocumentRequest request;
-				sld_mcp::v1::GetActiveDocumentResponse response;
-				return stub->GetActiveDocument(&context, request, &response).error_code();
-			});
-		};
-
-		auto expired = call(300ms);
-		bool passed = expired.wait_for(2s) == std::future_status::ready;
-		if (passed)
-		{
-			const auto code = expired.get();
-			passed = code == grpc::StatusCode::DEADLINE_EXCEEDED || code == grpc::StatusCode::CANCELLED;
-		}
-		// Let the server side give up on it (it polls every 50 ms), then pump:
-		// the stale wake must not start it.
-		std::this_thread::sleep_for(200ms);
-		Pump(100ms);
-		passed = passed && git.calls == 0;
-
-		auto fresh = call(5s);
-		passed = PumpUntil(fresh, 5s) && fresh.get() == grpc::StatusCode::UNAVAILABLE && passed;
-		passed = passed && git.calls == 1 && git.thread == GetCurrentThreadId();
-		server->Shutdown();
-		server->Wait();
-		return passed;
-	}
 
 	class ObservedService final : public sld_mcp::v1::SolidWorks::Service
 	{
@@ -372,40 +203,191 @@ namespace
 	private:
 		SolidWorksService m_inner;
 	};
+
+	bool Expired(grpc::StatusCode code)
+	{
+		return code == grpc::StatusCode::DEADLINE_EXCEEDED || code == grpc::StatusCode::CANCELLED;
+	}
 }
 
-bool TestPmiPreferences();
-bool TestArcBoundingPoints();
-bool TestNamedViewIn();
-
-int main()
+TEST_CASE("shared admission: an expired edit can't start, a throwing one still cleans up")
 {
-	if (!TestPmiPreferences() || !TestArcBoundingPoints() || !TestNamedViewIn())
-		return 1;
-	if (!TestGateAdmissionAndExceptions() || !TestGateLifecycle(ExecutionPolicy::Cancellable) ||
-		!TestGateLifecycle(ExecutionPolicy::CompleteOperation))
-	{
-		std::cerr << "FAIL: shared request admission, cancellation, edit completion or cleanup\n";
-		return 1;
-	}
-	std::cout << "PASS: shared admission, running inspection cancellation, edit completion and exception cleanup\n";
-	if (!TestReadOrChangePolicies())
-	{
-		std::cerr << "FAIL: a selection, configurations or equations request that changes something could stop early, or a read couldn't\n";
-		return 1;
-	}
-	std::cout << "PASS: selection, configurations and equations reads are cancellable, their changes complete\n";
-	if (!TestMainThread())
-	{
-		std::cerr << "FAIL: main-thread work: owning thread, exceptions, cancelled while queued, no nesting or Close\n";
-		return 1;
-	}
-	if (!TestExecutorOnMainThread())
-	{
-		std::cerr << "FAIL: executor on the main thread: an expired queued RPC connected, or a fresh one didn't on the main thread\n";
-		return 1;
-	}
-	std::cout << "PASS: main-thread work runs on its thread, never after expiring in the queue, never nested\n";
+	RequestGate gate;
+	// An already-expired edit cannot start, even though an admitted edit
+	// would be allowed to finish. Both policy types share admission rules.
+	RequestControl expired([] { return true; }, ExecutionPolicy::CompleteOperation);
+	bool ran = false;
+	CHECK_THROWS_AS(gate.Execute(expired, [&] { ran = true; return 0; }), RequestCancelled);
+	CHECK_FALSE(ran);
+
+	RequestControl active([] { return false; }, ExecutionPolicy::CompleteOperation);
+	bool cleaned = false;
+	struct Cleanup { bool& done; ~Cleanup() { done = true; } };
+	CHECK_THROWS_AS(gate.Execute(active, [&]() -> int {
+		Cleanup cleanup{ cleaned };
+		throw std::runtime_error("fake CAD failure");
+	}), std::runtime_error);
+	CHECK(gate.Execute(active, [&] { return cleaned; }));
+}
+
+TEST_CASE("a running inspection is cancelled, a running edit completes, neither releases its lock early")
+{
+	SECTION("inspection (Cancellable)") { CheckGateLifecycle(ExecutionPolicy::Cancellable); }
+	SECTION("edit (CompleteOperation)") { CheckGateLifecycle(ExecutionPolicy::CompleteOperation); }
+}
+
+// RPCs that read unless asked to change: only the plain read may stop early.
+TEST_CASE("selection, configurations and equations reads are cancellable, their changes complete")
+{
+	constexpr auto read = ExecutionPolicy::Cancellable;
+	constexpr auto change = ExecutionPolicy::CompleteOperation;
+
+	sld_mcp::v1::SelectionRequest selection;
+	CHECK(PolicyFor(selection) == read);
+	selection.set_append(true);
+	CHECK(PolicyFor(selection) == read);
+	selection.add_select()->set_feature_name("Boss-Extrude1");
+	CHECK(PolicyFor(selection) == change);
+	sld_mcp::v1::SelectionRequest drawing;
+	drawing.add_select_view_entities()->set_view_name("Drawing View1");
+	CHECK(PolicyFor(drawing) == change);
+	sld_mcp::v1::SelectionRequest clear;
+	clear.set_clear(true);
+	CHECK(PolicyFor(clear) == change);
+
+	sld_mcp::v1::ConfigurationsRequest configurations;
+	CHECK(PolicyFor(configurations) == read);
+	configurations.set_activate("Default");
+	CHECK(PolicyFor(configurations) == change);
+	configurations.set_delete_("Other");
+	CHECK(PolicyFor(configurations) == change);
+	configurations.mutable_create();
+	CHECK(PolicyFor(configurations) == change);
+
+	sld_mcp::v1::EquationsRequest equations;
+	CHECK(PolicyFor(equations) == read);
+	equations.add_delete_("Width");
+	CHECK(PolicyFor(equations) == change);
+	sld_mcp::v1::EquationsRequest set;
+	set.add_set()->set_name("Width");
+	CHECK(PolicyFor(set) == change);
+}
+
+TEST_CASE("main-thread work runs on its thread, never after expiring in the queue, never nested")
+{
+	using Outcome = MainThread::Outcome;
+	MainThread main;
+	const DWORD owner = GetCurrentThreadId();
+	auto never = [] { return false; };
+
+	// Work runs on the owning thread; an exception it throws reaches the caller.
+	struct Seen { Outcome outcome; DWORD ranOn; bool threw; };
+	auto ran = std::async(std::launch::async, [&] {
+		Seen seen{ Outcome::NotStarted, 0, false };
+		seen.outcome = main.Run([&] { seen.ranOn = GetCurrentThreadId(); }, never);
+		try { main.Run([] { throw std::runtime_error("fake CAD failure"); }, never); }
+		catch (const std::runtime_error&) { seen.threw = true; }
+		return seen;
+	});
+	REQUIRE(PumpUntil(ran, 2s));
+	const Seen seen = ran.get();
+	CHECK(seen.outcome == Outcome::Done);
+	CHECK(seen.ranOn == owner);
+	CHECK(seen.threw);
+
+	// Cancelled while queued (the owner isn't pumping): it never runs, not
+	// even once the owner pumps again.
+	bool late = false;
+	std::atomic<bool> cancel{ false };
+	auto queued = std::async(std::launch::async, [&] {
+		return main.Run([&] { late = true; }, [&] { return cancel.load(); });
+	});
+	std::this_thread::sleep_for(100ms);
+	cancel = true;
+	REQUIRE(queued.wait_for(1s) == std::future_status::ready);
+	CHECK(queued.get() == Outcome::NotStarted);
+	Pump(100ms);
+	CHECK_FALSE(late);
+
+	// Work queued while other work runs and pumps messages (as SolidWorks does
+	// inside some calls) waits for it instead of running nested.
+	std::vector<int> order;
+	std::future<Outcome> inner;
+	auto outer = std::async(std::launch::async, [&] {
+		return main.Run([&] {
+			order.push_back(1);
+			inner = std::async(std::launch::async, [&] { return main.Run([&] { order.push_back(3); }, never); });
+			Pump(200ms);
+			order.push_back(2);
+		}, never);
+	});
+	REQUIRE(PumpUntil(outer, 2s));
+	CHECK(outer.get() == Outcome::Done);
+	REQUIRE(inner.valid());
+	REQUIRE(PumpUntil(inner, 2s));
+	CHECK(inner.get() == Outcome::Done);
+	CHECK(order == std::vector<int>{ 1, 2, 3 });
+
+	// Close: queued work is let go without running, new work is refused.
+	bool closedRan = false;
+	auto pending = std::async(std::launch::async, [&] { return main.Run([&] { closedRan = true; }, never); });
+	std::this_thread::sleep_for(100ms);
+	main.Close();
+	REQUIRE(pending.wait_for(1s) == std::future_status::ready);
+	CHECK(pending.get() == Outcome::Closed);
+	auto refused = std::async(std::launch::async, [&] { return main.Run([] {}, never); });
+	REQUIRE(refused.wait_for(1s) == std::future_status::ready);
+	CHECK(refused.get() == Outcome::Closed);
+	Pump(100ms);
+	CHECK_FALSE(closedRan);
+}
+
+// The production executor with a main thread: an RPC that expires while
+// queued never connects; a fresh one connects on the main thread.
+TEST_CASE("executor on the main thread: an expired queued RPC never connects, a fresh one connects there")
+{
+	MainThread main;
+	ThreadGit git;
+	SolidWorksService service(&git, 1, &main);
+	grpc::ServerBuilder builder;
+	int port = 0;
+	builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials(), &port);
+	builder.RegisterService(&service);
+	auto server = builder.BuildAndStart();
+	REQUIRE(server != nullptr);
+	REQUIRE(port != 0);
+	auto channel = grpc::CreateChannel("127.0.0.1:" + std::to_string(port), grpc::InsecureChannelCredentials());
+	auto call = [channel](std::chrono::milliseconds timeout) {
+		return std::async(std::launch::async, [channel, timeout] {
+			auto stub = sld_mcp::v1::SolidWorks::NewStub(channel);
+			grpc::ClientContext context;
+			context.set_deadline(std::chrono::system_clock::now() + timeout);
+			sld_mcp::v1::GetActiveDocumentRequest request;
+			sld_mcp::v1::GetActiveDocumentResponse response;
+			return stub->GetActiveDocument(&context, request, &response).error_code();
+		});
+	};
+
+	auto expired = call(300ms);
+	REQUIRE(expired.wait_for(2s) == std::future_status::ready);
+	CHECK(Expired(expired.get()));
+	// Let the server side give up on it (it polls every 50 ms), then pump:
+	// the stale wake must not start it.
+	std::this_thread::sleep_for(200ms);
+	Pump(100ms);
+	CHECK(git.calls.load() == 0);
+
+	auto fresh = call(5s);
+	REQUIRE(PumpUntil(fresh, 5s));
+	CHECK(fresh.get() == grpc::StatusCode::UNAVAILABLE);
+	CHECK(git.calls.load() == 1);
+	CHECK(git.thread.load() == GetCurrentThreadId());
+	server->Shutdown();
+	server->Wait();
+}
+
+TEST_CASE("expired mesh, macro and document RPCs exit before lock release; a fresh request proceeds")
+{
 	BlockingGit git;
 	ObservedService service(&git);
 	grpc::ServerBuilder builder;
@@ -413,8 +395,8 @@ int main()
 	builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials(), &port);
 	builder.RegisterService(&service);
 	auto server = builder.BuildAndStart();
-	if (!server || !port)
-		return 1;
+	REQUIRE(server != nullptr);
+	REQUIRE(port != 0);
 	auto channel = grpc::CreateChannel("127.0.0.1:" + std::to_string(port), grpc::InsecureChannelCredentials());
 	auto call = [&](uint64_t key, std::chrono::milliseconds timeout) {
 		auto stub = sld_mcp::v1::SolidWorks::NewStub(channel);
@@ -432,20 +414,20 @@ int main()
 	auto macroReturned = service.macroReturned.get_future();
 	auto documentReturned = service.documentReturned.get_future();
 	auto holder = std::async(std::launch::async, [&] { return call(1, 10s); });
-	bool passed = holderEntered.wait_for(2s) == std::future_status::ready;
-	if (passed)
+	// Only non-fatal checks until Unblock, so the holder is always let go.
+	const bool holding = holderEntered.wait_for(2s) == std::future_status::ready;
+	CHECK(holding);
+	if (holding)
 	{
-		const auto queued = call(2, 300ms);
-		passed = queued.error_code() == grpc::StatusCode::DEADLINE_EXCEEDED ||
-			queued.error_code() == grpc::StatusCode::CANCELLED;
-		passed = passed && queuedEntered.wait_for(1s) == std::future_status::ready;
+		CHECK(Expired(call(2, 300ms).error_code()));
+		CHECK(queuedEntered.wait_for(1s) == std::future_status::ready);
 		// Observe SERVER completion while the holder still owns the mutex.
 		// A client-side timeout by itself would pass even with the old bug.
 		const bool returned = queuedReturned.wait_for(1s) == std::future_status::ready;
-		passed = passed && returned;
+		CHECK(returned);
 		if (returned)
-			passed = passed && queuedReturned.get() == grpc::StatusCode::CANCELLED;
-		passed = passed && git.calls == 1;
+			CHECK(queuedReturned.get() == grpc::StatusCode::CANCELLED);
+		CHECK(git.calls.load() == 1);
 
 		// Commands and basic document reads must use the same admission gate.
 		// These must return on the server while the original call still owns it.
@@ -457,30 +439,26 @@ int main()
 		sld_mcp::v1::RunMacroResponse macroResponse;
 		stub->RunMacro(&macroContext, macroRequest, &macroResponse);
 		const bool macroStopped = macroReturned.wait_for(1s) == std::future_status::ready;
-		passed = passed && macroStopped;
+		CHECK(macroStopped);
 		if (macroStopped)
-			passed = passed && macroReturned.get() == grpc::StatusCode::CANCELLED;
+			CHECK(macroReturned.get() == grpc::StatusCode::CANCELLED);
 		grpc::ClientContext documentContext;
 		documentContext.set_deadline(std::chrono::system_clock::now() + 300ms);
 		sld_mcp::v1::GetActiveDocumentRequest documentRequest;
 		sld_mcp::v1::GetActiveDocumentResponse documentResponse;
 		stub->GetActiveDocument(&documentContext, documentRequest, &documentResponse);
 		const bool documentStopped = documentReturned.wait_for(1s) == std::future_status::ready;
-		passed = passed && documentStopped;
+		CHECK(documentStopped);
 		if (documentStopped)
-			passed = passed && documentReturned.get() == grpc::StatusCode::CANCELLED;
-		passed = passed && git.calls == 1;
+			CHECK(documentReturned.get() == grpc::StatusCode::CANCELLED);
+		CHECK(git.calls.load() == 1);
 	}
 	git.Unblock();
-	passed = holder.get().error_code() == grpc::StatusCode::UNAVAILABLE && passed;
+	CHECK(holder.get().error_code() == grpc::StatusCode::UNAVAILABLE);
 	// Positive control: a fresh request acquires the released mutex and reaches
 	// the fake GIT. No expired request may perform a late connection lookup.
-	passed = call(3, 2s).error_code() == grpc::StatusCode::UNAVAILABLE && passed;
+	CHECK(call(3, 2s).error_code() == grpc::StatusCode::UNAVAILABLE);
 	server->Shutdown();
 	server->Wait();
-	passed = passed && git.calls == 2;
-	std::cout << (passed ? "PASS" : "FAIL")
-		<< ": expired mesh, macro and document RPCs exit before lock release; fresh request proceeds; connection lookups="
-		<< git.calls << '\n';
-	return passed ? 0 : 1;
+	CHECK(git.calls.load() == 2);
 }
