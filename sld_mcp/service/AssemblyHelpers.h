@@ -83,6 +83,21 @@ namespace sld_mcp::service
 	void DescribeComponent(IComponent2* component, PersistIds& ids, IMathUtility* math,
 		sld_mcp::v1::ComponentInfo* info);
 
+	// The component's model, if SolidWorks has it loaded (null for a
+	// lightweight or suppressed component).
+	ATL::CComPtr<IModelDoc2> ComponentModel(IComponent2* component);
+
+	// InspectModel component_details: flags (virtual, envelope, excluded
+	// from the BOM, pattern / mirror instance, Toolbox) and in-context
+	// references. Best effort.
+	void DescribeComponentDetails(IComponent2* component, sld_mcp::v1::ComponentInfo* info);
+
+	// InspectModel component_properties: the custom properties `names` ("*"
+	// = all) of the component's model, its referenced configuration's value
+	// over the file's. Sets model_not_loaded when there's no model.
+	void ReadComponentProperties(IComponent2* component, const std::vector<std::string>& names,
+		sld_mcp::v1::ComponentInfo* info);
+
 	// The components listed in one reply, each described once.
 	class ComponentList
 	{
@@ -129,10 +144,12 @@ namespace sld_mcp::service
 	// folders; anything whose specific feature is an IMate2 is one.
 	constexpr size_t kMaxMates = 5000;
 
+	// `folders`, if given, gets each mate's folder (empty: none), in step
+	// with `mates`; `folder` = the folder `parent` is in.
 	void CollectMates(IFeature* parent, int depth, std::vector<ATL::CComPtr<IFeature>>& mates,
-		std::set<std::string>& seen);
+		std::set<std::string>& seen, std::vector<std::string>* folders = nullptr, const std::string& folder = {});
 
-	std::vector<ATL::CComPtr<IFeature>> MateFeatures(IModelDoc2* doc);
+	std::vector<ATL::CComPtr<IFeature>> MateFeatures(IModelDoc2* doc, std::vector<std::string>* folders = nullptr);
 
 	std::set<std::string> MateNames(IModelDoc2* doc);
 

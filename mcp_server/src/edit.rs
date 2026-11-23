@@ -11,7 +11,6 @@ use serde::Deserialize;
 
 use crate::addin::proto;
 use crate::assembly::{self, MateAlign, MateKind};
-use crate::diagnose;
 use crate::feature_text;
 use crate::inspect::{IdRegistry, Kind, MM_PER_M, mm, round};
 
@@ -528,7 +527,7 @@ pub fn mate_text(m: &proto::MateInfo) -> String {
 }
 
 pub fn entity_text(ids: &mut IdRegistry, e: &proto::MateEntityState) -> String {
-    let json = diagnose::mate_entity_json(ids, e);
+    let json = crate::assembly::mate_entity_json(ids, e);
     if e.missing {
         return "(missing)".into();
     }

@@ -231,6 +231,115 @@ namespace sld_mcp::service
 			DescribePlacement(component, math, info);
 	}
 
+	ATL::CComPtr<IModelDoc2> ComponentModel(IComponent2* component)
+	{
+		ATL::CComPtr<IDispatch> disp;
+		if (FAILED(component->GetModelDoc2(&disp)) || !disp)
+			return {};
+		ATL::CComQIPtr<IModelDoc2> model(disp.p);
+		return ATL::CComPtr<IModelDoc2>(model);
+	}
+
+	void DescribeComponentDetails(IComponent2* component, sld_mcp::v1::ComponentInfo* info)
+	{
+		VARIANT_BOOL flag = VARIANT_FALSE;
+		if (SUCCEEDED(component->get_IsVirtual(&flag)))
+			info->set_is_virtual(flag != VARIANT_FALSE);
+		flag = VARIANT_FALSE;
+		if (SUCCEEDED(component->IsEnvelope(&flag)))
+			info->set_envelope(flag != VARIANT_FALSE);
+		flag = VARIANT_FALSE;
+		if (SUCCEEDED(component->get_ExcludeFromBOM(&flag)))
+			info->set_excluded_from_bom(flag != VARIANT_FALSE);
+		flag = VARIANT_FALSE;
+		if (SUCCEEDED(component->IsPatternInstance(&flag)))
+			info->set_pattern_instance(flag != VARIANT_FALSE);
+		flag = VARIANT_FALSE;
+		if (SUCCEEDED(component->IsMirrored(&flag)))
+			info->set_mirrored(flag != VARIANT_FALSE);
+
+		if (ATL::CComPtr<IModelDoc2> model = ComponentModel(component))
+		{
+			ATL::CComPtr<IModelDocExtension> ext;
+			long toolbox = 0;
+			if (SUCCEEDED(model->get_Extension(&ext)) && ext && SUCCEEDED(ext->get_ToolboxPartType(&toolbox)))
+				info->set_toolbox(toolbox != 0);
+		}
+		else
+			info->set_model_not_loaded(true);
+
+		ATL::CComVariant models, components, features, dataTypes, statuses, entities, featComps;
+		long configOption = 0;
+		ATL::CComBSTR configName;
+		if (FAILED(component->ListExternalFileReferences2(&models, &components, &features, &dataTypes, &statuses,
+			&entities, &featComps, &configOption, &configName)))
+			return;
+		const auto modelNames = comvariant::ToBstrs(models);
+		const auto componentNames = comvariant::ToBstrs(components);
+		const auto featureNames = comvariant::ToBstrs(features);
+		const auto entityNames = comvariant::ToBstrs(entities);
+		const auto statusValues = comvariant::ToInt64s(statuses);
+		auto at = [](const std::vector<ATL::CComBSTR>& list, size_t i) {
+			return i < list.size() ? ToUtf8(list[i]) : std::string();
+		};
+		for (size_t i = 0; i < modelNames.size() && i < 200; ++i)
+		{
+			sld_mcp::v1::ExternalReference* ref = info->add_external_references();
+			ref->set_model(at(modelNames, i));
+			ref->set_component(at(componentNames, i));
+			ref->set_feature(at(featureNames, i));
+			ref->set_entity(at(entityNames, i));
+			if (i < statusValues.size())
+				ref->set_status(static_cast<int32_t>(statusValues[i]));
+		}
+	}
+
+	void ReadComponentProperties(IComponent2* component, const std::vector<std::string>& names,
+		sld_mcp::v1::ComponentInfo* info)
+	{
+		ATL::CComPtr<IModelDoc2> model = ComponentModel(component);
+		ATL::CComPtr<IModelDocExtension> ext;
+		if (!model || FAILED(model->get_Extension(&ext)) || !ext)
+		{
+			info->set_model_not_loaded(true);
+			return;
+		}
+		ATL::CComBSTR configuration;
+		component->get_ReferencedConfiguration(&configuration);
+		ATL::CComPtr<ICustomPropertyManager> fileProperties, configProperties;
+		ext->get_CustomPropertyManager(ATL::CComBSTR(L""), &fileProperties);
+		if (configuration.Length() > 0)
+			ext->get_CustomPropertyManager(configuration, &configProperties);
+
+		// The names asked for, or every one either manager has, in order.
+		std::vector<ATL::CComBSTR> wanted;
+		std::set<std::wstring> seen;
+		if (std::find(names.begin(), names.end(), "*") != names.end())
+		{
+			for (ICustomPropertyManager* properties : { configProperties.p, fileProperties.p })
+			{
+				ATL::CComVariant list;
+				if (properties && SUCCEEDED(properties->GetNames(&list)))
+					for (const auto& name : comvariant::ToBstrs(list))
+						if (seen.insert(std::wstring(name, name.Length())).second)
+							wanted.push_back(name);
+			}
+		}
+		else
+			for (const auto& name : names)
+				wanted.push_back(FromUtf8(name));
+
+		for (const auto& name : wanted)
+		{
+			if (info->properties_size() >= 200)
+				break;
+			sld_mcp::v1::CustomProperty property;
+			if ((configProperties && GetProperty(configProperties, name, &property)) ||
+				(fileProperties && GetProperty(fileProperties, name, &property)))
+				info->add_properties()->Swap(&property);
+		}
+	}
+
 	ATL::CComPtr<IComponent2> ParentOf(IComponent2* component)
 	{
 		ATL::CComPtr<IComponent2> parent;
@@ -371,11 +480,15 @@ namespace sld_mcp::service
 	}
 
 	void CollectMates(IFeature* parent, int depth, std::vector<ATL::CComPtr<IFeature>>& mates,
-		std::set<std::string>& seen)
+		std::set<std::string>& seen, std::vector<std::string>* folders, const std::string& folder)
 	{
 		ATL::CComPtr<IFeature> sub;
 		if (FAILED(parent->IGetFirstSubFeature(&sub)))
 			return;
+		// A folder doesn't hold its mates as sub-features: the MateGroup lists
+		// "Folder1" [FtrFolder], its mates, then "Folder1___EndTag___"
+		// [FtrFolder] (seen 2026-11-22). So the folder is the open one.
+		std::string current = folder;
 		while (sub && mates.size() < kMaxMates)
 		{
 			ATL::CComPtr<IDispatch> specific;
@@ -383,10 +496,21 @@ namespace sld_mcp::service
 				ATL::CComQIPtr<IMate2>(specific.p))
 			{
 				if (seen.insert(FeatureName(sub)).second)
+				{
 					mates.push_back(sub);
+					if (folders)
+						folders->push_back(current);
+				}
+			}
+			else if (FeatureTypeName(sub) == "FtrFolder")
+			{
+				const std::string name = FeatureName(sub);
+				const std::string endTag = "___EndTag___";
+				current = name.size() > endTag.size() && name.compare(name.size() - endTag.size(), endTag.size(), endTag) == 0
+					? folder : name;
 			}
 			else if (depth < 3)
-				CollectMates(sub, depth + 1, mates, seen);
+				CollectMates(sub, depth + 1, mates, seen, folders, current);
 
 			ATL::CComPtr<IFeature> next;
 			if (FAILED(sub->IGetNextSubFeature(&next)))
@@ -395,7 +519,7 @@ namespace sld_mcp::service
 		}
 	}
 
-	std::vector<ATL::CComPtr<IFeature>> MateFeatures(IModelDoc2* doc)
+	std::vector<ATL::CComPtr<IFeature>> MateFeatures(IModelDoc2* doc, std::vector<std::string>* folders)
 	{
 		std::vector<ATL::CComPtr<IFeature>> mates;
 		std::set<std::string> seen;
@@ -406,7 +530,7 @@ namespace sld_mcp::service
 		{
 			ATL::CComBSTR typeName;
 			if (SUCCEEDED(feature->GetTypeName2(&typeName)) && typeName == L"MateGroup")
-				CollectMates(feature, 0, mates, seen);
+				CollectMates(feature, 0, mates, seen, folders);
 			ATL::CComPtr<IFeature> next;
 			if (FAILED(feature->IGetNextFeature(&next)))
 				break;
@@ -540,6 +664,8 @@ namespace sld_mcp::service
 		for (const auto& display : FeatureDimensions(feature))
 			if (DescribeDimension(display, info->mutable_dimension()))
 				break;
+
+		DiagnoseMate(feature, ids, info->mutable_entities());
 	}
 
 	std::string MateErrorText(long code)

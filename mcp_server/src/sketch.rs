@@ -329,6 +329,13 @@ fn relation_json(ids: &mut IdRegistry, r: &proto::RelationInfo) -> Value {
 pub fn render_inspect(ids: &mut IdRegistry, reply: &proto::InspectSketchResponse) -> Value {
     let mut out = Map::new();
     out.insert("sketch".into(), json!(reply.sketch_name));
+    // A sketch in an assembly component.
+    if let Some(c) = &reply.component {
+        out.insert(
+            "component".into(),
+            json!({ "id": ids.id_for(Kind::Component, &c.persist_id), "name": c.name }),
+        );
+    }
     out.insert("status".into(), json!(status_name(reply.status())));
     if reply.is_3d {
         out.insert("is_3d".into(), json!(true));

@@ -44,6 +44,9 @@ namespace
 	// Faces and edges past this many are dropped (and `truncated` set), so a
 	// huge part can't stall SolidWorks' UI thread for minutes.
 	constexpr size_t kMaxInspectedEntities = 2000;
+
+	// all_component_features stops (and sets `truncated`) past this many.
+	constexpr int kMaxComponentFeatures = 20000;
 }
 
 namespace sld_mcp::service
@@ -98,9 +101,11 @@ namespace
 	// (an assembly's own tree; they're listed separately). With
 	// `referenceExt` (the document's own tree), reference features say where
 	// they are.
+	// With `brief`, only id, name, type, suppression and error (no parents,
+	// children or reference geometry), for every component's tree at once.
 	grpc::Status InspectFeatureList(RequestControl& control, ATL::CComPtr<IFeature> feature, PersistIds& ids,
 		const std::string& componentPid, bool skipAssemblyItems, IModelDocExtension* referenceExt,
-		sld_mcp::v1::InspectModelResponse* response)
+		sld_mcp::v1::InspectModelResponse* response, bool brief = false)
 	{
 		HRESULT hr = S_OK;
 		bool started = false;
@@ -116,7 +121,30 @@ namespace
 			const bool skip = skipAssemblyItems &&
 				(typeName == L"Reference" || typeName == L"MateGroup" || typeName == L"MateReferenceGroupFeature");
 
-			if (started && !skip)
+			if (started && !skip && brief)
+			{
+				if (response->features_size() >= kMaxComponentFeatures)
+				{
+					response->set_truncated(true);
+					return grpc::Status::OK;
+				}
+				sld_mcp::v1::FeatureInfo* info = response->add_features();
+				info->set_persist_id(ids.Get(feature));
+				info->set_name(FeatureName(feature));
+				info->set_type_name(ToUtf8(typeName));
+				info->set_component_persist_id(componentPid);
+				VARIANT_BOOL suppressed = VARIANT_FALSE;
+				if (SUCCEEDED(feature->IsSuppressed(&suppressed)))
+					info->set_suppressed(suppressed != VARIANT_FALSE);
+				VARIANT_BOOL warning = VARIANT_FALSE;
+				long errorCode = swFeatureErrorNone;
+				if (SUCCEEDED(feature->GetErrorCode2(&warning, &errorCode)) && errorCode != swFeatureErrorNone)
+				{
+					info->set_error_code(static_cast<int32_t>(errorCode));
+					info->set_error_is_warning(warning != VARIANT_FALSE);
+				}
+			}
+			else if (started && !skip)
 				DescribeFeature(feature, ToUtf8(typeName), ids, componentPid, referenceExt, response->add_features());
 
 			ATL::CComPtr<IFeature> next;
@@ -388,19 +416,36 @@ namespace
 		const bool wantGeometry = request.include_faces() || request.include_edges();
 		ComponentList components(ids, math, response->mutable_components());
 
+		const std::vector<std::string> propertyNames(request.component_properties().begin(),
+			request.component_properties().end());
 		if (request.include_components())
 			for (const auto& component : AllComponents(assembly, &control))
 			{
 				control.Checkpoint();
+				const int before = response->components_size();
 				components.Add(component);
+				if (response->components_size() == before)
+					continue;
+				sld_mcp::v1::ComponentInfo* info = response->mutable_components(before);
+				if (request.component_details())
+					DescribeComponentDetails(component, info);
+				if (!propertyNames.empty())
+					ReadComponentProperties(component, propertyNames, info);
 			}
 		control.Checkpoint();
 		if (request.include_mates())
-			for (const auto& mate : MateFeatures(doc))
+		{
+			std::vector<std::string> folders;
+			const auto mates = MateFeatures(doc, &folders);
+			for (size_t i = 0; i < mates.size(); ++i)
 			{
 				control.Checkpoint();
-				DescribeMate(mate, ids, response->add_mates());
+				sld_mcp::v1::MateInfo* info = response->add_mates();
+				DescribeMate(mates[i], ids, info);
+				if (i < folders.size())
+					info->set_folder(folders[i]);
 			}
+		}
 
 		// A component scope narrows everything; any other scope (body,
 		// feature, face) only faces/edges, as in a part.
@@ -431,6 +476,29 @@ namespace
 			}
 			else if (grpc::Status status = InspectFeatures(control, doc, ext, ids, true, response); !status.ok())
 				return status;
+
+			// Then the trees of every component in the scope (all of them
+			// without one), briefly.
+			if (request.all_component_features() && (!scopeComponent || IsSubassembly(scopeComponent)))
+			{
+				const std::string scopePid = scopeComponent ? ids.Get(scopeComponent) : std::string();
+				for (const auto& component : AllComponents(assembly, &control))
+				{
+					control.Checkpoint();
+					if (response->truncated())
+						break;
+					if (IsSuppressed(component) ||
+						(!scopePid.empty() && (ids.Get(component) == scopePid || !IsWithin(component, scopePid, ids))))
+						continue;
+					ATL::CComPtr<IFeature> first;
+					if (FAILED(component->FirstFeature(&first)) || !first)
+						continue;
+					const std::string pid = components.Add(component);
+					if (grpc::Status status = InspectFeatureList(control, first, ids, pid, true, nullptr, response, true);
+						!status.ok())
+						return status;
+				}
+			}
 		}
 
 		// Bodies with their components: for the body list, and as the

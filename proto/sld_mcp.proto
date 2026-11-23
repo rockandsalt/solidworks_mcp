@@ -207,7 +207,9 @@ service SolidWorks {
 
   // Read-only look at one 2D sketch: its segments and points (with IDs
   // other sketch RPCs take), dimensions, relations, and how fully defined
-  // it and each entity are. Doesn't open the sketch for editing.
+  // it and each entity are. Doesn't open the sketch for editing. In an
+  // assembly: one of the assembly's own sketches by name, or a sketch in a
+  // component by its persist id (InspectModel all_component_features).
   rpc InspectSketch(InspectSketchRequest) returns (InspectSketchResponse);
 
   // Read-only look at one feature of the active part: its definition
@@ -1907,6 +1909,20 @@ message InspectModelRequest {
   // Assemblies only (ignored for parts): list every component / every mate.
   bool include_components = 7;
   bool include_mates = 8;
+
+  // Assemblies, with include_components: also each component's flags
+  // (virtual, envelope, ...) and in-context references (ComponentInfo
+  // fields 16-22). One more call or two per component.
+  bool component_details = 9;
+  // Assemblies, with include_components: these custom properties of each
+  // component's model (its referenced configuration's value over the
+  // file's, as a BOM resolves them); "*" = all of them.
+  repeated string component_properties = 10;
+  // Assemblies, with include_features and no scope or a subassembly scope:
+  // also the features of every (unsuppressed, resolved) component in it,
+  // each with its component_persist_id. Without parents, children and
+  // reference geometry, to stay cheap on big assemblies.
+  bool all_component_features = 11;
 }
 
 message InspectModelResponse {
@@ -1969,6 +1985,37 @@ message ComponentInfo {
   bool local_geometry = 14;
   // Assembly space. Unset if SolidWorks can't report it.
   Box3 box = 15;
+
+  // With component_details (best effort; false when SolidWorks won't say).
+  bool is_virtual = 16;         // IComponent2::IsVirtual: stored in the assembly
+  bool envelope = 17;           // IComponent2::IsEnvelope
+  bool excluded_from_bom = 18;  // IComponent2::ExcludeFromBOM
+  // An instance of a component pattern / mirror: placed by that feature,
+  // not by mates (IComponent2::IsPatternInstance / IsMirrored).
+  bool pattern_instance = 19;
+  bool mirrored = 20;
+  // Its model is a Toolbox part (IModelDocExtension::ToolboxPartType != 0).
+  bool toolbox = 21;
+  // In-context references of the component's features to other files
+  // (IComponent2::ListExternalFileReferences2).
+  repeated ExternalReference external_references = 22;
+
+  // With component_properties: the ones it has, as evaluated.
+  repeated CustomProperty properties = 23;
+  // component_properties or component_details asked, but the component's
+  // model isn't loaded (lightweight or suppressed), so nothing was read.
+  bool model_not_loaded = 24;
+}
+
+// One in-context reference (IComponent2::ListExternalFileReferences2).
+message ExternalReference {
+  string feature = 1;    // the feature that holds it, e.g. "Sketch2"
+  string model = 2;      // the file referenced (full path)
+  string component = 3;  // the component, in the assembly, referenced through
+  string entity = 4;     // what is referenced, as SolidWorks names it
+  // swExternalReferenceStatus_e: 0 broken, 1 locked, 3 in context,
+  // 4 out of context, 5 dangling.
+  int32 status = 5;
 }
 
 // swMateType_e, the kinds AddMate supports; anything else reads as OTHER.
@@ -2015,6 +2062,10 @@ message MateInfo {
   // "advanced" one, type_name MateLimitDistanceDim / MateLimitPlanarAngleDim):
   // the range its value may move in. `dimension` is the current value.
   MateLimits limits = 13;
+  // What the mate ties together: one per mate entity, in order.
+  repeated MateEntityState entities = 14;
+  // The folder in the Mates folder it's in; empty at the top.
+  string folder = 15;
 }
 
 // The range of a limit mate, in its value's units: meters for DISTANCE,
@@ -2702,6 +2753,9 @@ message RelationInfo {
 message InspectSketchRequest {
   // E.g. "Sketch1". Empty means the last sketch in the feature tree.
   string sketch_name = 1;
+  // Instead of the name: the sketch feature's persist id from InspectModel,
+  // e.g. a sketch in an assembly component.
+  bytes sketch_persist_id = 2;
 }
 
 message InspectSketchResponse {
@@ -2717,6 +2771,9 @@ message InspectSketchResponse {
   bool truncated = 8;
   // The sketch is a 3D sketch: `frame` is unset, positions are model space.
   bool is_3d = 9;
+  // A sketch in an assembly component: that component, so its frame (and a
+  // 3D sketch's positions) can be placed in assembly space.
+  ComponentInfo component = 10;
 }
 
 // Something a dimension or relation attaches to.

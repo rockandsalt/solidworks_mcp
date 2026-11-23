@@ -139,6 +139,10 @@ namespace sld_mcp::service
 
 	sld_mcp::v1::DocumentType ToDocumentType(long type);
 
+	// A custom property's value as typed and as evaluated; false if there's
+	// none (Properties.cpp).
+	bool GetProperty(ICustomPropertyManager* properties, BSTR name, sld_mcp::v1::CustomProperty* out);
+
 	bool SameObject(IUnknown* a, IUnknown* b);
 
 	// RPCs that only read unless the request asks for a change: a read is
