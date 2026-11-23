@@ -122,7 +122,8 @@ everything = inspect(what="components", properties=["*"], search="tree-block")["
 assert len(everything) == 3, everything
 assert all(c["properties"].get("Description") == "Block 40x20" for c in everything), everything
 paged = inspect(what="components", search="*", limit=2)
-assert len(paged["components"]) == 2 and "offset=2" in paged["page_note"], paged
+assert len(paged["components"]) == 2 and "offset=2" in paged["components_note"], paged
+assert paged["components_matching"] == len(inspect(what="components")["components"]), paged
 none = inspect(what="components", search="nothing-like-this")
 assert none["components"] == [] and "note" in none, none
 

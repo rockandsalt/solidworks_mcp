@@ -16,6 +16,7 @@ use serde_json::{Map, Value, json};
 use glam::{BVec3, DAffine3, DMat3, DVec3};
 
 use crate::addin::proto;
+use crate::files::file_name;
 use crate::inspect::{self, IdRegistry, Kind, MM_PER_M, direction, mm, point_mm, round};
 
 // ---- Placement -------------------------------------------------------------
@@ -252,11 +253,6 @@ pub fn place_mesh(mesh: &mut proto::GetMeshResponse) {
 
 // ---- Rendering components and mates ------------------------------------------
 
-/// "C:\models\bracket.SLDPRT" -> "bracket.SLDPRT".
-fn file_name(path: &str) -> &str {
-    path.rsplit(['\\', '/']).next().unwrap_or(path)
-}
-
 fn id_value(id: Option<String>) -> Value {
     id.map_or(Value::Null, Value::String)
 }
@@ -352,6 +348,14 @@ pub fn component_json(ids: &mut IdRegistry, c: &proto::ComponentInfo) -> Value {
             .map(|p| (p.name.clone(), json!(p.resolved)))
             .collect();
         obj.insert("properties".into(), Value::Object(properties));
+    }
+    if c.lists_truncated {
+        obj.insert(
+            "lists_truncated".into(),
+            json!(
+                "it has more in-context references or properties than shown (200 of each at most)"
+            ),
+        );
     }
     Value::Object(obj)
 }

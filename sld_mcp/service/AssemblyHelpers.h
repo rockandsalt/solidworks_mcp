@@ -87,6 +87,10 @@ namespace sld_mcp::service
 	// lightweight or suppressed component).
 	ATL::CComPtr<IModelDoc2> ComponentModel(IComponent2* component);
 
+	// Past these, a component's lists stop and lists_truncated is set.
+	constexpr size_t kMaxExternalReferences = 200;
+	constexpr int kMaxComponentProperties = 200;
+
 	// InspectModel component_details: flags (virtual, envelope, excluded
 	// from the BOM, pattern / mirror instance, Toolbox) and in-context
 	// references. Best effort.
@@ -144,12 +148,21 @@ namespace sld_mcp::service
 	// folders; anything whose specific feature is an IMate2 is one.
 	constexpr size_t kMaxMates = 5000;
 
-	// `folders`, if given, gets each mate's folder (empty: none), in step
-	// with `mates`; `folder` = the folder `parent` is in.
-	void CollectMates(IFeature* parent, int depth, std::vector<ATL::CComPtr<IFeature>>& mates,
-		std::set<std::string>& seen, std::vector<std::string>* folders = nullptr, const std::string& folder = {});
+	// A mate, and the folder of the Mates folder it's in (empty: none).
+	struct MateEntry
+	{
+		ATL::CComPtr<IFeature> feature;
+		std::string folder;
+	};
 
-	std::vector<ATL::CComPtr<IFeature>> MateFeatures(IModelDoc2* doc, std::vector<std::string>* folders = nullptr);
+	// `folder` = the folder `parent` is in.
+	void CollectMates(IFeature* parent, int depth, std::vector<MateEntry>& mates,
+		std::set<std::string>& seen, const std::string& folder = {});
+
+	// Every mate, in tree order, with its folder.
+	std::vector<MateEntry> Mates(IModelDoc2* doc);
+
+	std::vector<ATL::CComPtr<IFeature>> MateFeatures(IModelDoc2* doc);
 
 	std::set<std::string> MateNames(IModelDoc2* doc);
 

@@ -47,12 +47,12 @@ namespace
 
 	// all_component_features stops (and sets `truncated`) past this many.
 	constexpr int kMaxComponentFeatures = 20000;
-}
 
-namespace sld_mcp::service
-{
-	void DescribeFeature(IFeature* feature, const std::string& typeName, PersistIds& ids,
-		const std::string& componentPid, IModelDocExtension* referenceExt, sld_mcp::v1::FeatureInfo* info)
+	// What every feature listing says of a feature: id, name, type,
+	// component, suppressed / rolled back, rebuild error. One COM call each,
+	// so cheap enough for every component's tree at once.
+	void DescribeFeatureHeader(IFeature* feature, const std::string& typeName, PersistIds& ids,
+		const std::string& componentPid, sld_mcp::v1::FeatureInfo* info)
 	{
 		info->set_persist_id(ids.Get(feature));
 		info->set_name(FeatureName(feature));
@@ -73,6 +73,15 @@ namespace sld_mcp::service
 			info->set_error_code(static_cast<int32_t>(errorCode));
 			info->set_error_is_warning(warning != VARIANT_FALSE);
 		}
+	}
+}
+
+namespace sld_mcp::service
+{
+	void DescribeFeature(IFeature* feature, const std::string& typeName, PersistIds& ids,
+		const std::string& componentPid, IModelDocExtension* referenceExt, sld_mcp::v1::FeatureInfo* info)
+	{
+		DescribeFeatureHeader(feature, typeName, ids, componentPid, info);
 
 		ATL::CComVariant parents;
 		if (SUCCEEDED(feature->GetParents(&parents)))
@@ -101,8 +110,8 @@ namespace
 	// (an assembly's own tree; they're listed separately). With
 	// `referenceExt` (the document's own tree), reference features say where
 	// they are.
-	// With `brief`, only id, name, type, suppression and error (no parents,
-	// children or reference geometry), for every component's tree at once.
+	// With `brief`, only DescribeFeatureHeader (no parents, children or
+	// reference geometry), for every component's tree at once.
 	grpc::Status InspectFeatureList(RequestControl& control, ATL::CComPtr<IFeature> feature, PersistIds& ids,
 		const std::string& componentPid, bool skipAssemblyItems, IModelDocExtension* referenceExt,
 		sld_mcp::v1::InspectModelResponse* response, bool brief = false)
@@ -128,21 +137,7 @@ namespace
 					response->set_truncated(true);
 					return grpc::Status::OK;
 				}
-				sld_mcp::v1::FeatureInfo* info = response->add_features();
-				info->set_persist_id(ids.Get(feature));
-				info->set_name(FeatureName(feature));
-				info->set_type_name(ToUtf8(typeName));
-				info->set_component_persist_id(componentPid);
-				VARIANT_BOOL suppressed = VARIANT_FALSE;
-				if (SUCCEEDED(feature->IsSuppressed(&suppressed)))
-					info->set_suppressed(suppressed != VARIANT_FALSE);
-				VARIANT_BOOL warning = VARIANT_FALSE;
-				long errorCode = swFeatureErrorNone;
-				if (SUCCEEDED(feature->GetErrorCode2(&warning, &errorCode)) && errorCode != swFeatureErrorNone)
-				{
-					info->set_error_code(static_cast<int32_t>(errorCode));
-					info->set_error_is_warning(warning != VARIANT_FALSE);
-				}
+				DescribeFeatureHeader(feature, ToUtf8(typeName), ids, componentPid, response->add_features());
 			}
 			else if (started && !skip)
 				DescribeFeature(feature, ToUtf8(typeName), ids, componentPid, referenceExt, response->add_features());
@@ -434,18 +429,13 @@ namespace
 			}
 		control.Checkpoint();
 		if (request.include_mates())
-		{
-			std::vector<std::string> folders;
-			const auto mates = MateFeatures(doc, &folders);
-			for (size_t i = 0; i < mates.size(); ++i)
+			for (const auto& mate : Mates(doc))
 			{
 				control.Checkpoint();
 				sld_mcp::v1::MateInfo* info = response->add_mates();
-				DescribeMate(mates[i], ids, info);
-				if (i < folders.size())
-					info->set_folder(folders[i]);
+				DescribeMate(mate.feature, ids, info);
+				info->set_folder(mate.folder);
 			}
-		}
 
 		// A component scope narrows everything; any other scope (body,
 		// feature, face) only faces/edges, as in a part.

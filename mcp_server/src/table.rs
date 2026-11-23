@@ -18,6 +18,7 @@ use serde_json::{Map, Value, json};
 
 use crate::addin::proto;
 use crate::drawing::{self, sheet_mm};
+use crate::files::file_name;
 use crate::inspect::{IdRegistry, MM_PER_M, round};
 use crate::note;
 
@@ -1318,10 +1319,6 @@ pub fn render_inspect(
                         delete_drawing_annotations.",
         "sheets": sheets,
     }))
-}
-
-fn file_name(path: &str) -> &str {
-    path.rsplit(['\\', '/']).next().unwrap_or(path)
 }
 
 /// What looks wrong about where a table ended up.

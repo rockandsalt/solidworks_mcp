@@ -1285,51 +1285,7 @@ impl SolidWorksTools {
         }
 
         let what = params.what;
-        let search = params
-            .search
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(tree::Pattern::new);
-        let component_list = matches!(what, InspectWhat::Components | InspectWhat::Tree);
-        if search.is_some()
-            && !matches!(
-                what,
-                InspectWhat::Components | InspectWhat::Tree | InspectWhat::Features
-            )
-        {
-            return Err(McpError::invalid_params(
-                "search is for what=\"components\", \"tree\" or \"features\"",
-                None,
-            ));
-        }
-        if (!params.properties.is_empty() || !params.where_properties.is_empty()) && !component_list
-        {
-            return Err(McpError::invalid_params(
-                "properties and where are for what=\"components\" or \"tree\"",
-                None,
-            ));
-        }
-        let wanted: Vec<(String, tree::Pattern)> = params
-            .where_properties
-            .iter()
-            .map(|(name, value)| (name.trim().to_string(), tree::Pattern::new(value)))
-            .collect();
-        let mut property_names: Vec<String> = params
-            .properties
-            .iter()
-            .map(|p| p.trim().to_string())
-            .filter(|p| !p.is_empty())
-            .collect();
-        for (name, _) in &wanted {
-            if !property_names.iter().any(|p| p.eq_ignore_ascii_case(name)) {
-                property_names.push(name.clone());
-            }
-        }
-        if property_names.iter().any(|p| p == "*") {
-            property_names = vec!["*".into()];
-        }
-
+        let search = tree::Search::new(&params).map_err(|e| McpError::invalid_params(e, None))?;
         let request = proto::InspectModelRequest {
             include_features: matches!(what, InspectWhat::Overview | InspectWhat::Features),
             include_bodies: matches!(what, InspectWhat::Overview | InspectWhat::Bodies),
@@ -1343,8 +1299,8 @@ impl SolidWorksTools {
             ),
             include_mates: matches!(what, InspectWhat::Overview | InspectWhat::Mates),
             component_details: what == InspectWhat::Tree,
-            component_properties: property_names,
-            all_component_features: what == InspectWhat::Features && search.is_some(),
+            component_properties: search.property_names.clone(),
+            all_component_features: search.features.is_some(),
         };
         let mut reply = self
             .addin
@@ -1366,45 +1322,22 @@ impl SolidWorksTools {
             offset,
             limit,
         };
-        let component_filter = tree::ComponentFilter {
-            search: if component_list { search.clone() } else { None },
-            properties: wanted,
-        };
         // Search results are paged here; faces and edges in render_inspect.
-        let mut page_note = None;
-        let mut searched = None;
-        match what {
-            InspectWhat::Components if !component_filter.is_empty() => {
-                tree::filter_components(&mut reply, &component_filter);
-                page_note = tree::page(&mut reply.components, offset, limit, "components");
-                searched = Some("components");
-            }
-            InspectWhat::Features if let Some(search) = &search => {
-                page_note = tree::filter_features(&mut reply, search, offset, limit);
-                searched = Some("features");
-            }
-            _ => {}
-        }
+        let searched = search.apply(&mut reply, offset, limit);
         let mut json = {
             let mut ids = self
                 .ids
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             if what == InspectWhat::Tree && is_assembly {
-                tree::render_tree(&mut ids, &reply, &component_filter, params.depth)
+                tree::render_tree(&mut ids, &reply, &search.components, params.depth)
             } else {
                 assembly::render_inspect(&mut ids, &reply, &filters)
             }
         };
         if let Some(obj) = json.as_object_mut() {
-            if let Some(key) = searched
-                && !obj.contains_key(key)
-            {
-                obj.insert(key.into(), serde_json::json!([]));
-                obj.insert("note".into(), serde_json::json!(format!("no {key} match")));
-            }
-            if let Some(note) = page_note {
-                obj.insert("page_note".into(), serde_json::json!(note));
+            if let Some(searched) = &searched {
+                searched.record(obj);
             }
             match what {
                 InspectWhat::Components | InspectWhat::Mates | InspectWhat::Tree

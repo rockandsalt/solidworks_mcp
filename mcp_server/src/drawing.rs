@@ -21,6 +21,7 @@ use serde_json::{Map, Value, json};
 
 use crate::addin::proto;
 use crate::assembly::Placement;
+use crate::files::file_name;
 use crate::inspect::{IdRegistry, Kind, MM_PER_M, curve_name, mm, round};
 use crate::pmi;
 use crate::sketch_tools::DimensionKind;
@@ -477,10 +478,6 @@ fn short_number(x: f64) -> String {
 pub fn scale_text(numerator: f64, denominator: f64) -> Option<String> {
     (numerator > 0.0 && denominator > 0.0)
         .then(|| format!("{}:{}", short_number(numerator), short_number(denominator)))
-}
-
-pub fn file_name(path: &str) -> &str {
-    path.rsplit(['\\', '/']).next().unwrap_or(path)
 }
 
 /// Which model axis points along a sheet direction ("+X", "-Z", ...), if

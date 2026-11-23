@@ -2005,6 +2005,9 @@ message ComponentInfo {
   // component_properties or component_details asked, but the component's
   // model isn't loaded (lightweight or suppressed), so nothing was read.
   bool model_not_loaded = 24;
+  // external_references or properties stopped at their cap (200 each):
+  // the component has more.
+  bool lists_truncated = 25;
 }
 
 // One in-context reference (IComponent2::ListExternalFileReferences2).

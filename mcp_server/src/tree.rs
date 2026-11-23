@@ -10,7 +10,8 @@ use serde_json::{Map, Value, json};
 
 use crate::addin::proto;
 use crate::assembly;
-use crate::inspect::IdRegistry;
+use crate::files::file_name;
+use crate::inspect::{IdRegistry, InspectModelParams, InspectWhat, Page};
 
 /// A search pattern: `*` any text, `?` one character, case-insensitive. One
 /// without wildcards matches anywhere in the text ("bolt" finds "M6 bolt").
@@ -63,11 +64,6 @@ fn glob(p: &[char], t: &[char]) -> bool {
     p[pi..].iter().all(|c| *c == '*')
 }
 
-/// "C:\models\bolt.SLDPRT" -> "bolt.SLDPRT".
-fn file_name(path: &str) -> &str {
-    path.rsplit(['\\', '/']).next().unwrap_or(path)
-}
-
 /// What a component search looks at: its name (with and without the
 /// subassembly path), file name and configuration.
 pub fn component_matches(c: &proto::ComponentInfo, search: &Pattern) -> bool {
@@ -109,50 +105,133 @@ impl ComponentFilter {
     }
 }
 
-/// Keeps the components the filter matches.
-pub fn filter_components(reply: &mut proto::InspectModelResponse, filter: &ComponentFilter) {
-    reply.components.retain(|c| filter.keeps(c));
+/// What one inspect_model call searches for and reads, from its `what`,
+/// `search`, `properties` and `where`.
+#[derive(Debug, Default)]
+pub struct Search {
+    what: InspectWhat,
+    /// Components / tree: the components kept.
+    pub components: ComponentFilter,
+    /// Features: the features kept (in an assembly, of every component).
+    pub features: Option<Pattern>,
+    /// The custom properties to read of each component: those asked and
+    /// those `where` tests ("*" = all).
+    pub property_names: Vec<String>,
 }
 
-/// Keeps the features the search matches (`offset` / `limit` of them; the
-/// note says when that isn't all), and of the components only those they're
-/// in.
-pub fn filter_features(
-    reply: &mut proto::InspectModelResponse,
-    search: &Pattern,
-    offset: usize,
-    limit: usize,
-) -> Option<String> {
-    reply.features.retain(|f| feature_matches(f, search));
-    let note = page(&mut reply.features, offset, limit, "features");
-    let used: HashSet<&[u8]> = reply
-        .features
-        .iter()
-        .map(|f| f.component_persist_id.as_slice())
-        .collect();
-    reply
-        .components
-        .retain(|c| used.contains(c.persist_id.as_slice()));
-    note
-}
-
-/// Keeps `items[offset .. offset + limit]`; a note when that isn't all.
-pub fn page<T>(items: &mut Vec<T>, offset: usize, limit: usize, what: &str) -> Option<String> {
-    let total = items.len();
-    let start = offset.min(total);
-    items.drain(..start);
-    items.truncate(limit);
-    let end = start + items.len();
-    (start > 0 || end < total).then(|| {
-        if end < total {
-            format!(
-                "showing {what} {}-{end} of {total} matching; pass offset={end} for more",
-                start + 1
-            )
-        } else {
-            format!("showing {what} {}-{end} of {total} matching", start + 1)
+impl Search {
+    pub fn new(params: &InspectModelParams) -> Result<Search, &'static str> {
+        let what = params.what;
+        let pattern = params
+            .search
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(Pattern::new);
+        let component_list = matches!(what, InspectWhat::Components | InspectWhat::Tree);
+        if pattern.is_some() && !component_list && what != InspectWhat::Features {
+            return Err("search is for what=\"components\", \"tree\" or \"features\"");
         }
-    })
+        if (!params.properties.is_empty() || !params.where_properties.is_empty()) && !component_list
+        {
+            return Err("properties and where are for what=\"components\" or \"tree\"");
+        }
+        let wanted: Vec<(String, Pattern)> = params
+            .where_properties
+            .iter()
+            .map(|(name, value)| (name.trim().to_string(), Pattern::new(value)))
+            .collect();
+        let mut property_names: Vec<String> = params
+            .properties
+            .iter()
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .collect();
+        for (name, _) in &wanted {
+            if !property_names.iter().any(|p| p.eq_ignore_ascii_case(name)) {
+                property_names.push(name.clone());
+            }
+        }
+        if property_names.iter().any(|p| p == "*") {
+            property_names = vec!["*".into()];
+        }
+        let (components, features) = if component_list {
+            (pattern, None)
+        } else {
+            (None, pattern)
+        };
+        Ok(Search {
+            what,
+            components: ComponentFilter {
+                search: components,
+                properties: wanted,
+            },
+            features,
+            property_names,
+        })
+    }
+
+    /// Keeps what the search matches, `offset` / `limit` of it, and says
+    /// which list that was. Components: the matches (the tree pages
+    /// nothing; render_tree filters). Features: the matches, and of the
+    /// components only those they're in.
+    pub fn apply(
+        &self,
+        reply: &mut proto::InspectModelResponse,
+        offset: usize,
+        limit: usize,
+    ) -> Option<Searched> {
+        if self.what == InspectWhat::Components && !self.components.is_empty() {
+            reply.components.retain(|c| self.components.keeps(c));
+            let page = page(&mut reply.components, offset, limit);
+            return Some(Searched {
+                key: "components",
+                page,
+            });
+        }
+        let search = self.features.as_ref()?;
+        reply.features.retain(|f| feature_matches(f, search));
+        let page = page(&mut reply.features, offset, limit);
+        let used: HashSet<&[u8]> = reply
+            .features
+            .iter()
+            .map(|f| f.component_persist_id.as_slice())
+            .collect();
+        reply
+            .components
+            .retain(|c| used.contains(c.persist_id.as_slice()));
+        Some(Searched {
+            key: "features",
+            page,
+        })
+    }
+}
+
+/// The list a search kept, and the page of it shown.
+#[derive(Debug, PartialEq)]
+pub struct Searched {
+    pub key: &'static str,
+    pub page: Page,
+}
+
+impl Searched {
+    /// Into the rendered reply: the page counts, and an empty list with a
+    /// note when nothing matched.
+    pub fn record(&self, out: &mut Map<String, Value>) {
+        if !out.contains_key(self.key) {
+            out.insert(self.key.into(), json!([]));
+            out.insert("note".into(), json!(format!("no {} match", self.key)));
+        }
+        self.page.record(out, self.key);
+    }
+}
+
+/// Keeps `items[offset .. offset + limit]`.
+fn page<T>(items: &mut Vec<T>, offset: usize, limit: usize) -> Page {
+    let page = Page::new(items.len(), offset, limit);
+    items.truncate(page.end);
+    items.drain(..page.start);
+    page
 }
 
 // ---- The tree ------------------------------------------------------------------
@@ -584,26 +663,98 @@ mod tests {
                 ..Default::default()
             },
         ];
-        assert_eq!(
-            filter_features(&mut reply, &Pattern::new("holewzd"), 0, 100),
-            None
-        );
+        let search = Search::new(&params(InspectWhat::Features, "holewzd")).unwrap();
+        let searched = search.apply(&mut reply, 0, 100).unwrap();
+        assert_eq!(searched.key, "features");
+        assert_eq!(searched.page.total, 1);
         assert_eq!(reply.features.len(), 1);
         assert_eq!(reply.components.len(), 1);
         assert_eq!(reply.components[0].name, "base-1");
     }
 
+    fn params(what: InspectWhat, search: &str) -> InspectModelParams {
+        InspectModelParams {
+            what,
+            search: Some(search.into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn search_is_checked_against_what() {
+        assert!(Search::new(&params(InspectWhat::Faces, "x")).is_err());
+        let mut p = params(InspectWhat::Features, " ");
+        p.properties = vec!["Vendor".into()];
+        assert!(Search::new(&p).is_err());
+        // A blank search is no search.
+        let blank = Search::new(&params(InspectWhat::Faces, "  ")).unwrap();
+        assert!(blank.features.is_none() && blank.components.is_empty());
+    }
+
+    #[test]
+    fn where_names_are_read_and_star_reads_all() {
+        let mut p = params(InspectWhat::Components, "");
+        p.properties = vec![" Description ".into(), "vendor".into()];
+        p.where_properties = [
+            ("Vendor".to_string(), "acme".to_string()),
+            ("Material".to_string(), "steel*".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let mut names = Search::new(&p).unwrap().property_names;
+        names.sort();
+        // "Vendor" is asked already (ignoring case); "Material" is added.
+        assert_eq!(names, ["Description", "Material", "vendor"]);
+
+        p.properties.push("*".into());
+        assert_eq!(Search::new(&p).unwrap().property_names, ["*"]);
+    }
+
+    #[test]
+    fn component_search_pages_and_records() {
+        let mut reply = sample();
+        let search = Search::new(&params(InspectWhat::Components, "bolt")).unwrap();
+        let searched = search.apply(&mut reply, 1, 2).unwrap();
+        assert_eq!(reply.components.len(), 2);
+        let mut out = Map::new();
+        out.insert("components".into(), json!([]));
+        searched.record(&mut out);
+        assert_eq!(out["components_matching"], 4);
+        assert_eq!(
+            out["components_note"],
+            "showing components 2-3 of 4; pass offset=3 for more"
+        );
+        assert!(out.get("note").is_none());
+
+        // The tree isn't paged; nothing matched says so.
+        let tree = Search::new(&params(InspectWhat::Tree, "bolt")).unwrap();
+        assert_eq!(tree.apply(&mut sample(), 0, 1), None);
+        let mut none = sample();
+        let searched = Search::new(&params(InspectWhat::Components, "nut"))
+            .unwrap()
+            .apply(&mut none, 0, 100)
+            .unwrap();
+        let mut out = Map::new();
+        searched.record(&mut out);
+        assert_eq!(out["components"], json!([]));
+        assert_eq!(out["note"], "no components match");
+    }
+
     #[test]
     fn paging() {
         let mut items: Vec<u32> = (1..=5).collect();
-        let note = page(&mut items, 1, 2, "components");
-        assert_eq!(items, [2, 3]);
         assert_eq!(
-            note.as_deref(),
-            Some("showing components 2-3 of 5 matching; pass offset=3 for more")
+            page(&mut items, 1, 2),
+            Page {
+                start: 1,
+                end: 3,
+                total: 5
+            }
         );
-        let mut all: Vec<u32> = (1..=3).collect();
-        assert_eq!(page(&mut all, 0, 10, "components"), None);
+        assert_eq!(items, [2, 3]);
+        let mut past: Vec<u32> = (1..=3).collect();
+        assert_eq!(page(&mut past, 10, usize::MAX).end, 3);
+        assert!(past.is_empty());
     }
 
     #[test]

@@ -282,7 +282,9 @@ namespace sld_mcp::service
 		auto at = [](const std::vector<ATL::CComBSTR>& list, size_t i) {
 			return i < list.size() ? ToUtf8(list[i]) : std::string();
 		};
-		for (size_t i = 0; i < modelNames.size() && i < 200; ++i)
+		if (modelNames.size() > kMaxExternalReferences)
+			info->set_lists_truncated(true);
+		for (size_t i = 0; i < modelNames.size() && i < kMaxExternalReferences; ++i)
 		{
 			sld_mcp::v1::ExternalReference* ref = info->add_external_references();
 			ref->set_model(at(modelNames, i));
@@ -331,12 +333,16 @@ namespace sld_mcp::service
 
 		for (const auto& name : wanted)
 		{
-			if (info->properties_size() >= 200)
-				break;
 			sld_mcp::v1::CustomProperty property;
-			if ((configProperties && GetProperty(configProperties, name, &property)) ||
-				(fileProperties && GetProperty(fileProperties, name, &property)))
-				info->add_properties()->Swap(&property);
+			if (!(configProperties && GetProperty(configProperties, name, &property)) &&
+				!(fileProperties && GetProperty(fileProperties, name, &property)))
+				continue;
+			if (info->properties_size() >= kMaxComponentProperties)
+			{
+				info->set_lists_truncated(true);
+				break;
+			}
+			info->add_properties()->Swap(&property);
 		}
 	}
 
@@ -479,8 +485,8 @@ namespace sld_mcp::service
 		}
 	}
 
-	void CollectMates(IFeature* parent, int depth, std::vector<ATL::CComPtr<IFeature>>& mates,
-		std::set<std::string>& seen, std::vector<std::string>* folders, const std::string& folder)
+	void CollectMates(IFeature* parent, int depth, std::vector<MateEntry>& mates,
+		std::set<std::string>& seen, const std::string& folder)
 	{
 		ATL::CComPtr<IFeature> sub;
 		if (FAILED(parent->IGetFirstSubFeature(&sub)))
@@ -496,11 +502,7 @@ namespace sld_mcp::service
 				ATL::CComQIPtr<IMate2>(specific.p))
 			{
 				if (seen.insert(FeatureName(sub)).second)
-				{
-					mates.push_back(sub);
-					if (folders)
-						folders->push_back(current);
-				}
+					mates.push_back({ sub, current });
 			}
 			else if (FeatureTypeName(sub) == "FtrFolder")
 			{
@@ -510,7 +512,7 @@ namespace sld_mcp::service
 					? folder : name;
 			}
 			else if (depth < 3)
-				CollectMates(sub, depth + 1, mates, seen, folders, current);
+				CollectMates(sub, depth + 1, mates, seen, current);
 
 			ATL::CComPtr<IFeature> next;
 			if (FAILED(sub->IGetNextSubFeature(&next)))
@@ -519,9 +521,9 @@ namespace sld_mcp::service
 		}
 	}
 
-	std::vector<ATL::CComPtr<IFeature>> MateFeatures(IModelDoc2* doc, std::vector<std::string>* folders)
+	std::vector<MateEntry> Mates(IModelDoc2* doc)
 	{
-		std::vector<ATL::CComPtr<IFeature>> mates;
+		std::vector<MateEntry> mates;
 		std::set<std::string> seen;
 		ATL::CComPtr<IFeature> feature;
 		if (FAILED(doc->IFirstFeature(&feature)))
@@ -530,13 +532,21 @@ namespace sld_mcp::service
 		{
 			ATL::CComBSTR typeName;
 			if (SUCCEEDED(feature->GetTypeName2(&typeName)) && typeName == L"MateGroup")
-				CollectMates(feature, 0, mates, seen, folders);
+				CollectMates(feature, 0, mates, seen);
 			ATL::CComPtr<IFeature> next;
 			if (FAILED(feature->IGetNextFeature(&next)))
 				break;
 			feature = next;
 		}
 		return mates;
+	}
+
+	std::vector<ATL::CComPtr<IFeature>> MateFeatures(IModelDoc2* doc)
+	{
+		std::vector<ATL::CComPtr<IFeature>> features;
+		for (auto& mate : Mates(doc))
+			features.push_back(mate.feature);
+		return features;
 	}
 
 	std::set<std::string> MateNames(IModelDoc2* doc)

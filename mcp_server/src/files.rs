@@ -894,11 +894,9 @@ pub fn new_document_reply_text(kind: &str, document: Option<&proto::Document>) -
     }
 }
 
-fn file_name(path: &str) -> &str {
-    Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(path)
+/// "C:\models\bracket.SLDPRT" -> "bracket.SLDPRT", either separator.
+pub fn file_name(path: &str) -> &str {
+    path.rsplit(['\\', '/']).next().unwrap_or(path)
 }
 
 /// "A3 (420 x 297 mm)", or "500 x 300 mm" for a custom size.

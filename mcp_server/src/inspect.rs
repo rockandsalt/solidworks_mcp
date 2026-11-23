@@ -665,8 +665,46 @@ pub(crate) fn edge_json(ids: &mut IdRegistry, e: &proto::EdgeInfo) -> Value {
     Value::Object(obj)
 }
 
+/// The items `offset` / `limit` shows of `total` matching ones: `start..end`.
+/// Every paged list of inspect_model reports itself through `record`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Page {
+    pub start: usize,
+    pub end: usize,
+    pub total: usize,
+}
+
+impl Page {
+    pub fn new(total: usize, offset: usize, limit: usize) -> Page {
+        let start = offset.min(total);
+        Page {
+            start,
+            end: start.saturating_add(limit).min(total),
+            total,
+        }
+    }
+
+    /// `{key}_matching`, and `{key}_note` when more follow, so the model
+    /// knows whether to page on.
+    pub fn record(&self, out: &mut Map<String, Value>, key: &str) {
+        if self.end < self.total {
+            out.insert(
+                format!("{key}_note"),
+                json!(format!(
+                    "showing {key} {}-{} of {}; pass offset={} for more",
+                    self.start + 1,
+                    self.end,
+                    self.total,
+                    self.end
+                )),
+            );
+        }
+        out.insert(format!("{key}_matching"), json!(self.total));
+    }
+}
+
 /// Applies offset/limit to the items that pass `keep`, rendering only those
-/// shown, and records the counts so the model knows whether to page on.
+/// shown, and records the counts.
 fn page<T>(
     out: &mut Map<String, Value>,
     key: &str,
@@ -676,26 +714,12 @@ fn page<T>(
     mut render: impl FnMut(&T) -> Value,
 ) {
     let matching: Vec<&T> = items.iter().filter(|item| keep(item)).collect();
-    let shown: Vec<Value> = matching
+    let page = Page::new(matching.len(), filters.offset, filters.limit);
+    let shown: Vec<Value> = matching[page.start..page.end]
         .iter()
-        .skip(filters.offset)
-        .take(filters.limit)
         .map(|item| render(item))
         .collect();
-    let end = filters.offset + shown.len();
-    if end < matching.len() {
-        out.insert(
-            format!("{key}_note"),
-            json!(format!(
-                "showing {key} {}-{} of {}; pass offset={} for more",
-                filters.offset + 1,
-                end,
-                matching.len(),
-                end
-            )),
-        );
-    }
-    out.insert(format!("{key}_matching"), json!(matching.len()));
+    page.record(out, key);
     out.insert(key.to_string(), Value::Array(shown));
 }
 
