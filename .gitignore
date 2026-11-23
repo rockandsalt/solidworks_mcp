@@ -527,3 +527,5 @@ installer/out/
 devloop/out/
 # Private design notes: a separate repo cloned here (see CLAUDE.md)
 docs/notes/
+# cad-gen-freecad reference STEPs, made by devloop/bench/export_cadgen.py
+devloop/bench/cadgen/refs/
