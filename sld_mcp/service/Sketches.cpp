@@ -1,6 +1,8 @@
 // Sketches.cpp : Drawing sketches: CreateRectangleSketch, AddSketchEntities, InspectSketch.
 #include "pch.h"
 #include "Common.h"
+#include "AssemblyHelpers.h"
+#include "FeatureTreeHelpers.h"
 #include "DimensionHelpers.h"
 #include "SketchHelpers.h"
 
@@ -872,15 +874,39 @@ grpc::Status SolidWorksService::InspectSketch(grpc::ServerContext* context,
 	return m_executor.Execute(context, "InspectSketch", ExecutionPolicy::Cancellable,
 		[&](RequestControl& control, ISldWorks* swApp) -> grpc::Status {
 		ATL::CComPtr<IModelDoc2> doc;
-		if (grpc::Status status = GetActivePart(swApp, doc); !status.ok())
+		long docType = swDocNONE;
+		if (grpc::Status status = GetActiveModel(swApp, doc, docType); !status.ok())
 			return status;
 		ATL::CComPtr<IModelDocExtension> ext;
 		if (grpc::Status status = GetExtension(doc, ext); !status.ok())
 			return status;
 
 		ATL::CComPtr<IFeature> feature;
-		if (grpc::Status status = ResolveSketchFeature(doc, request->sketch_name(), feature, true); !status.ok())
+		if (!request->sketch_persist_id().empty())
+		{
+			ATL::CComPtr<IDispatch> found;
+			if (grpc::Status status = ResolvePersistId(ext, request->sketch_persist_id(), found); !status.ok())
+				return status;
+			ATL::CComQIPtr<IFeature> asFeature(found.p);
+			const std::string type = asFeature ? FeatureTypeName(asFeature) : std::string();
+			if (type != "ProfileFeature" && type != "3DProfileFeature")
+				return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT, "that id isn't a sketch");
+			feature = asFeature;
+		}
+		else if (grpc::Status status = ResolveSketchFeature(doc, request->sketch_name(), feature, true); !status.ok())
 			return status;
+
+		// A sketch in an assembly component: say which, with its placement.
+		if (ATL::CComQIPtr<IAssemblyDoc> assembly(doc.p); assembly)
+		{
+			PersistIds ids(ext);
+			if (ATL::CComPtr<IComponent2> component = ComponentOfFeature(assembly, feature, ids))
+			{
+				ATL::CComQIPtr<IMathUtility> math;
+				if (GetMathUtility(swApp, math).ok())
+					DescribeComponent(component, ids, math, response->mutable_component());
+			}
+		}
 		ATL::CComPtr<ISketch> sketch;
 		if (grpc::Status status = SketchOf(feature, sketch); !status.ok())
 			return status;

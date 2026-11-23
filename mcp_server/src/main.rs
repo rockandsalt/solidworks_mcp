@@ -1,6 +1,7 @@
 mod addin;
 mod assembly;
 mod center_mark;
+mod clearance;
 mod component;
 mod configuration;
 mod delete;
@@ -55,6 +56,7 @@ mod table;
 mod tolerance;
 mod tool_schema;
 mod toolsets;
+mod tree;
 mod undo;
 mod units;
 mod view;
@@ -1254,10 +1256,13 @@ impl SolidWorksTools {
     #[tool(
         description = "Look at the active part or assembly: the feature tree (failing features \
                        carry an error; diagnose_model explains), bodies, faces with geometry, \
-                       edges, and in an assembly components and mates. Every entity has an id \
-                       (\"face:7\") other tools take, valid across edits while it exists; `within` \
-                       narrows to a body, feature, face or component. mm, in model (or assembly) \
-                       space."
+                       edges, and in an assembly components, mates (with the faces they tie) and \
+                       the component tree (what=\"tree\"). Every entity has an id (\"face:7\") \
+                       other tools take, valid across edits while it exists; `within` narrows to a \
+                       body, feature, face or component. `search` finds components or features (in \
+                       every component of an assembly) by name, file or type; `properties` and \
+                       `where` read and filter components' custom properties. mm, in model (or \
+                       assembly) space."
     )]
     async fn inspect_model(
         &self,
@@ -1280,6 +1285,7 @@ impl SolidWorksTools {
         }
 
         let what = params.what;
+        let search = tree::Search::new(&params).map_err(|e| McpError::invalid_params(e, None))?;
         let request = proto::InspectModelRequest {
             include_features: matches!(what, InspectWhat::Overview | InspectWhat::Features),
             include_bodies: matches!(what, InspectWhat::Overview | InspectWhat::Bodies),
@@ -1287,8 +1293,14 @@ impl SolidWorksTools {
             include_edges: matches!(what, InspectWhat::Edges),
             scope_persist_id,
             scope_feature_name,
-            include_components: matches!(what, InspectWhat::Overview | InspectWhat::Components),
+            include_components: matches!(
+                what,
+                InspectWhat::Overview | InspectWhat::Components | InspectWhat::Tree
+            ),
             include_mates: matches!(what, InspectWhat::Overview | InspectWhat::Mates),
+            component_details: what == InspectWhat::Tree,
+            component_properties: search.property_names.clone(),
+            all_component_features: search.features.is_some(),
         };
         let mut reply = self
             .addin
@@ -1301,23 +1313,36 @@ impl SolidWorksTools {
             .as_ref()
             .is_some_and(|d| d.r#type() == proto::DocumentType::Assembly);
 
+        let offset = params.offset.unwrap_or(0);
+        let limit = params.limit.unwrap_or(DEFAULT_INSPECT_LIMIT);
         let filters = inspect::Filters {
             surface_type: params.surface_type.map(Into::into),
             normal: params.normal,
             curve_type: params.curve_type.map(Into::into),
-            offset: params.offset.unwrap_or(0),
-            limit: params.limit.unwrap_or(DEFAULT_INSPECT_LIMIT),
+            offset,
+            limit,
         };
+        // Search results are paged here; faces and edges in render_inspect.
+        let searched = search.apply(&mut reply, offset, limit);
         let mut json = {
             let mut ids = self
                 .ids
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            assembly::render_inspect(&mut ids, &reply, &filters)
+            if what == InspectWhat::Tree && is_assembly {
+                tree::render_tree(&mut ids, &reply, &search.components, params.depth)
+            } else {
+                assembly::render_inspect(&mut ids, &reply, &filters)
+            }
         };
         if let Some(obj) = json.as_object_mut() {
+            if let Some(searched) = &searched {
+                searched.record(obj);
+            }
             match what {
-                InspectWhat::Components | InspectWhat::Mates if !is_assembly => {
+                InspectWhat::Components | InspectWhat::Mates | InspectWhat::Tree
+                    if !is_assembly =>
+                {
                     obj.insert(
                         "note".into(),
                         serde_json::json!("the active document is a part; only assemblies have components and mates"),
@@ -2800,19 +2825,30 @@ impl SolidWorksTools {
     #[tool(
         description = "Look at one sketch: every segment and point with its id (\"line:3\"; end \
                        points and centers are points) and geometry (sketch mm, model mm in a 3D \
-                       sketch), its dimensions and relations, and what can still move."
+                       sketch), its dimensions and relations, and what can still move. In an \
+                       assembly: its own sketches by name, a component's by the feature id \
+                       inspect_model gives (what=\"features\" with search=\"Sketch*\")."
     )]
     async fn inspect_sketch(
         &self,
         Parameters(params): Parameters<InspectSketchParams>,
     ) -> Result<CallToolResult, McpError> {
-        let reply = self
+        let name = trimmed(params.sketch_name);
+        let (sketch_name, sketch_persist_id) =
+            if IdRegistry::looks_like_id(&name) && Kind::of_id(&name) == Some(Kind::Feature) {
+                (String::new(), self.resolve_id(&name)?)
+            } else {
+                (name, Vec::new())
+            };
+        let mut reply = self
             .addin
             .inspect_sketch(proto::InspectSketchRequest {
-                sketch_name: trimmed(params.sketch_name),
+                sketch_name,
+                sketch_persist_id,
             })
             .await
             .map_err(|status| self.addin_error(status))?;
+        assembly::place_sketch_reply(&mut reply);
         let json = {
             let mut ids = self
                 .ids
@@ -3382,6 +3418,87 @@ impl SolidWorksTools {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             interference::render(&mut ids, &params, &wanted, &reply)
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            json.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "Check an assembly for clearance: the pairs of parts closer than \
+                       `clearance_mm` (gap in mm, smallest first) and the pairs that touch or \
+                       overlap. Components as they sit now; boxes pick the pairs, Measure gives each \
+                       gap (at most 300 pairs per call). Overlap volumes: check_interference."
+    )]
+    async fn check_clearance(
+        &self,
+        Parameters(params): Parameters<clearance::CheckClearanceParams>,
+    ) -> Result<CallToolResult, McpError> {
+        if !(params.clearance_mm.is_finite() && params.clearance_mm > 0.0) {
+            return Err(McpError::invalid_params(
+                "clearance_mm must be a distance above 0, e.g. 2",
+                None,
+            ));
+        }
+        let only = params
+            .components
+            .iter()
+            .map(|id| self.resolve_id(id.trim()))
+            .collect::<Result<std::collections::HashSet<_>, _>>()?;
+        let reply = self
+            .addin
+            .inspect_model(proto::InspectModelRequest {
+                include_components: true,
+                ..Default::default()
+            })
+            .await
+            .map_err(|status| self.addin_error(status))?;
+        if reply
+            .document
+            .as_ref()
+            .is_none_or(|d| d.r#type() != proto::DocumentType::Assembly)
+        {
+            return Err(McpError::invalid_params(
+                "check_clearance works on an assembly; the active document is a part",
+                None,
+            ));
+        }
+        let clearance = params.clearance_mm / MM_PER_M;
+        let mut found =
+            clearance::candidates(&reply.components, clearance, &only, params.include_hidden);
+        let left_out = found.len().saturating_sub(clearance::MAX_PAIRS);
+        found.truncate(clearance::MAX_PAIRS);
+        let mut measured = Vec::with_capacity(found.len());
+        for candidate in found {
+            let target = |c: &proto::ComponentInfo| proto::GeometryRef {
+                target: Some(proto::geometry_ref::Target::ModelPersistId(
+                    c.persist_id.clone(),
+                )),
+            };
+            let request = proto::MeasureRequest {
+                entities: vec![
+                    target(&reply.components[candidate.a]),
+                    target(&reply.components[candidate.b]),
+                ],
+                ..Default::default()
+            };
+            // A pair SolidWorks won't measure is reported, not fatal. Touching
+            // entities have no Distance, only a closest distance of 0
+            // (measure.md).
+            let gap = self
+                .addin
+                .measure(request)
+                .await
+                .ok()
+                .and_then(|r| r.closest_distance.or(r.distance));
+            measured.push(clearance::Measured { candidate, gap });
+        }
+        let json = {
+            let mut ids = self
+                .ids
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            clearance::render(&mut ids, &reply.components, clearance, &measured, left_out)
         };
         Ok(CallToolResult::success(vec![ContentBlock::text(
             json.to_string(),

@@ -11,6 +11,7 @@ use serde::Deserialize;
 
 use crate::addin::proto;
 use crate::drawing::{axes_text, display_mode_name, scale_text};
+use crate::files::file_name;
 use crate::inspect::{MM_PER_M, round};
 use crate::sheet::parse_scale;
 
@@ -479,10 +480,6 @@ fn mm2(p: DVec2) -> String {
         round(p.x * MM_PER_M, 1),
         round(p.y * MM_PER_M, 1)
     )
-}
-
-fn file_name(path: &str) -> &str {
-    path.rsplit(['\\', '/']).next().unwrap_or(path)
 }
 
 /// "Drawing View1 on Sheet1: *Front of block.SLDPRT (configuration Default), ..."

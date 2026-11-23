@@ -19,6 +19,7 @@ use glam::{DMat3, DQuat, DVec3};
 
 use crate::addin::proto;
 use crate::assembly::{self, placement_text};
+use crate::files::file_name;
 use crate::inspect::{IdRegistry, Kind, MM_PER_M, direction as unit_text, mm, point_mm, round};
 use crate::{edit, feature_text, files, motion};
 
@@ -273,10 +274,6 @@ pub fn replace_request(
             .unwrap_or_default()
             .to_string(),
     })
-}
-
-fn file_name(path: &str) -> &str {
-    path.rsplit(['\\', '/']).next().unwrap_or(path)
 }
 
 fn same_file(a: &str, b: &str) -> bool {

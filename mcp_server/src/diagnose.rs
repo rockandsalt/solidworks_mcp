@@ -16,6 +16,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::addin::proto;
+use crate::assembly::mate_entity_json;
 use crate::feature_text::{feature_error_name, type_label};
 use crate::inspect::{IdRegistry, Kind};
 use crate::sketch;
@@ -127,32 +128,6 @@ fn sketch_json(ids: &mut IdRegistry, s: &proto::SketchDiagnosis) -> Value {
     }
     if !s.dangling_dimensions.is_empty() {
         obj.insert("dangling_dimensions".into(), json!(s.dangling_dimensions));
-    }
-    Value::Object(obj)
-}
-
-pub fn mate_entity_json(ids: &mut IdRegistry, e: &proto::MateEntityState) -> Value {
-    let mut obj = Map::new();
-    if e.missing {
-        obj.insert("missing".into(), json!(true));
-    } else {
-        obj.insert("kind".into(), json!(e.kind));
-        let kind = match e.kind.as_str() {
-            "face" => Some(Kind::Face),
-            "edge" => Some(Kind::Edge),
-            "component" => Some(Kind::Component),
-            "plane" | "axis" | "point" | "coordinate system" => Some(Kind::Feature),
-            _ => None,
-        };
-        if let Some(id) = kind.and_then(|k| ids.id_for(k, &e.persist_id)) {
-            obj.insert("id".into(), json!(id));
-        }
-    }
-    if let Some(id) = ids.id_for(Kind::Component, &e.component_persist_id) {
-        obj.insert("component".into(), json!(id));
-    }
-    if !e.component_name.is_empty() {
-        obj.insert("component_name".into(), json!(e.component_name));
     }
     Value::Object(obj)
 }

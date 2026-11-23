@@ -7,6 +7,26 @@
 
 using namespace sld_mcp::service;
 
+namespace sld_mcp::service
+{
+	bool GetProperty(ICustomPropertyManager* properties, BSTR name, sld_mcp::v1::CustomProperty* out)
+	{
+		ATL::CComBSTR value, resolved;
+		VARIANT_BOOL wasResolved = VARIANT_FALSE, linked = VARIANT_FALSE;
+		long status = swCustomInfoGetResult_NotPresent;
+		if (FAILED(properties->Get6(name, VARIANT_FALSE, &value, &resolved, &wasResolved, &linked, &status)) ||
+			status == swCustomInfoGetResult_NotPresent)
+			return false;
+		out->set_name(ToUtf8(name));
+		out->set_value(ToUtf8(value));
+		out->set_resolved(ToUtf8(resolved));
+		long t = 0;
+		if (SUCCEEDED(properties->GetType2(name, &t)))
+			out->set_type(static_cast<int32_t>(t));
+		return true;
+	}
+}
+
 namespace
 {
 	constexpr int kMaxProperties = 500;
@@ -128,24 +148,6 @@ namespace
 		out->set_title(ToUtf8(title));
 		out->set_path(ToUtf8(path));
 		out->set_type(ToDocumentType(type));
-	}
-
-	// A property's value as typed and as evaluated; false if there's none.
-	bool GetProperty(ICustomPropertyManager* properties, BSTR name, sld_mcp::v1::CustomProperty* out)
-	{
-		ATL::CComBSTR value, resolved;
-		VARIANT_BOOL wasResolved = VARIANT_FALSE, linked = VARIANT_FALSE;
-		long status = swCustomInfoGetResult_NotPresent;
-		if (FAILED(properties->Get6(name, VARIANT_FALSE, &value, &resolved, &wasResolved, &linked, &status)) ||
-			status == swCustomInfoGetResult_NotPresent)
-			return false;
-		out->set_name(ToUtf8(name));
-		out->set_value(ToUtf8(value));
-		out->set_resolved(ToUtf8(resolved));
-		long t = 0;
-		if (SUCCEEDED(properties->GetType2(name, &t)))
-			out->set_type(static_cast<int32_t>(t));
-		return true;
 	}
 
 	// A value that links one SolidWorks works out: a quoted reference such

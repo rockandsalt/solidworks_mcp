@@ -714,7 +714,8 @@ pub fn sketch_entity(
 }
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub struct InspectSketchParams {
-    /// The sketch, e.g. "Sketch1". Defaults to the last sketch in the feature tree.
+    /// The sketch, e.g. "Sketch1", or a sketch feature id from inspect_model ("feature:12": a
+    /// sketch in an assembly component). Defaults to the last sketch in the feature tree.
     #[serde(default)]
     pub sketch_name: Option<String>,
 }

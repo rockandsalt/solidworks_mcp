@@ -665,8 +665,46 @@ pub(crate) fn edge_json(ids: &mut IdRegistry, e: &proto::EdgeInfo) -> Value {
     Value::Object(obj)
 }
 
+/// The items `offset` / `limit` shows of `total` matching ones: `start..end`.
+/// Every paged list of inspect_model reports itself through `record`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Page {
+    pub start: usize,
+    pub end: usize,
+    pub total: usize,
+}
+
+impl Page {
+    pub fn new(total: usize, offset: usize, limit: usize) -> Page {
+        let start = offset.min(total);
+        Page {
+            start,
+            end: start.saturating_add(limit).min(total),
+            total,
+        }
+    }
+
+    /// `{key}_matching`, and `{key}_note` when more follow, so the model
+    /// knows whether to page on.
+    pub fn record(&self, out: &mut Map<String, Value>, key: &str) {
+        if self.end < self.total {
+            out.insert(
+                format!("{key}_note"),
+                json!(format!(
+                    "showing {key} {}-{} of {}; pass offset={} for more",
+                    self.start + 1,
+                    self.end,
+                    self.total,
+                    self.end
+                )),
+            );
+        }
+        out.insert(format!("{key}_matching"), json!(self.total));
+    }
+}
+
 /// Applies offset/limit to the items that pass `keep`, rendering only those
-/// shown, and records the counts so the model knows whether to page on.
+/// shown, and records the counts.
 fn page<T>(
     out: &mut Map<String, Value>,
     key: &str,
@@ -676,26 +714,12 @@ fn page<T>(
     mut render: impl FnMut(&T) -> Value,
 ) {
     let matching: Vec<&T> = items.iter().filter(|item| keep(item)).collect();
-    let shown: Vec<Value> = matching
+    let page = Page::new(matching.len(), filters.offset, filters.limit);
+    let shown: Vec<Value> = matching[page.start..page.end]
         .iter()
-        .skip(filters.offset)
-        .take(filters.limit)
         .map(|item| render(item))
         .collect();
-    let end = filters.offset + shown.len();
-    if end < matching.len() {
-        out.insert(
-            format!("{key}_note"),
-            json!(format!(
-                "showing {key} {}-{} of {}; pass offset={} for more",
-                filters.offset + 1,
-                end,
-                matching.len(),
-                end
-            )),
-        );
-    }
-    out.insert(format!("{key}_matching"), json!(matching.len()));
+    page.record(out, key);
     out.insert(key.to_string(), Value::Array(shown));
 }
 
@@ -792,6 +816,8 @@ pub enum InspectWhat {
     Components,
     /// Assemblies: the mates.
     Mates,
+    /// Assemblies: the components as a nested tree, alike parts grouped, with a count per file.
+    Tree,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
@@ -844,9 +870,27 @@ pub const DEFAULT_INSPECT_LIMIT: usize = 100;
 pub struct InspectModelParams {
     /// What to list: "overview" (default; the feature tree and bodies, plus components and
     /// mates in an assembly), "features", "bodies", "faces", "edges", or for assemblies
-    /// "components" or "mates".
+    /// "components", "mates" or "tree" (the components nested, with flags, in-context
+    /// references and a count per file).
     #[serde(default)]
     pub what: InspectWhat,
+    /// Components / tree / features: keep only those matching, case-insensitive; `*` and `?`
+    /// wildcards, else anywhere in the text. Components match by name, file or configuration
+    /// ("bolt*", "*.SLDASM"), features by name or type ("HoleWzd", "Sketch*"). In an assembly,
+    /// features searches every component's tree (all of them, or those inside `within`).
+    #[serde(default)]
+    pub search: Option<String>,
+    /// Components / tree: also read these custom properties of each component's file ("Part
+    /// Number", "Description"; "*" = all), its configuration's value first.
+    #[serde(default)]
+    pub properties: Vec<String>,
+    /// Components / tree: keep only components whose properties match, e.g. {"Vendor":
+    /// "McMaster*"} (patterns as in `search`).
+    #[serde(default, rename = "where")]
+    pub where_properties: HashMap<String, String>,
+    /// Tree: how many levels to show (1 = top level); deeper ones are counted.
+    #[serde(default)]
+    pub depth: Option<usize>,
     /// Faces/edges: restrict to one body, feature or face (edges only), given as an id, e.g.
     /// "body:1", or (parts only) as a feature name, e.g. "Boss-Extrude1" (the faces that feature
     /// created). Assemblies: a component id, e.g. "component:2", restricts features (that
@@ -863,10 +907,11 @@ pub struct InspectModelParams {
     /// Edges only: keep only edges of this curve type.
     #[serde(default)]
     pub curve_type: Option<CurveKind>,
-    /// Faces/edges only: how many to return. Defaults to 100.
+    /// Faces/edges, and components / features with `search` or `where`: how many to return.
+    /// Defaults to 100.
     #[serde(default)]
     pub limit: Option<usize>,
-    /// Faces/edges only: skip this many matching entries first, for paging. Defaults to 0.
+    /// Paging with `limit`: skip this many matching entries first. Defaults to 0.
     #[serde(default)]
     pub offset: Option<usize>,
 }

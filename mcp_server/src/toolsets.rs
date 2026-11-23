@@ -72,7 +72,7 @@ pub const TOOLS: &[(&str, &[Mode], Access)] = &[
     ("equations", MODEL, Destructive),
     ("design_table", MODEL, Destructive),
     // Part modeling: sketches and features.
-    ("inspect_sketch", PART, Inspect),
+    ("inspect_sketch", MODEL, Inspect),
     ("inspect_feature", PART, Inspect),
     ("recognize_features", PART, Inspect),
     ("add_pmi_dimension", PART, Edit),
@@ -116,6 +116,7 @@ pub const TOOLS: &[(&str, &[Mode], Access)] = &[
     // drawing of the assembly.
     ("inspect_mobility", ASM, Inspect),
     ("check_interference", &[Assembly, Drawing], Inspect),
+    ("check_clearance", ASM, Inspect),
     ("insert_components", ASM, Edit),
     ("replace_components", ASM, Destructive),
     ("fix_components", ASM, Edit),

@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 
 use crate::addin::{AddinClient, proto};
 use crate::files;
+use crate::files::file_name;
 
 /// Files read per FileReferences call (about 30 ms each, seen 2026-11-09).
 const BATCH: usize = 100;
@@ -60,10 +61,6 @@ fn windows_path(path: &str) -> String {
 /// The same file whichever way the path is written.
 fn key(path: &str) -> String {
     windows_path(path).to_lowercase()
-}
-
-fn file_name(path: &str) -> &str {
-    path.rsplit(['\\', '/']).next().unwrap_or(path)
 }
 
 fn type_of(path: &str) -> &'static str {

@@ -16,6 +16,7 @@ use serde_json::{Map, Value, json};
 use glam::{BVec3, DAffine3, DMat3, DVec3};
 
 use crate::addin::proto;
+use crate::files::file_name;
 use crate::inspect::{self, IdRegistry, Kind, MM_PER_M, direction, mm, point_mm, round};
 
 // ---- Placement -------------------------------------------------------------
@@ -146,6 +147,21 @@ impl Placement {
     }
 }
 
+/// A component's sketch: its frame comes in the component's own coordinates
+/// (seen 2026-11-22: a block at x 13 gave a sketch origin of 0), so it's
+/// placed in assembly space, whatever `local_geometry` says of the bodies.
+pub fn place_sketch_reply(reply: &mut proto::InspectSketchResponse) {
+    let Some(p) = reply.component.as_ref().and_then(Placement::from_component) else {
+        return;
+    };
+    if let Some(frame) = &mut reply.frame {
+        p.place_point(&mut frame.origin);
+        p.place_direction(&mut frame.x_axis);
+        p.place_direction(&mut frame.y_axis);
+        p.place_direction(&mut frame.normal);
+    }
+}
+
 /// Placements by component persist id, for the components that need one.
 fn placements(components: &[proto::ComponentInfo]) -> HashMap<Vec<u8>, Placement> {
     components
@@ -237,11 +253,6 @@ pub fn place_mesh(mesh: &mut proto::GetMeshResponse) {
 
 // ---- Rendering components and mates ------------------------------------------
 
-/// "C:\models\bracket.SLDPRT" -> "bracket.SLDPRT".
-fn file_name(path: &str) -> &str {
-    path.rsplit(['\\', '/']).next().unwrap_or(path)
-}
-
 fn id_value(id: Option<String>) -> Value {
     id.map_or(Value::Null, Value::String)
 }
@@ -302,6 +313,109 @@ pub fn component_json(ids: &mut IdRegistry, c: &proto::ComponentInfo) -> Value {
             "bbox_mm".into(),
             json!({ "min": point_mm(lo), "max": point_mm(hi) }),
         );
+    }
+    // component_details / component_properties, when asked.
+    for (set, key) in [
+        (c.is_virtual, "virtual"),
+        (c.envelope, "envelope"),
+        (c.excluded_from_bom, "excluded_from_bom"),
+        (c.pattern_instance, "pattern_instance"),
+        (c.mirrored, "mirror_instance"),
+        (c.toolbox, "toolbox"),
+    ] {
+        if set {
+            obj.insert(key.into(), json!(true));
+        }
+    }
+    if !c.external_references.is_empty() {
+        let refs: Vec<Value> = c
+            .external_references
+            .iter()
+            .map(external_reference_json)
+            .collect();
+        obj.insert("in_context_references".into(), Value::Array(refs));
+    }
+    if c.model_not_loaded {
+        obj.insert(
+            "model_not_loaded".into(),
+            json!("lightweight or suppressed: its properties and flags of its file can't be read; resolve it"),
+        );
+    }
+    if !c.properties.is_empty() {
+        let properties: Map<String, Value> = c
+            .properties
+            .iter()
+            .map(|p| (p.name.clone(), json!(p.resolved)))
+            .collect();
+        obj.insert("properties".into(), Value::Object(properties));
+    }
+    if c.lists_truncated {
+        obj.insert(
+            "lists_truncated".into(),
+            json!(
+                "it has more in-context references or properties than shown (200 of each at most)"
+            ),
+        );
+    }
+    Value::Object(obj)
+}
+
+/// swExternalReferenceStatus_e in words.
+fn reference_status(status: i32) -> &'static str {
+    match status {
+        0 => "broken",
+        1 => "locked",
+        3 => "in context",
+        4 => "out of context",
+        5 => "dangling",
+        _ => "unknown",
+    }
+}
+
+/// A broken or dangling in-context reference: the feature lost what it
+/// referenced.
+pub fn is_broken_reference(r: &proto::ExternalReference) -> bool {
+    matches!(r.status, 0 | 5)
+}
+
+fn external_reference_json(r: &proto::ExternalReference) -> Value {
+    let mut obj = Map::new();
+    obj.insert("feature".into(), json!(r.feature));
+    obj.insert("file".into(), json!(file_name(&r.model)));
+    if !r.component.is_empty() {
+        obj.insert("through".into(), json!(r.component));
+    }
+    if !r.entity.is_empty() {
+        obj.insert("entity".into(), json!(r.entity));
+    }
+    obj.insert("status".into(), json!(reference_status(r.status)));
+    Value::Object(obj)
+}
+
+/// One entity of a mate: what it is, its id, its component.
+pub fn mate_entity_json(ids: &mut IdRegistry, e: &proto::MateEntityState) -> Value {
+    let mut obj = Map::new();
+    if e.missing {
+        obj.insert("missing".into(), json!(true));
+    } else {
+        obj.insert("kind".into(), json!(e.kind));
+        let kind = match e.kind.as_str() {
+            "face" => Some(Kind::Face),
+            "edge" => Some(Kind::Edge),
+            "vertex" => Some(Kind::Vertex),
+            "component" => Some(Kind::Component),
+            "plane" | "axis" | "point" | "coordinate system" => Some(Kind::Feature),
+            _ => None,
+        };
+        if let Some(id) = kind.and_then(|k| ids.id_for(k, &e.persist_id)) {
+            obj.insert("id".into(), json!(id));
+        }
+    }
+    if let Some(id) = ids.id_for(Kind::Component, &e.component_persist_id) {
+        obj.insert("component".into(), json!(id));
+    }
+    if !e.component_name.is_empty() {
+        obj.insert("component_name".into(), json!(e.component_name));
     }
     Value::Object(obj)
 }
@@ -445,6 +559,17 @@ pub fn mate_json(ids: &mut IdRegistry, m: &proto::MateInfo) -> Value {
         })
         .collect();
     obj.insert("components".into(), Value::Array(components));
+    if !m.folder.is_empty() {
+        obj.insert("folder".into(), json!(m.folder));
+    }
+    if !m.entities.is_empty() {
+        let entities: Vec<Value> = m
+            .entities
+            .iter()
+            .map(|e| mate_entity_json(ids, e))
+            .collect();
+        obj.insert("entities".into(), Value::Array(entities));
+    }
     mate_value(m, &mut obj);
     if m.suppressed {
         obj.insert("suppressed".into(), json!(true));
@@ -870,6 +995,40 @@ mod tests {
 
     fn close(a: &proto::Vec3, b: [f64; 3]) -> bool {
         (a.x - b[0]).abs() < 1e-12 && (a.y - b[1]).abs() < 1e-12 && (a.z - b[2]).abs() < 1e-12
+    }
+
+    #[test]
+    fn places_a_component_sketch_frame() {
+        let mut reply = proto::InspectSketchResponse {
+            // Not local_geometry: a sketch frame is placed regardless.
+            component: Some(turned(false)),
+            frame: Some(proto::SketchFrame {
+                origin: v(0.0, 0.0, 0.01),
+                x_axis: v(1.0, 0.0, 0.0),
+                y_axis: v(0.0, 1.0, 0.0),
+                normal: v(0.0, 0.0, 1.0),
+            }),
+            ..Default::default()
+        };
+        place_sketch_reply(&mut reply);
+        let f = reply.frame.unwrap();
+        assert!(close(f.origin.as_ref().unwrap(), [0.1, 0.0, 0.01]));
+        assert!(close(f.x_axis.as_ref().unwrap(), [0.0, 1.0, 0.0]));
+        assert!(close(f.y_axis.as_ref().unwrap(), [-1.0, 0.0, 0.0]));
+
+        // A part's sketch (no component) stays as it is.
+        let mut part = proto::InspectSketchResponse {
+            frame: Some(proto::SketchFrame {
+                origin: v(0.0, 0.0, 0.01),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        place_sketch_reply(&mut part);
+        assert!(close(
+            part.frame.unwrap().origin.as_ref().unwrap(),
+            [0.0, 0.0, 0.01]
+        ));
     }
 
     #[test]

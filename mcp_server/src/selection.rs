@@ -494,7 +494,7 @@ fn drawing_item_json(
         Some(Item::Annotation(a)) => drawing::annotation_json(ids, Some(&item.view_name), a),
         Some(Item::DrawingView(name)) => json!({ "drawing_view": name }),
         Some(Item::Feature(f)) => match model_file {
-            Some(file) => ids.in_document(&crate::files::file_key(file), drawing::file_name(file), |ids| {
+            Some(file) => ids.in_document(&crate::files::file_key(file), crate::files::file_name(file), |ids| {
                 inspect::feature_json(ids, f)
             }),
             None => json!({ "id": null, "name": f.name }),
@@ -519,7 +519,7 @@ fn drawing_item_json(
         if let Some(file) = model_file
             && (obj.contains_key("model_id") || matches!(item.item, Some(Item::Feature(_))))
         {
-            obj.insert("model".into(), json!(drawing::file_name(file)));
+            obj.insert("model".into(), json!(crate::files::file_name(file)));
         }
     }
     value
