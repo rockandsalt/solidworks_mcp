@@ -1,0 +1,4438 @@
+{
+ "source": "huggingface.co/datasets/gnucleus-ai/cad-gen-freecad (Apache-2.0, (c) gNucleus AI, Inc.)",
+ "freecad": "26.3.0",
+ "tasks": [
+  {
+   "id": "0603c53148",
+   "name": "round mounting flange",
+   "description": "A round mounting flange consists of a circular flange body with a central plain through bore and an array of equally spaced bolt holes distributed on a bolt circle.\n\nThe flange body is defined by outer_diameter and flange_thickness, with a coaxial through bore defined by bore_diameter.\n\nThe bolt hole pattern is characterized by bolt_circle_diameter, bolt_hole_diameter, and number_bolt_holes, with the holes arranged evenly around the flange axis.",
+   "key_parameters": "- outer_diameter = 107.156mm\n- flange_thickness = 21.034mm\n- bolt_circle_diameter = 87.312mm\n- bolt_hole_diameter = 9.922mm\n- number_bolt_holes = 4\n- bore_diameter = 49.213mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 143174.52357040322,
+    "area_mm2": 26569.125310223146,
+    "bbox_mm": {
+     "min": [
+      -53.578,
+      -53.578,
+      0.0
+     ],
+     "max": [
+      53.578,
+      53.578,
+      21.034
+     ]
+    },
+    "bbox_sorted_mm": [
+     21.034,
+     107.156,
+     107.156
+    ],
+    "center_of_mass_mm": [
+     -8.508972983770945e-15,
+     1.2196512227577615e-15,
+     10.517
+    ],
+    "principal_moments_normalized": [
+     0.3295075173564926,
+     0.32950751735649975,
+     0.6320718667994545
+    ],
+    "surface_area_by_type": {
+     "cylinder": 12955.49751043202,
+     "plane": 13613.62779979113
+    },
+    "faces": 8
+   },
+   "step": "refs/0603c53148.step"
+  },
+  {
+   "id": "067a9a8726",
+   "name": "high-profile external-hex flange nut",
+   "description": "A high-profile external-hex flange nut consists of a central plain through-hole, an external hex drive body, and an integrated circular flange at one end, forming a stepped nut profile.\n\nThe plain through-hole is defined by through_hole_diameter and runs axially through the full nut height set by overall_height.\n\nThe external hex drive is specified by drive_style, with its width controlled by hub_width and its axial extent controlled by hex_head_height.\n\nThe integrated flange is a coaxial circular skirt at the base of the nut, defined by flange_diameter and flange_thickness, and merges into the hex body to create the overall high-profile form set by nut_profile.",
+   "key_parameters": "- drive_style = external_hex\n- nut_profile = high\n- through_hole_diameter = 18.0 mm\n- overall_height = 27.0 mm\n- flange_diameter = 34.0 mm\n- flange_thickness = 5.0 mm\n- hub_width = 27.0 mm\n- hex_head_height = overall_height - flange_thickness = 27.0mm - 5.0mm = 22.0 mm  # DIN 6331",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 11558.2536769312,
+    "area_mm2": 5425.463684040084,
+    "bbox_mm": {
+     "min": [
+      -17.0,
+      -17.0,
+      0.0
+     ],
+     "max": [
+      17.0,
+      17.0,
+      27.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     27.0,
+     34.0,
+     34.0
+    ],
+    "center_of_mass_mm": [
+     -7.868789933103508e-17,
+     -2.3682494987795387e-16,
+     12.183855962217324
+    ],
+    "principal_moments_normalized": [
+     0.28100362082890334,
+     0.281003620828904,
+     0.3019317063571774
+    ],
+    "surface_area_by_type": {
+     "cylinder": 2060.884780754904,
+     "plane": 3364.5789032851803
+    },
+    "faces": 11
+   },
+   "step": "refs/067a9a8726.step"
+  },
+  {
+   "id": "08d2da3057",
+   "name": "spur gear",
+   "description": "A spur gear consists of a toothed gear body, a central hub, and a round bore through the center.\n\nThe toothed gear body is defined by number_of_teeth, gear_module, pressure_angle, pitch_diameter, outer_diameter, root_diameter, face_width, addendum, dedendum, whole_depth, circular_pitch, base_diameter, and tooth_thickness.\n\nThe central hub is integrated with the gear body and is characterized by hub_diameter, hub_width, and overall_width.\n\nThe round bore is centered on the gear axis and is defined by shaft_diameter.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- gear_module = 1 mm\n- number_of_teeth = 45\n- pitch_diameter = 45 mm\n- outer_diameter = 47 mm\n- face_width = 6 mm\n- hub_diameter = 16 mm\n- hub_width = 6 mm\n- shaft_diameter = 8 mm\n- overall_width = 12 mm\n- addendum = gear_module = 1 = 1 mm  # ISO 21771 / standard spur gear geometry\n- dedendum = 1.25 * gear_module = 1.25 * 1 = 1.25 mm  # ISO 21771 / standard spur gear geometry\n- root_diameter = pitch_diameter - 2 * dedendum = 45 - 2 * 1.25 = 42.5 mm  # ISO 21771 / standard spur gear geometry\n- circular_pitch = pi * gear_module = pi * 1 = 3.142 mm  # ISO 21771 / standard spur gear geometry\n- base_diameter = pitch_diameter * cos(pressure_angle) = 45 * cos(20) = 42.286 mm  # ISO 21771 / standard spur gear geometry\n- whole_depth = addendum + dedendum = 1 + 1.25 = 2.25 mm  # ISO 21771 / standard spur gear geometry\n- tooth_thickness = circular_pitch / 2 = 3.142 / 2 = 1.571 mm  # ISO 21771 / standard spur gear geometry",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 10075.315175653532,
+    "area_mm2": 5386.788497778367,
+    "bbox_mm": {
+     "min": [
+      -23.466431916621183,
+      -23.495957253799414,
+      -1e-07
+     ],
+     "max": [
+      23.5000001,
+      23.495957253799418,
+      12.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     12.0000001,
+     46.966432016621184,
+     46.991914507598835
+    ],
+    "center_of_mass_mm": [
+     -1.7146144236323198e-08,
+     -1.8175027046257048e-15,
+     3.5388091856074677
+    ],
+    "principal_moments_normalized": [
+     0.27123127442162065,
+     0.27123127442258976,
+     0.5169846971362078
+    ],
+    "surface_area_by_type": {
+     "cylinder": 1044.164687641554,
+     "extrusion": 1285.7852998886513,
+     "plane": 3056.8385102481484
+    },
+    "faces": 185
+   },
+   "step": "refs/08d2da3057.step"
+  },
+  {
+   "id": "0e9bcbd4f4",
+   "name": "standard external-hex coupling nut",
+   "description": "A standard external-hex coupling nut consists of an elongated hexagonal prismatic body with a plain cylindrical through hole running along the central axis.\n\nThe hex body size and overall length are governed by hex_width_across_flats and overall_length.\n\nThe axial clearance passage is defined by through_hole_diameter and extends through the full length set by overall_length.",
+   "key_parameters": "- overall_length = 30mm\n- hex_width_across_flats = 17mm\n- through_hole_diameter = 10mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 5152.245760618738,
+    "area_mm2": 3052.6526705051087,
+    "bbox_mm": {
+     "min": [
+      -9.814954576223638,
+      -8.5,
+      0.0
+     ],
+     "max": [
+      9.814954576223638,
+      8.5,
+      30.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     17.0,
+     19.629909152447276,
+     30.0
+    ],
+    "center_of_mass_mm": [
+     -4.302770944112114e-16,
+     -5.652942980098306e-17,
+     15.0
+    ],
+    "principal_moments_normalized": [
+     0.17692654878870762,
+     0.3398815729433708,
+     0.3398815729433711
+    ],
+    "surface_area_by_type": {
+     "cylinder": 942.477796076938,
+     "plane": 2110.174874428171
+    },
+    "faces": 9
+   },
+   "step": "refs/0e9bcbd4f4.step"
+  },
+  {
+   "id": "0f27beedee",
+   "name": "five-tiered front step",
+   "description": "A five-tiered front step modeled as a single prismatic staircase solid. Substructures: (1) stair_profile_2d defined by number_of_steps, step_riser, step_depth, total_rise, total_run; (2) extrusion defined by step_width, extrusion_direction. Create a 2D side profile of 5 risers and 5 treads, then extrude the profile across the full step_width.",
+   "key_parameters": "- **stair_profile_2d**\n  - number_of_steps = 5\n  - step_riser = 170.0 mm\n  - step_depth = 300.0 mm\n  - total_rise = number_of_steps * step_riser = 850.0 mm\n  - total_run = number_of_steps * step_depth = 1500.0 mm\n  - profile_origin = (0.0 mm, 0.0 mm)\n  - tread_direction = +X\n  - rise_direction = +Z\n- **extrusion**\n  - step_width = 1200.0 mm\n  - extrusion_direction = +Y\n  - extrusion_start_plane = Y = 0.0 mm\n  - extrusion_end_plane = Y = step_width = 1200.0 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 918000000.0,
+    "area_mm2": 7170000.0,
+    "bbox_mm": {
+     "min": [
+      0.0,
+      -850.0000000000001,
+      -1200.0
+     ],
+     "max": [
+      1500.0,
+      0.0,
+      1.0409497792752503e-13
+     ]
+    },
+    "bbox_sorted_mm": [
+     850.0000000000001,
+     1200.0,
+     1500.0
+    ],
+    "center_of_mass_mm": [
+     950.0,
+     -311.66666666666674,
+     -600.0
+    ],
+    "principal_moments_normalized": [
+     0.1625682446119646,
+     0.20630174970172147,
+     0.2978207051899514
+    ],
+    "surface_area_by_type": {
+     "plane": 7170000.0
+    },
+    "faces": 14
+   },
+   "step": "refs/0f27beedee.step"
+  },
+  {
+   "id": "0fe9d9e3ce",
+   "name": "round mounting flange",
+   "description": "A round mounting flange consists of a circular flange body with a central plain through hole and a set of bolt holes arranged on a bolt circle.\n\nThe flange body is defined by outer_diameter and flange_thickness, with the central through hole defined by inner_diameter.\n\nThe bolt pattern consists of number_bolt_holes through holes, each defined by bolt_hole_diameter, positioned evenly around pitch_circle_diameter.",
+   "key_parameters": "- inner_diameter = 34.925 mm\n- outer_diameter = 69.454 mm\n- flange_thickness = 13.097 mm\n- pitch_circle_diameter = 56.356 mm\n- bolt_hole_diameter = 6.747 mm\n- number_bolt_holes = 4",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 35200.07174019818,
+    "area_mm2": 10780.440619172765,
+    "bbox_mm": {
+     "min": [
+      -34.727,
+      -34.727,
+      0.0
+     ],
+     "max": [
+      34.727,
+      34.727,
+      13.097
+     ]
+    },
+    "bbox_sorted_mm": [
+     13.097,
+     69.454,
+     69.454
+    ],
+    "center_of_mass_mm": [
+     1.6148665627829762e-16,
+     -5.167573000905524e-16,
+     6.548500000000001
+    ],
+    "principal_moments_normalized": [
+     0.3638928249141696,
+     0.3638928249141772,
+     0.7011683882720773
+    ],
+    "surface_area_by_type": {
+     "cylinder": 5405.152883019735,
+     "plane": 5375.287736153035
+    },
+    "faces": 8
+   },
+   "step": "refs/0fe9d9e3ce.step"
+  },
+  {
+   "id": "14da78600e",
+   "name": "disc_spring",
+   "description": "A disc spring, also known as a Belleville washer, is a conical-shaped mechanical component that provides a spring force when subjected to a load. It typically consists of a circular ring with a conical profile, which allows it to compress and expand under load.\n\nKey parameters: outside_diameter and inner_diameter define the disc's radial extent; overall_height is the full vertical extent of the cross-section's bounding box; thickness is the perpendicular thickness of the disc material; cone_height is the nominal vertical rise of the slanted-material centerline (= overall_height - thickness) and represents the spring's free travel before flattening.",
+   "key_parameters": "- outside_diameter=8.0mm\n- inner_diameter=4.2mm\n- overall_height=0.6mm\n- thickness=0.4mm\n- cone_height=0.2mm\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 14.31648993556677,
+    "area_mm2": 86.91342182552634,
+    "bbox_mm": {
+     "min": [
+      -4.000000000000001,
+      -4.000000000000001,
+      -5.429770246076077e-16
+     ],
+     "max": [
+      4.000000000000001,
+      4.000000000000001,
+      0.6000000000000009
+     ]
+    },
+    "bbox_sorted_mm": [
+     0.6000000000000014,
+     8.000000000000002,
+     8.000000000000002
+    ],
+    "center_of_mass_mm": [
+     3.2570390678244545e-16,
+     -1.4941524453570454e-16,
+     0.29020571719890764
+    ],
+    "principal_moments_normalized": [
+     0.8648022658086322,
+     0.8648022658086331,
+     1.7240098359488552
+    ],
+    "surface_area_by_type": {
+     "cone": 86.91342182552634
+    },
+    "faces": 4
+   },
+   "step": "refs/14da78600e.step"
+  },
+  {
+   "id": "163672a65f",
+   "name": "taper_pin",
+   "description": "A taper pin is a cylindrical pin with a slight taper along its length, typically used for positioning and securing components in mechanical assemblies. It usually has a small end and a large end, with a consistent taper angle.\n\nKey parameters for drawing a taper pin include the small_end_diameter, large_end_diameter, overall_length, and taper_angle. These dimensions ensure the pin fits snugly into a corresponding tapered hole, providing a secure and precise fit.",
+   "key_parameters": "- diameter=0.6mm (small-end diameter; the radius at the start of the taper section after the rounded tip)\n- length=4.0mm\n- rounded_end_height=0.08mm (axial length of the rounded section at each end)\n- taper_ratio=0.02 (1:50 standard taper, slope per unit axial length)\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 1.4170880737465357,
+    "area_mm2": 8.935349148376497,
+    "bbox_mm": {
+     "min": [
+      0.0,
+      -0.3768000000000001,
+      -0.3768000000000001
+     ],
+     "max": [
+      4.000000000000001,
+      0.3768000000000001,
+      0.3768000000000001
+     ]
+    },
+    "bbox_sorted_mm": [
+     0.7536000000000002,
+     0.7536000000000002,
+     4.000000000000001
+    ],
+    "center_of_mass_mm": [
+     2.1505703334009714,
+     -1.0291877297094562e-17,
+     1.9586344793833436e-17
+    ],
+    "principal_moments_normalized": [
+     0.046063501890195306,
+     1.0248446320140374,
+     1.0248446320140383
+    ],
+    "surface_area_by_type": {
+     "cone": 8.166355627833857,
+     "sphere": 0.7689935205426395
+    },
+    "faces": 3
+   },
+   "step": "refs/163672a65f.step"
+  },
+  {
+   "id": "1b9f95801c",
+   "name": "water cup",
+   "description": "A water cup consists of a cup body and its interior is hollowed out to achieve a consistent thickness.\nA water cup is normally defined by cup_diameter, cup_height, cup_thickness, etc.\n",
+   "key_parameters": "- cup_diameter=80.0mm, cup_height=120.0mm, cup_thickness=2.0mm\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 67883.53405876833,
+    "area_mm2": 68386.18888334262,
+    "bbox_mm": {
+     "min": [
+      -40.0,
+      -40.0,
+      0.0
+     ],
+     "max": [
+      40.0,
+      40.0,
+      120.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     80.0,
+     80.0,
+     120.0
+    ],
+    "center_of_mass_mm": [
+     -4.115825380316284e-14,
+     -5.7131503403343485e-15,
+     52.114402073306096
+    ],
+    "principal_moments_normalized": [
+     0.8503616486870706,
+     1.292158477175209,
+     1.292158477175223
+    ],
+    "surface_area_by_type": {
+     "cylinder": 58333.09239185528,
+     "plane": 10053.096491487337
+    },
+    "faces": 5
+   },
+   "step": "refs/1b9f95801c.step"
+  },
+  {
+   "id": "1db55e40f2",
+   "name": "spur gear",
+   "description": "A spur gear consists of a cylindrical gear body with external involute teeth, a central hub, and a round bore for mounting on a shaft.\n\nThe toothed gear body is defined by number_of_teeth, gear_module, pressure_angle, face_width, pitch_diameter, outer_diameter, base_diameter, root_diameter, addendum, dedendum, whole_depth, clearance, circular_pitch, and tooth_thickness.\n\nThe hub is integrated concentrically with the gear body and is governed by hub_diameter, hub_width, and overall_width.\n\nThe central bore passes through the gear axis and is characterized by shaft_diameter.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- gear_module = 1.5 mm\n- number_of_teeth = 80\n- pitch_diameter = 120 mm\n- outer_diameter = 123 mm\n- face_width = 15 mm\n- hub_diameter = 55 mm\n- hub_width = 10 mm\n- shaft_diameter = 12 mm\n- overall_width = 25 mm\n- addendum = gear_module = 1.5 = 1.5 mm  # ISO 54 / DIN 867\n- dedendum = 1.25 * gear_module = 1.25 * 1.5 = 1.875 mm  # ISO 54 / DIN 867\n- whole_depth = addendum + dedendum = 1.5 + 1.875 = 3.375 mm  # ISO 54 / DIN 867\n- clearance = dedendum - addendum = 1.875 - 1.5 = 0.375 mm  # ISO 54 / DIN 867\n- base_diameter = pitch_diameter * cos(pressure_angle) = 120 * cos(20) = 112.763 mm  # ISO 21771\n- circular_pitch = pi * gear_module = pi * 1.5 = 4.712 mm  # ISO 54\n- tooth_thickness = circular_pitch / 2 = 4.712 / 2 = 2.356 mm  # ISO 54\n- root_diameter = pitch_diameter - (2 * dedendum) = 120 - (2 * 1.875) = 116.25 mm  # ISO 54 / DIN 867",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 189968.0528552295,
+    "area_mm2": 36378.782430365194,
+    "bbox_mm": {
+     "min": [
+      -61.5000001,
+      -61.5000001,
+      -1e-07
+     ],
+     "max": [
+      61.5000001,
+      61.5000001,
+      25.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     25.0000001,
+     123.0000002,
+     123.0000002
+    ],
+    "center_of_mass_mm": [
+     2.05895776571167e-09,
+     -6.050432238879508e-14,
+     8.988889889293187
+    ],
+    "principal_moments_normalized": [
+     0.2593497772188571,
+     0.2593497772188828,
+     0.4981805963599323
+    ],
+    "surface_area_by_type": {
+     "cylinder": 5473.780954318858,
+     "extrusion": 8592.899896859728,
+     "plane": 22312.10157918642
+    },
+    "faces": 325
+   },
+   "step": "refs/1db55e40f2.step"
+  },
+  {
+   "id": "21d1517841",
+   "name": "large_washer_grade_a",
+   "description": "A large washer, Grade A, typically consists of a flat, circular disc with a central hole. The washer is used to distribute the load of a threaded fastener, such as a screw or nut. Grade A indicates a specific standard of material and manufacturing quality.\n\nKey parameters for drawing a large washer include the outer_diameter, inner_diameter (hole size), thickness. For a Grade A washer, ensure the material properties and dimensions meet the specified standards for that grade.",
+   "key_parameters": "- outer_diameter=9.0mm\n- inner_diameter=3.2mm\n- thickness=0.8mm\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 44.459819233602765,
+    "area_mm2": 141.81149238304326,
+    "bbox_mm": {
+     "min": [
+      -4.5,
+      -4.5,
+      0.0
+     ],
+     "max": [
+      4.5,
+      4.5,
+      0.8
+     ]
+    },
+    "bbox_sorted_mm": [
+     0.8,
+     9.0,
+     9.0
+    ],
+    "center_of_mass_mm": [
+     4.195191778828832e-16,
+     1.4954512723937928e-18,
+     0.4
+    ],
+    "principal_moments_normalized": [
+     0.45863065693653143,
+     0.45863065693654104,
+     0.9087620053327691
+    ],
+    "surface_area_by_type": {
+     "cylinder": 30.66194429903638,
+     "plane": 111.14954808400688
+    },
+    "faces": 4
+   },
+   "step": "refs/21d1517841.step"
+  },
+  {
+   "id": "264ab71adf",
+   "name": "disc_spring_supporting_surface",
+   "description": "A disc spring with bearing flats (supporting surfaces) consists of a conical disc with a central hole, where the inner edge of the upper face and the outer edge of the lower face are flattened into horizontal bearing surfaces that distribute the load evenly when the spring is compressed.\n\nKey parameters: outside_diameter and inner_diameter define the disc's radial extent; overall_height is the full vertical extent of the cross-section (top bearing flat to bottom bearing flat); thickness_with_bearing_flat is the perpendicular distance from the slanted disc surface to the adjacent bearing flat plane (i.e., the length of the short edges in the hexagonal cross-section); cone_height is the nominal vertical rise of the slanted material centerline (= overall_height - thickness_with_bearing_flat) and represents the spring's free travel before flattening.",
+   "key_parameters": "- outside_diameter=8.0mm\n- inner_diameter=4.2mm\n- overall_height=0.6mm\n- thickness_with_bearing_flat=0.4mm\n- cone_height=0.2mm\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 15.758066159853348,
+    "area_mm2": 86.56503970680888,
+    "bbox_mm": {
+     "min": [
+      -4.000000000000001,
+      -4.000000000000001,
+      -5.41280752526053e-16
+     ],
+     "max": [
+      4.000000000000001,
+      4.000000000000001,
+      0.6000000000000011
+     ]
+    },
+    "bbox_sorted_mm": [
+     0.6000000000000016,
+     8.000000000000002,
+     8.000000000000002
+    ],
+    "center_of_mass_mm": [
+     4.1568018428407106e-16,
+     -5.077709551073776e-16,
+     0.28957419609460544
+    ],
+    "principal_moments_normalized": [
+     0.8085018822420302,
+     0.8085018822420348,
+     1.6105433093573784
+    ],
+    "surface_area_by_type": {
+     "cone": 71.45251322510717,
+     "plane": 15.112526481701723
+    },
+    "faces": 6
+   },
+   "step": "refs/264ab71adf.step"
+  },
+  {
+   "id": "28177ca409",
+   "name": "gib_head_key",
+   "description": "A gib head key is a type of machine key with a tapered end and a head that protrudes for easy removal. It is used to secure rotating elements like gears or pulleys to a shaft.\n\nA gib head key is typically defined by its length, width, height, taper_angle, and height_with_head the dimensions of the head. These parameters ensure a precise fit and secure locking mechanism between the shaft and the rotating element.",
+   "key_parameters": "- length=14.0mm (axial length of the body, measured from the head/body joint to the tapered tip)\n- width=4.0mm (extrusion depth and total horizontal extent of the head)\n- key_height=4.0mm (body height at the head/body joint)\n- height_with_head=7.0mm (full height including the head)\n- taper_angle=45 degree (angle of the head's slanted face from horizontal)\n- key_taper_ratio=0.01 (1:100 standard body height taper along the length)\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 314.08000000000015,
+    "area_mm2": 349.45336267848063,
+    "bbox_mm": {
+     "min": [
+      0.0,
+      -4.0000000000000036,
+      -1.3322676295501877e-15
+     ],
+     "max": [
+      18.000000000000004,
+      0.0,
+      7.000000000000002
+     ]
+    },
+    "bbox_sorted_mm": [
+     4.0000000000000036,
+     7.000000000000003,
+     18.000000000000004
+    ],
+    "center_of_mass_mm": [
+     8.334606894209545,
+     -2.000000000000001,
+     2.2812752589573773
+    ],
+    "principal_moments_normalized": [
+     0.07227373297985971,
+     0.6363970610728859,
+     0.6509575866581029
+    ],
+    "surface_area_by_type": {
+     "plane": 349.45336267848063
+    },
+    "faces": 9
+   },
+   "step": "refs/28177ca409.step"
+  },
+  {
+   "id": "2c186f799d",
+   "name": "circular flange",
+   "description": "A circular flange consists of a cylindrical flange body with a plain through bore and a bolt-hole pattern arranged on a bolt circle for fastening.\n\nThe flange body is defined by outer_diameter and flange_thickness, with the central through bore defined by bore_diameter.\n\nThe bolt-hole pattern is located on bolt_circle_diameter, with individual holes sized by bolt_hole_diameter and the quantity set by number_of_bolt_holes.",
+   "key_parameters": "- outer_diameter = 125.4125 mm\n- flange_thickness = 23.01875 mm\n- bore_diameter = 64.690625 mm\n- bolt_circle_diameter = 103.1875 mm\n- bolt_hole_diameter = 13.49375 mm\n- number_of_bolt_holes = 4",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 195524.81218272532,
+    "area_mm2": 34638.94882621434,
+    "bbox_mm": {
+     "min": [
+      -62.70625,
+      -62.70625,
+      0.0
+     ],
+     "max": [
+      62.70625,
+      62.70625,
+      23.01875
+     ]
+    },
+    "bbox_sorted_mm": [
+     23.01875,
+     125.4125,
+     125.4125
+    ],
+    "center_of_mass_mm": [
+     -2.3955515731442317e-15,
+     -6.698241291898434e-16,
+     11.509375000000004
+    ],
+    "principal_moments_normalized": [
+     0.38060030076942214,
+     0.3806003007694299,
+     0.7349859370478431
+    ],
+    "surface_area_by_type": {
+     "cylinder": 17650.640409577878,
+     "plane": 16988.30841663647
+    },
+    "faces": 8
+   },
+   "step": "refs/2c186f799d.step"
+  },
+  {
+   "id": "2fcd25f3ac",
+   "name": "spur gear",
+   "description": "A spur gear consists of a toothed gear body, a central hub, and a round bore through the center.\n\nThe toothed gear body is defined by number_of_teeth, gear_module, pressure_angle, pitch_diameter, outer_diameter, root_diameter, addendum, dedendum, whole_depth, circular_pitch, base_diameter, and face_width.\n\nThe central hub is integrated with the gear body and is characterized by hub_diameter, hub_width, and overall_width.\n\nThe central bore passes through the axis of the gear and is defined by shaft_diameter.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- gear_module = 1 mm\n- number_of_teeth = 18\n- pitch_diameter = 18 mm\n- outer_diameter = 20 mm\n- face_width = 10 mm\n- hub_diameter = 14 mm\n- hub_width = 10 mm\n- shaft_diameter = 6 mm\n- overall_width = 20 mm\n- addendum = pitch_diameter / number_of_teeth = 18 mm / 18 = 1 mm  # ISO 54 / DIN 867\n- dedendum = 1.25 * gear_module = 1.25 * 1 = 1.25 mm  # ISO 54 / DIN 867\n- whole_depth = addendum + dedendum = 1 mm + 1.25 mm = 2.25 mm  # ISO 54 / DIN 867\n- root_diameter = pitch_diameter - 2 * dedendum = 18 mm - 2 * 1.25 mm = 15.5 mm  # ISO 54 / DIN 867\n- circular_pitch = pi * gear_module = pi * 1 = 3.142 mm  # ISO 54 / DIN 867\n- base_diameter = pitch_diameter * cos(pressure_angle) = 18 mm * cos(20 degrees) = 16.914 mm  # ISO 54 / DIN 867",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 3447.676529415526,
+    "area_mm2": 2440.256228624385,
+    "bbox_mm": {
+     "min": [
+      -10.0000001,
+      -9.901531485114747,
+      -1e-07
+     ],
+     "max": [
+      10.0000001,
+      9.901531485114745,
+      20.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     19.80306297022949,
+     20.0000001,
+     20.0000002
+    ],
+    "center_of_mass_mm": [
+     -6.940293070616873e-08,
+     1.0901802238399122e-16,
+     8.644881190268181
+    ],
+    "principal_moments_normalized": [
+     0.17423785275086937,
+     0.22513119177317978,
+     0.22513119178423854
+    ],
+    "surface_area_by_type": {
+     "cylinder": 1141.4037707324983,
+     "extrusion": 606.0446842574452,
+     "plane": 692.8077736344411
+    },
+    "faces": 113
+   },
+   "step": "refs/2fcd25f3ac.step"
+  },
+  {
+   "id": "333ba9d41c",
+   "name": "spur gear",
+   "description": "A spur gear consists of a toothed gear body, a central hub, and a round bore aligned along the rotational axis.\n\nThe toothed gear body is defined by number_of_teeth, gear_module, pressure_angle, face_width, pitch_diameter, outer_diameter, root_diameter, addendum, and dedendum.\n\nThe central hub is integrated with the gear body and is characterized by hub_diameter, hub_width, and overall_width.\n\nThe round bore passes through the center of the gear and is defined by shaft_diameter.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- gear_module = 1 mm\n- number_of_teeth = 48\n- pitch_diameter = 48 mm\n- outer_diameter = 50 mm\n- face_width = 6 mm\n- hub_diameter = 16 mm\n- hub_width = 8 mm\n- shaft_diameter = 8 mm\n- overall_width = 14 mm\n- addendum = pitch_diameter / number_of_teeth = 48 mm / 48 = 1 mm  # ISO 21771\n- dedendum = 1.25 * gear_module = 1.25 * 1 = 1.25 mm  # ISO 21771\n- root_diameter = pitch_diameter - 2 * dedendum = 48 mm - 2 * 1.25 mm = 45.5 mm  # ISO 21771",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 11688.588295871708,
+    "area_mm2": 6086.242496785482,
+    "bbox_mm": {
+     "min": [
+      -25.0000001,
+      -25.0000001,
+      -1e-07
+     ],
+     "max": [
+      25.0000001,
+      25.0000001,
+      14.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     14.0000001,
+     50.0000002,
+     50.0000002
+    ],
+    "center_of_mass_mm": [
+     1.0301561858180512e-08,
+     -6.227266772029329e-15,
+     3.7224654182643238
+    ],
+    "principal_moments_normalized": [
+     0.27662596611636514,
+     0.27662596611685986,
+     0.52305576201181
+    ],
+    "surface_area_by_type": {
+     "cylinder": 1220.17991480813,
+     "extrusion": 1371.9851519748759,
+     "plane": 3494.0774300025
+    },
+    "faces": 197
+   },
+   "step": "refs/333ba9d41c.step"
+  },
+  {
+   "id": "33e0cf86f9",
+   "name": "half_moon_key",
+   "description": "A half moon key, also known as a Woodruff key, is a semi-circular, disk-shaped mechanical component used to connect a rotating element to a shaft. It typically fits into a corresponding keyway in the shaft and the rotating element, ensuring proper alignment and torque transmission.\n\nKey parameters for drawing a half moon key in CAD include the diameter of the key (which determines the size of the semi-circular part), the moon_height of the key (which is top of the semi-circle to the bottom of the key), and thickness of the key. Additionally, the keyway dimensions on both the shaft and the rotating element must be considered to ensure a proper fit.",
+   "key_parameters": "- diameter=4.0mm\n- moon_height=1.4mm\n- key_thickness=1.0mm\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 3.9196876494176625,
+    "area_mm2": 16.719546795621106,
+    "bbox_mm": {
+     "min": [
+      -1.9078784028338918,
+      -1.0000000000000002,
+      -1.4000000000000006
+     ],
+     "max": [
+      1.9078784028338915,
+      7.771561172376095e-16,
+      2.220446049250313e-16
+     ]
+    },
+    "bbox_sorted_mm": [
+     1.0000000000000009,
+     1.4000000000000008,
+     3.8157568056677835
+    ],
+    "center_of_mass_mm": [
+     -4.011119502244577e-16,
+     -0.49999999999999967,
+     -0.5811616991721472
+    ],
+    "principal_moments_normalized": [
+     0.08838021503509566,
+     0.3645049850199224,
+     0.3858430743610775
+    ],
+    "surface_area_by_type": {
+     "cylinder": 5.064414691117998,
+     "plane": 11.655132104503108
+    },
+    "faces": 4
+   },
+   "step": "refs/33e0cf86f9.step"
+  },
+  {
+   "id": "3582a53285",
+   "name": "square washer",
+   "description": "A square washer consists of a prismatic square plate (square outer profile) with a central circular through-hole.\n\nMain substructures and key parameter names:\n- Square plate body: washer_width, washer_thickness\n- Central hole (cut-through): washer_inner_hole_diameter",
+   "key_parameters": "- **Square plate body**\n  - washer_width = 40 mm\n  - washer_thickness = 5 mm\n- **Central hole (cut-through)**\n  - washer_inner_hole_diameter = 7.5 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 7779.106766544466,
+    "area_mm2": 4029.452431127404,
+    "bbox_mm": {
+     "min": [
+      -20.0,
+      -20.0,
+      0.0
+     ],
+     "max": [
+      20.0,
+      20.0,
+      5.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     5.0,
+     40.0,
+     40.0
+    ],
+    "center_of_mass_mm": [
+     -6.028432565272281e-16,
+     -4.0934121861029906e-17,
+     2.5
+    ],
+    "principal_moments_normalized": [
+     0.35430977163878297,
+     0.35430977163878313,
+     0.6980066058538873
+    ],
+    "surface_area_by_type": {
+     "cylinder": 117.80972450961725,
+     "plane": 3911.6427066177866
+    },
+    "faces": 7
+   },
+   "step": "refs/3582a53285.step"
+  },
+  {
+   "id": "3ba87acac3",
+   "name": "spur gear",
+   "description": "A spur gear consists of a toothed gear body, a central hub, and a round shaft bore.\n\nThe toothed gear body is defined by number_of_teeth, gear_module, pressure_angle, pitch_diameter, outer_diameter, root_diameter, addendum, dedendum, and face_width.\n\nThe central hub is integrated with the gear body and is characterized by hub_diameter, hub_width, and overall_width.\n\nThe round shaft bore passes through the center and is defined by shaft_diameter.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- gear_module = 2 mm\n- number_of_teeth = 20\n- pitch_diameter = 40 mm\n- outer_diameter = 44 mm\n- face_width = 20 mm\n- hub_diameter = 32 mm\n- hub_width = 10 mm\n- shaft_diameter = 10 mm\n- overall_width = 30 mm\n- addendum = pitch_diameter / number_of_teeth = 40 mm / 20 = 2 mm  # ISO 6336\n- dedendum = 1.25 * gear_module = 1.25 * 2 = 2.5 mm  # ISO 6336\n- root_diameter = pitch_diameter - 2 * dedendum = 40 mm - 2 * 2.5 mm = 35 mm  # ISO 6336",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 30207.943724057095,
+    "area_mm2": 9508.396783933797,
+    "bbox_mm": {
+     "min": [
+      -22.0000001,
+      -22.0000001,
+      -1e-07
+     ],
+     "max": [
+      22.0000001,
+      22.0000001,
+      30.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     30.0000001,
+     44.0000002,
+     44.0000002
+    ],
+    "center_of_mass_mm": [
+     -1.474018042356507e-07,
+     -2.5447656778816554e-15,
+     13.603561861827046
+    ],
+    "principal_moments_normalized": [
+     0.1722833198710515,
+     0.17228331988151505,
+     0.20353798533344952
+    ],
+    "surface_area_by_type": {
+     "cylinder": 3394.587487496383,
+     "extrusion": 2783.661588914546,
+     "plane": 3330.147707522864
+    },
+    "faces": 125
+   },
+   "step": "refs/3ba87acac3.step"
+  },
+  {
+   "id": "3cebd4c4f6",
+   "name": "round_key",
+   "description": "A round key is a cylindrical component used to connect a rotating machine element to a shaft, providing secure torque transmission. It fits into a corresponding keyway or slot, ensuring proper alignment and rotational stability between connected parts.\nKey parameters include the key\u00e2\u0080\u0099s diameter, height, and length. These dimensions ensure the key fits securely within the keyway, enabling effective performance and reliable operation in mechanical assemblies.",
+   "key_parameters": "- diameter=5.0mm\n- height=3.0mm\n- length=10.0mm\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 133.90486225480862,
+    "area_mm2": 166.3937979737193,
+    "bbox_mm": {
+     "min": [
+      -5.0,
+      -2.5,
+      0.0
+     ],
+     "max": [
+      5.0,
+      2.5,
+      3.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     3.0,
+     5.0,
+     10.0
+    ],
+    "center_of_mass_mm": [
+     -3.886468601884945e-19,
+     -5.113417358983416e-17,
+     1.5000000000000002
+    ],
+    "principal_moments_normalized": [
+     0.09949772631539969,
+     0.29370554436646834,
+     0.33589371681290053
+    ],
+    "surface_area_by_type": {
+     "cylinder": 47.1238898038469,
+     "plane": 119.26990816987241
+    },
+    "faces": 6
+   },
+   "step": "refs/3cebd4c4f6.step"
+  },
+  {
+   "id": "41b24257f7",
+   "name": "spur gear",
+   "description": "A spur gear consists of a cylindrical gear body with external involute teeth, a central bore, and an integrated hub.\n\nThe toothed gear body is defined by number_of_teeth, gear_module, pressure_angle, face_width, pitch_diameter, outer_diameter, root_diameter, base_diameter, addendum, dedendum, whole_depth, circular_pitch, and tooth_thickness.\n\nThe central bore passes through the gear along its axis and is defined by shaft_diameter.\n\nThe hub is formed concentrically with the gear body and is characterized by hub_diameter, hub_width, and overall_width.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- gear_module = 2 mm\n- number_of_teeth = 24\n- pitch_diameter = 48 mm\n- outer_diameter = 52 mm\n- face_width = 20 mm\n- hub_diameter = 38 mm\n- hub_width = 10 mm\n- shaft_diameter = 10 mm\n- overall_width = 30 mm\n- addendum = gear_module = 2 = 2 mm  # ISO 21771\n- dedendum = 1.25 * gear_module = 1.25 * 2 = 2.5 mm  # ISO 21771\n- whole_depth = addendum + dedendum = 2 + 2.5 = 4.5 mm  # ISO 21771\n- root_diameter = pitch_diameter - 2 * dedendum = 48 - 2 * 2.5 = 43 mm  # ISO 21771\n- base_diameter = pitch_diameter * cos(pressure_angle) = 48 * cos(20 degrees) = 45.11 mm  # ISO 21771\n- circular_pitch = pi * gear_module = pi * 2 = 6.283 mm  # ISO 21771\n- tooth_thickness = circular_pitch / 2 = 6.283 / 2 = 3.142 mm  # ISO 21771",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 44492.45011347166,
+    "area_mm2": 11833.00765720166,
+    "bbox_mm": {
+     "min": [
+      -26.0000001,
+      -26.0000001,
+      -1e-07
+     ],
+     "max": [
+      26.0000001,
+      26.0000001,
+      30.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     30.0000001,
+     52.0000002,
+     52.0000002
+    ],
+    "center_of_mass_mm": [
+     -1.3803128355899624e-07,
+     5.983416532587812e-15,
+     13.558722425325971
+    ],
+    "principal_moments_normalized": [
+     0.16439023145894835,
+     0.16439023146617687,
+     0.22027872853152775
+    ],
+    "surface_area_by_type": {
+     "cylinder": 3866.4697786391353,
+     "extrusion": 3562.3799038168727,
+     "plane": 4404.15797474565
+    },
+    "faces": 149
+   },
+   "step": "refs/41b24257f7.step"
+  },
+  {
+   "id": "4ca1b8519a",
+   "name": "rectangular_spline",
+   "description": "A rectangular spline consists of a series of connected line segments forming a rectangular profile, commonly used in CAD designs to define paths, boundaries, or mechanical features such as gear teeth. This type of spline is characterized by its straight edges and precise geometry, making it ideal for applications requiring defined boundaries and controlled motion.\nKey parameters include the shaft diameter, root diameter, number of teeth, tooth width, and spline thickness. These parameters establish the spline's shape, size, and structural integrity, ensuring proper fit and function in mechanical assemblies.",
+   "key_parameters": "- shaft_diameter=14.0mm\n- root_diameter=11.0mm\n- number_teeth=6\n- tooth_width=3.0mm\n- spline_thickness=1.0mm\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 122.303481792012,
+    "area_mm2": 297.62494155416493,
+    "bbox_mm": {
+     "min": [
+      -6.671359641163508,
+      -1.0000000000000049,
+      -7.000000000000002
+     ],
+     "max": [
+      6.671359641163509,
+      4.699798436761767e-15,
+      7.000000000000002
+     ]
+    },
+    "bbox_sorted_mm": [
+     1.0000000000000095,
+     13.342719282327018,
+     14.000000000000004
+    ],
+    "center_of_mass_mm": [
+     1.3071755047652639e-15,
+     -0.4999999999999998,
+     -2.4823963859743325e-16
+    ],
+    "principal_moments_normalized": [
+     0.4194374739796014,
+     0.4194374739796015,
+     0.8321106478270265
+    ],
+    "surface_area_by_type": {
+     "cylinder": 34.46724344862702,
+     "plane": 263.15769810553786
+    },
+    "faces": 26
+   },
+   "step": "refs/4ca1b8519a.step"
+  },
+  {
+   "id": "52e0552e1d",
+   "name": "spur gear",
+   "description": "A spur gear consists of a toothed gear body, a central hub section, and a round shaft bore.\n\nThe toothed gear body is defined by number_of_teeth, gear_module, pressure_angle, pitch_diameter, outer_diameter, root_diameter, addendum, dedendum, and face_width.\n\nThe central hub is integrated with the gear body and is characterized by hub_diameter, hub_width, and overall_width.\n\nThe round bore passes through the center of the gear and is defined by shaft_diameter.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- gear_module = 1 mm\n- number_of_teeth = 40\n- pitch_diameter = 40 mm\n- outer_diameter = 42 mm\n- face_width = 10 mm\n- hub_diameter = 35 mm\n- hub_width = 10 mm\n- shaft_diameter = 10 mm\n- overall_width = 20 mm\n- addendum = pitch_diameter / number_of_teeth = 40 mm / 40 = 1 mm  # ISO 21771\n- dedendum = 1.25 * gear_module = 1.25 * 1 = 1.25 mm  # ISO 21771\n- root_diameter = pitch_diameter - 2 * dedendum = 40 mm - 2 * 1.25 mm = 37.5 mm  # ISO 21771",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 20507.152049247394,
+    "area_mm2": 6635.457004430136,
+    "bbox_mm": {
+     "min": [
+      -21.0000001,
+      -21.0000001,
+      -1e-07
+     ],
+     "max": [
+      21.0000001,
+      21.0000001,
+      20.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     20.0000001,
+     42.0000002,
+     42.0000002
+    ],
+    "center_of_mass_mm": [
+     -6.403602289940271e-08,
+     -2.6621387856182797e-15,
+     9.308608768343548
+    ],
+    "principal_moments_normalized": [
+     0.17222294609274025,
+     0.17222294609591987,
+     0.2567393957130134
+    ],
+    "surface_area_by_type": {
+     "cylinder": 2397.6246166180777,
+     "extrusion": 1868.4885116861562,
+     "plane": 2369.3438761259004
+    },
+    "faces": 245
+   },
+   "step": "refs/52e0552e1d.step"
+  },
+  {
+   "id": "539c2a6856",
+   "name": "high-profile hex flange nut",
+   "description": "A high-profile hex flange nut consists of a hexagonal hub integrated with a circular flange, with a plain through hole running axially through the full body.\n\nThe plain through hole is defined by inner_diameter, and it is centered on the nut axis to provide the fastening clearance.\n\nThe overall nut height is controlled by overall_height, while the hex hub\u2019s size across flats is governed by hub_width.\n\nThe integrated flange is characterized by flange_diameter and flange_thickness, forming a larger bearing surface at one end of the nut.",
+   "key_parameters": "- inner_diameter = 30.0 mm\n- overall_height = 45.0 mm\n- flange_diameter = 58.0 mm\n- flange_thickness = 8.0 mm\n- hub_width = 46.0 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 57130.87066884676,
+    "area_mm2": 15465.192171798966,
+    "bbox_mm": {
+     "min": [
+      -29.0,
+      -29.0,
+      0.0
+     ],
+     "max": [
+      29.0,
+      29.0,
+      45.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     45.0,
+     58.0,
+     58.0
+    ],
+    "center_of_mass_mm": [
+     -1.3690767082099276e-15,
+     3.3830691667923503e-16,
+     20.40277464089158
+    ],
+    "principal_moments_normalized": [
+     0.273356072960099,
+     0.2733560729600997,
+     0.2977846547218125
+    ],
+    "surface_area_by_type": {
+     "cylinder": 5698.849073611886,
+     "plane": 9766.343098187084
+    },
+    "faces": 11
+   },
+   "step": "refs/539c2a6856.step"
+  },
+  {
+   "id": "53b5d25579",
+   "name": "socket weld flange",
+   "description": "A socket weld flange consists of flange body, bore, a recessed socket for the pipe insertion and welding, a raised face and bolt holes around the bolt circle to connect to another flange.\nA socket weld flange is normally defined by outer_circle_diameter, flange_thickness, total_height, bore_diameter, neck_diameter, neck_height, socket_diameter, socket_depth, raised_face_diameter, raised_face_thickness, bolt_circle_diameter, bolt_hole_diameter, number_bolt_holes, etc.\n",
+   "key_parameters": "- outer_circle_diameter=130mm, flange_thickness=17.5mm, total_height=22.0mm\n- bore_diameter=41mm\n- neck_diameter=65mm, neck_height=2.5mm\n- socket_diameter=49.5mm, socket_depth=16.0mm\n- raised_face_diameter=73mm, raised_face_thickness=2mm\n- bolt_circle_diameter=98.5mm, bolt_hole_diameter=16mm, number_bolt_holes=4\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 196161.43798922835,
+    "area_mm2": 37193.31542584958,
+    "bbox_mm": {
+     "min": [
+      -65.0,
+      -65.0,
+      -2.0
+     ],
+     "max": [
+      65.0,
+      65.0,
+      20.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     22.0,
+     130.0,
+     130.0
+    ],
+    "center_of_mass_mm": [
+     -1.2175344508775767e-14,
+     -6.33531662660063e-17,
+     8.55966966353767
+    ],
+    "principal_moments_normalized": [
+     0.35212712063942875,
+     0.3521271206394367,
+     0.6870024499900179
+    ],
+    "surface_area_by_type": {
+     "cylinder": 14895.861566996002,
+     "plane": 22297.45385885357
+    },
+    "faces": 14
+   },
+   "step": "refs/53b5d25579.step"
+  },
+  {
+   "id": "553fe598d9",
+   "name": "three-tiered front step",
+   "description": "A three-tiered front step modeled as a prismatic solid created from a 2D side-profile sketch (3 risers and 3 treads) extruded to a constant width. Substructures: step_profile (riser, depth, number_of_tiers), extrusion (width).",
+   "key_parameters": "- **step_profile**\n  - number_of_tiers = 3\n  - riser = 150.0 mm\n  - depth = 300.0 mm\n  - total_rise = number_of_tiers * riser = 450.0 mm\n  - total_run = number_of_tiers * depth = 900.0 mm\n  - profile_origin = (0.0, 0.0) mm  \n- **extrusion**\n  - width = 1200.0 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 324000000.0000001,
+    "area_mm2": 3780000.000000001,
+    "bbox_mm": {
+     "min": [
+      0.0,
+      -1200.0000000000002,
+      -4.547473508864641e-13
+     ],
+     "max": [
+      900.0000000000002,
+      0.0,
+      450.0000000000001
+     ]
+    },
+    "bbox_sorted_mm": [
+     450.00000000000057,
+     900.0000000000002,
+     1200.0000000000002
+    ],
+    "center_of_mass_mm": [
+     550.0000000000002,
+     -600.0000000000001,
+     174.99999999999986
+    ],
+    "principal_moments_normalized": [
+     0.15236358552503815,
+     0.2777284248277469,
+     0.38339704627654897
+    ],
+    "surface_area_by_type": {
+     "plane": 3780000.000000001
+    },
+    "faces": 10
+   },
+   "step": "refs/553fe598d9.step"
+  },
+  {
+   "id": "5709ae4446",
+   "name": "spur gear",
+   "description": "A spur gear consists of a toothed gear body, a central hub, and a round through bore aligned along the rotational axis.\n\nThe toothed gear body is defined by number_of_teeth, gear_module, pressure_angle, face_width, pitch_diameter, outer_diameter, root_diameter, base_diameter, addendum, dedendum, whole_depth, circular_pitch, and tooth_thickness.\n\nThe central hub is integrated with the gear body and is characterized by hub_diameter, hub_width, and overall_width.\n\nThe round bore passes through the center of the gear and hub and is governed by shaft_diameter.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- gear_module = 2 mm\n- number_of_teeth = 30\n- pitch_diameter = 60 mm\n- outer_diameter = 64 mm\n- face_width = 20 mm\n- hub_diameter = 50 mm\n- hub_width = 10 mm\n- shaft_diameter = 10 mm\n- overall_width = 30 mm\n- addendum = pitch_diameter / number_of_teeth = 60 mm / 30 = 2 mm  # ISO 21771\n- dedendum = 1.25 * gear_module = 1.25 * 2 = 2.5 mm  # ISO 21771\n- whole_depth = addendum + dedendum = 2 mm + 2.5 mm = 4.5 mm  # ISO 21771\n- root_diameter = pitch_diameter - 2 * dedendum = 60 mm - 2 * 2.5 mm = 55 mm  # ISO 21771\n- base_diameter = pitch_diameter * cos(pressure_angle) = 60 mm * cos(20 degrees) = 56.382 mm  # ISO 21771\n- circular_pitch = pi * gear_module = pi * 2 = 6.283 mm  # ISO 21771\n- tooth_thickness = circular_pitch / 2 = 6.283 mm / 2 = 3.142 mm  # ISO 21771",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 73061.93499901817,
+    "area_mm2": 15764.148636791715,
+    "bbox_mm": {
+     "min": [
+      -32.0000001,
+      -31.893323902168394,
+      -1e-07
+     ],
+     "max": [
+      32.0000001,
+      31.893323902168394,
+      30.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     30.0000001,
+     63.78664780433679,
+     64.0000002
+    ],
+    "center_of_mass_mm": [
+     -1.3481067635495166e-07,
+     8.894646749909412e-15,
+     13.869913272343338
+    ],
+    "principal_moments_normalized": [
+     0.16244355496282514,
+     0.16244355496791155,
+     0.24483121682149908
+    ],
+    "surface_area_by_type": {
+     "cylinder": 4634.185364327537,
+     "extrusion": 4879.838819468478,
+     "plane": 6250.124452995701
+    },
+    "faces": 185
+   },
+   "step": "refs/5709ae4446.step"
+  },
+  {
+   "id": "58a1b82005",
+   "name": "shaft with spline",
+   "description": "This shaft consists of two main sections:\n- The first section is an external spline with shaft_number_teeth, shaft_spline_module, shaft_spline_pitch_diameter, shaft_pressure_angle, and shaft_spline_height.\n- The second section is a smooth shaft with shaft_diameter and shaft_length, directly connected coaxially to the external spline section.",
+   "key_parameters": "- shaft_number_teeth = 15\n- shaft_spline_module = 2 mm\n- shaft_spline_pitch_diameter = shaft_number_teeth * shaft_spline_module = 15*2 mm = 30 mm\n- shaft_pressure_angle = 30\u00b0\n- shaft_spline_height = 10 mm\n- shaft_diameter = 24 mm\n- shaft_length = 20 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 15999.286743318333,
+    "area_mm2": 4278.920351121931,
+    "bbox_mm": {
+     "min": [
+      -15.985572395586617,
+      -15.826993518432552,
+      0.0
+     ],
+     "max": [
+      15.985572395586622,
+      16.0,
+      30.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     30.0,
+     31.826993518432552,
+     31.971144791173238
+    ],
+    "center_of_mass_mm": [
+     9.308524798926643e-16,
+     -6.658029462450975e-16,
+     13.482678310128886
+    ],
+    "principal_moments_normalized": [
+     0.1413156211491782,
+     0.19311864783788815,
+     0.1931186478378888
+    ],
+    "surface_area_by_type": {
+     "cylinder": 2888.6203709259844,
+     "plane": 1390.299980195946
+    },
+    "faces": 64
+   },
+   "step": "refs/58a1b82005.step"
+  },
+  {
+   "id": "58fd45a90e",
+   "name": "metric hex flange nut",
+   "description": "A metric hex flange nut consists of a central plain through-hole passing through a combined hexagonal nut body and an integral circular flange at the base.\n\nThe through-hole is defined by inner_diameter and runs the full axial length set by overall_height.\n\nThe hexagonal nut body is characterized by hex_head_width_across_flats, hex_head_width_across_corners, and hex_head_angle, which define the wrenching profile and edge/chamfer geometry.\n\nThe integrated flange is characterized by flange_diameter and flange_thickness, forming a wider bearing surface at the base of the nut body.",
+   "key_parameters": "- inner_diameter = 8.0 mm\n- overall_height = 8.0 mm\n- flange_diameter = 17.9 mm\n- flange_thickness = 3.5 mm\n- hex_head_width_across_flats = 13.0 mm\n- hex_head_width_across_corners = hex_head_width_across_flats/cos(30) = 13.0mm/cos(30degrees) = 15.011106998930272 mm  # ISO 4161\n- hex_head_angle = 30.0 degrees  # ISO 4161",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 1137.2614492881894,
+    "area_mm2": 1003.3005402161855,
+    "bbox_mm": {
+     "min": [
+      -8.95,
+      -8.95,
+      0.0
+     ],
+     "max": [
+      8.95,
+      8.95,
+      8.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     8.0,
+     17.9,
+     17.9
+    ],
+    "center_of_mass_mm": [
+     -1.624438350682293e-16,
+     -1.2796298658913085e-16,
+     3.2709084904451844
+    ],
+    "principal_moments_normalized": [
+     0.23804956676248587,
+     0.23804956676248853,
+     0.38349447698548833
+    ],
+    "surface_area_by_type": {
+     "cylinder": 397.8827095771473,
+     "plane": 605.4178306390379
+    },
+    "faces": 11
+   },
+   "step": "refs/58fd45a90e.step"
+  },
+  {
+   "id": "5c47cdbfc1",
+   "name": "round mounting flange",
+   "description": "A round mounting flange consists of a circular flange body with a central through bore and an evenly spaced pattern of bolt holes arranged on a bolt circle.\n\nThe flange body is defined by outer_diameter and flange_thickness.\n\nThe central through bore is defined by inner_diameter and is concentric with the flange body.\n\nThe bolt hole pattern is defined by number_bolt_holes, bolt_hole_diameter, and bolt_circle_diameter, with the holes distributed evenly around the bolt circle.",
+   "key_parameters": "- outer_diameter = 40.084mm\n- flange_thickness = 10.319mm\n- bolt_circle_diameter = 28.575mm\n- bolt_hole_diameter = 6.747mm\n- number_bolt_holes = 4\n- inner_diameter = 14.288mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 9891.506892258552,
+    "area_mm2": 4554.68064590018,
+    "bbox_mm": {
+     "min": [
+      -20.042,
+      -20.042,
+      0.0
+     ],
+     "max": [
+      20.042,
+      20.042,
+      10.319
+     ]
+    },
+    "bbox_sorted_mm": [
+     10.319,
+     40.084,
+     40.084
+    ],
+    "center_of_mass_mm": [
+     -1.4941392716793115e-16,
+     -1.838940642066845e-16,
+     5.1594999999999995
+    ],
+    "principal_moments_normalized": [
+     0.2675517254316858,
+     0.2675517254316916,
+     0.4965897130801388
+    ],
+    "surface_area_by_type": {
+     "cylinder": 2637.536176037101,
+     "plane": 1917.1444698630785
+    },
+    "faces": 8
+   },
+   "step": "refs/5c47cdbfc1.step"
+  },
+  {
+   "id": "5c60c7a001",
+   "name": "smooth shaft",
+   "description": "A smooth shaft is a coaxial stepped cylindrical component designed to transmit torque and provide seating surfaces. It consists of six successive cylindrical sections along a common centerline. Each section is defined by its diameter and axial length: section_1_diameter/section_1_length through section_6_diameter/section_6_length. Sections are joined with flush shoulders (no keyways/threads specified).",
+   "key_parameters": "- **Section 1**\n  - section_1_diameter = 10 mm\n  - section_1_length = 40 mm\n- **Section 2**\n  - section_2_diameter = 15 mm\n  - section_2_length = 30 mm\n- **Section 3**\n  - section_3_diameter = 20 mm\n  - section_3_length = 40 mm\n- **Section 4**\n  - section_4_diameter = 40 mm\n  - section_4_length = 10 mm\n- **Section 5**\n  - section_5_diameter = 30 mm\n  - section_5_length = 20 mm\n- **Section 6**\n  - section_6_diameter = 25 mm\n  - section_6_length = 25 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 59984.78472948012,
+    "area_mm2": 12801.990063378407,
+    "bbox_mm": {
+     "min": [
+      -20.0,
+      -20.0,
+      0.0
+     ],
+     "max": [
+      20.0,
+      20.0,
+      165.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     40.0,
+     40.0,
+     165.0
+    ],
+    "center_of_mass_mm": [
+     -1.0916704764878194e-15,
+     -1.448995497147438e-16,
+     110.69148936170212
+    ],
+    "principal_moments_normalized": [
+     0.06396045942842257,
+     0.8840826912594975,
+     0.8840826912595
+    ],
+    "surface_area_by_type": {
+     "cylinder": 10288.715940506572,
+     "plane": 2513.274122871834
+    },
+    "faces": 13
+   },
+   "step": "refs/5c60c7a001.step"
+  },
+  {
+   "id": "5c60c7a002",
+   "name": "smooth shaft",
+   "description": "A smooth shaft is a stepped cylindrical component made by joining multiple coaxial shaft sections along a common center axis. It consists of sequential shaft_section_1 through shaft_section_11, each defined by its corresponding shaft_section_n_diameter and shaft_section_n_length, with each new section starting at the end face of the previous section to form a continuous stepped profile.",
+   "key_parameters": "- **shaft_section_1**\n  - shaft_section_1_diameter = 10 mm\n  - shaft_section_1_length = 20 mm\n- **shaft_section_2**\n  - shaft_section_2_diameter = 15 mm\n  - shaft_section_2_length = 30 mm\n- **shaft_section_3**\n  - shaft_section_3_diameter = 20 mm\n  - shaft_section_3_length = 40 mm\n- **shaft_section_4**\n  - shaft_section_4_diameter = 40 mm\n  - shaft_section_4_length = 10 mm\n- **shaft_section_5**\n  - shaft_section_5_diameter = 30 mm\n  - shaft_section_5_length = 20 mm\n- **shaft_section_6**\n  - shaft_section_6_diameter = 25 mm\n  - shaft_section_6_length = 25 mm\n- **shaft_section_7**\n  - shaft_section_7_diameter = 20 mm\n  - shaft_section_7_length = 20 mm\n- **shaft_section_8**\n  - shaft_section_8_diameter = 50 mm\n  - shaft_section_8_length = 20 mm\n- **shaft_section_9**\n  - shaft_section_9_diameter = 30 mm\n  - shaft_section_9_length = 10 mm\n- **shaft_section_10**\n  - shaft_section_10_diameter = 50 mm\n  - shaft_section_10_length = 20 mm\n- **shaft_section_11**\n  - shaft_section_11_diameter = 30 mm\n  - shaft_section_11_length = 10 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 157374.1569907637,
+    "area_mm2": 27410.39590257095,
+    "bbox_mm": {
+     "min": [
+      -25.0,
+      -25.0,
+      0.0
+     ],
+     "max": [
+      25.0,
+      25.0,
+      224.99999999999994
+     ]
+    },
+    "bbox_sorted_mm": [
+     50.0,
+     50.0,
+     224.99999999999994
+    ],
+    "center_of_mass_mm": [
+     2.219207855717389e-15,
+     9.160371913423723e-17,
+     154.09388646288207
+    ],
+    "principal_moments_normalized": [
+     0.07042899030081576,
+     0.9917742404841473,
+     0.9917742404841482
+    ],
+    "surface_area_by_type": {
+     "cylinder": 19085.175370557994,
+     "plane": 8325.220532012949
+    },
+    "faces": 23
+   },
+   "step": "refs/5c60c7a002.step"
+  },
+  {
+   "id": "5c60c7a003",
+   "name": "smooth shaft",
+   "description": "A smooth stepped shaft is a coaxial cylindrical component composed of five consecutive shaft sections used to transmit torque or provide mounting diameters. It consists of shaft_section_1 through shaft_section_5 arranged in series along the shaft axis, each defined by its diameter and length (shaft_section_#_diameter, shaft_section_#_length). Each section is modeled as a solid cylinder and joined end-to-end concentrically to form a single continuous shaft profile.",
+   "key_parameters": "- **shaft_section_1**\n  - shaft_section_1_diameter = 10 mm\n  - shaft_section_1_length = 40 mm\n- **shaft_section_2**\n  - shaft_section_2_diameter = 15 mm\n  - shaft_section_2_length = 30 mm\n- **shaft_section_3**\n  - shaft_section_3_diameter = 20 mm\n  - shaft_section_3_length = 40 mm\n- **shaft_section_4**\n  - shaft_section_4_diameter = 40 mm\n  - shaft_section_4_length = 10 mm\n- **shaft_section_5**\n  - shaft_section_5_diameter = 30 mm\n  - shaft_section_5_length = 20 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 47712.93842639499,
+    "area_mm2": 10838.494654884787,
+    "bbox_mm": {
+     "min": [
+      -20.0,
+      -20.0,
+      0.0
+     ],
+     "max": [
+      20.0,
+      20.0,
+      140.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     40.0,
+     40.0,
+     140.0
+    ],
+    "center_of_mass_mm": [
+     1.5249443555876946e-15,
+     -2.7388790823789786e-16,
+     99.93827160493825
+    ],
+    "principal_moments_normalized": [
+     0.07839226013241489,
+     0.8472229945341634,
+     0.8472229945341645
+    ],
+    "surface_area_by_type": {
+     "cylinder": 8325.220532012952,
+     "plane": 2513.274122871834
+    },
+    "faces": 11
+   },
+   "step": "refs/5c60c7a003.step"
+  },
+  {
+   "id": "5c60c7a004",
+   "name": "smooth shaft",
+   "description": "A smooth stepped shaft is a rotational cylindrical component composed of nine coaxial shaft sections merged end-to-end along a common centerline. Each section is defined by its shaft_section_i_diameter and shaft_section_i_length (i = 1..9), creating a continuous stepped profile with smooth cylindrical surfaces and sharp shoulders between adjacent diameters unless otherwise filleted/chamfered.",
+   "key_parameters": "- **Shaft Section 1**\n  - shaft_section_1_diameter = 10 mm\n  - shaft_section_1_length = 20 mm\n- **Shaft Section 2**\n  - shaft_section_2_diameter = 15 mm\n  - shaft_section_2_length = 30 mm\n- **Shaft Section 3**\n  - shaft_section_3_diameter = 20 mm\n  - shaft_section_3_length = 40 mm\n- **Shaft Section 4**\n  - shaft_section_4_diameter = 40 mm\n  - shaft_section_4_length = 10 mm\n- **Shaft Section 5**\n  - shaft_section_5_diameter = 30 mm\n  - shaft_section_5_length = 20 mm\n- **Shaft Section 6**\n  - shaft_section_6_diameter = 25 mm\n  - shaft_section_6_length = 25 mm\n- **Shaft Section 7**\n  - shaft_section_7_diameter = 20 mm\n  - shaft_section_7_length = 20 mm\n- **Shaft Section 8**\n  - shaft_section_8_diameter = 50 mm\n  - shaft_section_8_length = 20 mm\n- **Shaft Section 9**\n  - shaft_section_9_diameter = 30 mm\n  - shaft_section_9_length = 10 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 111035.66535031426,
+    "area_mm2": 20813.05133003238,
+    "bbox_mm": {
+     "min": [
+      -25.0,
+      -25.0,
+      0.0
+     ],
+     "max": [
+      25.0,
+      25.0,
+      195.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     50.0,
+     50.0,
+     195.0
+    ],
+    "center_of_mass_mm": [
+     3.2764056446313865e-15,
+     7.149875543768133e-16,
+     131.89434129089307
+    ],
+    "principal_moments_normalized": [
+     0.07500965658747831,
+     1.0130779695229082,
+     1.0130779695229086
+    ],
+    "surface_area_by_type": {
+     "cylinder": 15001.104920891263,
+     "plane": 5811.9464091411155
+    },
+    "faces": 19
+   },
+   "step": "refs/5c60c7a004.step"
+  },
+  {
+   "id": "5c60c7a005",
+   "name": "smooth shaft",
+   "description": "A smooth stepped shaft composed of eight coaxial cylindrical sections (section_1 through section_8) revolved/extruded along a common center axis. Each section is defined by its section_i_diameter and section_i_length, stacked sequentially end-to-end to form a continuous smooth profile without threads or splines.",
+   "key_parameters": "- **Section 1**\n  - section_1_diameter = 10 mm\n  - section_1_length = 20 mm\n- **Section 2**\n  - section_2_diameter = 15 mm\n  - section_2_length = 30 mm\n- **Section 3**\n  - section_3_diameter = 20 mm\n  - section_3_length = 40 mm\n- **Section 4**\n  - section_4_diameter = 40 mm\n  - section_4_length = 10 mm\n- **Section 5**\n  - section_5_diameter = 30 mm\n  - section_5_length = 20 mm\n- **Section 6**\n  - section_6_diameter = 25 mm\n  - section_6_length = 25 mm\n- **Section 7**\n  - section_7_diameter = 20 mm\n  - section_7_length = 20 mm\n- **Section 8**\n  - section_8_diameter = 50 mm\n  - section_8_length = 20 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 103967.0818797372,
+    "area_mm2": 19870.57353395544,
+    "bbox_mm": {
+     "min": [
+      -25.0,
+      -25.0,
+      0.0
+     ],
+     "max": [
+      25.0,
+      25.0,
+      185.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     50.0,
+     50.0,
+     185.0
+    ],
+    "center_of_mass_mm": [
+     -3.0792644098099404e-15,
+     -6.832281042466028e-16,
+     127.94381491973563
+    ],
+    "principal_moments_normalized": [
+     0.08024120981286116,
+     1.0175934839206884,
+     1.0175934839206904
+    ],
+    "surface_area_by_type": {
+     "cylinder": 14058.627124814324,
+     "plane": 5811.946409141116
+    },
+    "faces": 17
+   },
+   "step": "refs/5c60c7a005.step"
+  },
+  {
+   "id": "6417ae5005",
+   "name": "spur gear with web",
+   "description": "A spur gear with web consists of a spur gear body, a recessed hub machined from both faces leaving a central web, several web lightening (bolt) holes on a bolt circle, and a protruding hub with a central through hole for coupling.\n- Spur gear substructure is defined by number_gear_tooth, gear_module, gear_height, pressure_angle, and derived gear_pitch_diameter.\n- Recessed hub/web substructure is defined by gear_recessed_hub_diameter, gear_recessed_hub_depth, gear_web_thickness, number_of_web_lightening_holes, web_lightening_hole_diameter, web_lightening_hole_circle_diameter.\n- Protruding hub substructure is defined by protruding_hub_diameter, protruding_hub_height, inner_hole_diameter (through hole).",
+   "key_parameters": "- **Spur gear**\n  - number_gear_tooth = 30\n  - gear_module = 2 mm\n  - gear_height = 30 mm\n  - pressure_angle = 20 degree\n  - gear_pitch_diameter = number_gear_tooth * gear_module = 30 * 2 mm = 60 mm\n- **Recessed hub + web**\n  - gear_recessed_hub_diameter = 50 mm\n  - gear_recessed_hub_depth = 5 mm\n  - gear_web_thickness = 20 mm\n  - number_of_web_lightening_holes = 4\n  - web_lightening_hole_diameter = 10 mm\n  - web_lightening_hole_circle_diameter = 34 mm\n- **Protruding hub + center hole**\n  - protruding_hub_diameter = 22 mm\n  - protruding_hub_height = 30 mm\n  - inner_hole_diameter = 12 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 58165.03075926235,
+    "area_mm2": 22374.477338180197,
+    "bbox_mm": {
+     "min": [
+      -32.0000001,
+      -31.893323902168394,
+      -1e-07
+     ],
+     "max": [
+      32.0000001,
+      31.893323902168394,
+      30.0000001
+     ]
+    },
+    "bbox_sorted_mm": [
+     30.000000200000002,
+     63.78664780433679,
+     64.0000002
+    ],
+    "center_of_mass_mm": [
+     -7.99022752397785e-07,
+     1.6288484777177437e-14,
+     14.999999999999993
+    ],
+    "principal_moments_normalized": [
+     0.20890038421232754,
+     0.20890038432272057,
+     0.34210755187083136
+    ],
+    "surface_area_by_type": {
+     "cylinder": 9087.561050932367,
+     "extrusion": 7319.758229202716,
+     "plane": 5967.158058045105
+    },
+    "faces": 195
+   },
+   "step": "refs/6417ae5005.step"
+  },
+  {
+   "id": "641cfcd541",
+   "name": "external-hex coupling nut",
+   "description": "An external-hex coupling nut consists of a prismatic hexagonal body with a coaxial plain through hole running the full length.\n\nThe overall nut body is defined by overall_length and hex_width_across_flats, which set the axial length and the size of the hex profile.\n\nThe internal bore is a straight through hole defined by through_hole_diameter, centered on the nut axis and extending through the entire overall_length.",
+   "key_parameters": "- overall_length = 9.525 mm\n- hex_width_across_flats = 6.35 mm\n- through_hole_diameter = 2.8448 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 272.0737261679981,
+    "area_mm2": 351.77705400556584,
+    "bbox_mm": {
+     "min": [
+      -3.666174209354123,
+      -3.1749999999999994,
+      0.0
+     ],
+     "max": [
+      3.666174209354123,
+      3.175,
+      9.525
+     ]
+    },
+    "bbox_sorted_mm": [
+     6.35,
+     7.332348418708246,
+     9.525
+    ],
+    "center_of_mass_mm": [
+     -1.2078564877158654e-16,
+     2.3026365517222204e-16,
+     4.762499999999999
+    ],
+    "principal_moments_normalized": [
+     0.15769865510686,
+     0.25891226041293236,
+     0.2589122604129326
+    ],
+    "surface_area_by_type": {
+     "cylinder": 85.12685648837963,
+     "plane": 266.6501975171862
+    },
+    "faces": 9
+   },
+   "step": "refs/641cfcd541.step"
+  },
+  {
+   "id": "65bef2529b",
+   "name": "circular mounting flange",
+   "description": "A circular mounting flange consists of a cylindrical flange body with a central plain through bore and an evenly spaced bolt-hole pattern on a bolt circle.\n\nThe flange body is defined by flange_outer_diameter and flange_thickness.\n\nThe central through bore is defined by bore_diameter and is concentric with the flange body.\n\nThe bolt-hole pattern is defined by number_of_bolt_holes, bolt_hole_diameter, and bolt_circle_diameter, with the holes distributed uniformly around the flange axis.",
+   "key_parameters": "- flange_outer_diameter = 107.156mm\n- flange_thickness = 21.034mm\n- bolt_circle_diameter = 87.313mm\n- bore_diameter = 49.213mm\n- bolt_hole_diameter = 9.922mm\n- number_of_bolt_holes = 4",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 143174.52357040322,
+    "area_mm2": 26569.125310223142,
+    "bbox_mm": {
+     "min": [
+      -53.578,
+      -53.578,
+      0.0
+     ],
+     "max": [
+      53.578,
+      53.578,
+      21.034
+     ]
+    },
+    "bbox_sorted_mm": [
+     21.034,
+     107.156,
+     107.156
+    ],
+    "center_of_mass_mm": [
+     -5.326445574387411e-15,
+     -2.540940047412003e-16,
+     10.517
+    ],
+    "principal_moments_normalized": [
+     0.32950715496579436,
+     0.32950715496580124,
+     0.6320711420180575
+    ],
+    "surface_area_by_type": {
+     "cylinder": 12955.49751043202,
+     "plane": 13613.627799791127
+    },
+    "faces": 8
+   },
+   "step": "refs/65bef2529b.step"
+  },
+  {
+   "id": "669bfb187c",
+   "name": "hex flange nut",
+   "description": "A hex flange nut consists of a hexagonal nut body with an integral circular flange at one end and a plain through-hole along the central axis.\n\nThe overall nut height is governed by overall_height. The hexagonal exterior profile is characterized by hub_width, which defines the across-flats size of the nut body.\n\nThe integrated flange is positioned at one end of the nut body and is defined by flange_diameter and flange_thickness, forming a widened bearing surface.\n\nThe central plain through-hole runs through the full height of the nut and is defined by inner_diameter.",
+   "key_parameters": "- overall_height = 16 mm\n- flange_diameter = 34.5 mm\n- flange_thickness = 7 mm\n- hub_width = 24 mm\n- inner_diameter = 16 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 7816.225963829273,
+    "area_mm2": 3778.7047623388094,
+    "bbox_mm": {
+     "min": [
+      -17.25,
+      -17.25,
+      0.0
+     ],
+     "max": [
+      17.25,
+      17.25,
+      16.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     16.0,
+     34.5,
+     34.5
+    ],
+    "center_of_mass_mm": [
+     -9.381511060424612e-16,
+     -5.834073351810271e-17,
+     6.242928197984574
+    ],
+    "principal_moments_normalized": [
+     0.24904656607568038,
+     0.24904656607568346,
+     0.39949016942862026
+    ],
+    "surface_area_by_type": {
+     "cylinder": 1562.9423451609218,
+     "plane": 2215.7624171778875
+    },
+    "faces": 11
+   },
+   "step": "refs/669bfb187c.step"
+  },
+  {
+   "id": "67b7983b2c",
+   "name": "spur gear stock",
+   "description": "A spur gear stock consists of a cylindrical gear blank with external involute teeth distributed around its circumference, forming a long gear section along the axial direction.\n\nThe toothed gear body is defined by number_of_teeth, pressure_angle, diametral_pitch, gear_module, pitch_diameter, and outer_diameter, which together govern the tooth spacing and the primary reference diameters.\n\nThe stock length (axial extent of the gear section) is set by overall_length.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- diametral_pitch = 16\n- number_of_teeth = 24\n- pitch_diameter = 38.1 mm\n- outer_diameter = 41.402 mm\n- overall_length = 304.8 mm\n- gear_module = 25.4mm / diametral_pitch = 25.4mm / 16 = 1.5875 mm  # AGMA / ISO gear geometry",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 340935.7002422069,
+    "area_mm2": 78483.93143544313,
+    "bbox_mm": {
+     "min": [
+      -20.637500099999997,
+      -20.637500099999997,
+      -1e-07
+     ],
+     "max": [
+      20.637500099999997,
+      20.637500099999997,
+      304.80000010000003
+     ]
+    },
+    "bbox_sorted_mm": [
+     41.275000199999994,
+     41.275000199999994,
+     304.80000020000006
+    ],
+    "center_of_mass_mm": [
+     -2.5413875435727075e-16,
+     4.640897116236957e-15,
+     152.40000000000006
+    ],
+    "principal_moments_normalized": [
+     0.03740634978372293,
+     1.6050527523452929,
+     1.6050527523452935
+    ],
+    "surface_area_by_type": {
+     "cylinder": 20929.636860780553,
+     "extrusion": 43093.21910149679,
+     "plane": 14461.075473165793
+    },
+    "faces": 146
+   },
+   "step": "refs/67b7983b2c.step"
+  },
+  {
+   "id": "6d8fcf43ca",
+   "name": "spur gear",
+   "description": "A spur gear consists of a toothed gear body, a central hub, and a round through bore aligned on the rotational axis.\n\nThe toothed gear body is defined by number_of_teeth, gear_module, pressure_angle, pitch_diameter, outer_diameter, root_diameter, base_diameter, circular_pitch, addendum, dedendum, whole_depth, and face_width.\n\nThe central hub is integrated with the gear body and is characterized by hub_diameter, hub_width, and overall_width.\n\nThe round bore passes through the center of the gear and hub and is defined by shaft_diameter.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- gear_module = 1 mm\n- number_of_teeth = 60\n- pitch_diameter = 60 mm\n- outer_diameter = 62 mm\n- face_width = 6 mm\n- hub_diameter = 18 mm\n- hub_width = 8 mm\n- shaft_diameter = 8 mm\n- overall_width = 14 mm\n- addendum = pitch_diameter / number_of_teeth = 60 mm / 60 = 1 mm  # ISO 54 / DIN 867\n- dedendum = 1.25 * gear_module = 1.25 * 1 = 1.25 mm  # ISO 54 / DIN 867\n- whole_depth = addendum + dedendum = 1 mm + 1.25 mm = 2.25 mm  # ISO 54 / DIN 867\n- root_diameter = pitch_diameter - 2 * dedendum = 60 mm - 2 * 1.25 mm = 57.5 mm  # ISO 54 / DIN 867\n- circular_pitch = pi * gear_module = pi * 1 = 3.142 mm  # ISO 54 / DIN 867\n- base_diameter = pitch_diameter * cos(pressure_angle) = 60 mm * cos(20 degrees) = 56.382 mm  # involute gear geometry",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 18210.384630557615,
+    "area_mm2": 8616.901289997912,
+    "bbox_mm": {
+     "min": [
+      -31.0000001,
+      -31.0000001,
+      -1e-07
+     ],
+     "max": [
+      31.0000001,
+      31.0000001,
+      14.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     14.0000001,
+     62.0000002,
+     62.0000002
+    ],
+    "center_of_mass_mm": [
+     -4.088740711107134e-09,
+     -1.3437814269517427e-14,
+     3.6279602335187935
+    ],
+    "principal_moments_normalized": [
+     0.31434647458026843,
+     0.3143464745803954,
+     0.6078578730580758
+    ],
+    "surface_area_by_type": {
+     "cylinder": 1374.5364487610736,
+     "extrusion": 1716.783053826581,
+     "plane": 5525.581787410287
+    },
+    "faces": 245
+   },
+   "step": "refs/6d8fcf43ca.step"
+  },
+  {
+   "id": "732e9c56ac",
+   "name": "spur gear stock",
+   "description": "A spur gear stock consists of a cylindrical gear body with an external ring of involute teeth distributed around its circumference, forming a long gear blank along the axial direction.\n\nThe toothed gear body is defined by number_of_teeth, pressure_angle, diametral_pitch, gear_module, pitch_diameter, outer_diameter, and overall_length, where number_of_teeth together with diametral_pitch or gear_module governs the tooth sizing, pressure_angle governs the involute tooth form, pitch_diameter and outer_diameter govern the reference and outside diameters, and overall_length sets the axial extent of the stock.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- diametral_pitch = 12\n- number_of_teeth = 24\n- pitch_diameter = 2 in * 25.4 = 50.8 mm\n- outer_diameter = 2.17 in * 25.4 = 55.118 mm\n- overall_length = 1 ft * 12 in/ft * 25.4 = 304.8 mm\n- gear_module = 25.4 / diametral_pitch = 25.4 / 12 = 2.1166666667 mm  # AGMA / inch DP to module conversion",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 606107.9115417015,
+    "area_mm2": 105639.50505322723,
+    "bbox_mm": {
+     "min": [
+      -27.516666766666667,
+      -27.516666766666667,
+      -1e-07
+     ],
+     "max": [
+      27.516666766666667,
+      27.516666766666667,
+      304.80000010000003
+     ]
+    },
+    "bbox_sorted_mm": [
+     55.033333533333334,
+     55.033333533333334,
+     304.80000020000006
+    ],
+    "center_of_mass_mm": [
+     -1.1049673704569131e-15,
+     8.457817481300503e-15,
+     152.4
+    ],
+    "principal_moments_normalized": [
+     0.04531456566312314,
+     1.1036279645645097,
+     1.1036279645645106
+    ],
+    "surface_area_by_type": {
+     "cylinder": 27906.182481040756,
+     "extrusion": 57457.6254686624,
+     "plane": 20275.69710352398
+    },
+    "faces": 146
+   },
+   "step": "refs/732e9c56ac.step"
+  },
+  {
+   "id": "740b422c57",
+   "name": "slotted_spring_pin",
+   "description": "A slotted spring pin is a cylindrical fastener with a longitudinal slot along its length, allowing it to compress and expand to provide a spring-like effect when inserted into a hole. This design ensures secure retention and alignment in mechanical assemblies, absorbing shocks and vibrations.\nKey parameters include the outer diameter, inner diameter, pin length, and chamfer length. These dimensions define the pin\u00e2\u0080\u0099s size, fit, and flexibility, ensuring it provides the necessary spring force and stability in its intended application.",
+   "key_parameters": "- outer_diameter=1.3mm\n- inner_diameter=0.8mm\n- pin_length=4.0mm\n- chamfer_length=0.35mm\n- slot_angle=15deg\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 3.0312660282481043,
+    "area_mm2": 27.968318832322833,
+    "bbox_mm": {
+     "min": [
+      -7.970225115564269e-18,
+      -0.6444391598929783,
+      -0.6500000000000002
+     ],
+     "max": [
+      4.000000000000002,
+      0.6500000000000002,
+      0.6500000000000004
+     ]
+    },
+    "bbox_sorted_mm": [
+     1.2944391598929785,
+     1.3000000000000007,
+     4.000000000000002
+    ],
+    "center_of_mass_mm": [
+     2.000000000000001,
+     0.023037437131954788,
+     -8.698608630561707e-17
+    ],
+    "principal_moments_normalized": [
+     0.1369443027093331,
+     0.6566504445111422,
+     0.6628010419309559
+    ],
+    "surface_area_by_type": {
+     "cone": 2.6301810707313606,
+     "cylinder": 22.550090268079757,
+     "plane": 2.788047493511714
+    },
+    "faces": 10
+   },
+   "step": "refs/740b422c57.step"
+  },
+  {
+   "id": "7476ec86b6",
+   "name": "spur gear stock",
+   "description": "A spur gear stock consists of a cylindrical gear body with external involute gear teeth distributed around its circumference.\n\nThe toothed gear body geometry is governed by number_of_teeth, pressure_angle, gear_module, diametral_pitch, pitch_diameter, and outer_diameter, which together define the pitch reference, tooth form, and outside envelope.\n\nThe stock\u2019s axial length (face width) is defined by face_width, extending the full toothed profile along the gear axis.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- diametral_pitch = 32\n- number_of_teeth = 20\n- pitch_diameter = 5/8 in = 15.875 mm\n- outer_diameter = 0.69 in = 17.526 mm\n- face_width = 1 ft = 304.8 mm\n- gear_module = 25.4 / diametral_pitch = 25.4 / 32 = 0.79375 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 58862.992461681,
+    "area_mm2": 32234.218900889493,
+    "bbox_mm": {
+     "min": [
+      -8.731250099999999,
+      -8.731250099999999,
+      -1e-07
+     ],
+     "max": [
+      8.731250099999999,
+      8.731250099999999,
+      304.80000010000003
+     ]
+    },
+    "bbox_sorted_mm": [
+     17.462500199999997,
+     17.462500199999997,
+     304.80000020000006
+    ],
+    "center_of_mass_mm": [
+     -2.2923438151268636e-15,
+     3.140768787701723e-16,
+     152.39999999999998
+    ],
+    "principal_moments_normalized": [
+     0.021070144893057332,
+     5.126791720604474,
+     5.126791720604475
+    ],
+    "surface_area_by_type": {
+     "cylinder": 8750.789205669114,
+     "extrusion": 16836.62916285102,
+     "plane": 6646.800532369382
+    },
+    "faces": 122
+   },
+   "step": "refs/7476ec86b6.step"
+  },
+  {
+   "id": "77178c2112",
+   "name": "cylindrical_pin",
+   "description": "A cylindrical pin is a small, precise component commonly used in mechanical assemblies for alignment, fastening, or locating purposes. Its simple cylindrical shape allows it to fit snugly into corresponding holes, ensuring accurate positioning of parts.\nKey parameters of the cylindrical pin include the pin diameter, which defines the fit, the chamfer length and chamfer angle that together define the chamfer geometry at each end and facilitate easy insertion, and the overall length, which determines the pin's application in various assemblies. These parameters ensure the pin's effective function in securing or aligning components with precision.",
+   "key_parameters": "- pin_diameter=1mm\n- chamfer_length=0.2mm\n- chamfer_angle=15 degree\n- length=3.0mm\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 2.323725968036298,
+    "area_mm2": 10.651514673638411,
+    "bbox_mm": {
+     "min": [
+      0.0,
+      -0.5000000000000001,
+      -0.5000000000000001
+     ],
+     "max": [
+      3.000000000000001,
+      0.5000000000000001,
+      0.5000000000000001
+     ]
+    },
+    "bbox_sorted_mm": [
+     1.0000000000000002,
+     1.0000000000000002,
+     3.000000000000001
+    ],
+    "center_of_mass_mm": [
+     1.5000000000000002,
+     -1.9422150871027613e-18,
+     9.555541745426794e-17
+    ],
+    "principal_moments_normalized": [
+     0.07039068989004309,
+     0.4523043066062668,
+     0.452304306606267
+    ],
+    "surface_area_by_type": {
+     "cone": 1.2312478369553905,
+     "cylinder": 8.168140899333462,
+     "plane": 1.2521259373495588
+    },
+    "faces": 5
+   },
+   "step": "refs/77178c2112.step"
+  },
+  {
+   "id": "7aa55dda29",
+   "name": "washer for square-neck bolt",
+   "description": "A washer for a square-neck bolt consists of a flat, circular disc (washer body) with a central square hole sized to fit the bolt's square neck. The CAD model is defined by the washer_diameter and washer_thickness for the disc, and the square_neck_hole_width for the central square cutout.",
+   "key_parameters": "- **washer_body**\n  - washer_diameter = 60.0 mm\n  - washer_thickness = 10.0 mm\n- **square_neck_hole**\n  - square_neck_hole_width = 20.0 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 24274.333882308132,
+    "area_mm2": 7539.822368615503,
+    "bbox_mm": {
+     "min": [
+      -30.0,
+      -30.0,
+      0.0
+     ],
+     "max": [
+      30.0,
+      30.0,
+      10.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     10.0,
+     60.0,
+     60.0
+    ],
+    "center_of_mass_mm": [
+     -1.1989548548619683e-15,
+     -6.739547408792122e-16,
+     5.000000000000002
+    ],
+    "principal_moments_normalized": [
+     0.3159933106074329,
+     0.3159933106074394,
+     0.6121065835824043
+    ],
+    "surface_area_by_type": {
+     "cylinder": 1884.955592153876,
+     "plane": 5654.8667764616275
+    },
+    "faces": 7
+   },
+   "step": "refs/7aa55dda29.step"
+  },
+  {
+   "id": "7ba017c45b",
+   "name": "high-profile hex flange nut",
+   "description": "A high-profile hex flange nut consists of a hexagonal hub section integrated with a circular flange, and a plain through bore running axially through the entire part.\n\nThe overall axial extent of the nut is governed by overall_height. The hexagonal outer profile of the hub is defined by hex_head_width_across_flats and hex_head_width_across_corners, with edge/chamfer geometry characterized by hex_head_angle. The hub\u2019s axial portion is further governed by hub_width.\n\nThe integrated flange is formed at one end of the nut and is defined by flange_diameter and flange_thickness, blending into the hex hub as a single body.\n\nThe plain through hole is an axial cylindrical cut defined by bore_diameter, passing through both the hub and flange regions.",
+   "key_parameters": "- overall_height = 9.0 mm\n- flange_diameter = 14.0 mm\n- flange_thickness = 3.0 mm\n- hub_width = 10.0 mm\n- bore_diameter = 6.0 mm\n- hex_head_width_across_flats = 10.0 mm  # DIN 6331, table lookup\n- hex_head_width_across_corners = hex_head_width_across_flats/cos(30) = 10.0mm/cos(30deg) = 11.547005383792516 mm  # ISO geometry\n- hex_head_angle = 30.0 degrees  # ISO geometry",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 726.9603574075899,
+    "area_mm2": 760.766403940069,
+    "bbox_mm": {
+     "min": [
+      -7.0,
+      -7.0,
+      0.0
+     ],
+     "max": [
+      7.0,
+      7.0,
+      9.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     9.0,
+     14.0,
+     14.0
+    ],
+    "center_of_mass_mm": [
+     4.0074058879981437e-16,
+     -3.873984106597791e-17,
+     3.66636513855002
+    ],
+    "principal_moments_normalized": [
+     0.2331121233529902,
+     0.2331121233529923,
+     0.29581518781907246
+    ],
+    "surface_area_by_type": {
+     "cylinder": 301.59289474462014,
+     "plane": 459.1735091954487
+    },
+    "faces": 11
+   },
+   "step": "refs/7ba017c45b.step"
+  },
+  {
+   "id": "7c683fcc0b",
+   "name": "high-profile hex flange nut",
+   "description": "A high-profile hex flange nut consists of a hexagonal outer body with an integrated circular flange at one end and a plain cylindrical through hole running along the central axis. The overall form is tall relative to its footprint, with the flange providing a wider bearing surface at the base.\n\nThe central through hole is defined by inner_diameter, establishing the nut\u2019s clearance and alignment along the axis.\n\nThe nut\u2019s axial extent is governed by overall_height, which sets the full height from the flange face to the opposite end.\n\nThe integrated flange is characterized by flange_diameter and flange_thickness, defining its outer size and its axial protrusion from the base.\n\nThe hexagonal body width across its flats is controlled by hub_width, setting the primary gripping profile above the flange.",
+   "key_parameters": "- inner_diameter = 24.0 mm\n- overall_height = 36.0 mm\n- flange_diameter = 45.0 mm\n- flange_thickness = 6.0 mm\n- hub_width = 36.0 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 26927.63906820849,
+    "area_mm2": 9579.879691045406,
+    "bbox_mm": {
+     "min": [
+      -22.5,
+      -22.5,
+      0.0
+     ],
+     "max": [
+      22.5,
+      22.5,
+      36.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     36.0,
+     45.0,
+     45.0
+    ],
+    "center_of_mass_mm": [
+     -1.6887754241453397e-16,
+     6.460500251655398e-16,
+     16.435599494071404
+    ],
+    "principal_moments_normalized": [
+     0.28237629532043973,
+     0.28237629532044006,
+     0.3019097506936912
+    ],
+    "surface_area_by_type": {
+     "cylinder": 3562.5660691708254,
+     "plane": 6017.313621874579
+    },
+    "faces": 11
+   },
+   "step": "refs/7c683fcc0b.step"
+  },
+  {
+   "id": "7c8d69d649",
+   "name": "high-profile external-hex flange nut",
+   "description": "A high-profile external-hex flange nut consists of a hexagonal nut body with a plain through-hole and an integrated circular flange at one end, forming a tall, robust fastener with an enlarged bearing surface.\n\nThe overall nut form and profile are governed by nut_profile and overall_height, while the external driving geometry is defined by drive_style and hub_width.\n\nThe plain through-hole passes axially through the nut and is defined by through_hole_diameter.\n\nThe integrated flange is defined by flange_diameter and flange_thickness, and is positioned at the base of the nut body to provide increased contact area.",
+   "key_parameters": "- nut_profile = high\n- drive_style = external_hex\n- through_hole_diameter = 20.0 mm\n- overall_height = 30.0 mm\n- flange_diameter = 37.0 mm\n- flange_thickness = 6.0 mm\n- hub_width = 30.0 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 15732.63127512114,
+    "area_mm2": 6598.643964814249,
+    "bbox_mm": {
+     "min": [
+      -18.5,
+      -18.5,
+      0.0
+     ],
+     "max": [
+      18.5,
+      18.5,
+      30.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     30.0,
+     37.0,
+     37.0
+    ],
+    "center_of_mass_mm": [
+     -9.249511396976919e-16,
+     -5.0787900274578e-16,
+     13.646337053725679
+    ],
+    "principal_moments_normalized": [
+     0.27985424591432834,
+     0.27985424591432906,
+     0.3007696097028706
+    ],
+    "surface_area_by_type": {
+     "cylinder": 2582.3891612508105,
+     "plane": 4016.254803563438
+    },
+    "faces": 11
+   },
+   "step": "refs/7c8d69d649.step"
+  },
+  {
+   "id": "82c93fd5d6",
+   "name": "spur gear stock",
+   "description": "A spur gear stock consists of a cylindrical gear body with external involute teeth distributed around the circumference, extending along an axial overall length.\n\nThe toothed gear body is governed by number_of_teeth, pressure_angle, gear_module, and diametral_pitch, with the primary reference size captured by pitch_diameter and the addendum envelope captured by outer_diameter.\n\nThe stock length (face/blank length) is defined by overall_length, and the derived consistency relationships are represented by pitch_diameter_check and outer_diameter_check.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- diametral_pitch = 32\n- number_of_teeth = 40\n- pitch_diameter = 1.25 * 25.4 = 31.75 mm  # AGMA 2001 / ISO 6336\n- outer_diameter = 1.31 * 25.4 = 33.274 mm  # AGMA 2001 / ISO 6336\n- overall_length = 12 * 25.4 = 304.8 mm  # AGMA 2001 / ISO 6336\n- gear_module = 25.4 / diametral_pitch = 25.4 / 32 = 0.79375 mm  # AGMA 2001 / ISO 6336\n- pitch_diameter_check = number_of_teeth / diametral_pitch * 25.4 = 40 / 32 * 25.4 = 31.75 mm  # AGMA 2001 / ISO 6336\n- outer_diameter_check = (number_of_teeth + 2) / diametral_pitch * 25.4 = (40 + 2) / 32 * 25.4 = 33.3375 mm  # AGMA 2001 / ISO 6336",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 239215.68856138428,
+    "area_mm2": 63827.238190882825,
+    "bbox_mm": {
+     "min": [
+      -16.6687501,
+      -16.6687501,
+      -1e-07
+     ],
+     "max": [
+      16.6687501,
+      16.6687501,
+      304.80000010000003
+     ]
+    },
+    "bbox_sorted_mm": [
+     33.3375002,
+     33.3375002,
+     304.80000020000006
+    ],
+    "center_of_mass_mm": [
+     5.377753875948467e-15,
+     -2.299354273313327e-15,
+     152.4
+    ],
+    "principal_moments_normalized": [
+     0.03269427754300568,
+     2.025381344270341,
+     2.025381344270346
+    ],
+    "surface_area_by_type": {
+     "cylinder": 16203.564136605915,
+     "extrusion": 45205.27680747909,
+     "plane": 2418.3972467977705
+    },
+    "faces": 242
+   },
+   "step": "refs/82c93fd5d6.step"
+  },
+  {
+   "id": "83ca2dab2e",
+   "name": "ball joint",
+   "description": "A ball joint consists of a cylindrical shaft, a spherical ball, with an axial hole feature applied to the part.\n\nThe shaft is defined by shaft_diameter and shaft_length, forming the main cylindrical stem.\n\nThe ball is defined by ball_diameter and mounted at the center of the cylindrical shaft.\n\nThe hole is characterized by hole_diameter and hole_depth, and is applied as an axial drilled feature relative to the overall joint geometry.",
+   "key_parameters": "- shaft_diameter = 4.0 mm\n- shaft_length = 5.9 mm\n\n- ball_diameter = 5 mm\n\n- hole_diameter = 2.0 mm\n- hole_depth = 10.0 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 69.74335690969312,
+    "area_mm2": 139.48671381938675,
+    "bbox_mm": {
+     "min": [
+      -2.5,
+      -2.5,
+      -2.95
+     ],
+     "max": [
+      2.5,
+      2.5,
+      2.95
+     ]
+    },
+    "bbox_sorted_mm": [
+     5.0,
+     5.0,
+     5.9
+    ],
+    "center_of_mass_mm": [
+     -3.724973951263594e-15,
+     -1.156001424256373e-16,
+     -5.093981471813461e-17
+    ],
+    "principal_moments_normalized": [
+     0.1762619846645418,
+     0.2300172375215678,
+     0.230017237521569
+    ],
+    "surface_area_by_type": {
+     "cylinder": 73.5132680940028,
+     "plane": 18.84955592153875,
+     "sphere": 47.12388980384521
+    },
+    "faces": 6
+   },
+   "step": "refs/83ca2dab2e.step"
+  },
+  {
+   "id": "8450a6402b",
+   "name": "elbow flange",
+   "description": "An elbow flange consists of an elbow pipe, characterized by its curved shape, and two flanges, each equipped with bolt holes, located at both ends of the elbow pipe.\nAn elbow flange is normally defined by flange_outer_diameter, elbow_flange_length, elbow_flange_height, elbow_angle, elbow_radius, elbow_pipe_diameter, elbow_pipe_thickness, bolt_circle_radius, bolt_hole_diameter, number_bolt_holes,  etc.\n",
+   "key_parameters": "- flange_outer_diameter=200mm, elbow_flange_length=300mm, elbow_flange_height=300mm\n- elbow_angle = 90 degree, elbow_radius = 100mm\n- elbow_pipe_diameter=100mm, elbow_pipe_thickness=5mm\n- bolt_circle_radius=72.5mm, bolt_hole_diameter=16.0mm, number_bolt_holes=8\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 1065762.7684453386,
+    "area_mm2": 436452.4516492307,
+    "bbox_mm": {
+     "min": [
+      -100.0,
+      -100.0,
+      -5.0000001
+     ],
+     "max": [
+      305.0000001,
+      100.0,
+      400.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     200.0,
+     405.0000001,
+     405.0000001
+    ],
+    "center_of_mass_mm": [
+     95.68876291563065,
+     -1.1589507544775225e-13,
+     204.3112370843701
+    ],
+    "principal_moments_normalized": [
+     0.6385164387785051,
+     2.3898351512883034,
+     2.7313928431019687
+    ],
+    "surface_area_by_type": {
+     "cylinder": 251892.89896482957,
+     "plane": 90798.31087405223,
+     "torus": 93761.2418103489
+    },
+    "faces": 28
+   },
+   "step": "refs/8450a6402b.step"
+  },
+  {
+   "id": "85145e0d4e",
+   "name": "spur gear stock",
+   "description": "A spur gear stock consists of a cylindrical gear blank with external involute gear teeth distributed around the outside diameter, forming a gear body of a defined axial length.\n\nThe tooth geometry and sizing are governed by number_of_teeth, pressure_angle, diametral_pitch, and gear_module, which together establish the pitch and tooth proportions.\n\nThe overall gear envelope is set by pitch_diameter and outer_diameter, while the axial extent of the stock is defined by overall_length.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- diametral_pitch = 16\n- number_of_teeth = 20\n- pitch_diameter = 31.75 mm\n- outer_diameter = 35.052 mm\n- overall_length = 304.8 mm\n- gear_module = 25.4mm / diametral_pitch = 25.4mm / 16 = 1.5875 mm  # AGMA 2001 / ISO 6336",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 235451.969846724,
+    "area_mm2": 65240.91149864673,
+    "bbox_mm": {
+     "min": [
+      -17.4625001,
+      -17.4625001,
+      -1e-07
+     ],
+     "max": [
+      17.4625001,
+      17.4625001,
+      304.80000010000003
+     ]
+    },
+    "bbox_sorted_mm": [
+     34.9250002,
+     34.9250002,
+     304.80000020000006
+    ],
+    "center_of_mass_mm": [
+     -4.511295170021031e-15,
+     5.87594766359118e-16,
+     152.39999999999998
+    ],
+    "principal_moments_normalized": [
+     0.033446770168362554,
+     2.0471111814404854,
+     2.0471111814404868
+    ],
+    "surface_area_by_type": {
+     "cylinder": 17501.57841133823,
+     "extrusion": 33673.25832570204,
+     "plane": 14066.074761606522
+    },
+    "faces": 122
+   },
+   "step": "refs/85145e0d4e.step"
+  },
+  {
+   "id": "893b9137ff",
+   "name": "lego brick",
+   "description": "A lego brick consists of a lego brick body, studs on top of the lego brick and receiver tubes inside the brick.  The studs are arranged in an MxN matrix, where M represents the number of rows and N represents the number of columns of studs. For example, a 2x4 lego indicates the presence of 2 rows and 4 columns of studs atop the brick.\nA lego brick is normally defined by lego_unit_length, lego_unit_length, lego_height, lego_thickness, num_studs_rows, num_studs_columns, studs_distance, stud_center, stud_diameter, stud_height, tube_center, tube_outer_diameter, tube_inner_diameter, tube_distance, etc.\n",
+   "key_parameters": "- lego_unit_size=8.0mm, lego_height=9.6mm, lego_thickness=1.6mm\n- num_studs_rows=2, num_studs_columns=4, studs_distance=8mm\n- stud_center=(4mm,4mm), stud_diameter=4.8mm, stud_height=1.6mm\n- tube_center=(8mm, 8mm), tube_outer_diameter=6.4mm, tube_inner_diameter=4.8mm, tube_distance=8mm\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 2535.4873852778433,
+    "area_mm2": 3648.679557921493,
+    "bbox_mm": {
+     "min": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "max": [
+      32.0,
+      16.0,
+      11.2
+     ]
+    },
+    "bbox_sorted_mm": [
+     11.2,
+     16.0,
+     32.0
+    ],
+    "center_of_mass_mm": [
+     15.99999999999999,
+     7.999999999999996,
+     6.135506343943187
+    ],
+    "principal_moments_normalized": [
+     0.20134509015425647,
+     0.5836357012408172,
+     0.6791743104925145
+    ],
+    "surface_area_by_type": {
+     "cylinder": 1037.479557921493,
+     "plane": 2611.2000000000007
+    },
+    "faces": 39
+   },
+   "step": "refs/893b9137ff.step"
+  },
+  {
+   "id": "8acfa92b7f",
+   "name": "slip on flange",
+   "description": "A slip on flange consists of a flange body, bore, hub, a raised face and bolt holes around the bolt circle to connect to another flange.\nA slip on flange is normally defined by outer_circle_diameter, flange_thickness, total_height, bore_diameter, raised_face_diameter, raised_face_thickness, bolt_circle_diameter, bolt_hole_diameter, number_bolt_holes etc.\n",
+   "key_parameters": "- outer_circle_diameter=108mm, flange_thickness=12.2mm, total_height=17.5mm\n- bore_diameter=34.5mm \n- hub_diameter=50.8mm \n- raised_face_diameter=49.3mm, raised_face_thickness=2.0mm\n- bolt_circle_diameter=79.2mm, bolt_hole_diameter=15.7mm, number_bolt_holes=4\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 96462.44927583273,
+    "area_mm2": 24182.8649819422,
+    "bbox_mm": {
+     "min": [
+      -54.0,
+      -54.0,
+      -2.0
+     ],
+     "max": [
+      54.0,
+      54.0,
+      15.5
+     ]
+    },
+    "bbox_sorted_mm": [
+     17.5,
+     108.0,
+     108.0
+    ],
+    "center_of_mass_mm": [
+     -1.3199878212102424e-15,
+     1.3687207293973479e-17,
+     6.246131287620917
+    ],
+    "principal_moments_normalized": [
+     0.37363782776679033,
+     0.3736378277667989,
+     0.7330404096432478
+    ],
+    "surface_area_by_type": {
+     "cylinder": 9279.479300540852,
+     "plane": 14903.38568140135
+    },
+    "faces": 12
+   },
+   "step": "refs/8acfa92b7f.step"
+  },
+  {
+   "id": "8ba92aba6e",
+   "name": "flat_washer_grade_a",
+   "description": "A flat washer, grade A, consists of a flat, circular disc with a central hole. It is typically used to distribute the load of a threaded fastener, such as a screw or nut, and is made to specific standards for material and dimensions.\n\nKey parameters for drawing a flat washer include the outer_diameter, inner_diameter (hole diameter), and thickness. For a grade A washer, the material properties and tolerances are also specified according to industry standards.",
+   "key_parameters": "- outside_diameter=4.0mm\n- inner_diameter=1.7\n- thickness=0.3mm\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 3.0889709766421634,
+    "area_mm2": 25.96526328191963,
+    "bbox_mm": {
+     "min": [
+      -2.0,
+      -2.0,
+      0.0
+     ],
+     "max": [
+      2.0,
+      2.0,
+      0.3
+     ]
+    },
+    "bbox_sorted_mm": [
+     0.3,
+     4.0,
+     4.0
+    ],
+    "center_of_mass_mm": [
+     -3.14488272597178e-16,
+     -2.5631608949326782e-17,
+     0.15
+    ],
+    "principal_moments_normalized": [
+     0.5601696594357621,
+     0.5601696594357733,
+     1.113267213755039
+    ],
+    "surface_area_by_type": {
+     "cylinder": 5.372123437638546,
+     "plane": 20.593139844281083
+    },
+    "faces": 4
+   },
+   "step": "refs/8ba92aba6e.step"
+  },
+  {
+   "id": "8dce996259",
+   "name": "spur gear",
+   "description": "A spur gear consists of a toothed gear body, a central hub, and a round through bore aligned on the rotational axis.\n\nThe toothed gear body is defined by number_of_teeth, gear_module, pressure_angle, pitch_diameter, outer_diameter, root_diameter, addendum, dedendum, and face_width.\n\nThe central hub is integrated concentrically with the gear body and is governed by hub_diameter, hub_width, and overall_width.\n\nThe round bore passes through the center of the gear and hub, and is defined by shaft_diameter.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- gear_module = 1 mm\n- number_of_teeth = 50\n- pitch_diameter = 50 mm\n- outer_diameter = 52 mm\n- face_width = 6 mm\n- hub_diameter = 16 mm\n- hub_width = 8 mm\n- shaft_diameter = 8 mm\n- overall_width = 14 mm\n- addendum = pitch_diameter / number_of_teeth = 50 mm / 50 = 1 mm  # ISO 54 / standard spur gear geometry\n- dedendum = 1.25 * gear_module = 1.25 * 1 = 1.25 mm  # ISO 54 / standard spur gear geometry\n- root_diameter = pitch_diameter - 2 * dedendum = 50 mm - 2 * 1.25 mm = 47.5 mm  # ISO 54 / standard spur gear geometry",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 12610.138947509133,
+    "area_mm2": 6467.971643702176,
+    "bbox_mm": {
+     "min": [
+      -26.0000001,
+      -25.970153896852167,
+      -1e-07
+     ],
+     "max": [
+      26.0000001,
+      25.970153896852167,
+      14.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     14.0000001,
+     51.940307793704335,
+     52.0000002
+    ],
+    "center_of_mass_mm": [
+     8.572164210160526e-09,
+     5.141953469066288e-16,
+     3.6696675500424147
+    ],
+    "principal_moments_normalized": [
+     0.28457680373189864,
+     0.284576803732275,
+     0.5416051218262653
+    ],
+    "surface_area_by_type": {
+     "cylinder": 1237.259253734991,
+     "extrusion": 1429.451748135209,
+     "plane": 3801.2606418319688
+    },
+    "faces": 205
+   },
+   "step": "refs/8dce996259.step"
+  },
+  {
+   "id": "9c9ce03e0f",
+   "name": "spur gear",
+   "description": "A spur gear consists of a cylindrical gear body with external teeth, an axial bore, and a rear hub.\n\nThe toothed gear body is defined by number_of_teeth, gear_module, pressure_angle, face_width, pitch_diameter, outer_diameter, root_diameter, base_diameter, circular_pitch, tooth_thickness, addendum, dedendum, and whole_depth.\n\nThe central bore passes axially through the gear and is defined by shaft_diameter.\n\nThe rear hub is integrated concentrically with the gear body and is defined by hub_diameter, hub_width, and overall_width.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- gear_module = 1 mm\n- number_of_teeth = 80\n- pitch_diameter = 80 mm\n- outer_diameter = 82 mm\n- face_width = 6 mm\n- hub_diameter = 18 mm\n- hub_width = 8 mm\n- shaft_diameter = 8 mm\n- overall_width = 14 mm\n- addendum = pitch_diameter / number_of_teeth = 80 mm / 80 = 1 mm  # ISO 21771\n- dedendum = 1.25 * gear_module = 1.25 * 1 = 1.25 mm  # ISO 21771\n- whole_depth = addendum + dedendum = 1 mm + 1.25 mm = 2.25 mm  # ISO 21771\n- root_diameter = pitch_diameter - 2 * dedendum = 80 mm - 2 * 1.25 mm = 77.5 mm  # ISO 21771\n- circular_pitch = pi * gear_module = pi * 1 = 3.142 mm  # ISO 21771\n- base_diameter = pitch_diameter * cos(pressure_angle) = 80 mm * cos(20 degrees) = 75.175 mm  # ISO 21771\n- tooth_thickness = circular_pitch / 2 = 3.142 mm / 2 = 1.571 mm  # ISO 21771",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 31383.091605244343,
+    "area_mm2": 13759.757868902525,
+    "bbox_mm": {
+     "min": [
+      -41.0000001,
+      -41.0000001,
+      -8.0
+     ],
+     "max": [
+      41.0000001,
+      41.0000001,
+      6.0000001
+     ]
+    },
+    "bbox_sorted_mm": [
+     14.000000100000001,
+     82.0000002,
+     82.0000002
+    ],
+    "center_of_mass_mm": [
+     8.598241660428846e-10,
+     -3.7211944636554915e-14,
+     2.635619162151262
+    ],
+    "principal_moments_normalized": [
+     0.3911899687973141,
+     0.3911899687973271,
+     0.7712448949397784
+    ],
+    "surface_area_by_type": {
+     "cylinder": 1551.8283056569946,
+     "extrusion": 2291.4399724959376,
+     "plane": 9916.489590749521
+    },
+    "faces": 325
+   },
+   "step": "refs/9c9ce03e0f.step"
+  },
+  {
+   "id": "aa79a250e3",
+   "name": "spur gear",
+   "description": "A spur gear consists of a cylindrical gear body with external involute teeth, an integrated hub, and a central round bore.\n\nThe toothed gear body is defined by gear_module, number_of_teeth, pressure_angle, face_width, pitch_diameter, outer_diameter, root_diameter, base_diameter, addendum, dedendum, whole_depth, circular_pitch, and tooth_thickness.\n\nThe hub is formed concentrically with the gear body and is characterized by hub_diameter, hub_width, and overall_width.\n\nThe central bore passes through the gear about its axis and is defined by shaft_diameter.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- gear_module = 2 mm\n- number_of_teeth = 25\n- pitch_diameter = 50 mm\n- outer_diameter = 54 mm\n- face_width = 20 mm\n- hub_diameter = 40 mm\n- hub_width = 10 mm\n- shaft_diameter = 10 mm\n- overall_width = 30 mm\n- addendum = gear_module = 2 = 2 mm  # ISO 21771\n- dedendum = 1.25 * gear_module = 1.25 * 2 = 2.5 mm  # ISO 21771\n- whole_depth = addendum + dedendum = 2 + 2.5 = 4.5 mm  # ISO 21771\n- root_diameter = pitch_diameter - 2 * dedendum = 50 - 2 * 2.5 = 45 mm  # ISO 21771\n- base_diameter = pitch_diameter * cos(pressure_angle) = 50 * cos(20) = 46.985 mm  # ISO 21771\n- circular_pitch = pi * gear_module = pi * 2 = 6.283 mm  # ISO 21771\n- tooth_thickness = circular_pitch / 2 = 6.283 / 2 = 3.142 mm  # ISO 21771",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 48780.90771525985,
+    "area_mm2": 12459.086771597762,
+    "bbox_mm": {
+     "min": [
+      -26.867784680856463,
+      -26.982338563850814,
+      -1e-07
+     ],
+     "max": [
+      27.0000001,
+      26.982338563850814,
+      30.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     30.0000001,
+     53.86778478085647,
+     53.96467712770163
+    ],
+    "center_of_mass_mm": [
+     -1.3704415448179003e-07,
+     -9.989187480722619e-16,
+     13.622618063857125
+    ],
+    "principal_moments_normalized": [
+     0.16340145275001697,
+     0.16340145275677062,
+     0.22416843112833493
+    ],
+    "surface_area_by_type": {
+     "cylinder": 3997.3023039079008,
+     "extrusion": 3769.5079381252995,
+     "plane": 4692.276529564568
+    },
+    "faces": 155
+   },
+   "step": "refs/aa79a250e3.step"
+  },
+  {
+   "id": "aad4a0fbad",
+   "name": "hex nut",
+   "description": "A hex nut consists of an external hexagonal prism body (**nut_body**) and a central cylindrical inner hole (**through_hole**) cut through the full nut thickness. The nut is defined by across_flats, nut_thickness, and a through-hole defined by hole_diameter and hole_cut_depth (set to cut through the body). If no hex size is provided, across_flats is set by an ISO default proportion relative to the hole diameter for a generic nut.",
+   "key_parameters": "- **nut_body**\n  - hole_diameter = 8 mm\n  - nut_thickness = 10 mm\n  - across_flats = 13 mm (default, proportional to hole_diameter)\n  - across_corners = across_flats / cos(30 degree) = 13 mm / 0.8660254038 = 15.011 mm\n- **through_hole**\n  - hole_diameter = 8 mm\n  - hole_cut_depth = 30 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 960.9281078213343,
+    "area_mm2": 893.8462438193583,
+    "bbox_mm": {
+     "min": [
+      -6.500000000000001,
+      -7.505553499465135,
+      0.0
+     ],
+     "max": [
+      6.500000000000001,
+      7.505553499465135,
+      10.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     10.0,
+     13.000000000000002,
+     15.01110699893027
+    ],
+    "center_of_mass_mm": [
+     2.588018349050875e-16,
+     6.158998153664447e-16,
+     5.000000000000002
+    ],
+    "principal_moments_normalized": [
+     0.24765516341899077,
+     0.24765516341899096,
+     0.32415589402566103
+    ],
+    "surface_area_by_type": {
+     "cylinder": 251.32741228718345,
+     "plane": 642.5188315321749
+    },
+    "faces": 9
+   },
+   "step": "refs/aad4a0fbad.step"
+  },
+  {
+   "id": "ab46933317",
+   "name": "spur gear stock",
+   "description": "A spur gear stock consists of a cylindrical gear body with external involute teeth and a defined axial length.\n\nThe toothed gear body is defined by number_of_teeth, pressure_angle, gear_module, pitch_diameter, and outer_diameter, which together govern the tooth spacing, tooth form, and the main reference diameters.\n\nThe stock length along the gear axis is characterized by overall_length.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- diametral_pitch = 16\n- number_of_teeth = 12\n- pitch_diameter = 0.75 in * 25.4 = 19.05 mm\n- outer_diameter = 0.88 in * 25.4 = 22.352 mm\n- overall_length = 1 ft * 12 in/ft * 25.4 = 304.8 mm\n- gear_module = 25.4 / diametral_pitch = 25.4 / 16 = 1.5875 mm  # AGMA (inch DP to metric module conversion)",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 83064.96782425867,
+    "area_mm2": 38587.3224600208,
+    "bbox_mm": {
+     "min": [
+      -11.112500099999998,
+      -11.112500099999998,
+      -1e-07
+     ],
+     "max": [
+      11.112500099999998,
+      11.112500099999998,
+      304.80000010000003
+     ]
+    },
+    "bbox_sorted_mm": [
+     22.225000199999997,
+     22.225000199999997,
+     304.80000020000006
+    ],
+    "center_of_mass_mm": [
+     -1.2880475737236043e-16,
+     -1.088256196550846e-15,
+     152.4000000000001
+    ],
+    "principal_moments_normalized": [
+     0.025214672312838186,
+     4.0792418536750485,
+     4.079241853675049
+    ],
+    "surface_area_by_type": {
+     "cylinder": 10003.647050304959,
+     "extrusion": 17724.58886470967,
+     "plane": 10859.086545006172
+    },
+    "faces": 74
+   },
+   "step": "refs/ab46933317.step"
+  },
+  {
+   "id": "ae6efafb3b",
+   "name": "spur gear",
+   "description": "A spur gear consists of a toothed gear body, a central hub section, and a round through bore aligned with the rotational axis.\n\nThe toothed gear body is defined by number_of_teeth, gear_module, pressure_angle, pitch_diameter, outer_diameter, root_diameter, addendum, dedendum, circular_pitch, base_diameter, and face_width.\n\nThe central hub is integrated with the gear body and is characterized by hub_diameter, hub_width, and overall_width.\n\nThe round bore passes through the center to receive a shaft and is governed by bore_diameter and shaft_diameter.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- gear_module = 1 mm\n- number_of_teeth = 22\n- pitch_diameter = 22 mm\n- outer_diameter = 24 mm\n- face_width = 10 mm\n- hub_diameter = 18 mm\n- hub_width = 10 mm\n- shaft_diameter = 8 mm\n- overall_width = 20 mm\n- addendum = pitch_diameter / number_of_teeth = 22 mm / 22 = 1 mm  # ISO 21771\n- dedendum = 1.25 * gear_module = 1.25 * 1 = 1.25 mm  # ISO 21771\n- root_diameter = pitch_diameter - 2 * dedendum = 22 mm - 2 * 1.25 mm = 19.5 mm  # ISO 21771\n- circular_pitch = pi * gear_module = pi * 1 = 3.142 mm  # ISO 21771\n- base_diameter = pitch_diameter * cos(pressure_angle) = 22 mm * cos(20 degrees) = 20.673 mm  # ISO 21771\n- bore_diameter = 8 mm  # inferred from round bore geometry + given shaft_diameter",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 5259.502653237094,
+    "area_mm2": 3158.1965021355827,
+    "bbox_mm": {
+     "min": [
+      -12.0000001,
+      -11.922949633048036,
+      -1e-07
+     ],
+     "max": [
+      12.0000001,
+      11.922949633048036,
+      20.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     20.0000001,
+     23.845899266096072,
+     24.0000002
+    ],
+    "center_of_mass_mm": [
+     -7.214970999161085e-08,
+     1.3866566089573767e-15,
+     8.882563517953372
+    ],
+    "principal_moments_normalized": [
+     0.20243929822642528,
+     0.2073079484022143,
+     0.2073079484114728
+    ],
+    "surface_area_by_type": {
+     "cylinder": 1465.8314950789063,
+     "extrusion": 790.7654951342282,
+     "plane": 901.5995119224475
+    },
+    "faces": 137
+   },
+   "step": "refs/ae6efafb3b.step"
+  },
+  {
+   "id": "aff93db55d",
+   "name": "spur gear stock",
+   "description": "A spur gear stock consists of a cylindrical gear body with external involute teeth distributed around the outside, extruded along the gear axis to form the overall length.\n\nThe tooth geometry and spacing are governed by number_of_teeth, diametral_pitch, gear_module, and pressure_angle, with the tooth form sized relative to pitch_diameter and outer_diameter.\n\nThe axial extent of the stock is defined by overall_length, producing a uniform face width along the gear\u2019s rotation axis.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- diametral_pitch = 20\n- number_of_teeth = 16\n- pitch_diameter = 0.8 in = 20.32 mm\n- outer_diameter = 0.9 in = 22.86 mm\n- overall_length = 1 ft = 304.8 mm\n- gear_module = 25.4 / diametral_pitch = 25.4 / 20 = 1.27 mm  # AGMA / ISO gear geometry",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 95664.68561423894,
+    "area_mm2": 41394.44591122411,
+    "bbox_mm": {
+     "min": [
+      -11.430000099999999,
+      -11.430000099999999,
+      -1e-07
+     ],
+     "max": [
+      11.430000099999999,
+      11.430000099999999,
+      304.80000010000003
+     ]
+    },
+    "bbox_sorted_mm": [
+     22.860000199999998,
+     22.860000199999998,
+     304.80000020000006
+    ],
+    "center_of_mass_mm": [
+     -8.196940182393337e-17,
+     2.087396554267003e-15,
+     152.39999999999995
+    ],
+    "principal_moments_normalized": [
+     0.025297943350835603,
+     3.7138790105064565,
+     3.713879010506459
+    ],
+    "surface_area_by_type": {
+     "cylinder": 11085.50700670069,
+     "extrusion": 20173.638085399096,
+     "plane": 10135.300819124335
+    },
+    "faces": 98
+   },
+   "step": "refs/aff93db55d.step"
+  },
+  {
+   "id": "b0baf87576",
+   "name": "shaft with keyway",
+   "description": "The smooth shaft is a cylindrical component with a uniform diameter and keyway features. The shaft is defined by its overall length and diameter, while the keyways are specified by width, depth, height, and the number of keyways.\n\n- Smooth shaft: diameter, length\n- Keyway: width, depth, height, number of keyways",
+   "key_parameters": "- smooth_shaft_diameter = 50 mm\n- smooth_shaft_length = 80 mm\n- keyway_width = 5 mm\n- keyway_depth = 3 mm\n- keyway_height = 20 mm\n- num_keyway = 2",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 156487.9785576841,
+    "area_mm2": 16723.001463236527,
+    "bbox_mm": {
+     "min": [
+      -25.0,
+      -25.0,
+      0.0
+     ],
+     "max": [
+      25.0,
+      25.0,
+      80.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     50.0,
+     50.0,
+     80.0
+    ],
+    "center_of_mass_mm": [
+     -1.4064832318599918e-15,
+     2.596199061446551e-16,
+     39.88657516176157
+    ],
+    "principal_moments_normalized": [
+     0.10729797842904429,
+     0.23642442229615176,
+     0.23714043975893756
+    ],
+    "surface_area_by_type": {
+     "cylinder": 12366.03577203605,
+     "plane": 4356.965691200482
+    },
+    "faces": 11
+   },
+   "step": "refs/b0baf87576.step"
+  },
+  {
+   "id": "b2de850e9c",
+   "name": "spur gear",
+   "description": "A spur gear consists of a toothed gear body, a central hub, and a round bore through the center.\n\nThe toothed gear body is defined by number_of_teeth, gear_module, pressure_angle, face_width, pitch_diameter, outer_diameter, root_diameter, addendum, dedendum, and whole_depth.\n\nThe central hub is integrated with the gear body and is characterized by hub_diameter, hub_width, and overall_width.\n\nThe central bore passes through the gear axis and is defined by shaft_diameter.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- gear_module = 1.5 mm\n- number_of_teeth = 50\n- pitch_diameter = 75 mm\n- outer_diameter = 78 mm\n- face_width = 15 mm\n- hub_diameter = 45 mm\n- hub_width = 10 mm\n- shaft_diameter = 10 mm\n- overall_width = 25 mm\n- addendum = gear_module = 1.5 = 1.5 mm  # ISO 21771 / DIN 867\n- dedendum = 1.25 * gear_module = 1.25 * 1.5 = 1.875 mm  # ISO 21771 / DIN 867\n- whole_depth = addendum + dedendum = 1.5 + 1.875 = 3.375 mm  # ISO 21771 / DIN 867\n- root_diameter = pitch_diameter - (2 * dedendum) = 75 - (2 * 1.875) = 71.25 mm  # ISO 21771 / DIN 867",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 79783.46888122815,
+    "area_mm2": 17993.79920879618,
+    "bbox_mm": {
+     "min": [
+      -39.0000001,
+      -38.95523079527825,
+      -1e-07
+     ],
+     "max": [
+      39.0000001,
+      38.95523079527825,
+      25.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     25.0000001,
+     77.9104615905565,
+     78.0000002
+    ],
+    "center_of_mass_mm": [
+     1.7465119184304916e-08,
+     -4.0095805378073144e-15,
+     9.868741719859244
+    ],
+    "principal_moments_normalized": [
+     0.19192614404619804,
+     0.19192614404671085,
+     0.33984997243147325
+    ],
+    "surface_area_by_type": {
+     "cylinder": 4011.4036707882515,
+     "extrusion": 5360.444055507037,
+     "plane": 8621.951482500886
+    },
+    "faces": 205
+   },
+   "step": "refs/b2de850e9c.step"
+  },
+  {
+   "id": "b55517ee4b",
+   "name": "disk brake",
+   "description": "A disk brake consists of a circular disk and a central hub, used for friction-based braking. The key parameters defining the disk brake include disk_outer_diameter, disk_inner_diameter, and disk_thickness for the braking surface, and hub_outer_diameter, hub_inner_diameter, and hub_height for the hub. The disk also features mounting_holes for attachment, specified by mounting_hole_diameter, mounting_hole_pcd, and number_of_mounting_holes, as well as cooling_holes for heat dissipation, defined by cooling_hole_diameter, cooling_hole_pcd, and number_of_cooling_holes.",
+   "key_parameters": "\n\n- **disk_outer_diameter** = 280 mm\n- **disk_inner_diameter** = 140 mm\n- **disk_thickness** = 30 mm\n- **hub_outer_diameter** = 160 mm\n- **hub_inner_diameter** = 60 mm\n- **hub_height** = 50 mm\n- **mounting_hole_diameter** = 15 mm\n- **mounting_hole_pcd** = 100 mm\n- **number_of_mounting_holes** = 5\n- **cooling_hole_diameter** = 6 mm\n- **cooling_hole_pcd** = 210 mm\n- **number_of_cooling_holes** = 20\n\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 2188237.092949801,
+    "area_mm2": 211829.73864992577,
+    "bbox_mm": {
+     "min": [
+      -140.0,
+      -140.0,
+      -50.0
+     ],
+     "max": [
+      140.0,
+      140.0,
+      30.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     80.0,
+     280.0,
+     280.0
+    ],
+    "center_of_mass_mm": [
+     1.7689168432510344e-15,
+     -2.7398260880429557e-15,
+     0.01516429481542638
+    ],
+    "principal_moments_normalized": [
+     0.2984262272835672,
+     0.2984262272835732,
+     0.5375470107317928
+    ],
+    "surface_area_by_type": {
+     "cylinder": 97232.2926286041,
+     "plane": 114597.44602132175
+    },
+    "faces": 33
+   },
+   "step": "refs/b55517ee4b.step"
+  },
+  {
+   "id": "b849a4d94e",
+   "name": "rear drive shaft",
+   "description": "A rear drive shaft consists of a cylindrical shaft and two end flanges with a bolt hole pattern for fastening to mating components.\n\nThe shaft is constructed with shaft_length, outer_diameter, inner_diameter, and shaft_material_thickness to define its overall size and wall structure.\nTwo end flanges with identical flange_diameter and flange_thickness: each flange is positioned at one end of the shaft.\n\nThe fastening pattern on the flange is defined by bolt_hole_diameter, bolt_hole_circle_diameter, and number_of_bolt_holes.",
+   "key_parameters": "\n- shaft_length = 1000.0mm\n- outer_diameter = 50.0mm\n- inner_diameter = 40.0mm\n- flange_diameter = 100.0mm\n- flange_thickness = 20.0mm\n- bolt_hole_diameter = 10.0mm\n- bolt_hole_circle_diameter = 80.0mm\n- number_of_bolt_holes = 4\n- shaft_material_thickness = 5.0mm\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 958185.7593448856,
+    "area_mm2": 329081.8304635307,
+    "bbox_mm": {
+     "min": [
+      -50.0,
+      -50.0,
+      -1020.0000000000001
+     ],
+     "max": [
+      50.0,
+      50.0,
+      20.000000000000004
+     ]
+    },
+    "bbox_sorted_mm": [
+     100.0,
+     100.0,
+     1040.0000000000002
+    ],
+    "center_of_mass_mm": [
+     2.9158936005860486e-15,
+     -1.221536799047757e-13,
+     -499.99999999999966
+    ],
+    "principal_moments_normalized": [
+     0.07781154059914755,
+     13.384275825955074,
+     13.384275825955088
+    ],
+    "surface_area_by_type": {
+     "cylinder": 305362.80592892785,
+     "plane": 23719.024534602937
+    },
+    "faces": 16
+   },
+   "step": "refs/b849a4d94e.step"
+  },
+  {
+   "id": "bee61f8386",
+   "name": "high-profile hex flange nut",
+   "description": "A high-profile hex flange nut consists of a hexagonal hub integrated with a circular flange and a plain through hole running along the central axis, forming an overall tall nut profile.\n\nThe overall nut height is governed by overall_height. The hexagonal hub is defined by hub_width, hex_width_across_flats, hex_width_across_corners, and hex_head_angle, which control the wrenching envelope and the edge chamfer geometry.\n\nThe integrated flange at the base of the hub is characterized by flange_diameter and flange_thickness, providing a widened bearing surface. The plain through hole is defined by inner_diameter and passes through the full height of the nut.",
+   "key_parameters": "- overall_height = 21.0 mm\n- flange_diameter = 28.0 mm\n- flange_thickness = 4.0 mm\n- hub_width = 22.0 mm\n- inner_diameter = 14.0 mm\n- hex_head_angle = 30.0 degrees  # ISO 4032 / DIN 934\n- hex_width_across_flats = hub_width = 22.0 mm  # DIN 6331\n- hex_width_across_corners = hex_width_across_flats/cos(30) = 22.0/cos(30) = 25.403411844343534 mm  # ISO 4032 / DIN 934",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 6355.966822208863,
+    "area_mm2": 3494.6888615743765,
+    "bbox_mm": {
+     "min": [
+      -14.0,
+      -14.0,
+      0.0
+     ],
+     "max": [
+      14.0,
+      14.0,
+      21.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     21.0,
+     28.0,
+     28.0
+    ],
+    "center_of_mass_mm": [
+     3.3984600252523524e-16,
+     -3.4029613011908475e-16,
+     9.448348915936803
+    ],
+    "principal_moments_normalized": [
+     0.26415935286661424,
+     0.2641593528666149,
+     0.2939959679799995
+    ],
+    "surface_area_by_type": {
+     "cylinder": 1275.486617357456,
+     "plane": 2219.202244216919
+    },
+    "faces": 11
+   },
+   "step": "refs/bee61f8386.step"
+  },
+  {
+   "id": "bf26b04486",
+   "name": "standard hex flange nut",
+   "description": "A standard hex flange nut consists of a hexagonal wrenching hub integrated with a circular flange at its base, with a coaxial through hole passing fully through the part. The overall form is a stacked flange-and-hex body with a continuous central bore.\n\nThe overall height of the nut is governed by overall_height, with the height split between the flange and the hex portion by flange_thickness and hex_height_above_flange.\n\nThe flange geometry is defined by flange_diameter and flange_thickness, forming the circular bearing surface beneath the hex hub.\n\nThe hex hub wrenching profile is characterized by hub_width, hex_head_width_across_flats, hex_head_width_across_corners, and hex_head_angle, which together define the hex cross-section and any chamfered/top edge treatment.\n\nThe central through hole is defined by through_hole_diameter and is aligned with the nut axis, extending through both the hex hub and the flange.",
+   "key_parameters": "- overall_height = 14.0 mm\n- flange_diameter = 29.9 mm\n- flange_thickness = 6.2 mm\n- hub_width = 21.0 mm\n- through_hole_diameter = 14.0 mm\n- hex_head_width_across_flats = hub_width = 21.0 mm  # ISO 4161 / DIN 6923\n- hex_head_width_across_corners = hex_head_width_across_flats/cos(30) = 21.0/cos(30) = 24.24871130596428 mm  # ISO 4161 / DIN 6923\n- hex_head_angle = 30 degrees  # ISO 4161 / DIN 6923\n- hex_height_above_flange = overall_height-flange_thickness = 14.0-6.2 = 7.8 mm  # ISO 4161 / DIN 6923",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 5177.1752583406205,
+    "area_mm2": 2861.991994851744,
+    "bbox_mm": {
+     "min": [
+      -14.95,
+      -14.95,
+      0.0
+     ],
+     "max": [
+      14.95,
+      14.95,
+      14.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     14.0,
+     29.9,
+     29.9
+    ],
+    "center_of_mass_mm": [
+     2.0861278679244868e-16,
+     -1.4624513836716356e-16,
+     5.504334734872307
+    ],
+    "principal_moments_normalized": [
+     0.2486079246514951,
+     0.24860792465149814,
+     0.3976799751933369
+    ],
+    "surface_area_by_type": {
+     "cylinder": 1198.1406062260753,
+     "plane": 1663.8513886256699
+    },
+    "faces": 11
+   },
+   "step": "refs/bf26b04486.step"
+  },
+  {
+   "id": "c4bad6c5af",
+   "name": "slotted_headless_cylindrical_pin",
+   "description": "A slotted headless cylindrical pin consists of a cylindrical body with a slot running along its length and no head.\n\nA slotted headless cylindrical pin is typically defined by its diameter, length, chamfer length, chamfer angle, slot width, and slot depth.",
+   "key_parameters": "- pin_diameter=1mm\n- pin_length=2.5mm\n- chamfer_length=0.08mm\n- chamfer_angle=45 degree\n- slot_width=0.2mm\n- slot_depth=0.63mm\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 1.8383405219265334,
+    "area_mm2": 10.405609810936298,
+    "bbox_mm": {
+     "min": [
+      -0.5000000000000003,
+      -2.5000000000000013,
+      -0.5000000000000034
+     ],
+     "max": [
+      0.5000000000000003,
+      6.106226635438364e-16,
+      0.5000000000000003
+     ]
+    },
+    "bbox_sorted_mm": [
+     1.0000000000000007,
+     1.0000000000000038,
+     2.5000000000000018
+    ],
+    "center_of_mass_mm": [
+     -4.3879053238943496e-17,
+     -1.3136551376333676,
+     -1.4900005390170275e-15
+    ],
+    "principal_moments_normalized": [
+     0.08508637621836299,
+     0.36758849010191713,
+     0.37116851638259235
+    ],
+    "surface_area_by_type": {
+     "cylinder": 7.600270653778676,
+     "plane": 2.8053391571576216
+    },
+    "faces": 9
+   },
+   "step": "refs/c4bad6c5af.step"
+  },
+  {
+   "id": "c5551173e6",
+   "name": "headless_pin",
+   "description": "A headless pin is a cylindrical rod without a head, commonly used for fastening or aligning components in mechanical assemblies.\nKey parameters include the pin\u00e2\u0080\u0099s diameter and length, which determine its size, and the chamfer length and angle, which facilitate insertion. These dimensions, along with material selection, define the pin\u00e2\u0080\u0099s strength and suitability for various applications.\n",
+   "key_parameters": "- pin_diameter=3mm\n- pin_length=6.0mm\n- chamfer_length=1.0mm\n- chamfer_angle=30 degree\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 37.6682344315573,
+    "area_mm2": 60.624679867243714,
+    "bbox_mm": {
+     "min": [
+      0.0,
+      -1.5000000000000004,
+      -1.5000000000000004
+     ],
+     "max": [
+      6.000000000000002,
+      1.5000000000000004,
+      1.5000000000000004
+     ]
+    },
+    "bbox_sorted_mm": [
+     3.000000000000001,
+     3.000000000000001,
+     6.000000000000002
+    ],
+    "center_of_mass_mm": [
+     3.0000000000000013,
+     -6.08890672362875e-17,
+     -1.680002085540213e-16
+    ],
+    "principal_moments_normalized": [
+     0.09295337420606652,
+     0.2674748776151936,
+     0.2674748776151938
+    ],
+    "surface_area_by_type": {
+     "cone": 17.576802166024226,
+     "cylinder": 37.69911184307753,
+     "plane": 5.348765858141961
+    },
+    "faces": 5
+   },
+   "step": "refs/c5551173e6.step"
+  },
+  {
+   "id": "c7364c0bbd",
+   "name": "round mounting flange",
+   "description": "A round mounting flange consists of a circular flange body with a central plain through bore and an array of bolt holes distributed around a bolt circle for fastening.\n\nThe flange body outer profile and thickness are governed by outer_diameter and flange_thickness. The central through bore is defined by bore_diameter. The bolt hole pattern is defined by pitch_circle_diameter, bolt_hole_diameter, and number_bolt_holes.",
+   "key_parameters": "- outer_diameter = 69.453mm\n- flange_thickness = 13.097mm\n- pitch_circle_diameter = 57.944mm\n- bolt_hole_diameter = 6.747mm\n- number_bolt_holes = 4\n- bore_diameter = 34.925mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 35198.64289282497,
+    "area_mm2": 10780.181279128425,
+    "bbox_mm": {
+     "min": [
+      -34.7265,
+      -34.7265,
+      0.0
+     ],
+     "max": [
+      34.7265,
+      34.7265,
+      13.097
+     ]
+    },
+    "bbox_sorted_mm": [
+     13.097,
+     69.453,
+     69.453
+    ],
+    "center_of_mass_mm": [
+     -5.216230735925233e-16,
+     5.684561049677034e-16,
+     6.548499999999996
+    ],
+    "principal_moments_normalized": [
+     0.3627700103891923,
+     0.36277001038919987,
+     0.6989220388961132
+    ],
+    "surface_area_by_type": {
+     "cylinder": 5405.111737580751,
+     "plane": 5375.069541547676
+    },
+    "faces": 8
+   },
+   "step": "refs/c7364c0bbd.step"
+  },
+  {
+   "id": "c7ccc5660f",
+   "name": "shaft with spur gear",
+   "description": "A 2 sections spur gear shaft consists of a spur gear mounted on a 2 section shaft.\n\nThe shaft is constructed in 2 sections from bottom to top: The 1st section is a smooth cylindrical shaft defined by shaft_diameter and shaft_length.\n\nThe spur gear is mounted on the 2nd section of shaft along the axial direction. The spur gear is characterized by parameters such as gear_number_tooth, gear_module, gear_height, and pressure_angle. The gear teeth are created using an involute profile, repeated in a circular pattern to achieve the specified gear_number_tooth. The gear_height defines the axial thickness of the gear.",
+   "key_parameters": "- **Shaft (section_1: smooth shaft)**\n  - shaft_diameter = 16 mm\n  - shaft_length = 30 mm\n\n- **Spur gear (section_2)**\n  - gear_number_tooth = 20\n  - gear_module = 1 mm\n  - gear_height = 20 mm\n  - pressure_angle = 20 degree\n  - gear_pitch_diameter = gear_number_tooth * gear_module = 20 * 1 mm = 20 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 12162.273150157296,
+    "area_mm2": 4753.772607509955,
+    "bbox_mm": {
+     "min": [
+      -11.0000001,
+      -11.0000001,
+      0.0
+     ],
+     "max": [
+      11.0000001,
+      11.0000001,
+      50.0000001
+     ]
+    },
+    "bbox_sorted_mm": [
+     22.0000002,
+     22.0000002,
+     50.0000001
+    ],
+    "center_of_mass_mm": [
+     -3.515558878768545e-08,
+     -4.051805003914484e-16,
+     27.60129392072703
+    ],
+    "principal_moments_normalized": [
+     0.07823949327462307,
+     0.43664713654001575,
+     0.43664713654177323
+    ],
+    "surface_area_by_type": {
+     "cylinder": 2231.364494858457,
+     "extrusion": 1391.8307944572732,
+     "plane": 1130.577318194223
+    },
+    "faces": 124
+   },
+   "step": "refs/c7ccc5660f.step"
+  },
+  {
+   "id": "cb6f0c2fb5",
+   "name": "dumbbell",
+   "description": "A dumbbell consisting of a central cylindrical handle and two identical hexagonal-prism end weights. The handle is defined by handle_length and handle_diameter. Each hex end is defined by cross_flat_width (distance across flats of the hex profile) and hex_height (axial thickness of the hex prism). The hex ends are coaxial with the handle and centered on the handle axis, one on each side.",
+   "key_parameters": "- **handle (cylindrical rod)**\n  - handle_length = 110.0 mm\n  - handle_diameter = 28.0 mm\n- **hex_end_weights (2x hexagonal prism)**\n  - cross_flat_width = 80.0 mm\n  - hex_height = 30.0 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 400286.4926646204,
+    "area_mm2": 47242.539142392205,
+    "bbox_mm": {
+     "min": [
+      -46.188021535170066,
+      -40.00000000000001,
+      -30.0
+     ],
+     "max": [
+      46.188021535170066,
+      40.00000000000001,
+      140.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     80.00000000000001,
+     92.37604307034013,
+     170.0
+    ],
+    "center_of_mass_mm": [
+     -4.544218795486299e-16,
+     -1.1633200116444925e-15,
+     55.00000000000002
+    ],
+    "principal_moments_normalized": [
+     0.1390172505974767,
+     0.8618966395174062,
+     0.8618966395174067
+    ],
+    "surface_area_by_type": {
+     "cylinder": 9676.105373056564,
+     "plane": 37566.43376933564
+    },
+    "faces": 17
+   },
+   "step": "refs/cb6f0c2fb5.step"
+  },
+  {
+   "id": "cda06f9dbf",
+   "name": "high-profile hex flange nut",
+   "description": "A high-profile hex flange nut consists of a hexagonal nut body with an integral circular flange at its base, and a plain through hole running axially through the entire part.\n\nThe through hole is defined by inner_diameter, and it is centered on the nut\u2019s main axis to provide a clearance passage.\n\nThe overall axial size of the nut is set by overall_height. The hexagonal exterior is characterized by hex_nut_width_across_flats, hex_nut_width_across_corners, and hex_nut_half_angle, which control the wrenching geometry and corner profile.\n\nThe integrated flange is defined by flange_diameter and flange_thickness, forming a wider bearing surface concentric with the nut body.",
+   "key_parameters": "- inner_diameter = 10.0 mm\n- overall_height = 15.0 mm\n- flange_diameter = 22.0 mm\n- flange_thickness = 4.0 mm\n- hex_nut_width_across_flats = 16.0 mm\n- hex_nut_width_across_corners = hex_nut_width_across_flats/cos(30) = 16.0mm/cos(30degrees) = 18.475208614068023 mm  # DIN 6331\n- hex_nut_half_angle = 30.0 degrees  # DIN 6331",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 2781.1611362982662,
+    "area_mm2": 1960.5667253078554,
+    "bbox_mm": {
+     "min": [
+      -11.0,
+      -11.0,
+      0.0
+     ],
+     "max": [
+      11.0,
+      11.0,
+      15.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     15.0,
+     22.0,
+     22.0
+    ],
+    "center_of_mass_mm": [
+     -1.9416799412652314e-16,
+     -1.3868496323543963e-16,
+     6.246759213534375
+    ],
+    "principal_moments_normalized": [
+     0.2507181520562036,
+     0.25071815205620523,
+     0.298128800105971
+    ],
+    "surface_area_by_type": {
+     "cylinder": 747.6990515543707,
+     "plane": 1212.8676737534852
+    },
+    "faces": 11
+   },
+   "step": "refs/cda06f9dbf.step"
+  },
+  {
+   "id": "d733bfa285",
+   "name": "external spline",
+   "description": "An external spline with fillet root tooth. Model as a cylindrical spline body with straight teeth distributed evenly around the axis, and apply a rounded fillet at the root of each tooth. \nIn CAD, the tooth profile of a spline can be drawn using a series of simplified circular arcs. Key parameters include number_teeth, spline_module, spline_pitch_diameter, spline_height, pressure_angle, and fillet_radius.",
+   "key_parameters": "- number_teeth = 23\n- spline_module = 3 mm\n- spline_pitch_diameter = number_teeth * spline_module = 23 * 3 mm = 69 mm\n- spline_height = 10 mm\n- pressure_angle = 30 degree\n- fillet_radius = 1.2 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 37019.354847721,
+    "area_mm2": 10500.307879192209,
+    "bbox_mm": {
+     "min": [
+      -35.987099465039584,
+      -35.83744163069994,
+      0.0
+     ],
+     "max": [
+      35.987099465039584,
+      36.0,
+      10.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     10.0,
+     71.83744163069994,
+     71.97419893007917
+    ],
+    "center_of_mass_mm": [
+     4.324380330710602e-15,
+     -3.1359200044808835e-16,
+     4.999999999999988
+    ],
+    "principal_moments_normalized": [
+     0.2748338502728218,
+     0.2748338502728218,
+     0.5346629244543131
+    ],
+    "surface_area_by_type": {
+     "cylinder": 3096.436909648022,
+     "plane": 7403.870969544188
+    },
+    "faces": 140
+   },
+   "step": "refs/d733bfa285.step"
+  },
+  {
+   "id": "d7e1bdf8be",
+   "name": "headed_pin",
+   "description": "A headed pin features a cylindrical shaft with a head at one end, typically larger in diameter than the shaft, which can be flat, rounded, or shaped according to its use.\nKey parameters include the pin diameter, pin length, head diameter, head thickness, chamfer length, and chamfer angle. These dimensions define the pin\u00e2\u0080\u0099s overall size and geometry, ensuring a proper fit and secure fastening in its intended application.",
+   "key_parameters": "- pin_diameter=3mm\n- pin_length=6.0mm\n- head_diameter=5mm\n- head_thickness=1.0mm\n- chamfer_length=1.0mm\n- chamfer_angle=30 degree\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 59.67482171244599,
+    "area_mm2": 106.49596178317437,
+    "bbox_mm": {
+     "min": [
+      -1.0000000000000002,
+      -2.5000000000000004,
+      -2.5000000000000004
+     ],
+     "max": [
+      6.000000000000002,
+      2.5000000000000004,
+      2.5000000000000004
+     ]
+    },
+    "bbox_sorted_mm": [
+     5.000000000000001,
+     5.000000000000001,
+     7.000000000000002
+    ],
+    "center_of_mass_mm": [
+     1.7428935099780813,
+     -1.0250037329379762e-16,
+     -2.9767275182822495e-17
+    ],
+    "principal_moments_normalized": [
+     0.1150999007046901,
+     0.3409407280764473,
+     0.3409407280764483
+    ],
+    "surface_area_by_type": {
+     "cone": 8.788401083012115,
+     "cylinder": 62.831853071795884,
+     "plane": 34.87570762836636
+    },
+    "faces": 6
+   },
+   "step": "refs/d7e1bdf8be.step"
+  },
+  {
+   "id": "d831ec007c",
+   "name": "spur gear",
+   "description": "A spur gear consists of a toothed cylindrical gear body, an integrated hub, and a central round bore.\n\nThe toothed gear body is defined by number_of_teeth, gear_module, pressure_angle, face_width, pitch_diameter, outer_diameter, root_diameter, base_diameter, circular_pitch, addendum, dedendum, and whole_depth.\n\nThe hub is formed concentrically with the gear body and is governed by hub_diameter, hub_width, and overall_width.\n\nThe central bore passes through the gear along its axis and is characterized by bore_diameter and shaft_diameter.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- gear_module = 1 mm\n- number_of_teeth = 24\n- pitch_diameter = 24 mm\n- outer_diameter = 26 mm\n- face_width = 10 mm\n- hub_diameter = 20 mm\n- hub_width = 10 mm\n- shaft_diameter = 8 mm\n- overall_width = 20 mm\n- addendum = gear_module = 1 = 1 mm  # ISO 54 / DIN 867\n- dedendum = 1.25 * gear_module = 1.25 * 1 = 1.25 mm  # ISO 54 / DIN 867\n- whole_depth = addendum + dedendum = 1 + 1.25 = 2.25 mm  # ISO 54 / DIN 867\n- root_diameter = pitch_diameter - 2 * dedendum = 24 - 2 * 1.25 = 21.5 mm  # ISO 54 / DIN 867\n- circular_pitch = pi * gear_module = pi * 1 = 3.142 mm  # ISO 54\n- base_diameter = pitch_diameter * cos(pressure_angle) = 24 * cos(20) = 22.553 mm  # ISO 54 / involute gear geometry\n- bore_diameter = shaft_diameter = 8 = 8 mm  # inferred from geometry standard table + given parameters",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 6574.719894966667,
+    "area_mm2": 3493.8934617374753,
+    "bbox_mm": {
+     "min": [
+      -13.0000001,
+      -13.0000001,
+      -1e-07
+     ],
+     "max": [
+      13.0000001,
+      13.0000001,
+      20.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     20.0000001,
+     26.0000002,
+     26.0000002
+    ],
+    "center_of_mass_mm": [
+     -6.811039402130639e-08,
+     2.5439593993767547e-15,
+     9.013764794747045
+    ],
+    "principal_moments_normalized": [
+     0.19417110059856768,
+     0.19417110060601217,
+     0.2039274021958048
+    ],
+    "surface_area_by_type": {
+     "cylinder": 1563.5200488418445,
+     "extrusion": 890.5949759542182,
+     "plane": 1039.7784369414114
+    },
+    "faces": 149
+   },
+   "step": "refs/d831ec007c.step"
+  },
+  {
+   "id": "da772a2e0b",
+   "name": "connecting rod",
+   "description": "A connecting rod consists of a flat plate with two circular heads connected by a straight shaft, and a through-hole at each head.\n\nThe overall thickness of the rod is controlled by plate_thickness. The two heads are sized by head_outer_diameter and connected by a shaft whose width is set by shaft_width. The head-to-head spacing is defined by hole_center_distance. Each head contains a through-hole sized by hole_diameter, centered on the head.",
+   "key_parameters": "- plate_thickness = 3.0 mm\n- hole_center_distance = 29.0 mm\n- head_outer_diameter = 7.0 mm\n- hole_diameter = 3.0 mm\n- shaft_width = 3.0 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 388.4810985337092,
+    "area_mm2": 564.9333624645726,
+    "bbox_mm": {
+     "min": [
+      -18.0,
+      -3.5,
+      0.0
+     ],
+     "max": [
+      18.0,
+      3.5,
+      3.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     3.0,
+     7.0,
+     36.0
+    ],
+    "center_of_mass_mm": [
+     1.271174333107018e-13,
+     -1.102712199499667e-16,
+     1.5
+    ],
+    "principal_moments_normalized": [
+     0.05443336412964664,
+     2.36117510857463,
+     2.3874347222463674
+    ],
+    "surface_area_by_type": {
+     "cylinder": 169.89329536440636,
+     "plane": 395.0400671001662
+    },
+    "faces": 8
+   },
+   "step": "refs/da772a2e0b.step"
+  },
+  {
+   "id": "db1ef53f08",
+   "name": "round mounting flange",
+   "description": "A round mounting flange consists of a circular flange body with a central plain through bore and an array of equally spaced bolt holes on a bolt circle.\n\nThe flange body is defined by outer_diameter and flange_thickness, with the central through bore defined by inner_diameter.\n\nThe bolt hole pattern is located on the pitch circle defined by pitch_circle_diameter, with each hole sized by bolt_hole_diameter and the quantity set by number_bolt_holes.",
+   "key_parameters": "- inner_diameter = 34.925mm\n- outer_diameter = 69.454mm\n- flange_thickness = 26.194mm\n- pitch_circle_diameter = 57.547mm\n- bolt_hole_diameter = 6.747mm\n- number_bolt_holes = 4",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 70400.14348039636,
+    "area_mm2": 16185.593502192507,
+    "bbox_mm": {
+     "min": [
+      -34.727,
+      -34.727,
+      0.0
+     ],
+     "max": [
+      34.727,
+      34.727,
+      26.194
+     ]
+    },
+    "bbox_sorted_mm": [
+     26.194,
+     69.454,
+     69.454
+    ],
+    "center_of_mass_mm": [
+     -4.34076132076064e-15,
+     4.0861911232310764e-16,
+     13.096999999999996
+    ],
+    "principal_moments_normalized": [
+     0.2538606255392462,
+     0.2538606255392511,
+     0.4406499548278946
+    ],
+    "surface_area_by_type": {
+     "cylinder": 10810.30576603947,
+     "plane": 5375.287736153036
+    },
+    "faces": 8
+   },
+   "step": "refs/db1ef53f08.step"
+  },
+  {
+   "id": "db4e2a4bcf",
+   "name": "wooden ladder",
+   "description": "A wooden ladder consists of two parallel side rails and a set of equally spaced rungs connecting the rails. Each side rail is a rectangular prism defined by ladder_side_rails_length, ladder_side_rail_width (in-plane), and ladder_side_rail_thickness (out-of-plane). Each rung is a rectangular prism defined by ladder_rung_length (clear span between the inner faces of the two side rails), ladder_rung_width (vertical/in-plane), and ladder_rung_thickness (out-of-plane). Rungs are patterned along the ladder length with ladder_number_of_rungs instances at ladder_rung_spacing pitch, aligned perpendicular to the side rails and centered between them.",
+   "key_parameters": "- **Side rails (2x)**\n  - ladder_side_rails_length = 2400 mm\n  - ladder_side_rail_width = 40 mm\n  - ladder_side_rail_thickness = 90 mm\n  - side_rail_outer_to_outer_width = ladder_rung_length + 2 * ladder_side_rail_width = 400 mm + 2 * 40 mm = 480 mm\n- **Rungs (patterned)**\n  - ladder_number_of_rungs = 7\n  - ladder_rung_length = 400 mm\n  - ladder_rung_width = 40 mm\n  - ladder_rung_thickness = 40 mm\n  - ladder_rung_spacing = 300 mm\n  - rungs_total_span_along_length = (ladder_number_of_rungs - 1) * ladder_rung_spacing = (7 - 1) * 300 mm = 1800 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 21759999.999999993,
+    "area_mm2": 1688000.0,
+    "bbox_mm": {
+     "min": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "max": [
+      480.0,
+      2400.0,
+      90.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     90.0,
+     480.0,
+     2400.0
+    ],
+    "center_of_mass_mm": [
+     240.00000000000009,
+     1142.3529411764707,
+     39.852941176470594
+    ],
+    "principal_moments_normalized": [
+     0.5382083606963838,
+     6.0147814358544505,
+     6.535980707653115
+    ],
+    "surface_area_by_type": {
+     "plane": 1688000.0
+    },
+    "faces": 30
+   },
+   "step": "refs/db4e2a4bcf.step"
+  },
+  {
+   "id": "dbf8356a78",
+   "name": "spur gear stock",
+   "description": "A spur gear stock consists of a cylindrical gear body with external spur teeth running along the overall length.\n\nThe tooth geometry is defined by number_of_teeth, pressure_angle, gear_module, and diametral_pitch, with the reference sizing governed by pitch_diameter and the tooth tip envelope governed by outer_diameter.\n\nThe axial extent of the stock is set by overall_length, producing a uniform-tooth gear blank along the axis.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- diametral_pitch = 24\n- number_of_teeth = 20\n- pitch_diameter = 0.833 in = 21.1582 mm\n- outer_diameter = 0.92 in = 23.368 mm\n- overall_length = 1 ft = 304.8 mm\n- gear_module = 25.4 / diametral_pitch = 25.4 / 24 = 1.058333333 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 104645.31993187731,
+    "area_mm2": 43150.61935604555,
+    "bbox_mm": {
+     "min": [
+      -11.641666766666667,
+      -11.641666766666667,
+      -1e-07
+     ],
+     "max": [
+      11.641666766666667,
+      11.641666766666667,
+      304.80000010000003
+     ]
+    },
+    "bbox_sorted_mm": [
+     23.283333533333334,
+     23.283333533333334,
+     304.80000020000006
+    ],
+    "center_of_mass_mm": [
+     -6.312641607666523e-16,
+     -2.0424818945498137e-15,
+     152.40000000000018
+    ],
+    "principal_moments_normalized": [
+     0.025524662786088458,
+     3.4990830739863403,
+     3.4990830739863448
+    ],
+    "surface_area_by_type": {
+     "cylinder": 11667.718940892171,
+     "extrusion": 22448.83888380136,
+     "plane": 9034.061531352001
+    },
+    "faces": 122
+   },
+   "step": "refs/dbf8356a78.step"
+  },
+  {
+   "id": "dc935d877e",
+   "name": "rectangular drawer",
+   "description": "A rectangular drawer is defined as an open-top rectangular outer body (length, width, height) with a hollowed internal cavity created by shelling inwards by wall_thickness from the side walls and bottom (top remains open). The model is positioned by left_lower_front_corner.",
+   "key_parameters": "- **outer_body**\n  - length = 500.0 mm\n  - width = 300.0 mm\n  - height = 150.0 mm\n  - left_lower_front_corner = (0.0, 0.0, 0.0) mm\n- **wall_shell_cavity**\n  - wall_thickness = 20.0 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 6952000.000000004,
+    "area_mm2": 727200.0,
+    "bbox_mm": {
+     "min": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "max": [
+      500.0,
+      300.0,
+      150.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     150.0,
+     300.0,
+     500.0
+    ],
+    "center_of_mass_mm": [
+     250.0,
+     149.99999999999986,
+     52.63521288837743
+    ],
+    "principal_moments_normalized": [
+     0.38076587086973923,
+     0.8286737339497189,
+     1.0889276830587566
+    ],
+    "surface_area_by_type": {
+     "plane": 727200.0
+    },
+    "faces": 11
+   },
+   "step": "refs/dc935d877e.step"
+  },
+  {
+   "id": "e0b89a1ecc",
+   "name": "spur gear stock",
+   "description": "A spur gear stock consists of a cylindrical gear blank extended into a long stock body, with spur gear teeth formed around the outer circumference.\n\nThe gear tooth geometry and reference sizing are governed by number_of_teeth, pressure_angle, diametral_pitch, gear_module, pitch_diameter, and outer_diameter.\n\nThe stock length is defined by overall_length, with the toothed section following the same outer envelope set by outer_diameter.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- diametral_pitch = 24\n- number_of_teeth = 16\n- pitch_diameter = 0.667 in = 16.9418 mm\n- outer_diameter = 0.75 in = 19.05 mm\n- overall_length = 1 ft = 304.8 mm\n- gear_module = 25.4 / diametral_pitch = 25.4 / 24 = 1.058333333 mm  # AGMA, diametral pitch to module",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 66433.8094124845,
+    "area_mm2": 34408.18885854915,
+    "bbox_mm": {
+     "min": [
+      -9.525000097,
+      -9.525000097,
+      -1e-07
+     ],
+     "max": [
+      9.525000097,
+      9.525000097,
+      304.80000010000003
+     ]
+    },
+    "bbox_sorted_mm": [
+     19.050000194,
+     19.050000194,
+     304.80000020000006
+    ],
+    "center_of_mass_mm": [
+     -3.735695704218356e-16,
+     3.1583500717858195e-15,
+     152.40000000000003
+    ],
+    "principal_moments_normalized": [
+     0.022402563565680732,
+     4.730973864500769,
+     4.730973864500772
+    ],
+    "surface_area_by_type": {
+     "cylinder": 9237.922502674315,
+     "extrusion": 16811.365065871032,
+     "plane": 8358.90129000382
+    },
+    "faces": 98
+   },
+   "step": "refs/e0b89a1ecc.step"
+  },
+  {
+   "id": "e20918a733",
+   "name": "spur gear",
+   "description": "A spur gear consists of a toothed cylindrical gear body, a central hub, and a round bore through the axis.\n\nThe toothed gear body is defined by number_of_teeth, gear_module, pressure_angle, face_width, pitch_diameter, outer_diameter, root_diameter, base_diameter, circular_pitch, addendum, dedendum, and whole_depth.\n\nThe central hub is formed concentrically with the gear body and is characterized by hub_diameter, hub_width, and overall_width.\n\nThe round bore passes through the center for shaft mounting and is defined by shaft_diameter.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- gear_module = 1 mm\n- number_of_teeth = 70\n- pitch_diameter = 70 mm\n- outer_diameter = 72 mm\n- face_width = 6 mm\n- hub_diameter = 18 mm\n- hub_width = 8 mm\n- shaft_diameter = 8 mm\n- overall_width = 14 mm\n- addendum = gear_module = 1 = 1 mm  # ISO 21771\n- dedendum = 1.25 * gear_module = 1.25 * 1 = 1.25 mm  # ISO 21771\n- whole_depth = addendum + dedendum = 1 + 1.25 = 2.25 mm  # ISO 21771\n- root_diameter = pitch_diameter - 2 * dedendum = 70 - 2 * 1.25 = 67.5 mm  # ISO 21771\n- base_diameter = pitch_diameter * cos(pressure_angle) = 70 * cos(20 degrees) = 65.78 mm  # ISO 21771\n- circular_pitch = pi * gear_module = pi * 1 = 3.142 mm  # ISO 21771",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 24325.55691743413,
+    "area_mm2": 11030.961321954643,
+    "bbox_mm": {
+     "min": [
+      -36.0000001,
+      -35.9793608124179,
+      -1e-07
+     ],
+     "max": [
+      36.0000001,
+      35.9793608124179,
+      14.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     14.0000001,
+     71.9587216248358,
+     72.0000002
+    ],
+    "center_of_mass_mm": [
+     -2.860918641193885e-10,
+     -3.2694359794644286e-15,
+     3.4700980663940495
+    ],
+    "principal_moments_normalized": [
+     0.3535968289925412,
+     0.3535968289925476,
+     0.6923608046341966
+    ],
+    "surface_area_by_type": {
+     "cylinder": 1462.87383096155,
+     "extrusion": 2004.111647706743,
+     "plane": 7563.975843286265
+    },
+    "faces": 285
+   },
+   "step": "refs/e20918a733.step"
+  },
+  {
+   "id": "e4cf76d978",
+   "name": "spur gear",
+   "description": "A spur gear consists of a toothed gear body, a central bore, and a hub integrated along the axial direction.\n\nThe toothed gear body is defined by number_of_teeth, gear_module, pressure_angle, pitch_diameter, outer_diameter, root_diameter, addendum, dedendum, whole_depth, circular_pitch, and face_width.\n\nThe central bore passes through the gear axis and is defined by shaft_diameter.\n\nThe hub is centered on the gear body and extends along the width, characterized by hub_diameter, hub_width, and overall_width.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- gear_module = 1 mm\n- number_of_teeth = 20\n- pitch_diameter = 20 mm\n- outer_diameter = 22 mm\n- face_width = 10 mm\n- hub_diameter = 16 mm\n- hub_width = 10 mm\n- shaft_diameter = 6 mm\n- overall_width = 20 mm\n- addendum = gear_module = 1 = 1 mm  # ISO 54 / standard metric spur gear proportions\n- dedendum = 1.25 * gear_module = 1.25 * 1 = 1.25 mm  # ISO 54 / standard metric spur gear proportions\n- whole_depth = addendum + dedendum = 1 + 1.25 = 2.25 mm  # ISO 54 / standard metric spur gear proportions\n- root_diameter = pitch_diameter - 2 * dedendum = 20 - 2 * 1.25 = 17.5 mm  # ISO 54 / standard metric spur gear proportions\n- circular_pitch = pi * gear_module = pi * 1 = 3.142 mm  # ISO 54",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 4510.340248283753,
+    "area_mm2": 2752.51951808743,
+    "bbox_mm": {
+     "min": [
+      -11.0000001,
+      -11.0000001,
+      -1e-07
+     ],
+     "max": [
+      11.0000001,
+      11.0000001,
+      20.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     20.0000001,
+     22.0000002,
+     22.0000002
+    ],
+    "center_of_mass_mm": [
+     -6.463951142419216e-08,
+     -7.985750988697613e-16,
+     8.830921712933879
+    ],
+    "principal_moments_normalized": [
+     0.17616990875241076,
+     0.20518484270210574,
+     0.2051848427106461
+    ],
+    "surface_area_by_type": {
+     "cylinder": 1241.3459535728198,
+     "extrusion": 695.9153972286366,
+     "plane": 815.2581672859724
+    },
+    "faces": 125
+   },
+   "step": "refs/e4cf76d978.step"
+  },
+  {
+   "id": "e50de66084",
+   "name": "deep groove ball bearing inner ring",
+   "description": "  \nA deep groove ball bearing inner ring is a circular component that forms the inner raceway for the bearing balls. It is designed to support rotational motion and is defined by its bore, raceway geometry, and shoulder dimensions.\n\nThe bore diameter defines the inner opening of the ring, which determines the shaft size it can accommodate. The bearing width specifies the axial thickness of the ring, ensuring compatibility with the overall bearing assembly.\n\nThe raceway geometry is determined by the raceway depth ratio and the ball diameter. These parameters define the curvature and depth of the groove, ensuring proper seating and smooth motion of the balls.\n\nThe shoulder diameter defines the outermost diameter of the inner ring, providing structural integrity and ensuring proper alignment with the bearing balls.\n\n**MAKE SURE**: The shoulder diameter must be greater than the bore diameter and slightly larger than the ball diameter to ensure proper ball containment, e.g., shoulder_diameter = 1.066mm > ball_diameter = 0.388mm.  \n",
+   "key_parameters": "- bore_diameter=0.6mm\n- bearing_width=0.8mm\n- ball_diameter=0.38888888888889mm\n- raceway_depth_ratio=0.4\n- shoulder_diameter=1.0666666666666675mm\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 0.4353907827941018,
+    "area_mm2": 5.460659692318137,
+    "bbox_mm": {
+     "min": [
+      -0.5333333333333339,
+      -0.40000000000000047,
+      -0.5333333333333341
+     ],
+     "max": [
+      0.5333333333333339,
+      0.4000000000000003,
+      0.5333333333333343
+     ]
+    },
+    "bbox_sorted_mm": [
+     0.8000000000000007,
+     1.0666666666666678,
+     1.0666666666666684
+    ],
+    "center_of_mass_mm": [
+     4.202104645822469e-17,
+     -3.984290767122568e-17,
+     3.585861690410311e-17
+    ],
+    "principal_moments_normalized": [
+     0.25906054049125465,
+     0.25906054049125843,
+     0.31192462941088184
+    ],
+    "surface_area_by_type": {
+     "cylinder": 3.146246864928444,
+     "plane": 1.2217304763960346,
+     "torus": 1.0926823509936592
+    },
+    "faces": 6
+   },
+   "step": "refs/e50de66084.step"
+  },
+  {
+   "id": "e74ef5c001",
+   "name": "shaft with keyway",
+   "description": "The smooth shaft is a cylindrical component with a uniform diameter and a keyway feature. The shaft is defined by its overall length and diameter, while the keyway is specified by its width, depth, height, and the number of keyways.\n\n- Smooth shaft: diameter, length\n- Keyway: width, depth, height, number of keyways",
+   "key_parameters": "- smooth_shaft_diameter = 30 mm\n- smooth_shaft_length = 50 mm\n- keyway_width = 7 mm\n- keyway_depth = 4 mm\n- keyway_height = 20 mm\n- num_keyway = 1",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 34802.1316374345,
+    "area_mm2": 6268.2412183002025,
+    "bbox_mm": {
+     "min": [
+      -15.0,
+      -15.0,
+      0.0
+     ],
+     "max": [
+      15.0,
+      15.0,
+      50.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     30.0,
+     30.0,
+     50.0
+    ],
+    "center_of_mass_mm": [
+     -0.20096949059130864,
+     -2.285577788289158e-16,
+     24.76691698611257
+    ],
+    "principal_moments_normalized": [
+     0.10456975572883231,
+     0.24575904238060647,
+     0.2482531617627466
+    ],
+    "surface_area_by_type": {
+     "cylinder": 4571.08643835221,
+     "plane": 1697.1547799479922
+    },
+    "faces": 7
+   },
+   "step": "refs/e74ef5c001.step"
+  },
+  {
+   "id": "e74ef5c002",
+   "name": "shaft with keyway",
+   "description": "The smooth shaft is a cylindrical component with a uniform diameter and two keyway features. The shaft is defined by its overall length and diameter, while each keyway is specified by its width, depth, height, and the number of keyways.\n\n- Smooth shaft: diameter, length  \n- Keyway: width, depth, height, number of keyways",
+   "key_parameters": "- smooth_shaft_diameter = 50 mm\n- smooth_shaft_length = 80 mm\n- keyway_width = 5 mm\n- keyway_depth = 5 mm\n- keyway_height = 20 mm\n- num_keyway = 2",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 156087.97855768414,
+    "area_mm2": 16883.001463236535,
+    "bbox_mm": {
+     "min": [
+      -25.0,
+      -25.0,
+      0.0
+     ],
+     "max": [
+      25.0,
+      25.0,
+      80.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     50.0,
+     50.0,
+     80.0
+    ],
+    "center_of_mass_mm": [
+     -5.244127313066153e-16,
+     -6.946462964074537e-16,
+     39.809404773326804
+    ],
+    "principal_moments_normalized": [
+     0.10736467662252794,
+     0.23621181149940967,
+     0.23731917956966642
+    ],
+    "surface_area_by_type": {
+     "cylinder": 12366.03577203605,
+     "plane": 4516.965691200489
+    },
+    "faces": 11
+   },
+   "step": "refs/e74ef5c002.step"
+  },
+  {
+   "id": "e74ef5c003",
+   "name": "shaft with keyway",
+   "description": "The smooth shaft is a cylindrical component with a uniform diameter and two keyway features. The shaft is defined by its overall length and diameter, while each keyway is specified by its width, depth, height, and the number of keyways.\n\n- Smooth shaft: smooth_shaft_diameter, smooth_shaft_length\n- Keyway: keyway_width, keyway_depth, keyway_height, num_keyway",
+   "key_parameters": "- smooth_shaft_diameter = 30 mm\n- smooth_shaft_length = 60 mm\n- keyway_width = 6 mm\n- keyway_depth = 3 mm\n- keyway_height = 30 mm\n- num_keyway = 2",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 41367.71997058693,
+    "area_mm2": 7389.77182795833,
+    "bbox_mm": {
+     "min": [
+      -15.0,
+      -15.0,
+      0.0
+     ],
+     "max": [
+      15.0,
+      15.0,
+      60.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     30.0,
+     30.0,
+     60.0
+    ],
+    "center_of_mass_mm": [
+     -1.5389929435166234e-16,
+     5.2502662144073945e-17,
+     29.621523429276227
+    ],
+    "principal_moments_normalized": [
+     0.09253424757308783,
+     0.29507350694780654,
+     0.29884355435406407
+    ],
+    "surface_area_by_type": {
+     "cylinder": 5292.4225190390325,
+     "plane": 2097.349308919296
+    },
+    "faces": 11
+   },
+   "step": "refs/e74ef5c003.step"
+  },
+  {
+   "id": "e74ef5c004",
+   "name": "shaft with keyway",
+   "description": "The smooth shaft is a cylindrical component with a uniform diameter and a keyway feature. The shaft is defined by its overall length and diameter, while the keyway is specified by its width, depth, height, and the number of keyways.\n\n- Smooth shaft: smooth_shaft_diameter, smooth_shaft_length\n- Keyway: keyway_width, keyway_depth, keyway_height, num_keyway",
+   "key_parameters": "- smooth_shaft_diameter = 50 mm\n- smooth_shaft_length = 80 mm\n- keyway_width = 8 mm\n- keyway_depth = 4 mm\n- keyway_height = 50 mm\n- num_keyway = 1",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 155522.46470304078,
+    "area_mm2": 16859.42733481721,
+    "bbox_mm": {
+     "min": [
+      -25.0,
+      -25.0,
+      0.0
+     ],
+     "max": [
+      25.0,
+      25.0,
+      80.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     50.0,
+     50.0,
+     80.0
+    ],
+    "center_of_mass_mm": [
+     -0.22976316252166978,
+     -1.2956983275830287e-16,
+     39.849812567648414
+    ],
+    "principal_moments_normalized": [
+     0.1072645212361766,
+     0.23748029421171468,
+     0.23931900358545655
+    ],
+    "surface_area_by_type": {
+     "cylinder": 12164.643981979394,
+     "plane": 4694.783352837815
+    },
+    "faces": 7
+   },
+   "step": "refs/e74ef5c004.step"
+  },
+  {
+   "id": "e74ef5c005",
+   "name": "shaft with keyway",
+   "description": "The smooth shaft is a cylindrical component with a uniform diameter and two keyway features. The shaft is defined by its overall length and diameter, while each keyway is specified by its width, depth, height, and the number of keyways.\n\n- Smooth shaft: diameter, length\n- Keyway: width, depth, height, number of keyways",
+   "key_parameters": "- smooth_shaft_diameter = 50 mm\n- smooth_shaft_length = 80 mm\n- keyway_width = 8 mm\n- keyway_depth = 3 mm\n- keyway_height = 50 mm\n- num_keyway = 2",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 154765.29672659255,
+    "area_mm2": 17025.493238288058,
+    "bbox_mm": {
+     "min": [
+      -25.0,
+      -25.0,
+      0.0
+     ],
+     "max": [
+      25.0,
+      25.0,
+      80.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     50.0,
+     50.0,
+     80.0
+    ],
+    "center_of_mass_mm": [
+     -2.867783823974844e-15,
+     -7.696721271561073e-16,
+     39.77569235463173
+    ],
+    "principal_moments_normalized": [
+     0.10714799809078983,
+     0.2376798028114041,
+     0.24050882333815685
+    ],
+    "surface_area_by_type": {
+     "cylinder": 11762.917349599617,
+     "plane": 5262.575888688438
+    },
+    "faces": 11
+   },
+   "step": "refs/e74ef5c005.step"
+  },
+  {
+   "id": "ecdc59b900",
+   "name": "smooth shaft",
+   "description": "A smooth shaft is a stepped cylindrical component intended to transmit torque and provide bearing/fit journals. It consists of seven coaxial cylindrical sections arranged end-to-end along the shaft axis. Each section is defined by its section_N_diameter and section_N_length, where N = 1..7, forming the overall stepped profile with smooth (non-splined) outer surfaces.",
+   "key_parameters": "- **section_1**\n  - section_1_diameter = 10 mm\n  - section_1_length = 20 mm\n- **section_2**\n  - section_2_diameter = 15 mm\n  - section_2_length = 30 mm\n- **section_3**\n  - section_3_diameter = 20 mm\n  - section_3_length = 40 mm\n- **section_4**\n  - section_4_diameter = 40 mm\n  - section_4_length = 10 mm\n- **section_5**\n  - section_5_diameter = 30 mm\n  - section_5_length = 20 mm\n- **section_6**\n  - section_6_diameter = 25 mm\n  - section_6_length = 25 mm\n- **section_7**\n  - section_7_diameter = 20 mm\n  - section_7_length = 20 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 64697.173709864786,
+    "area_mm2": 13430.308594096367,
+    "bbox_mm": {
+     "min": [
+      -20.0,
+      -20.0,
+      0.0
+     ],
+     "max": [
+      20.0,
+      20.0,
+      165.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     40.0,
+     40.0,
+     165.0
+    ],
+    "center_of_mass_mm": [
+     -2.4741585811750586e-15,
+     -2.667230792999314e-16,
+     99.38163884673752
+    ],
+    "principal_moments_normalized": [
+     0.0592107362948111,
+     0.8319168741178963,
+     0.8319168741178965
+    ],
+    "surface_area_by_type": {
+     "cylinder": 10917.034471224531,
+     "plane": 2513.2741228718337
+    },
+    "faces": 15
+   },
+   "step": "refs/ecdc59b900.step"
+  },
+  {
+   "id": "eceefa2929",
+   "name": "round mounting flange",
+   "description": "A round mounting flange consists of a circular flange body with a central plain through bore and an array of equally spaced bolt holes arranged on a bolt circle.\n\nThe flange body is defined by outer_diameter and flange_thickness. The central through hole is defined by bore_diameter. The bolt-hole pattern is defined by bolt_circle_diameter, bolt_hole_diameter, and number_bolt_holes.",
+   "key_parameters": "- bore_diameter = 23.8125 mm\n- outer_diameter = 66.675 mm\n- flange_thickness = 13.49375 mm\n- bolt_circle_diameter = 53.18125 mm\n- bolt_hole_diameter = 6.746875 mm\n- number_bolt_holes = 4",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 39174.73847490587,
+    "area_mm2": 10786.337528678961,
+    "bbox_mm": {
+     "min": [
+      -33.3375,
+      -33.3375,
+      0.0
+     ],
+     "max": [
+      33.3375,
+      33.3375,
+      13.49375
+     ]
+    },
+    "bbox_sorted_mm": [
+     13.49375,
+     66.675,
+     66.675
+    ],
+    "center_of_mass_mm": [
+     2.636507506903946e-15,
+     4.1789442046688853e-16,
+     6.746875000000001
+    ],
+    "principal_moments_normalized": [
+     0.2829198434642548,
+     0.2829198434642608,
+     0.5395303442053221
+    ],
+    "surface_area_by_type": {
+     "cylinder": 4979.984443005095,
+     "plane": 5806.353085673868
+    },
+    "faces": 8
+   },
+   "step": "refs/eceefa2929.step"
+  },
+  {
+   "id": "ecf3ef894f",
+   "name": "round flange",
+   "description": "A round flange consists of a circular flange plate with a central plain through bore and a set of evenly spaced mounting holes arranged on a bolt circle.\n\nThe main flange plate is defined by outer_diameter and flange_thickness.\n\nThe central through bore is defined by bore_diameter and is concentric with the flange outer profile.\n\nThe mounting hole pattern is defined by bolt_circle_diameter, mounting_hole_diameter, and number_of_mounting_holes, with the holes distributed evenly around the flange center.",
+   "key_parameters": "- outer_diameter = 125.4125 mm\n- flange_thickness = 23.01875 mm\n- bolt_circle_diameter = 103.1875 mm\n- mounting_hole_diameter = 13.49375 mm\n- number_of_mounting_holes = 4\n- bore_diameter = 28.971875 mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 256007.8526959725,
+    "area_mm2": 37311.039048017556,
+    "bbox_mm": {
+     "min": [
+      -62.70625,
+      -62.70625,
+      0.0
+     ],
+     "max": [
+      62.70625,
+      62.70625,
+      23.01875
+     ]
+    },
+    "bbox_sorted_mm": [
+     23.01875,
+     125.4125,
+     125.4125
+    ],
+    "center_of_mass_mm": [
+     -5.968375902879314e-15,
+     -3.2868633194255843e-16,
+     11.509374999999999
+    ],
+    "principal_moments_normalized": [
+     0.26386321125686474,
+     0.2638632112568706,
+     0.5058230983459607
+    ],
+    "surface_area_by_type": {
+     "cylinder": 15067.619861834773,
+     "plane": 22243.419186182786
+    },
+    "faces": 8
+   },
+   "step": "refs/ecf3ef894f.step"
+  },
+  {
+   "id": "f0d323e9ce",
+   "name": "spur gear stock",
+   "description": "A spur gear stock consists of a cylindrical gear body with an external involute-tooth ring running along the overall length, defined about a central axis.\n\nThe tooth geometry and spacing are governed by number_of_teeth, pressure_angle, diametral_pitch, and gear_module, with the reference circle and outer envelope characterized by pitch_diameter and outer_diameter.\n\nThe involute generating circle and tooth depth system are defined by base_diameter, addendum, dedendum, whole_depth, and root_diameter, which together control the root circle, tooth height, and involute profile limits.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- diametral_pitch = 12\n- number_of_teeth = 16\n- pitch_diameter = 1.333 in = 33.8582 mm\n- outer_diameter = 1.5 in = 38.1 mm\n- overall_length = 1 ft = 304.8 mm\n- gear_module = 25.4 / diametral_pitch = 25.4 / 12 = 2.1166666667 mm  # AGMA / ISO gear geometry\n- addendum = 1 / diametral_pitch = 1 / 12 = 0.0833333333 in = 2.1166666667 mm  # AGMA full-depth involute\n- dedendum = 1.25 / diametral_pitch = 1.25 / 12 = 0.1041666667 in = 2.6458333333 mm  # AGMA full-depth involute\n- whole_depth = 2.25 / diametral_pitch = 2.25 / 12 = 0.1875 in = 4.7625 mm  # AGMA full-depth involute\n- root_diameter = pitch_diameter - 2 * dedendum = 33.8582 mm - 2 * 2.6458333333 mm = 28.5665333334 mm  # AGMA full-depth involute\n- base_diameter = pitch_diameter * cos(pressure_angle) = 33.8582 mm * cos(20 degrees) = 31.8164882848 mm  # involute geometry",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 265735.2378257,
+    "area_mm2": 69688.20497180337,
+    "bbox_mm": {
+     "min": [
+      -19.0500001003,
+      -19.0500001003,
+      -1e-07
+     ],
+     "max": [
+      19.0500001003,
+      19.0500001003,
+      304.80000010000003
+     ]
+    },
+    "bbox_sorted_mm": [
+     38.1000002006,
+     38.1000002006,
+     304.80000020000006
+    ],
+    "center_of_mass_mm": [
+     1.1214266888598386e-15,
+     2.1825153367319503e-15,
+     152.40000000000003
+    ],
+    "principal_moments_normalized": [
+     0.035561852978786654,
+     1.8908239163777545,
+     1.8908239163777545
+    ],
+    "surface_area_by_type": {
+     "cylinder": 18475.845011458772,
+     "extrusion": 33622.7301428613,
+     "plane": 17589.62981748322
+    },
+    "faces": 98
+   },
+   "step": "refs/f0d323e9ce.step"
+  },
+  {
+   "id": "f3e10795e7",
+   "name": "cone frustum",
+   "description": "A frustum is normally defined by top diameter, bottom diameter height, etc.\n",
+   "key_parameters": "- top_diameter=15.0mm, bottom_diameter=25.0mm\n- height=30.00mm\n",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 9621.127501618743,
+    "area_mm2": 2578.5446467594456,
+    "bbox_mm": {
+     "min": [
+      -12.5000001,
+      -12.5000001,
+      -1e-07
+     ],
+     "max": [
+      12.5000001,
+      12.5000001,
+      30.0000001
+     ]
+    },
+    "bbox_sorted_mm": [
+     25.0000002,
+     25.0000002,
+     30.000000200000002
+    ],
+    "center_of_mass_mm": [
+     7.089824204231054e-16,
+     4.799788684420269e-17,
+     12.551020408163264
+    ],
+    "principal_moments_normalized": [
+     0.12189480383937726,
+     0.21619327595369836,
+     0.21619327595369986
+    ],
+    "surface_area_by_type": {
+     "cone": 1910.9562078716149,
+     "plane": 667.588438887831
+    },
+    "faces": 3
+   },
+   "step": "refs/f3e10795e7.step"
+  },
+  {
+   "id": "f67dad96d1",
+   "name": "round mounting flange",
+   "description": "A round mounting flange consists of a circular flange body with a central plain through hole and a set of equally spaced bolt holes arranged on a bolt circle.\n\nThe flange body is defined by outer_diameter and flange_thickness.\n\nThe central through hole is defined by inner_diameter and runs through the flange thickness.\n\nThe bolt pattern is defined by number_bolt_holes, bolt_hole_diameter, and pitch_circle_diameter, positioning the bolt holes evenly around the flange.",
+   "key_parameters": "- outer_diameter = 66.675mm\n- flange_thickness = 13.49375mm\n- pitch_circle_diameter = 53.18125mm\n- bolt_hole_diameter = 6.746875mm\n- number_bolt_holes = 4\n- inner_diameter = 25.4mm",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 38346.77400057686,
+    "area_mm2": 10730.916398152673,
+    "bbox_mm": {
+     "min": [
+      -33.3375,
+      -33.3375,
+      0.0
+     ],
+     "max": [
+      33.3375,
+      33.3375,
+      13.49375
+     ]
+    },
+    "bbox_sorted_mm": [
+     13.49375,
+     66.675,
+     66.675
+    ],
+    "center_of_mass_mm": [
+     -9.19058267930721e-16,
+     -1.8974106176634238e-16,
+     6.746874999999999
+    ],
+    "principal_moments_normalized": [
+     0.2914474277043599,
+     0.29144742770436605,
+     0.5562081570773273
+    ],
+    "surface_area_by_type": {
+     "cylinder": 5047.2815300727325,
+     "plane": 5683.634868079943
+    },
+    "faces": 8
+   },
+   "step": "refs/f67dad96d1.step"
+  },
+  {
+   "id": "fa1a50cf2b",
+   "name": "spur gear",
+   "description": "A spur gear consists of a toothed cylindrical gear body, a central hub region, and a round through bore aligned with the gear axis.\n\nThe toothed gear body is defined by number_of_teeth, gear_module, pressure_angle, face_width, pitch_diameter, outer_diameter, root_diameter, base_diameter, circular_pitch, addendum, dedendum, and whole_depth.\n\nThe central hub is integrated with the gear body and is characterized by hub_diameter, hub_width, and overall_width.\n\nThe round bore passes through the center and is defined by shaft_diameter.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- gear_module = 1 mm\n- number_of_teeth = 32\n- pitch_diameter = 32 mm\n- outer_diameter = 34 mm\n- face_width = 10 mm\n- hub_diameter = 26 mm\n- hub_width = 10 mm\n- shaft_diameter = 8 mm\n- overall_width = 20 mm\n- addendum = pitch_diameter / number_of_teeth = 32 mm / 32 = 1 mm  # ISO 21771\n- dedendum = 1.25 * gear_module = 1.25 * 1 = 1.25 mm  # ISO 21771\n- whole_depth = addendum + dedendum = 1 mm + 1.25 mm = 2.25 mm  # ISO 21771\n- root_diameter = pitch_diameter - 2 * dedendum = 32 mm - 2 * 1.25 mm = 29.5 mm  # ISO 21771\n- circular_pitch = pi * gear_module = pi * 1 = 3.142 mm  # ISO 21771\n- base_diameter = pitch_diameter * cos(pressure_angle) = 32 mm * cos(20 degrees) = 30.07 mm  # ISO 21771",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 12247.912564704991,
+    "area_mm2": 4890.34026612987,
+    "bbox_mm": {
+     "min": [
+      -17.0000001,
+      -17.0000001,
+      -1e-07
+     ],
+     "max": [
+      17.0000001,
+      17.0000001,
+      20.0
+     ]
+    },
+    "bbox_sorted_mm": [
+     20.0000001,
+     34.0000002,
+     34.0000002
+    ],
+    "center_of_mass_mm": [
+     -6.146087862938609e-08,
+     2.0157530835504013e-15,
+     8.92445395690125
+    ],
+    "principal_moments_normalized": [
+     0.17264169957120104,
+     0.1726416995752563,
+     0.2241694203126561
+    ],
+    "surface_area_by_type": {
+     "cylinder": 1879.9397051112373,
+     "extrusion": 1339.7067078767607,
+     "plane": 1670.693853141871
+    },
+    "faces": 197
+   },
+   "step": "refs/fa1a50cf2b.step"
+  },
+  {
+   "id": "fc1e98cd09",
+   "name": "spur gear stock",
+   "description": "A spur gear stock consists of a cylindrical gear blank extruded along an axial length, with involute spur teeth distributed around the outer perimeter.\n\nThe tooth geometry of the spur gear is governed by number_of_teeth, diametral_pitch, and pressure_angle, with the base pitch and involute profile derived from these parameters.\n\nThe main body diameters are characterized by pitch_diameter and outer_diameter, and the stock length is set by overall_length.",
+   "key_parameters": "- pressure_angle = 20 degrees\n- diametral_pitch = 24\n- number_of_teeth = 12\n- pitch_diameter = 1/2 in * 25.4 = 12.7 mm  # AGMA 2001 / ISO 6336\n- outer_diameter = 0.58 in * 25.4 = 14.732 mm  # AGMA 2001 / ISO 6336\n- overall_length = 1 ft * 12 in/ft * 25.4 = 304.8 mm  # AGMA 2001 / ISO 6336",
+   "reference": {
+    "solid_count": 1,
+    "volume_mm3": 36917.763477448294,
+    "area_mm2": 25603.761486108844,
+    "bbox_mm": {
+     "min": [
+      -7.4083334333333335,
+      -7.4083334333333335,
+      -1e-07
+     ],
+     "max": [
+      7.4083334333333335,
+      7.4083334333333335,
+      304.80000010000003
+     ]
+    },
+    "bbox_sorted_mm": [
+     14.816666866666667,
+     14.816666866666667,
+     304.80000020000006
+    ],
+    "center_of_mass_mm": [
+     -1.5883025756797911e-16,
+     1.7325207390569358e-16,
+     152.40000000000003
+    ],
+    "principal_moments_normalized": [
+     0.01924239634521322,
+     6.992322875366477,
+     6.9923228753664795
+    ],
+    "surface_area_by_type": {
+     "cylinder": 6669.098033536633,
+     "extrusion": 11816.392576473096,
+     "plane": 7118.270876099095
+    },
+    "faces": 74
+   },
+   "step": "refs/fc1e98cd09.step"
+  }
+ ]
+}

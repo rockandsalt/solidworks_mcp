@@ -1,0 +1,3 @@
+[submodule "devloop/bench/cad-gen-freecad"]
+	path = devloop/bench/cad-gen-freecad
+	url = https://huggingface.co/datasets/gnucleus-ai/cad-gen-freecad
