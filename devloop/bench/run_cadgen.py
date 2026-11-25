@@ -4,6 +4,7 @@ score.py scores them against the FreeCAD references, report.html shows it.
     py devloop/bench/run_cadgen.py --sample 5                  # 5 tasks at random
     py devloop/bench/run_cadgen.py --sample 5 --seed 1234      # the same 5 again
     py devloop/bench/run_cadgen.py --tasks 0603c53148,08d2da3057 --model sonnet
+    py devloop/bench/run_cadgen.py --resume devloop/out/<time>-cadgen-bench   # finish a cut-off run
 
 Per task: sw.ps1 reset -Force, then a headless `claude -p` from
 %LOCALAPPDATA%\\sld_mcp\\bench-agent (outside the repo, so no CLAUDE.md) with only
@@ -12,13 +13,17 @@ prompt. The prompt is the dataset's description and key parameters, plus where
 to save the part. Then the saved file is opened in a fresh SolidWorks state
 and scored. Output: devloop/out/<time>-cadgen-bench/ (gitignored): report.html,
 results.jsonl, and per task task.md, stream.jsonl, stderr.log, transcript.md, part.SLDPRT
-and the scorer's transcript. A passing `mcp_client.py run` deletes saved parts
+and the scorer's transcript; run.json (the tasks and options, for --resume, which
+skips the tasks already in results.jsonl and redoes the one cut off). SolidWorks
+grows over a run (about 5 GB in 30 tasks): before a task, with less than
+--min-free-gb of free memory, it is stopped and started again. A passing `mcp_client.py run` deletes saved parts
 under devloop/out later (SAVED_FILES); the scores stay.
 
 Needs devloop/bench/cadgen/tasks.json (export_cadgen.py) and a built mcp_server.
 """
 
 import argparse
+import ctypes
 import html
 import json
 import os
@@ -43,6 +48,18 @@ SESSION_DIR = Path(os.environ["LOCALAPPDATA"]) / "sld_mcp" / "bench-agent"
 SYSTEM_PROMPT = ("You model parts in SOLIDWORKS through the tools of the solidworks MCP server; work only "
                  "through those tools. When the part is finished, save it where the task says, then reply with "
                  "a short summary of what you built.")
+
+
+def free_memory_gb() -> float:
+    class MemoryStatus(ctypes.Structure):
+        _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong)] + [
+            (name, ctypes.c_ulonglong) for name in ("ullTotalPhys", "ullAvailPhys", "ullTotalPageFile",
+                                                     "ullAvailPageFile", "ullTotalVirtual", "ullAvailVirtual",
+                                                     "ullAvailExtendedVirtual")]
+    status = MemoryStatus(dwLength=ctypes.sizeof(MemoryStatus))
+    if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+        raise ctypes.WinError()
+    return status.ullAvailPhys / 2**30
 
 
 def prompt_for(task: dict, part: Path) -> str:
@@ -145,14 +162,21 @@ def main() -> int:
     pick = parser.add_mutually_exclusive_group(required=True)
     pick.add_argument("--sample", type=int, help="this many tasks at random")
     pick.add_argument("--tasks", help="task ids, comma-separated")
+    pick.add_argument("--resume", type=Path, help="a run folder: run its tasks not yet in results.jsonl")
     parser.add_argument("--seed", type=int, help="seed for --sample (default: a new one, printed)")
     parser.add_argument("--model", help="model alias or id (default: Claude Code's default)")
     parser.add_argument("--budget", type=float, default=3.0, help="max USD per task (default 3)")
     parser.add_argument("--timeout", type=int, default=1200, help="seconds per task (default 1200)")
+    parser.add_argument("--min-free-gb", type=float, default=4.0,
+                        help="restart SolidWorks before a task when less memory is free (default 4)")
     args = parser.parse_args()
 
     all_tasks = json.loads((BENCH / "cadgen" / "tasks.json").read_text(encoding="utf-8"))["tasks"]
-    if args.tasks:
+    if args.resume:
+        run = json.loads((args.resume / "run.json").read_text(encoding="utf-8"))
+        args.model, args.budget, args.timeout, how = run["model"], run["budget"], run["timeout"], run["how"]
+        tasks = [t for t in all_tasks if t["id"] in run["tasks"]]
+    elif args.tasks:
         wanted = args.tasks.split(",")
         tasks = [t for t in all_tasks if t["id"] in wanted]
         missing = set(wanted) - {t["id"] for t in tasks}
@@ -170,15 +194,37 @@ def main() -> int:
     SESSION_DIR.mkdir(parents=True, exist_ok=True)
     (SESSION_DIR / "mcp.json").write_text(json.dumps({"mcpServers": {"solidworks": {
         "command": str(DEFAULT_SERVER)}}}), encoding="ascii")
-    run_dir = OUT / f"{datetime.now():%Y%m%d-%H%M%S}-cadgen-bench"
-    run_dir.mkdir(parents=True)
+    rows, started = [], time.monotonic()
+    if args.resume:
+        run_dir = args.resume.resolve()  # the prompt names the save path, and the agent runs elsewhere
+        by_id = {t["id"]: t for t in tasks}
+        results = run_dir / "results.jsonl"
+        for line in results.read_text(encoding="utf-8").splitlines() if results.exists() else []:
+            done = json.loads(line)
+            rows.append(row_for(by_id[done["id"]], done["score"], done))
+        started -= sum(r["agent"]["seconds"] for r in rows)  # minutes: agent time of the earlier part, roughly
+        print(f"resuming {run_dir}: {len(rows)} of {len(tasks)} done")
+    else:
+        run_dir = OUT / f"{datetime.now():%Y%m%d-%H%M%S}-cadgen-bench"
+        run_dir.mkdir(parents=True)
+        (run_dir / "run.json").write_text(json.dumps({
+            "how": how, "tasks": [t["id"] for t in tasks], "model": args.model, "budget": args.budget,
+            "timeout": args.timeout}), encoding="utf-8")
     sw("start")
 
-    rows, started = [], time.monotonic()
+    done_ids = {r["task"]["id"] for r in rows}
     for i, task in enumerate(tasks, 1):
+        if task["id"] in done_ids:
+            continue
         task_dir = run_dir / task["id"]
+        if task_dir.exists():  # cut off mid-task: its files (a part saved by it, say) would count
+            shutil.rmtree(task_dir)
         task_dir.mkdir()
         print(f"\n[{datetime.now():%H:%M:%S}] {i}/{len(tasks)} {task['id']} {task['name']}", flush=True)
+        if (free := free_memory_gb()) < args.min_free_gb:
+            print(f"    {free:.1f} GB free: restarting SolidWorks", flush=True)
+            sw("stop", "-Force")
+            sw("start")
         sw("reset", "-Force")
         agent = run_agent(task, task_dir, args)
         result, measured = score_part(task, task_dir)
@@ -188,14 +234,18 @@ def main() -> int:
         with open(run_dir / "results.jsonl", "a", encoding="utf-8") as f:
             f.write(json.dumps({"id": task["id"], "name": task["name"], "model": args.model, **agent,
                                 "score": result, "measured": measured}, ensure_ascii=False) + "\n")
-        rows.append({"task": task, "result": result, "agent": agent, "cols": {
-            "Turns": agent["turns"] or "", "Tool calls": agent["tool_calls"], "Tool errors": agent["tool_errors"],
-            "Cost": f"${agent['cost_usd'] or 0:.2f}", "Minutes": f"{agent['seconds'] / 60:.1f}"},
-            "details": agent_details(task["id"], agent["final"], agent["agent_error"])})
+        rows.append(row_for(task, result, agent))
         write_report_for(run_dir, rows, args, how, started)
     sw("reset", "-Force")
     print(f"\nreport: {run_dir / 'report.html'}")
     return 0
+
+
+def row_for(task: dict, result: dict, agent: dict) -> dict:
+    return {"task": task, "result": result, "agent": agent, "cols": {
+        "Turns": agent["turns"] or "", "Tool calls": agent["tool_calls"], "Tool errors": agent["tool_errors"],
+        "Cost": f"${agent['cost_usd'] or 0:.2f}", "Minutes": f"{agent['seconds'] / 60:.1f}"},
+        "details": agent_details(task["id"], agent["final"], agent["agent_error"])}
 
 
 def write_report_for(run_dir: Path, rows: list, args, how: str, started: float) -> None:
